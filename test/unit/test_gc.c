@@ -830,7 +830,7 @@ void test_gc_heap_used_bytes(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_tlab2_init(VALK_TEST_ARGS()) {
+void test_gc_tlab_init(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_tlab_t tlab;
@@ -845,7 +845,7 @@ void test_gc_tlab2_init(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_page2_accessors(VALK_TEST_ARGS()) {
+void test_gc_page_accessors(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
@@ -908,7 +908,7 @@ void test_gc_ptr_to_location(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_page2_mark_operations(VALK_TEST_ARGS()) {
+void test_gc_page_mark_operations(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
@@ -920,7 +920,7 @@ void test_gc_page2_mark_operations(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(found, "Should find allocation");
   
   VALK_TEST_ASSERT(!valk_gc_page_is_marked(loc.page, loc.slot), "Slot should not be marked initially");
-  VALK_TEST_ASSERT(valk_gc_page2_is_allocated(loc.page, loc.slot), "Slot should be allocated");
+  VALK_TEST_ASSERT(valk_gc_page_is_allocated(loc.page, loc.slot), "Slot should be allocated");
   
   bool newly_marked = valk_gc_page_try_mark(loc.page, loc.slot);
   VALK_TEST_ASSERT(newly_marked, "First mark should succeed");
@@ -934,7 +934,7 @@ void test_gc_page2_mark_operations(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_sweep_page2_unmarked(VALK_TEST_ARGS()) {
+void test_gc_sweep_page_unmarked(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
@@ -950,7 +950,7 @@ void test_gc_sweep_page2_unmarked(VALK_TEST_ARGS()) {
   u32 before = atomic_load(&page->num_allocated);
   VALK_TEST_ASSERT(before > 0, "Page should have allocations");
   
-  size_t freed = valk_gc_sweep_page2(page);
+  size_t freed = valk_gc_sweep_page(page);
   VALK_TEST_ASSERT(freed == before, "All unmarked slots should be freed");
   
   u32 after = atomic_load(&page->num_allocated);
@@ -961,7 +961,7 @@ void test_gc_sweep_page2_unmarked(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_sweep_page2_marked(VALK_TEST_ARGS()) {
+void test_gc_sweep_page_marked(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
@@ -985,7 +985,7 @@ void test_gc_sweep_page2_marked(VALK_TEST_ARGS()) {
   
   u32 before = atomic_load(&page->num_allocated);
   
-  size_t freed = valk_gc_sweep_page2(page);
+  size_t freed = valk_gc_sweep_page(page);
   
   u32 remaining = atomic_load(&page->num_allocated);
   VALK_TEST_ASSERT(remaining == (u32)marked_count, 
@@ -1060,7 +1060,7 @@ void test_gc_rebuild_partial_lists(VALK_TEST_ARGS()) {
   
   valk_gc_page_list_t *list = &heap->classes[3];
   valk_gc_page_t *page = list->all_pages;
-  valk_gc_sweep_page2(page);
+  valk_gc_sweep_page(page);
   
   valk_gc_rebuild_partial_lists(heap);
   
@@ -1086,7 +1086,7 @@ void test_gc_heap_get_stats(VALK_TEST_ARGS()) {
   }
   
   valk_gc_stats_t stats;
-  valk_gc_heap2_get_stats(heap, &stats);
+  valk_gc_heap_get_stats(heap, &stats);
   
   VALK_TEST_ASSERT(stats.hard_limit == 64 * 1024 * 1024, "Hard limit should match");
   VALK_TEST_ASSERT(stats.soft_limit == 48 * 1024 * 1024, "Soft limit should be 75% of hard");
@@ -1098,7 +1098,7 @@ void test_gc_heap_get_stats(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_tlab2_reset(VALK_TEST_ARGS()) {
+void test_gc_tlab_reset(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_gc_tlab_t tlab;
@@ -1110,7 +1110,7 @@ void test_gc_tlab2_reset(VALK_TEST_ARGS()) {
   tlab.classes[3].next_slot = 10;
   tlab.classes[3].limit_slot = 20;
   
-  valk_gc_tlab2_reset(&tlab);
+  valk_gc_tlab_reset(&tlab);
   
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     VALK_TEST_ASSERT(tlab.classes[c].page == nullptr, "Page should be nullptr after reset");
@@ -1127,7 +1127,7 @@ void test_gc_heap_collect_empty(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
   valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
   
-  size_t reclaimed = valk_gc_heap2_collect(heap);
+  size_t reclaimed = valk_gc_heap_collect(heap);
   
   VALK_TEST_ASSERT(reclaimed == 0, "Empty heap should reclaim nothing");
   VALK_TEST_ASSERT(atomic_load(&heap->collections) == 1, "Collection count should be 1");
@@ -1151,7 +1151,7 @@ void test_gc_heap_collect_reclaims_unmarked(VALK_TEST_ARGS()) {
   size_t used_before = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(used_before >= 100 * 128, "Should have allocated at least 100 * 128 bytes");
   
-  size_t reclaimed = valk_gc_heap2_collect(heap);
+  size_t reclaimed = valk_gc_heap_collect(heap);
   
   VALK_TEST_ASSERT(reclaimed >= 100 * 128, "Should reclaim all unmarked allocations");
   
@@ -1182,7 +1182,7 @@ void test_gc_heap_collect_preserves_marked(VALK_TEST_ARGS()) {
     }
   }
   
-  size_t reclaimed = valk_gc_heap2_collect(heap);
+  size_t reclaimed = valk_gc_heap_collect(heap);
   
   VALK_TEST_ASSERT(reclaimed >= 25 * 128, "Should reclaim unmarked slots");
   VALK_TEST_ASSERT(reclaimed < 50 * 128, "Should not reclaim marked slots");
@@ -1227,10 +1227,10 @@ void test_gc_heap_collect_updates_stats(VALK_TEST_ARGS()) {
     valk_gc_heap_alloc(heap, 72);
   }
   
-  size_t reclaimed = valk_gc_heap2_collect(heap);
+  size_t reclaimed = valk_gc_heap_collect(heap);
   
   valk_gc_stats_t stats;
-  valk_gc_heap2_get_stats(heap, &stats);
+  valk_gc_heap_get_stats(heap, &stats);
   
   VALK_TEST_ASSERT(stats.collections == 1, "Collection count should be 1");
   VALK_TEST_ASSERT(stats.bytes_reclaimed_total >= reclaimed, 
@@ -1258,7 +1258,7 @@ void test_gc_heap_mark_object(VALK_TEST_ARGS()) {
     .queue = &queue
   };
   
-  valk_gc_heap2_mark_object(&ctx, ptr);
+  valk_gc_heap_mark_object(&ctx, ptr);
   
   valk_gc_ptr_location_t loc;
   bool found = valk_gc_ptr_to_location(heap, ptr, &loc);
@@ -1284,7 +1284,7 @@ void test_gc_heap_mark_object_null(VALK_TEST_ARGS()) {
     .queue = &queue
   };
   
-  valk_gc_heap2_mark_object(&ctx, nullptr);
+  valk_gc_heap_mark_object(&ctx, nullptr);
   
   VALK_TEST_ASSERT(valk_gc_mark_queue_empty(&queue), 
                    "Queue should remain empty after marking nullptr");
@@ -1308,7 +1308,7 @@ void test_gc_heap_mark_object_not_in_heap(VALK_TEST_ARGS()) {
   };
   
   char stack_buffer[128];
-  valk_gc_heap2_mark_object(&ctx, stack_buffer);
+  valk_gc_heap_mark_object(&ctx, stack_buffer);
   
   valk_gc_heap_destroy(heap);
   
@@ -1332,10 +1332,10 @@ void test_gc_heap_mark_large_object_via_ctx(VALK_TEST_ARGS()) {
     .queue = &queue
   };
   
-  valk_gc_heap2_mark_object(&ctx, large);
+  valk_gc_heap_mark_object(&ctx, large);
   
   size_t used_before = valk_gc_heap_used_bytes(heap);
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   size_t used_after = valk_gc_heap_used_bytes(heap);
   
   VALK_TEST_ASSERT(used_after == used_before, 
@@ -1385,7 +1385,7 @@ void test_gc_reclaim_empty_pages_after_sweep(VALK_TEST_ARGS()) {
   
   size_t committed_before = atomic_load(&heap->committed_bytes);
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   
   size_t committed_after = atomic_load(&heap->committed_bytes);
   VALK_TEST_ASSERT(committed_after < committed_before, "committed_bytes should decrease after GC reclaims pages");
@@ -1414,7 +1414,7 @@ void test_gc_reclaim_empty_pages_multiple_classes(VALK_TEST_ARGS()) {
   
   size_t committed_before = atomic_load(&heap->committed_bytes);
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   
   size_t committed_after = atomic_load(&heap->committed_bytes);
   VALK_TEST_ASSERT(committed_after < committed_before, "committed_bytes should decrease after GC reclaims pages from multiple classes");
@@ -1437,7 +1437,7 @@ void test_gc_reclaim_reallocation_works(VALK_TEST_ARGS()) {
   void *p1 = valk_gc_heap_alloc(heap, 64);
   VALK_TEST_ASSERT(p1 != nullptr, "First allocation should succeed");
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   valk_gc_reclaim_empty_pages(heap);
   
   void *p2 = valk_gc_heap_alloc(heap, 64);
@@ -1463,12 +1463,12 @@ void test_gc_reclaim_committed_bytes_accounting(VALK_TEST_ARGS()) {
   size_t committed_after_alloc = atomic_load(&heap->committed_bytes);
   VALK_TEST_ASSERT(committed_after_alloc >= committed_before, "Committed should increase or stay same");
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   (void)valk_gc_reclaim_empty_pages(heap);
   
   size_t committed_after_reclaim1 = atomic_load(&heap->committed_bytes);
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   sz reclaimed2 = valk_gc_reclaim_empty_pages(heap);
   (void)reclaimed2;
   
@@ -1496,7 +1496,7 @@ void test_gc_reclaim_committed_bytes_accounting(VALK_TEST_ARGS()) {
 void test_gc_heap_collect_null(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  size_t reclaimed = valk_gc_heap2_collect(nullptr);
+  size_t reclaimed = valk_gc_heap_collect(nullptr);
   VALK_TEST_ASSERT(reclaimed == 0, "nullptr heap should return 0");
   
   VALK_PASS();
@@ -1516,7 +1516,7 @@ void test_gc_heap_collect_single_thread(VALK_TEST_ARGS()) {
   size_t before = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(before > 0, "Heap should have used bytes");
   
-  size_t reclaimed = valk_gc_heap2_collect(heap);
+  size_t reclaimed = valk_gc_heap_collect(heap);
   
   size_t after = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(after < before, "Heap usage should decrease after GC");
@@ -1531,7 +1531,7 @@ void test_gc_heap_collect_single_thread(VALK_TEST_ARGS()) {
 void test_gc_heap_parallel_mark_null(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_gc_heap2_parallel_mark(nullptr);
+  valk_gc_heap_parallel_mark(nullptr);
   
   VALK_PASS();
 }
@@ -1539,7 +1539,7 @@ void test_gc_heap_parallel_mark_null(VALK_TEST_ARGS()) {
 void test_gc_heap_parallel_sweep_null(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_gc_heap2_parallel_sweep(nullptr);
+  valk_gc_heap_parallel_sweep(nullptr);
   
   VALK_PASS();
 }
@@ -1547,7 +1547,7 @@ void test_gc_heap_parallel_sweep_null(VALK_TEST_ARGS()) {
 void test_gc_heap_request_stw_null(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  bool result = valk_gc_heap2_request_stw(nullptr);
+  bool result = valk_gc_heap_request_stw(nullptr);
   VALK_TEST_ASSERT(!result, "nullptr heap should return false");
   
   VALK_PASS();
@@ -1567,7 +1567,7 @@ void test_gc_heap_collect_reclaims_bytes(VALK_TEST_ARGS()) {
   size_t before = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(before >= 100 * 64, "Should have allocated at least 6400 bytes");
   
-  size_t reclaimed = valk_gc_heap2_collect(heap);
+  size_t reclaimed = valk_gc_heap_collect(heap);
   
   size_t after = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(after == 0, "All objects should be reclaimed (no roots)");
@@ -1590,13 +1590,13 @@ void test_gc_heap_collect_updates_metrics(VALK_TEST_ARGS()) {
   }
   
   valk_gc_stats_t stats_before;
-  valk_gc_heap2_get_stats(heap, &stats_before);
+  valk_gc_heap_get_stats(heap, &stats_before);
   u64 cycles_before = stats_before.collections;
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   
   valk_gc_stats_t stats_after;
-  valk_gc_heap2_get_stats(heap, &stats_after);
+  valk_gc_heap_get_stats(heap, &stats_after);
   
   VALK_TEST_ASSERT(stats_after.collections == cycles_before + 1, 
                    "Collection count should increment");
@@ -1681,7 +1681,7 @@ void test_gc_heap_multithread_alloc(VALK_TEST_ARGS()) {
   size_t used = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(used > 0, "Should have allocated some bytes");
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   size_t after = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(after == 0, "All bytes should be reclaimed (no roots)");
   
@@ -1706,7 +1706,7 @@ void test_gc_heap_multithread_collect(VALK_TEST_ARGS()) {
   size_t before = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(before > 0, "Should have allocated bytes");
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   
   size_t after = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(after == 0, "All objects should be reclaimed");
@@ -1803,7 +1803,7 @@ void test_gc_heap_parallel_gc_stress(VALK_TEST_ARGS()) {
   size_t used = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(used > 0, "Should have allocated some bytes");
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   size_t after = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(after == 0, "All bytes should be reclaimed (no roots)");
   
@@ -1831,13 +1831,13 @@ void test_gc_heap_parallel_gc_stw(VALK_TEST_ARGS()) {
   size_t before = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(before > 0, "Should have allocated bytes");
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   
   size_t after = valk_gc_heap_used_bytes(heap);
   VALK_TEST_ASSERT(after == 0, "All objects should be reclaimed (no roots)");
   
   valk_gc_stats_t stats;
-  valk_gc_heap2_get_stats(heap, &stats);
+  valk_gc_heap_get_stats(heap, &stats);
   VALK_TEST_ASSERT(stats.collections == 1, "Should have 1 collection");
   
   valk_gc_thread_unregister();
@@ -1956,7 +1956,7 @@ void test_gc_heap_true_parallel_gc(VALK_TEST_ARGS()) {
   
   usleep(1000);
   
-  size_t reclaimed = valk_gc_heap2_collect(heap);
+  size_t reclaimed = valk_gc_heap_collect(heap);
   
   atomic_store(&gc_done_flag, true);
   
@@ -1967,7 +1967,7 @@ void test_gc_heap_true_parallel_gc(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(reclaimed > 0, "Should reclaim some bytes (main thread garbage)");
   
   valk_gc_stats_t stats;
-  valk_gc_heap2_get_stats(heap, &stats);
+  valk_gc_heap_get_stats(heap, &stats);
   VALK_TEST_ASSERT(stats.collections >= 1, "Should have at least 1 collection");
   
   u64 parallel_cycles = atomic_load(&valk_gc_coord.parallel_cycles);
@@ -2065,7 +2065,7 @@ void test_gc_parallel_thread_local_roots(VALK_TEST_ARGS()) {
   atomic_store(&start_flag, true);
   usleep(1000);
   
-  valk_gc_heap2_collect(heap);
+  valk_gc_heap_collect(heap);
   
   atomic_store(&gc_done_flag, true);
   
@@ -2177,7 +2177,7 @@ void test_gc_emergency_gc_trigger(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(successful > 50, "Should have many successful allocations");
   
   valk_gc_stats_t stats;
-  valk_gc_heap2_get_stats(heap, &stats);
+  valk_gc_heap_get_stats(heap, &stats);
   
   VALK_TEST_ASSERT(stats.collections >= 1, "Allocation pressure near limit should trigger GC");
   
@@ -2275,7 +2275,7 @@ void test_gc_soft_limit_multithread(VALK_TEST_ARGS()) {
   }
   
   valk_gc_stats_t stats;
-  valk_gc_heap2_get_stats(heap, &stats);
+  valk_gc_heap_get_stats(heap, &stats);
   
   int total_allocs = atomic_load(&alloc_success);
   VALK_TEST_ASSERT(total_allocs > 50, "Should have many successful allocations");
@@ -2496,11 +2496,11 @@ void test_gc_heap_collect_with_pressure(VALK_TEST_ARGS()) {
     (void)p;
   }
 
-  sz reclaimed = valk_gc_heap2_collect(heap);
+  sz reclaimed = valk_gc_heap_collect(heap);
   (void)reclaimed;
 
   valk_gc_stats_t stats;
-  valk_gc_heap2_get_stats(heap, &stats);
+  valk_gc_heap_get_stats(heap, &stats);
   VALK_TEST_ASSERT(stats.collections >= 1, "Should have at least 1 collection");
 
   valk_gc_thread_unregister();
@@ -2509,7 +2509,7 @@ void test_gc_heap_collect_with_pressure(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_tlab2_refill(VALK_TEST_ARGS()) {
+void test_gc_tlab_refill(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
@@ -2518,7 +2518,7 @@ void test_gc_tlab2_refill(VALK_TEST_ARGS()) {
   valk_gc_tlab_t tlab;
   valk_gc_tlab_init(&tlab);
 
-  bool refilled = valk_gc_tlab2_refill(&tlab, heap, 0);
+  bool refilled = valk_gc_tlab_refill(&tlab, heap, 0);
   VALK_TEST_ASSERT(refilled, "TLAB refill should succeed");
   VALK_TEST_ASSERT(tlab.classes[0].page != nullptr, "TLAB page should be set after refill");
 
@@ -2527,7 +2527,7 @@ void test_gc_tlab2_refill(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_tlab2_refill_invalid_class(VALK_TEST_ARGS()) {
+void test_gc_tlab_refill_invalid_class(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
@@ -2536,10 +2536,10 @@ void test_gc_tlab2_refill_invalid_class(VALK_TEST_ARGS()) {
   valk_gc_tlab_t tlab;
   valk_gc_tlab_init(&tlab);
 
-  bool refilled = valk_gc_tlab2_refill(&tlab, heap, 255);
+  bool refilled = valk_gc_tlab_refill(&tlab, heap, 255);
   VALK_TEST_ASSERT(!refilled, "TLAB refill with invalid size class should fail");
 
-  refilled = valk_gc_tlab2_refill(&tlab, heap, VALK_GC_NUM_SIZE_CLASSES);
+  refilled = valk_gc_tlab_refill(&tlab, heap, VALK_GC_NUM_SIZE_CLASSES);
   VALK_TEST_ASSERT(!refilled, "TLAB refill with out-of-range size class should fail");
 
   valk_gc_heap_destroy(heap);
@@ -2547,7 +2547,7 @@ void test_gc_tlab2_refill_invalid_class(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_tlab2_alloc_inline(VALK_TEST_ARGS()) {
+void test_gc_tlab_alloc_inline(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
@@ -2555,12 +2555,12 @@ void test_gc_tlab2_alloc_inline(VALK_TEST_ARGS()) {
 
   valk_gc_tlab_t tlab;
   valk_gc_tlab_init(&tlab);
-  valk_gc_tlab2_refill(&tlab, heap, 0);
+  valk_gc_tlab_refill(&tlab, heap, 0);
 
-  void *ptr = valk_gc_tlab2_alloc(&tlab, 0);
+  void *ptr = valk_gc_tlab_alloc(&tlab, 0);
   VALK_TEST_ASSERT(ptr != nullptr, "TLAB alloc should succeed");
 
-  void *ptr2 = valk_gc_tlab2_alloc(&tlab, 0);
+  void *ptr2 = valk_gc_tlab_alloc(&tlab, 0);
   VALK_TEST_ASSERT(ptr2 != nullptr, "Second TLAB alloc should succeed");
   VALK_TEST_ASSERT(ptr != ptr2, "Allocations should be different");
 
@@ -3655,21 +3655,21 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_heap_alloc_many", test_gc_heap_alloc_many);
   valk_testsuite_add_test(suite, "test_gc_heap_alloc_large_object", test_gc_heap_alloc_large_object);
   valk_testsuite_add_test(suite, "test_gc_heap_used_bytes", test_gc_heap_used_bytes);
-  valk_testsuite_add_test(suite, "test_gc_tlab2_init", test_gc_tlab2_init);
-  valk_testsuite_add_test(suite, "test_gc_page2_accessors", test_gc_page2_accessors);
+  valk_testsuite_add_test(suite, "test_gc_tlab_init", test_gc_tlab_init);
+  valk_testsuite_add_test(suite, "test_gc_page_accessors", test_gc_page_accessors);
 
   // Phase 2: Pointer location and marking tests
   valk_testsuite_add_test(suite, "test_gc_ptr_to_location", test_gc_ptr_to_location);
-  valk_testsuite_add_test(suite, "test_gc_page2_mark_operations", test_gc_page2_mark_operations);
-  valk_testsuite_add_test(suite, "test_gc_sweep_page2_unmarked", test_gc_sweep_page2_unmarked);
-  valk_testsuite_add_test(suite, "test_gc_sweep_page2_marked", test_gc_sweep_page2_marked);
+  valk_testsuite_add_test(suite, "test_gc_page_mark_operations", test_gc_page_mark_operations);
+  valk_testsuite_add_test(suite, "test_gc_sweep_page_unmarked", test_gc_sweep_page_unmarked);
+  valk_testsuite_add_test(suite, "test_gc_sweep_page_marked", test_gc_sweep_page_marked);
   valk_testsuite_add_test(suite, "test_gc_mark_large_object", test_gc_mark_large_object);
   valk_testsuite_add_test(suite, "test_gc_sweep_large_objects", test_gc_sweep_large_objects);
   valk_testsuite_add_test(suite, "test_gc_rebuild_partial_lists", test_gc_rebuild_partial_lists);
 
   // Phase 3: Memory limits and GC cycle tests
   valk_testsuite_add_test(suite, "test_gc_heap_get_stats", test_gc_heap_get_stats);
-  valk_testsuite_add_test(suite, "test_gc_tlab2_reset", test_gc_tlab2_reset);
+  valk_testsuite_add_test(suite, "test_gc_tlab_reset", test_gc_tlab_reset);
   valk_testsuite_add_test(suite, "test_gc_heap_collect_empty", test_gc_heap_collect_empty);
   valk_testsuite_add_test(suite, "test_gc_heap_collect_reclaims_unmarked", test_gc_heap_collect_reclaims_unmarked);
   valk_testsuite_add_test(suite, "test_gc_heap_collect_preserves_marked", test_gc_heap_collect_preserves_marked);
@@ -3735,9 +3735,9 @@ int main(void) {
 
   // Phase 18: Auto collection and TLAB tests
   valk_testsuite_add_test(suite, "test_gc_heap_collect_with_pressure", test_gc_heap_collect_with_pressure);
-  valk_testsuite_add_test(suite, "test_gc_tlab2_refill", test_gc_tlab2_refill);
-  valk_testsuite_add_test(suite, "test_gc_tlab2_refill_invalid_class", test_gc_tlab2_refill_invalid_class);
-  valk_testsuite_add_test(suite, "test_gc_tlab2_alloc_inline", test_gc_tlab2_alloc_inline);
+  valk_testsuite_add_test(suite, "test_gc_tlab_refill", test_gc_tlab_refill);
+  valk_testsuite_add_test(suite, "test_gc_tlab_refill_invalid_class", test_gc_tlab_refill_invalid_class);
+  valk_testsuite_add_test(suite, "test_gc_tlab_alloc_inline", test_gc_tlab_alloc_inline);
 
   // Phase 19: Metrics and histogram tests
   valk_testsuite_add_test(suite, "test_gc_get_allocated_bytes_total", test_gc_get_allocated_bytes_total);
