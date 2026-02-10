@@ -29,6 +29,7 @@ static inline valk_system_config_t valk_system_config_default(void) {
 
 valk_system_t *valk_system_create(valk_system_config_t *config);
 void valk_system_destroy(valk_system_t *sys);
+void valk_system_initiate_shutdown(valk_system_t *sys, int exit_code);
 void valk_system_shutdown(valk_system_t *sys, u64 deadline_ms);
 void valk_system_register_thread(valk_system_t *sys,
                                  void (*wake_fn)(void *), void *wake_ctx);

@@ -97,17 +97,22 @@ void valk_system_destroy(valk_system_t *sys) {
   VALK_INFO("System destroyed");
 }
 
-void valk_system_shutdown(valk_system_t *sys, u64 deadline_ms) {
+void valk_system_initiate_shutdown(valk_system_t *sys, int exit_code) {
   if (!sys) return;
+  sys->exit_code = exit_code;
   atomic_store(&sys->shutting_down, true);
 
   pthread_mutex_lock(&sys->subsystems_lock);
   for (int i = 0; i < sys->subsystem_count; i++) {
-    if (sys->subsystems[i].stop) {
+    if (sys->subsystems[i].stop)
       sys->subsystems[i].stop(sys->subsystems[i].ctx);
-    }
   }
   pthread_mutex_unlock(&sys->subsystems_lock);
+}
+
+void valk_system_shutdown(valk_system_t *sys, u64 deadline_ms) {
+  if (!sys) return;
+  valk_system_initiate_shutdown(sys, sys->exit_code);
 
   u64 deadline_us = deadline_ms * 1000;
   u64 start = uv_hrtime() / 1000;

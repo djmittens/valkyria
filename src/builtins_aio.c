@@ -294,6 +294,7 @@ static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   valk_lenv_def(e, valk_lval_sym("VALK_EXIT_CODE"), valk_lval_num(code));
+  valk_system_initiate_shutdown(valk_sys, code);
   return valk_lval_num(code);
 }
 
