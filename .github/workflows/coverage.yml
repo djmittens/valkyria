@@ -41,7 +41,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev gcovr
+          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev libbacktrace-dev gcovr
       
       - name: Build with Coverage
         run: |

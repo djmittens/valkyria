@@ -19,6 +19,10 @@ from pathlib import Path
 
 
 ALLOWED_PATTERNS = {
+    "src/modules/test.valk": {
+        "*test-default-timeout-ms*",
+        "*test-default-suite-timeout-ms*",
+    },
 }
 
 ATOM_PATTERN = re.compile(r'\(atom\s')
