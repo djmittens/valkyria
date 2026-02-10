@@ -57,7 +57,6 @@ valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
   VALK_INFO("Created multi-class GC heap: hard_limit=%zu soft_limit=%zu reserved=%zu region_size=%zu",
             heap->hard_limit, heap->soft_limit, heap->reserved, region_size);
 
-  valk_gc_register_heap(heap);
   return heap;
 }
 
@@ -65,7 +64,6 @@ void valk_gc_heap_destroy(valk_gc_heap_t *heap) {
   if (!heap) return;
 
   valk_gc_tlab_invalidate_heap(heap);
-  valk_gc_unregister_heap(heap);
 
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     pthread_mutex_destroy(&heap->classes[c].lock);

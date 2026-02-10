@@ -15,47 +15,7 @@ u64 valk_gc_heap_next_generation(void) {
   return atomic_fetch_add(&g_heap_generation, 1);
 }
 
-#define VALK_GC_MAX_LIVE_HEAPS 64
-static valk_gc_heap_t *g_live_heaps[VALK_GC_MAX_LIVE_HEAPS];
-static pthread_mutex_t g_live_heaps_lock = PTHREAD_MUTEX_INITIALIZER;
 
-void valk_gc_register_heap(valk_gc_heap_t *heap) {
-  pthread_mutex_lock(&g_live_heaps_lock);
-  for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) { // LCOV_EXCL_BR_LINE
-    if (g_live_heaps[i] == nullptr) {
-      g_live_heaps[i] = heap;
-      break;
-    }
-  }
-  pthread_mutex_unlock(&g_live_heaps_lock);
-}
-
-// LCOV_EXCL_START - heap unregister/alive check used internally by TLAB operations
-void valk_gc_unregister_heap(valk_gc_heap_t *heap) {
-  pthread_mutex_lock(&g_live_heaps_lock);
-  for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
-    if (g_live_heaps[i] == heap) {
-      g_live_heaps[i] = nullptr;
-      break;
-    }
-  }
-  pthread_mutex_unlock(&g_live_heaps_lock);
-}
-
-static bool valk_gc_is_heap_alive(valk_gc_heap_t *heap) {
-  if (!heap) return false;
-  pthread_mutex_lock(&g_live_heaps_lock);
-  bool alive = false;
-  for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
-    if (g_live_heaps[i] == heap) {
-      alive = true;
-      break;
-    }
-  }
-  pthread_mutex_unlock(&g_live_heaps_lock);
-  return alive;
-}
-// LCOV_EXCL_STOP
 
 void valk_gc_page_list_init(valk_gc_page_list_t *list, u8 size_class) {
   pthread_mutex_init(&list->lock, nullptr);
@@ -375,14 +335,7 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
 
   if (valk_gc_local_tlab->owner_heap != heap ||
       valk_gc_local_tlab->owner_generation != heap->generation) {
-    if (valk_gc_local_tlab->owner_heap == heap &&
-        valk_gc_local_tlab->owner_generation != heap->generation) {
-      valk_gc_tlab_abandon(valk_gc_local_tlab);
-    } else if (valk_gc_local_tlab->owner_heap && valk_gc_is_heap_alive(valk_gc_local_tlab->owner_heap)) {
-      valk_gc_tlab_reset(valk_gc_local_tlab);
-    } else {
-      valk_gc_tlab_abandon(valk_gc_local_tlab);
-    }
+    valk_gc_tlab_abandon(valk_gc_local_tlab);
     valk_gc_local_tlab->owner_heap = heap;
     valk_gc_local_tlab->owner_generation = heap->generation;
   }
@@ -451,10 +404,6 @@ void *valk_gc_heap_realloc(valk_gc_heap_t *heap, void *ptr, sz new_size) {
 
 // LCOV_EXCL_START - fork safety function requires actual fork()
 void valk_gc_heap_reset_after_fork(void) {
-  pthread_mutex_init(&g_live_heaps_lock, nullptr);
-  for (int i = 0; i < VALK_GC_MAX_LIVE_HEAPS; i++) {
-    g_live_heaps[i] = nullptr;
-  }
 }
 // LCOV_EXCL_STOP
 

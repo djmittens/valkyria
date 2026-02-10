@@ -39,8 +39,8 @@ leak:valk_gc_thread_register
 # Handle table may not be destroyed in test code on exit
 leak:valk_handle_table_init
 
-# Runtime init allocations may not be cleaned up in tests
-leak:valk_runtime_init
+# System create allocations may not be cleaned up in tests
+leak:valk_system_create
 
 # AIO metrics state may not be cleaned up in tests
 leak:valk_aio_metrics_state_new

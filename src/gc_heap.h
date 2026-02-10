@@ -357,6 +357,4 @@ void valk_gc_oom_abort(valk_gc_heap_t *heap, sz requested);
 u64 valk_gc_heap_next_generation(void);
 void valk_gc_heap_reset_after_fork(void);
 
-void valk_gc_register_heap(valk_gc_heap_t *heap);
-void valk_gc_unregister_heap(valk_gc_heap_t *heap);
 void valk_gc_page_list_init(valk_gc_page_list_t *list, u8 size_class);
