@@ -7,7 +7,6 @@
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
-#include <openssl/rand.h>
 #include <openssl/ssl.h>
 
 static int ssl_uninitialized = true;
@@ -25,9 +24,6 @@ void valk_aio_ssl_start() {
 
 void valk_aio_ssl_fork_reset() {
   valk_aio_alloc_fork_reset();
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L
-  RAND_poll();
-#endif
 }
 
 valk_err_e valk_aio_ssl_server_init(SSL_CTX **ssl_ctx, const char *keyfile,
