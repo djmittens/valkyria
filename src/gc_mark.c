@@ -12,7 +12,7 @@
 // Mark Phase Internals
 // ============================================================================
 
-// LCOV_EXCL_BR_START - heap2 mark phase null checks and type dispatch
+// LCOV_EXCL_BR_START - heap mark phase null checks and type dispatch
 static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx);
 static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx);
 

@@ -329,12 +329,12 @@ void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
 // LCOV_EXCL_BR_STOP
 
 // ============================================================================
-// Legacy GC API (wrappers around heap2)
+// Legacy GC API (wrappers around heap)
 // ============================================================================
 
 
 // ============================================================================
-// Legacy GC API (wrappers around heap2)
+// Legacy GC API (wrappers around heap)
 // ============================================================================
 
 void valk_gc_set_hard_limit(valk_gc_heap_t* heap, sz limit) {

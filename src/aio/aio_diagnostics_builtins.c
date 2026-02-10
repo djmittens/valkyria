@@ -56,7 +56,7 @@ static valk_lval_t *valk_builtin_aio_slab_buckets(valk_lenv_t *e, valk_lval_t *a
   } else if (strcmp(slab_name, "http_clients") == 0) {
     slab = valk_aio_get_http_clients_slab(sys);
   } else if (strcmp(slab_name, "lval") == 0 || strcmp(slab_name, "lenv") == 0) {
-    return valk_lval_err("aio/slab-buckets: lval/lenv slabs no longer exist in heap2");
+    return valk_lval_err("aio/slab-buckets: lval/lenv slabs no longer exist in heap");
   }
 
   if (!slab) {

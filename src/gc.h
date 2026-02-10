@@ -52,7 +52,7 @@ typedef struct valk_gc_header_t {
 struct valk_slab_t;
 
 // ============================================================================
-// Legacy GC API (wrappers around heap2)
+// Legacy GC API (wrappers around heap)
 // ============================================================================
 
 valk_gc_heap_t* valk_gc_heap_create(sz hard_limit);

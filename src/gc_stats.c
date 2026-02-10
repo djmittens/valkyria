@@ -73,7 +73,7 @@ void valk_gc_get_fragmentation(valk_gc_heap_t* heap, valk_fragmentation_t* out) 
 }
 
 // ============================================================================
-// GC Statistics Printing (heap2)
+// GC Statistics Printing (heap)
 // ============================================================================
 
 void valk_gc_print_stats(valk_gc_heap_t* heap) {
@@ -146,7 +146,7 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_heap_t* heap, FI
     valk_gc_heap_get_stats(heap, &stats);
 
     double usage = (double)stats.used_bytes / heap->hard_limit * 100.0;
-    fprintf(out, "GC Heap (heap2):\n");
+    fprintf(out, "GC Heap (heap):\n");
     fprintf(out, "  Usage:       %.1f%% (%zu / %zu bytes)\n",
             usage, stats.used_bytes, heap->hard_limit);
     fprintf(out, "  Committed:   %zu bytes\n", stats.committed_bytes);
