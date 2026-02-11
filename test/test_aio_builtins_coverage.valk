@@ -576,7 +576,28 @@
      (aio/stop sys)
      (== cancelled (quote :true))
    })
-    (test "aio/never in race with immediate value"
+    (test "aio/on-loop-thread? returns false from main thread"
+     {do
+     (= {sys} (aio/await (aio/start)))
+     (def {result} (aio/on-loop-thread? sys))
+     (aio/stop sys)
+     (== result 0)
+   })
+   (test "aio/metrics-json-compact returns JSON string"
+     {do
+     (= {sys} (aio/await (aio/start)))
+     (def {json} (aio/metrics-json-compact sys))
+     (aio/stop sys)
+     (> (len json) 2)
+   })
+   (test "aio/systems-json returns JSON array string"
+     {do
+     (= {sys} (aio/await (aio/start)))
+     (def {json} (aio/systems-json sys))
+     (aio/stop sys)
+     (== (str/slice json 0 1) "[")
+   })
+   (test "aio/never in race with immediate value"
       {do
       (= {sys} (aio/await (aio/start)))
       (def {never-handle} (aio/never sys))

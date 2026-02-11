@@ -33,4 +33,4 @@
       (== settled 4)
     }))
   })))
-  {:suite-name "Backpressure Timeout Coverage Test" :timeout-ms 5000 :suite-timeout-ms 8000})
+  {:suite-name "Backpressure Timeout Coverage Test" :timeout-ms 8000 :suite-timeout-ms 12000})

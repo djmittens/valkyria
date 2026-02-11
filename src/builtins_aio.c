@@ -57,7 +57,7 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   if (!sys) { // LCOV_EXCL_BR_LINE - OOM: aio system allocation failure
-    return valk_lval_err("Failed to start AIO system");
+    return valk_lval_err("Failed to start AIO system"); // LCOV_EXCL_LINE
   }
 
   valk_lval_t* ref;
@@ -67,7 +67,7 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
   valk_async_handle_t* startup_handle = valk_async_handle_new(sys, e);
   if (!startup_handle) { // LCOV_EXCL_BR_LINE - OOM: handle allocation failure
-    return valk_lval_err("Failed to allocate startup handle");
+    return valk_lval_err("Failed to allocate startup handle"); // LCOV_EXCL_LINE
   }
   valk_async_handle_complete(startup_handle, ref);
 
@@ -130,10 +130,10 @@ static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
   char* buf = valk_mem_alloc(131072);
-  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_BR_LINE - OOM
+  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_LINE
   u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
   if (len == 0) { // LCOV_EXCL_BR_LINE - metrics serialization failure
-    return valk_lval_err("Failed to generate metrics JSON");
+    return valk_lval_err("Failed to generate metrics JSON"); // LCOV_EXCL_LINE
   }
   return valk_lval_str(buf);
 }
@@ -148,10 +148,10 @@ static valk_lval_t* valk_builtin_aio_metrics_json_compact(valk_lenv_t* e,
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
   char* buf = valk_mem_alloc(65536);
-  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_BR_LINE - OOM
+  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_LINE
   u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 65536);
   if (len == 0) { // LCOV_EXCL_BR_LINE - metrics serialization failure
-    return valk_lval_err("Failed to generate metrics JSON");
+    return valk_lval_err("Failed to generate metrics JSON"); // LCOV_EXCL_LINE
   }
   return valk_lval_str(buf);
 }
@@ -166,10 +166,10 @@ static valk_lval_t* valk_builtin_aio_systems_json(valk_lenv_t* e,
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
   char* buf = valk_mem_alloc(131072);
-  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_BR_LINE - OOM
+  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_LINE
   u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
   if (len == 0) { // LCOV_EXCL_BR_LINE - metrics serialization failure
-    return valk_lval_err("Failed to generate metrics JSON");
+    return valk_lval_err("Failed to generate metrics JSON"); // LCOV_EXCL_LINE
   }
   
   char* result = valk_mem_alloc(len + 3);
@@ -214,7 +214,7 @@ static valk_lval_t* valk_builtin_vm_metrics_json(valk_lenv_t* e,
 
   char* json = valk_vm_metrics_to_json(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!json) { // LCOV_EXCL_BR_LINE - OOM
-    return valk_lval_err("Failed to generate VM metrics JSON");
+    return valk_lval_err("Failed to generate VM metrics JSON"); // LCOV_EXCL_LINE
   }
   return valk_lval_str(json);
 }
@@ -229,7 +229,7 @@ static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
 
   char* prom = valk_vm_metrics_to_prometheus(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!prom) { // LCOV_EXCL_BR_LINE - OOM
-    return valk_lval_err("Failed to generate VM metrics Prometheus");
+    return valk_lval_err("Failed to generate VM metrics Prometheus"); // LCOV_EXCL_LINE
   }
   return valk_lval_str(prom);
 }
@@ -244,7 +244,7 @@ static valk_lval_t* valk_builtin_vm_metrics_json_compact(valk_lenv_t* e,
 
   char* json = valk_vm_metrics_to_json_compact(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!json) { // LCOV_EXCL_BR_LINE - OOM
-    return valk_lval_err("Failed to generate compact VM metrics JSON");
+    return valk_lval_err("Failed to generate compact VM metrics JSON"); // LCOV_EXCL_LINE
   }
   return valk_lval_str(json);
 }

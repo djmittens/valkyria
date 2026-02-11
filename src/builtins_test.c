@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #ifndef __linux__
+// LCOV_EXCL_START - platform shim: only compiled on non-Linux, fd<0 is OOM-equivalent
 static int memfd_create(const char *name, unsigned int flags) {
   (void)name;
   (void)flags;
@@ -14,6 +15,7 @@ static int memfd_create(const char *name, unsigned int flags) {
   if (fd >= 0) unlink(tmpl);
   return fd;
 }
+// LCOV_EXCL_STOP
 #endif
 
 typedef struct {

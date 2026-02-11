@@ -71,14 +71,16 @@ jobs:
         run: |
           python3 bin/check-coverage.py --build-dir build-coverage
       
-      - name: Test Report
-        uses: dorny/test-reporter@v1
+      - name: Remove expected-failure JUnit
+        if: always()
+        run: rm -f build/junit/test_test_framework_fail.xml build/junit/test_test_framework_async_fail.xml
+
+      - name: Test Summary
+        uses: test-summary/action@v2
         if: always()
         with:
-          name: Tests (${{ matrix.os }}-${{ matrix.arch }})
-          path: build/junit/*.xml
-          reporter: java-junit
-          fail-on-error: false
+          paths: build/junit/*.xml
+          show: fail
       
       - name: Upload JUnit Results
         uses: actions/upload-artifact@v4
