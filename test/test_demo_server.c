@@ -173,7 +173,7 @@ void test_basic_server_c_handler(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start successfully");
@@ -205,7 +205,7 @@ void test_multiple_requests(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start successfully");
@@ -249,7 +249,7 @@ void test_custom_config(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start with custom config");
@@ -277,7 +277,7 @@ void test_aio_metrics(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
@@ -303,7 +303,7 @@ void test_metrics_json_rendering(VALK_TEST_ARGS()) {
   valk_http2_handler_t *handler = get_noop_handler();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   valk_aio_http_server *srv = valk_aio_http2_server_from_ref(result);
@@ -456,7 +456,7 @@ void test_connection_states(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = start_demo_server();
 
   valk_async_handle_t *handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", &handler, nullptr);
 
   valk_lval_t *result = valk_async_handle_await(handle);
   VALK_TEST_ASSERT(LVAL_TYPE(result) != LVAL_ERR, "Server should start");
@@ -494,9 +494,9 @@ void test_multiple_servers(VALK_TEST_ARGS()) {
 
   // Start two servers with OS-assigned ports
   valk_async_handle_t *handle1 = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", handler, nullptr);
   valk_async_handle_t *handle2 = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", handler, nullptr);
 
   valk_lval_t *result1 = valk_async_handle_await(handle1);
   valk_lval_t *result2 = valk_async_handle_await(handle2);

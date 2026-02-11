@@ -124,7 +124,7 @@ void test_server_start_initializes_slabs(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *hserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(hserv);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -157,7 +157,7 @@ void test_multiple_connections(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *hserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(hserv);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_REF);
 
@@ -223,7 +223,7 @@ void test_connection_with_request_response(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *hserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", &handler, nullptr);
   valk_lval_t *server_result = valk_async_handle_await(hserv);
   ASSERT_EQ(LVAL_TYPE(server_result), LVAL_REF);
 
@@ -303,7 +303,7 @@ void test_server_listen_invalid_address(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *hserv = valk_aio_http2_listen(
-      sys, "not.a.valid.ip.address", 8080, "build/server.key", "build/server.crt", &handler, nullptr);
+      sys, "not.a.valid.ip.address", 8080, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(hserv);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_ERR);
 
@@ -349,7 +349,7 @@ void test_server_listen_port_already_bound(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *hserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", port, "build/server.key", "build/server.crt", &handler, nullptr);
+      sys, "0.0.0.0", port, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", &handler, nullptr);
   valk_lval_t *result = valk_async_handle_await(hserv);
   ASSERT_EQ(LVAL_TYPE(result), LVAL_ERR);
 

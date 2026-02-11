@@ -124,7 +124,7 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   printf("[test] Starting server...\n");
   fflush(stdout);
   ctx->hserv = valk_aio_http2_listen(
-      ctx->sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
+      ctx->sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt",
       nullptr, ctx->handler_fn);
 
   ctx->server_result = valk_async_handle_await(ctx->hserv);

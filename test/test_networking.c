@@ -52,7 +52,7 @@ void test_demo_socket_server(VALK_TEST_ARGS()) {
   }
 
   valk_async_handle_t *hserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", &handler, nullptr);
 
   valk_lval_t *server = valk_async_handle_await(hserv);
   VALK_ASSERT(LVAL_TYPE(server) != LVAL_ERR, "Failed to start server: %s", server->str);
@@ -108,7 +108,7 @@ void test_tcp_client_disconnect(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *hserv2 = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", &handler, nullptr);
   valk_lval_t *server2 = valk_async_handle_await(hserv2);
   (void)server2;
   valk_aio_stop(sys);
@@ -194,7 +194,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_aio_system_t *sys = valk_aio_start_with_config(&aio_cfg);
 
   valk_async_handle_t *hserv = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt",
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt",
       nullptr, handler_fn);
 
   valk_lval_t *server = valk_async_handle_await(hserv);

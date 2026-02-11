@@ -198,7 +198,7 @@ void test_handle_kind_with_connection(VALK_TEST_ARGS()) {
   };
 
   valk_async_handle_t *server_handle = valk_aio_http2_listen(
-      sys, "0.0.0.0", 0, "build/server.key", "build/server.crt", &handler, nullptr);
+      sys, "0.0.0.0", 0, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt", &handler, nullptr);
   valk_lval_t *server_result = valk_async_handle_await(server_handle);
   ASSERT_TRUE(LVAL_TYPE(server_result) != LVAL_ERR);
   valk_aio_http_server *srv = valk_aio_http2_server_from_ref(server_result);
