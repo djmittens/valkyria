@@ -28,6 +28,12 @@ void valk_http_async_done_callback(valk_async_handle_t *handle, void *ctx) {
     return;
   }
 
+  if (http->stream_response) {
+    VALK_DEBUG("Async handle %llu: stream response already sent for stream %d, skipping",
+               handle->id, stream_id);
+    return;
+  }
+
   valk_async_status_t done_status = valk_async_handle_get_status(handle);
   if (done_status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *result = atomic_load_explicit(&handle->result, memory_order_acquire);

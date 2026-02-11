@@ -124,6 +124,8 @@ static valk_lval_t *valk_builtin_stream_open(valk_lenv_t *e, valk_lval_t *a) {
     };
   }
 
+  req->stream_response = true;
+
   int rv = nghttp2_submit_response2(session, stream_id, headers, header_count, &data_prd);
   if (rv != 0) {
     valk_stream_body_close(body);

@@ -616,6 +616,7 @@ typedef struct {
 } async_response_ctx_t;
 
 static int __async_state_completed(async_response_ctx_t *ctx) {
+  if (ctx->req->stream_response) return 0;
   valk_lval_t *result = atomic_load_explicit(&ctx->handle->result, memory_order_acquire);
   if (LVAL_TYPE(result) == LVAL_ERR) {
     VALK_WARN("Handle completed with error: %s", result->str);
@@ -627,6 +628,7 @@ static int __async_state_completed(async_response_ctx_t *ctx) {
 }
 
 static int __async_state_failed(async_response_ctx_t *ctx) {
+  if (ctx->req->stream_response) return 0;
   valk_lval_t *err_val = atomic_load_explicit(&ctx->handle->error, memory_order_acquire);
   valk_lval_t *err = err_val ? err_val : valk_lval_err("Handle failed");
   const char *msg = LVAL_TYPE(err) == LVAL_ERR ? err->str : "Async operation failed";
@@ -636,6 +638,7 @@ static int __async_state_failed(async_response_ctx_t *ctx) {
 }
 
 static int __async_state_cancelled(async_response_ctx_t *ctx) {
+  if (ctx->req->stream_response) return 0;
   VALK_DEBUG("Handle cancelled, sending 503 for stream %d", ctx->stream_id);
   __send_error_response(ctx->session, ctx->stream_id, "503", "Request cancelled", ctx->req->stream_arena);
   return 0;
@@ -681,6 +684,7 @@ static int __handle_async_response(nghttp2_session *session, i32 stream_id,
 
   valk_http_async_ctx_t *http_ctx = __create_async_ctx(session, stream_id, conn, req->stream_arena, &req->region);
   if (http_ctx) {
+    http_ctx->stream_response = req->stream_response;
     handle->on_done = valk_http_async_done_callback;
     handle->on_done_ctx = http_ctx;
   }
