@@ -414,10 +414,16 @@ def collect_coverage(build_dir: Path, source_root: Path, valk_lcov: Optional[Pat
     parse_gcov_files(build_dir, source_root, report)
     
     if valk_lcov is None:
-        valk_lcov = build_dir / "coverage-valk.info"
-    
-    if valk_lcov.exists():
-        parse_lcov_file(valk_lcov, report, source_root)
+        valk_lcov_files = sorted(build_dir.glob("coverage-valk.*.info"))
+        if not valk_lcov_files:
+            single = build_dir / "coverage-valk.info"
+            if single.exists():
+                valk_lcov_files = [single]
+    else:
+        valk_lcov_files = [valk_lcov] if valk_lcov.exists() else []
+
+    for lcov_file in valk_lcov_files:
+        parse_lcov_file(lcov_file, report, source_root)
     
     return report
 

@@ -57,7 +57,7 @@ jobs:
       
       - name: Run Tests (with JUnit XML output)
         run: |
-          python3 bin/run-tests.py --build-dir build-coverage --timeout 60 --junit-dir build/junit --no-stress
+          python3 bin/run-tests.py --build-dir build-coverage --timeout 60 --junit-dir build/junit --no-stress --examples
       
       - name: Generate Coverage Report
         run: |

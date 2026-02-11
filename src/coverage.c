@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifdef VALK_COVERAGE
 #include "source_loc.h"
@@ -234,19 +235,16 @@ void valk_coverage_save_on_exit(void) {
     valk_coverage_report(g_coverage_output);
     
     u64 len = strlen(g_coverage_output);
-    char *lcov_path = malloc(len + 6);
+    char *lcov_path = malloc(len + 32);
     if (lcov_path != nullptr) {
+      pid_t pid = getpid();
       const char *ext = strrchr(g_coverage_output, '.');
       if (ext != nullptr) {
         u64 base_len = (u64)(ext - g_coverage_output);
         memcpy(lcov_path, g_coverage_output, base_len);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.strcpy)
-        strcpy(lcov_path + base_len, ".info");
+        sprintf(lcov_path + base_len, ".%d.info", (int)pid);
       } else { // LCOV_EXCL_START - rare path with no extension
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.strcpy)
-        strcpy(lcov_path, g_coverage_output);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.strcpy)
-        strcat(lcov_path, ".info");
+        sprintf(lcov_path, "%s.%d.info", g_coverage_output, (int)pid);
       } // LCOV_EXCL_STOP
       valk_coverage_report_lcov(lcov_path);
       free(lcov_path);

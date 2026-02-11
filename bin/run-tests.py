@@ -13,8 +13,12 @@ Usage:
   run-tests.py --timeout 60             # Per-suite timeout
   run-tests.py --junit-dir /tmp/junit   # Custom JUnit output dir
   run-tests.py --no-stress              # Exclude stress tests
+  run-tests.py --stress-only            # Only stress tests
   run-tests.py --only c                 # Only C tests
   run-tests.py --only valk              # Only Valk tests
+  run-tests.py --examples               # Also run examples/*.valk as tests
+  run-tests.py --sanitizer asan         # Set ASAN/LSAN env vars
+  run-tests.py --sanitizer tsan         # Set TSAN env vars + VALK_TEST_NO_FORK
 """
 
 import argparse
@@ -31,6 +35,17 @@ from pathlib import Path
 
 TAIL_LINES = 100
 EXCLUDE_BINARIES = {"test_demo_server"}
+
+SANITIZER_ENV = {
+    "asan": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1:abort_on_error=1",
+        "LSAN_OPTIONS": "verbosity=0:log_threads=1",
+    },
+    "tsan": {
+        "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1",
+        "VALK_TEST_NO_FORK": "1",
+    },
+}
 
 
 def discover_c_tests(build_dir):
@@ -84,6 +99,26 @@ def discover_valk_tests(build_dir, include_stress=True):
     return suites
 
 
+def discover_examples(build_dir):
+    """Find runnable example demos in examples/."""
+    suites = []
+    valk = str(Path(build_dir) / "valk")
+    if not os.access(valk, os.X_OK):
+        return suites
+    examples_dir = Path("examples")
+    if not examples_dir.is_dir():
+        return suites
+    for p in sorted(examples_dir.glob("*.valk")):
+        if p.name == "webserver_demo.valk":
+            continue
+        suites.append({
+            "name": f"example/{p.stem}",
+            "cmd": [valk, str(p)],
+            "kind": "example",
+        })
+    return suites
+
+
 def filter_suites(suites, pattern):
     """Filter suites by regex pattern against name."""
     if not pattern:
@@ -96,11 +131,15 @@ def filter_suites(suites, pattern):
     return [s for s in suites if rx.search(s["name"])]
 
 
-def run_one_suite(suite, junit_dir, timeout):
+def run_one_suite(suite, junit_dir, timeout, extra_env=None):
     """Run a single test suite, write JUnit XML, return result dict."""
     name = suite["name"]
     cmd = suite["cmd"]
     kind = suite["kind"]
+
+    env = {**os.environ, "VALK_TEST_TIMEOUT_SECONDS": "30"}
+    if extra_env:
+        env.update(extra_env)
 
     wall_start = time.monotonic()
     death_signal = None
@@ -110,7 +149,7 @@ def run_one_suite(suite, junit_dir, timeout):
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "VALK_TEST_TIMEOUT_SECONDS": "30"},
+            env=env,
         )
         wall_time = time.monotonic() - wall_start
         exit_code = proc.returncode
@@ -491,7 +530,17 @@ def main():
     parser.add_argument("--jobs", "-j", type=int, default=0, help="Parallel jobs (default: CPU count)")
     parser.add_argument("--junit-dir", default="", help="JUnit output dir (default: test-report/<timestamp>/)")
     parser.add_argument("--no-stress", action="store_true", help="Exclude stress tests")
+    parser.add_argument("--stress-only", action="store_true", help="Only run stress tests")
     parser.add_argument("--only", choices=["c", "valk"], help="Only run C or Valk tests")
+    parser.add_argument("--examples", action="store_true", help="Also run examples/*.valk as tests")
+    parser.add_argument(
+        "--sanitizer", choices=["asan", "tsan"],
+        help="Set sanitizer env vars (asan: ASAN_OPTIONS+LSAN_OPTIONS, tsan: TSAN_OPTIONS+VALK_TEST_NO_FORK)",
+    )
+    parser.add_argument(
+        "--lsan-suppressions", default="",
+        help="Path to LSAN suppressions file (appended to LSAN_OPTIONS)",
+    )
     args = parser.parse_args()
 
     build_dir = args.build_dir
@@ -500,12 +549,25 @@ def main():
         print(f"hint: run 'make build' first", file=sys.stderr)
         sys.exit(1)
 
+    # Build extra env from sanitizer flags
+    extra_env = {}
+    if args.sanitizer:
+        extra_env.update(SANITIZER_ENV[args.sanitizer])
+        if args.sanitizer == "asan" and args.lsan_suppressions:
+            extra_env["LSAN_OPTIONS"] += f":suppressions={args.lsan_suppressions}"
+
     # Discover suites
     suites = []
-    if args.only != "valk":
-        suites.extend(discover_c_tests(build_dir))
-    if args.only != "c":
-        suites.extend(discover_valk_tests(build_dir, include_stress=not args.no_stress))
+    if args.stress_only:
+        suites.extend(discover_valk_tests(build_dir, include_stress=True))
+        suites = [s for s in suites if "stress/" in s["name"]]
+    else:
+        if args.only != "valk":
+            suites.extend(discover_c_tests(build_dir))
+        if args.only != "c":
+            suites.extend(discover_valk_tests(build_dir, include_stress=not args.no_stress))
+        if args.examples:
+            suites.extend(discover_examples(build_dir))
 
     if not suites:
         print("error: no test suites found", file=sys.stderr)
@@ -538,8 +600,18 @@ def main():
     jobs = args.jobs if args.jobs > 0 else os.cpu_count() or 4
     c_count = sum(1 for s in suites if s["kind"] == "c")
     v_count = sum(1 for s in suites if s["kind"] == "valk")
+    e_count = sum(1 for s in suites if s["kind"] == "example")
 
-    print(f"Running {len(suites)} suites ({c_count} C, {v_count} Valk) "
+    parts = []
+    if c_count:
+        parts.append(f"{c_count} C")
+    if v_count:
+        parts.append(f"{v_count} Valk")
+    if e_count:
+        parts.append(f"{e_count} examples")
+
+    san_label = f" [{args.sanitizer.upper()}]" if args.sanitizer else ""
+    print(f"Running {len(suites)} suites ({', '.join(parts)}){san_label} "
           f"with {jobs} parallel workers")
     print(f"JUnit output: {junit_dir}/")
     print()
@@ -549,7 +621,7 @@ def main():
 
     with ProcessPoolExecutor(max_workers=jobs) as pool:
         futures = {
-            pool.submit(run_one_suite, suite, junit_dir, args.timeout): suite
+            pool.submit(run_one_suite, suite, junit_dir, args.timeout, extra_env): suite
             for suite in suites
         }
 

@@ -2,12 +2,13 @@
 
 ## Build & Test Commands
 - `make build` - Build into `build/` (CMake+Ninja)
-- `make test` - Run all C and Valk tests
+- `make test` - Run all C and Valk tests (parallel, auto-discovers)
+- `make test F=memory` - Filter tests by regex pattern
+- `make test TEST=test_memory` - Run a single test suite
+- `make test-c` / `make test-valk` - C-only or Valk-only tests
 - `make lint` - Run clang-tidy (must pass before committing)
 - `make coverage` - Generate aggregated C+Valk coverage (HTML: `coverage-report/index.html`)
 - `python3 scripts/find-uncovered-branches.py <file.c>` - Find specific uncovered branches
-- Single C test: `build/test_memory` (binary name matches `test/*.c`)
-- Single Valk test: `build/valk test/test_prelude.valk`
 - ASAN tests: `make test-c-asan`, `make test-valk-asan`
 - TSAN tests: `make test-c-tsan`, `make test-valk-tsan`
 
@@ -16,12 +17,12 @@ Sanitizer output can flood context. **Always redirect to file, then summarize.**
 
 ```bash
 # TSAN - redirect and summarize
-TSAN_OPTIONS="log_path=build/tsan.log" make test-c-tsan
+TSAN_OPTIONS="log_path=build/tsan.log" make test-c-tsan 2>&1 | tail -5
 echo "TSAN: $(grep -c 'WARNING: ThreadSanitizer' build/tsan.log 2>/dev/null || echo 0) races"
 grep -A2 "WARNING: ThreadSanitizer" build/tsan.log | grep "#0" | sort -u | head -5
 
 # ASAN - redirect and summarize  
-ASAN_OPTIONS="log_path=build/asan.log" make test-c-asan
+ASAN_OPTIONS="log_path=build/asan.log" make test-c-asan 2>&1 | tail -5
 grep -c "ERROR: AddressSanitizer" build/asan.log 2>/dev/null || echo "0 errors"
 ```
 
@@ -148,21 +149,6 @@ when                 # Show current event number
 run 12345            # Jump to specific event
 ```
 
-### Known Flaky Tests (auto-recorded)
-Tests marked with `$(RR_FLAKY)` in the Makefile automatically run under rr on Linux.
-When they fail, the recording is already there - just run `rr replay`.
-
-To mark a test as flaky, change its Makefile line from:
-```make
-$(1)/test_foo
-```
-to:
-```make
-$(RR_FLAKY) $(1)/test_foo
-```
-
-Remove `$(RR_FLAKY)` once the test is stable.
-
 ### Core Dumps (for crashes/SIGSEGV)
 Core dumps are already captured automatically via systemd-coredump:
 ```bash
@@ -180,11 +166,11 @@ apt install rr
 echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid
 
 # Record a single test
-RR=1 make test-c TEST=test_networking
-RR=1 make test-valk TEST=test/test_http_integration.valk
+VALK_TEST_NO_FORK=1 rr record build/test_networking
+VALK_TEST_NO_FORK=1 rr record build/valk test/test_http_integration.valk
 
 # Record with chaos mode (exposes races)
-RR=chaos make test-c TEST=test_networking
+VALK_TEST_NO_FORK=1 rr record --chaos build/test_networking
 
 # Run until failure (for flaky tests)
 make test-rr-until-fail TEST=test_networking MAX=100
@@ -255,7 +241,7 @@ See: https://notes.eatonphil.com/2024-08-20-deterministic-simulation-testing.htm
 
 2. **Use rr to capture the hang** (preferred over adding prints):
    ```bash
-   RR=chaos make test-c TEST=test_networking
+   VALK_TEST_NO_FORK=1 rr record --chaos build/test_networking
    # When it hangs, Ctrl+C, then:
    rr replay
    # In GDB: info threads, thread apply all bt
@@ -371,7 +357,6 @@ fprintf(stderr, "[GC] checkpoint: phase=%d paused=%llu/%llu\n",
 When a flaky test fails, follow this exact workflow:
 
 ### 1. Check if Recording Exists
-Tests marked `$(RR_FLAKY)` auto-record. Check for recording:
 ```bash
 rr ls                              # List all recordings
 ls ~/.local/share/rr/              # Recording directory
@@ -427,7 +412,6 @@ info locals
 
 ### 4. If No Recording, Capture One
 ```bash
-# For a test not marked RR_FLAKY:
 make test-rr-until-fail TEST=test_foo MAX=100
 
 # Or manually:
@@ -442,8 +426,6 @@ for i in {1..50}; do build/test_foo || echo "FAIL $i"; done
 
 # Run full test suite
 make test
-
-# If stable, remove $(RR_FLAKY) prefix from Makefile
 ```
 
 ## Verify Checklist for Async Code Changes

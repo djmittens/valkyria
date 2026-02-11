@@ -1148,12 +1148,12 @@ def main():
     source_root = Path(args.source_root).resolve()
     output_dir = Path(args.output).resolve()
     
-    valk_lcov = Path(args.valk_lcov) if args.valk_lcov else build_dir / "coverage-valk.info"
+    valk_lcov = Path(args.valk_lcov) if args.valk_lcov else None
     
     print(f"Collecting coverage data...")
     print(f"  Build dir:    {build_dir}")
     print(f"  Source root:  {source_root}")
-    print(f"  Valk LCOV:    {valk_lcov}")
+    print(f"  Valk LCOV:    {valk_lcov or '(auto-detect per-PID files)'}")
     print(f"  Output:       {output_dir}")
     
     print("\nCollecting coverage data...")
