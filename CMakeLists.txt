@@ -193,6 +193,9 @@ if(VALK_COVERAGE)
   message(STATUS "Valk line coverage: ENABLED")
 endif()
 
+file(RELATIVE_PATH VALK_REL_BUILD_DIR "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
+target_compile_definitions(valkyria PRIVATE VALK_BUILD_DIR="${VALK_REL_BUILD_DIR}")
+
 if(VALK_TRAMPOLINE)
   target_compile_definitions(valkyria PRIVATE VALK_TRAMPOLINE_EVAL=1)
   message(STATUS "Trampoline eval: ENABLED")

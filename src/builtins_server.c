@@ -67,7 +67,7 @@ static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
   valk_async_handle_t* handle =
       valk_aio_http2_listen_with_config(sys,
                             "0.0.0.0",
-                            port, "build/server.key", "build/server.crt",
+                            port, VALK_BUILD_DIR "/server.key", VALK_BUILD_DIR "/server.crt",
                             NULL,
                             heap_handler,
                             &config

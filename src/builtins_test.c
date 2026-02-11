@@ -3,6 +3,18 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <stdio.h>
+
+#ifndef __linux__
+static int memfd_create(const char *name, unsigned int flags) {
+  (void)name;
+  (void)flags;
+  char tmpl[] = "/tmp/valk_cap_XXXXXX";
+  int fd = mkstemp(tmpl);
+  if (fd >= 0) unlink(tmpl);
+  return fd;
+}
+#endif
 
 typedef struct {
   int saved_stdout;
