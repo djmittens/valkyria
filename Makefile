@@ -815,7 +815,8 @@ TLA_SPECS := \
 	tla/AsyncHandleAll:tla/AsyncHandleAll.cfg \
 	tla/AsyncHandleRace:tla/AsyncHandleRace.cfg \
 	tla/AsyncHandleWithin:tla/AsyncHandleWithin.cfg \
-	tla/AsyncHandleCancelTree:tla/AsyncHandleCancelTree.cfg
+	tla/AsyncHandleCancelTree:tla/AsyncHandleCancelTree.cfg \
+	tla/AsyncTimerLifecycle:tla/AsyncTimerLifecycle.cfg
 
 .ONESHELL:
 .PHONY: tla
