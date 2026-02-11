@@ -1,6 +1,5 @@
 #include "aio_internal.h"
 #include "gc.h"
-#include <execinfo.h>
 
 u64 g_async_handle_id = 0;
 

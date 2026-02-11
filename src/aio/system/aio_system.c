@@ -329,7 +329,7 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   if (!atomic_compare_exchange_strong(&sys->shuttingDown, &expected, true)) {
     return;
   }
-  
+
   // LCOV_EXCL_START - defensive error checks for corrupted state
   if (!sys->stopperHandle) {
     VALK_ERROR("valk_aio_stop: stopperHandle is nullptr!");
