@@ -611,13 +611,19 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   free(ctx);
 }
 
-valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
-                                                  valk_aio_http2_client *client) {
+valk_async_handle_t *valk_aio_http2_request_send_with_done(valk_http2_request_t *req,
+                                                            valk_aio_http2_client *client,
+                                                            valk_async_done_fn on_done,
+                                                            void *on_done_ctx) {
   valk_request_ctx_t *req_ctx = valk_thread_ctx.request_ctx;
   // LCOV_EXCL_BR_START deadline exceeded early check
   if (req_ctx && valk_request_ctx_deadline_exceeded(req_ctx)) {
     valk_async_handle_t *failed_handle = valk_async_handle_new(client->sys, nullptr);
     if (failed_handle) {
+      if (on_done) {
+        atomic_store_explicit(&failed_handle->on_done, on_done, memory_order_release);
+        atomic_store_explicit(&failed_handle->on_done_ctx, on_done_ctx, memory_order_relaxed);
+      }
       valk_async_handle_fail(failed_handle, valk_lval_err(":deadline-exceeded"));
     }
     return failed_handle;
@@ -628,6 +634,11 @@ valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
     return nullptr;
   }
   handle->request_ctx = req_ctx;
+
+  if (on_done) {
+    atomic_store_explicit(&handle->on_done, on_done, memory_order_release);
+    atomic_store_explicit(&handle->on_done_ctx, on_done_ctx, memory_order_relaxed);
+  }
 
   valk_aio_task_new *task;
   VALK_WITH_ALLOC((valk_mem_allocator_t *)client->sys->handleSlab) {
@@ -653,6 +664,11 @@ valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
 
   valk_uv_exec_task(client->sys, task);
   return handle;
+}
+
+valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
+                                                   valk_aio_http2_client *client) {
+  return valk_aio_http2_request_send_with_done(req, client, NULL, NULL);
 }
 
 static _Atomic u64 g_client_request_id = 0;
@@ -748,9 +764,8 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
     // LCOV_EXCL_BR_STOP
   }
 
-  valk_async_handle_t *request_handle = valk_aio_http2_request_send(req, ctx->client);
-  atomic_store_explicit(&request_handle->on_done, __http2_client_request_response_done, memory_order_release);
-  atomic_store_explicit(&request_handle->on_done_ctx, ctx, memory_order_relaxed);
+  valk_aio_http2_request_send_with_done(req, ctx->client,
+                                        __http2_client_request_response_done, ctx);
   return;
 
 cleanup:

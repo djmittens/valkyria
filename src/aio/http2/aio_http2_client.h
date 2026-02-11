@@ -17,7 +17,12 @@ valk_async_handle_t *valk_aio_http2_connect_host_with_done(valk_aio_system_t *sy
                                                             void *on_done_ctx);
 
 valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
-                                                  valk_aio_http2_client *client);
+                                                   valk_aio_http2_client *client);
+
+valk_async_handle_t *valk_aio_http2_request_send_with_done(valk_http2_request_t *req,
+                                                            valk_aio_http2_client *client,
+                                                            valk_async_done_fn on_done,
+                                                            void *on_done_ctx);
 
 valk_lval_t *valk_http2_client_request_impl(valk_lenv_t *e,
                                              valk_aio_system_t *sys,
