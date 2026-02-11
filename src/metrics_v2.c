@@ -86,6 +86,7 @@ static bool labels_equal(const valk_label_set_v2_t *a, const valk_label_set_v2_t
 void valk_metrics_registry_init(void) {
   memset(&g_metrics, 0, sizeof(g_metrics));
   valk_mutex_init(&g_metrics.pool_lock);
+  valk_mutex_init(&g_metrics.registry_lock);
 
   g_metrics.snapshot_interval_us = 1000000;
   g_metrics.start_time_us = valk_metrics_now_us();
@@ -99,6 +100,7 @@ void valk_metrics_registry_init(void) {
 }
 
 void valk_metrics_registry_destroy(void) {
+  valk_mutex_destroy(&g_metrics.registry_lock);
   valk_mutex_destroy(&g_metrics.pool_lock);
 
   // Free interned strings
@@ -172,11 +174,14 @@ valk_counter_v2_t *valk_counter_get_or_create(const char *name,
   const char *iname = intern_string(name);
   valk_label_set_v2_t ilabels = intern_labels(labels);
 
+  valk_mutex_lock(&g_metrics.registry_lock);
+
   // LCOV_EXCL_BR_START - lookup loop branches depend on metric state
   u64 count = atomic_load(&g_metrics.counter_count);
   for (u64 i = 0; i < count; i++) {
     valk_counter_v2_t *c = &g_metrics.counters[i];
     if (atomic_load(&c->active) && c->name == iname && labels_equal(&c->labels, &ilabels)) {
+      valk_mutex_unlock(&g_metrics.registry_lock);
       return c;
     }
   }
@@ -184,7 +189,10 @@ valk_counter_v2_t *valk_counter_get_or_create(const char *name,
 
   u32 idx = allocate_metric_slot(&g_metrics.counter_free, g_metrics.counter_next_free,
                                   &g_metrics.counter_count, VALK_REGISTRY_MAX_COUNTERS);
-  if (idx == VALK_INVALID_SLOT) return nullptr; // LCOV_EXCL_BR_LINE
+  if (idx == VALK_INVALID_SLOT) { // LCOV_EXCL_BR_LINE
+    valk_mutex_unlock(&g_metrics.registry_lock); // LCOV_EXCL_LINE
+    return nullptr; // LCOV_EXCL_LINE
+  }
 
   valk_counter_v2_t *c = &g_metrics.counters[idx];
   u64 now = valk_metrics_now_us();
@@ -200,6 +208,7 @@ valk_counter_v2_t *valk_counter_get_or_create(const char *name,
   c->evictable = true;
   atomic_store(&c->active, true);
 
+  valk_mutex_unlock(&g_metrics.registry_lock);
   return c;
 }
 
@@ -213,11 +222,14 @@ valk_gauge_v2_t *valk_gauge_get_or_create(const char *name,
   const char *iname = intern_string(name);
   valk_label_set_v2_t ilabels = intern_labels(labels);
 
+  valk_mutex_lock(&g_metrics.registry_lock);
+
   // LCOV_EXCL_BR_START - lookup loop branches depend on metric state
   u64 count = atomic_load(&g_metrics.gauge_count);
   for (u64 i = 0; i < count; i++) {
     valk_gauge_v2_t *g = &g_metrics.gauges[i];
     if (atomic_load(&g->active) && g->name == iname && labels_equal(&g->labels, &ilabels)) {
+      valk_mutex_unlock(&g_metrics.registry_lock);
       return g;
     }
   }
@@ -225,7 +237,10 @@ valk_gauge_v2_t *valk_gauge_get_or_create(const char *name,
 
   u32 idx = allocate_metric_slot(&g_metrics.gauge_free, g_metrics.gauge_next_free,
                                   &g_metrics.gauge_count, VALK_REGISTRY_MAX_GAUGES);
-  if (idx == VALK_INVALID_SLOT) return nullptr; // LCOV_EXCL_BR_LINE
+  if (idx == VALK_INVALID_SLOT) { // LCOV_EXCL_BR_LINE
+    valk_mutex_unlock(&g_metrics.registry_lock); // LCOV_EXCL_LINE
+    return nullptr; // LCOV_EXCL_LINE
+  }
 
   valk_gauge_v2_t *g = &g_metrics.gauges[idx];
   u64 now = valk_metrics_now_us();
@@ -241,6 +256,7 @@ valk_gauge_v2_t *valk_gauge_get_or_create(const char *name,
   g->evictable = true;
   atomic_store(&g->active, true);
 
+  valk_mutex_unlock(&g_metrics.registry_lock);
   return g;
 }
 
@@ -258,11 +274,14 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
   const char *iname = intern_string(name);
   valk_label_set_v2_t ilabels = intern_labels(labels);
 
+  valk_mutex_lock(&g_metrics.registry_lock);
+
   // LCOV_EXCL_BR_START - lookup loop branches depend on metric state
   u64 count = atomic_load(&g_metrics.histogram_count);
   for (u64 i = 0; i < count; i++) {
     valk_histogram_v2_t *h = &g_metrics.histograms[i];
     if (atomic_load(&h->active) && h->name == iname && labels_equal(&h->labels, &ilabels)) {
+      valk_mutex_unlock(&g_metrics.registry_lock);
       return h;
     }
   }
@@ -270,7 +289,10 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
 
   u32 idx = allocate_metric_slot(&g_metrics.histogram_free, g_metrics.histogram_next_free,
                                   &g_metrics.histogram_count, VALK_REGISTRY_MAX_HISTOGRAMS);
-  if (idx == VALK_INVALID_SLOT) return nullptr; // LCOV_EXCL_BR_LINE
+  if (idx == VALK_INVALID_SLOT) { // LCOV_EXCL_BR_LINE
+    valk_mutex_unlock(&g_metrics.registry_lock); // LCOV_EXCL_LINE
+    return nullptr; // LCOV_EXCL_LINE
+  }
 
   valk_histogram_v2_t *h = &g_metrics.histograms[idx];
   u64 now = valk_metrics_now_us();
@@ -297,6 +319,7 @@ valk_histogram_v2_t *valk_histogram_get_or_create(
   h->evictable = true;
   atomic_store(&h->active, true);
 
+  valk_mutex_unlock(&g_metrics.registry_lock);
   return h;
 }
 
