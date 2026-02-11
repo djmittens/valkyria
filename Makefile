@@ -226,6 +226,7 @@ define run_tests_c
 	$(1)/test_thread_posix_unit
 	$(1)/test_aio_handle_diag
 	$(1)/test_chase_lev_unit
+	$(1)/test_mpmc_unit
 	$(1)/test_task_queue_unit
 	$(1)/test_request_ctx_unit
 	$(1)/test_ctx_builtins_unit
@@ -553,7 +554,7 @@ C_TESTS_PARALLEL_SAFE = \
 	test_aio_ssl_unit test_gc_aio test_system test_memory_unit test_log \
 	test_parser_unit test_parser_errors test_pressure test_conn_io \
 	test_aio_timer_unit test_io_timer_ops_unit test_thread_posix_unit \
-	test_aio_handle_diag test_chase_lev_unit test_gc_unit test_task_queue_unit \
+	test_aio_handle_diag test_chase_lev_unit test_mpmc_unit test_gc_unit test_task_queue_unit \
 	test_request_ctx_unit test_ctx_builtins_unit test_http_builtins_unit \
 	test_stream_body_conn_unit test_backpressure_list_unit test_conn_fsm_unit \
 	test_stream_builtins_unit test_stream_body_integration test_http2_conn_unit \

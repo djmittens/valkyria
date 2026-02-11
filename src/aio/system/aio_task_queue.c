@@ -1,5 +1,7 @@
 #include "aio_internal.h"
 
+#define TASK_QUEUE_CAPACITY 4096
+
 static void __task_queue_notify_cb(uv_async_t *handle) {
   valk_aio_system_t *sys = handle->data;
   if (!sys || sys->shuttingDown) return; // LCOV_EXCL_BR_LINE - sys always set via handle->data during init
@@ -10,8 +12,8 @@ static void __task_queue_notify_cb(uv_async_t *handle) {
   const int max_per_iteration = 256;
 
   while (processed < max_per_iteration) {
-    item = valk_chase_lev_steal(&tq->deque);
-    if (item == VALK_CHASE_LEV_EMPTY || item == VALK_CHASE_LEV_ABORT) break; // LCOV_EXCL_BR_LINE - ABORT requires CAS contention
+    item = valk_mpmc_pop(&tq->queue);
+    if (!item) break;
 
     valk_aio_task_item_t *task = (valk_aio_task_item_t *)item;
     task->fn(task->ctx);
@@ -32,8 +34,8 @@ static void __task_queue_drain_cb(uv_check_t *handle) {
   const int max_per_iteration = 256;
 
   while (processed < max_per_iteration) {
-    item = valk_chase_lev_steal(&tq->deque);
-    if (item == VALK_CHASE_LEV_EMPTY || item == VALK_CHASE_LEV_ABORT) break; // LCOV_EXCL_BR_LINE - ABORT requires CAS contention
+    item = valk_mpmc_pop(&tq->queue);
+    if (!item) break;
 
     valk_aio_task_item_t *task = (valk_aio_task_item_t *)item;
     task->fn(task->ctx);
@@ -46,7 +48,7 @@ void valk_aio_task_queue_init(valk_aio_system_t *sys) {
   valk_aio_task_queue_t *tq = &sys->task_queue;
   if (tq->initialized) return;
 
-  valk_chase_lev_init(&tq->deque, 64);
+  valk_mpmc_init(&tq->queue, TASK_QUEUE_CAPACITY);
 
   uv_async_init(sys->eventloop, &tq->notify, __task_queue_notify_cb);
   tq->notify.data = sys;
@@ -77,11 +79,10 @@ void valk_aio_task_queue_shutdown(valk_aio_system_t *sys) {
   }
 
   void *item;
-  while ((item = valk_chase_lev_steal(&tq->deque)) != VALK_CHASE_LEV_EMPTY && 
-         item != VALK_CHASE_LEV_ABORT) {
+  while ((item = valk_mpmc_pop(&tq->queue)) != NULL) {
     free(item);
   }
-  valk_chase_lev_destroy(&tq->deque);
+  valk_mpmc_destroy(&tq->queue);
 
   tq->initialized = false;
 }
@@ -93,16 +94,20 @@ void valk_aio_enqueue_task(valk_aio_system_t *sys, valk_aio_task_fn fn, void *ct
   task->fn = fn;
   task->ctx = ctx;
 
-  valk_chase_lev_push(&sys->task_queue.deque, task);
+  if (!valk_mpmc_push(&sys->task_queue.queue, task)) {
+    VALK_ERROR("Task queue full (%d pending), dropping task", TASK_QUEUE_CAPACITY); // LCOV_EXCL_LINE
+    free(task); // LCOV_EXCL_LINE
+    return; // LCOV_EXCL_LINE
+  }
   uv_async_send(&sys->task_queue.notify);
 }
 
 bool valk_aio_task_queue_empty(valk_aio_system_t *sys) {
   if (!sys) return true;
-  return valk_chase_lev_empty(&sys->task_queue.deque);
+  return valk_mpmc_empty(&sys->task_queue.queue);
 }
 
 i64 valk_aio_task_queue_size(valk_aio_system_t *sys) {
   if (!sys) return 0;
-  return valk_chase_lev_size(&sys->task_queue.deque);
+  return (i64)valk_mpmc_size(&sys->task_queue.queue);
 }

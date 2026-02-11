@@ -14,6 +14,7 @@
 
 #include "aio.h"
 #include "system/aio_chase_lev.h"
+#include "system/aio_mpmc.h"
 #include "http2/aio_conn_io.h"
 #include "aio_metrics.h"
 #include "http2/stream/aio_stream_body.h"
@@ -282,7 +283,7 @@ typedef struct valk_aio_task_item {
 } valk_aio_task_item_t;
 
 typedef struct valk_aio_task_queue {
-  valk_chase_lev_deque_t deque;
+  valk_mpmc_queue_t queue;
   uv_async_t notify;
   uv_check_t drain_check;
   bool initialized;

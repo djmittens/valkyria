@@ -142,6 +142,7 @@ set(VALKYRIA_SOURCES
   src/aio/system/aio_task.c
   src/aio/system/aio_task_queue.c
   src/aio/system/aio_chase_lev.c
+  src/aio/system/aio_mpmc.c
   src/aio/system/aio_maintenance.c
   # HTTP/2 protocol (src/aio/http2/)
   src/aio/http2/aio_ssl.c
@@ -497,6 +498,11 @@ include_directories(test_http_builtins_unit src/)
 add_executable(test_chase_lev_unit test/unit/test_chase_lev.c test/testing.c)
 target_link_libraries(test_chase_lev_unit PRIVATE "-lc" valkyria)
 include_directories(test_chase_lev_unit src/)
+
+# MPMC bounded queue tests (Vyukov multi-producer multi-consumer)
+add_executable(test_mpmc_unit test/unit/test_mpmc.c test/testing.c)
+target_link_libraries(test_mpmc_unit PRIVATE "-lc" valkyria)
+include_directories(test_mpmc_unit src/)
 
 # Task queue tests (async task execution via libuv event loop)
 add_executable(test_task_queue_unit test/unit/test_task_queue.c test/testing.c)

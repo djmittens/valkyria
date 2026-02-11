@@ -40,7 +40,6 @@ void valk_chase_lev_init(valk_chase_lev_deque_t *deque, int64_t initial_size) {
   valk_chase_lev_array_t *arr = valk_chase_lev_array_new(initial_size);
   atomic_store_explicit(&deque->array, arr, memory_order_relaxed);
   deque->garbage = NULL;
-  atomic_store_explicit(&deque->push_lock, 0, memory_order_relaxed);
 }
 
 void valk_chase_lev_destroy(valk_chase_lev_deque_t *deque) {
@@ -56,12 +55,6 @@ void valk_chase_lev_destroy(valk_chase_lev_deque_t *deque) {
 }
 
 void valk_chase_lev_push(valk_chase_lev_deque_t *deque, void *item) {
-  int expected = 0;
-  while (!atomic_compare_exchange_weak_explicit(&deque->push_lock, &expected, 1,
-                                                memory_order_acquire, memory_order_relaxed)) {
-    expected = 0;
-  }
-
   int64_t b = atomic_load_explicit(&deque->bottom, memory_order_relaxed);
   int64_t t = atomic_load_explicit(&deque->top, memory_order_acquire);
   valk_chase_lev_array_t *arr = atomic_load_explicit(&deque->array, memory_order_relaxed);
@@ -78,9 +71,7 @@ void valk_chase_lev_push(valk_chase_lev_deque_t *deque, void *item) {
 
   atomic_store_explicit(&arr->buffer[b % arr->size], item, memory_order_release);
   atomic_thread_fence(memory_order_release);
-  atomic_store_explicit(&deque->bottom, b + 1, memory_order_release);
-
-  atomic_store_explicit(&deque->push_lock, 0, memory_order_release);
+  atomic_store_explicit(&deque->bottom, b + 1, memory_order_relaxed);
 }
 
 void *valk_chase_lev_pop(valk_chase_lev_deque_t *deque) {
