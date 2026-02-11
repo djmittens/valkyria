@@ -56,9 +56,9 @@ static void valk_async_propagate_single(void *ctx) {
         if (child->on_complete && child->env) {
           valk_lval_t *args;
           valk_lval_t *transformed;
-          valk_mem_allocator_t *alloc = child->region ? (valk_mem_allocator_t*)child->region : nullptr;
-          if (!alloc && child->sys) {
-            alloc = (valk_mem_allocator_t*)&child->sys->system_region;
+          valk_mem_allocator_t *alloc = child->sys ? (valk_mem_allocator_t*)&child->sys->system_region : nullptr;
+          if (!alloc && child->region) {
+            alloc = (valk_mem_allocator_t*)child->region;
           }
           if (!alloc) alloc = &valk_malloc_allocator;
           VALK_WITH_ALLOC(alloc) {
@@ -111,9 +111,9 @@ static void valk_async_propagate_single(void *ctx) {
         if (child->on_error && child->env) {
           valk_lval_t *args;
           valk_lval_t *recovered;
-          valk_mem_allocator_t *alloc = child->region ? (valk_mem_allocator_t*)child->region : nullptr;
-          if (!alloc && child->sys) {
-            alloc = (valk_mem_allocator_t*)&child->sys->system_region;
+          valk_mem_allocator_t *alloc = child->sys ? (valk_mem_allocator_t*)&child->sys->system_region : nullptr;
+          if (!alloc && child->region) {
+            alloc = (valk_mem_allocator_t*)child->region;
           }
           if (!alloc) alloc = &valk_malloc_allocator;
           VALK_WITH_ALLOC(alloc) {
