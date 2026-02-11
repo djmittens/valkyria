@@ -19,6 +19,7 @@ typedef struct valk_chase_lev_deque {
   _Atomic(int64_t) bottom;
   _Atomic(valk_chase_lev_array_t *) array;
   valk_chase_lev_garbage_t *garbage;
+  _Atomic(int) push_lock;
 } valk_chase_lev_deque_t;
 
 #define VALK_CHASE_LEV_EMPTY ((void *)0)
