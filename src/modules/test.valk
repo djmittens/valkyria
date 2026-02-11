@@ -59,6 +59,16 @@
   (test/assert (== expected actual) msg)
 })
 
+(fun {*test-print-captured* test-name captured} {
+  do
+    (= {out} (plist/get captured :stdout))
+    (= {err} (plist/get captured :stderr))
+    (printf "<<<CAPTURED name=%s\n" test-name)
+    (printf "<<<STDOUT\n%s\n>>>STDOUT\n" out)
+    (printf "<<<STDERR\n%s\n>>>STDERR\n" err)
+    (printf ">>>CAPTURED\n")
+})
+
 ; Tail-recursive helper to print n dots
 (fun {*test-pad-dots-helper* n} {
   if (<= n 0)
@@ -107,10 +117,12 @@
           (printf "\n⏰ TEST TIMEOUT: %s\n" test-name)
         })))
 
+        (= {cap} (test/capture-start))
         (= {start-time} (time-us {}))
         (= {result} (eval test-body))
         (= {end-time} (time-us {}))
         (= {elapsed} (- end-time start-time))
+        (= {captured} (test/capture-stop cap))
 
         ; Cancel timeout timer - returns :true if cancelled, :false if already completed
         (= {cancelled} (aio/cancel timer-handle))
@@ -119,6 +131,7 @@
         (if (== cancelled :false)
           {do
             (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
+            (*test-print-captured* test-name captured)
             (plist/set ctx :timed-out (+ (plist/get ctx :timed-out) 1))}
           {do
             (if (== debug 1)
@@ -134,7 +147,8 @@
 
             (if (== passed 1)
               {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
-              {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)})
+              {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+                  (*test-print-captured* test-name captured)})
 
             (if (== passed 1)
               {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
@@ -163,10 +177,12 @@
             (print test-body)}
           {true})
 
+        (= {cap} (test/capture-start))
         (= {start-time} (time-us {}))
         (= {result} (eval test-body))
         (= {end-time} (time-us {}))
         (= {elapsed} (- end-time start-time))
+        (= {captured} (test/capture-stop cap))
 
         (if (== debug 1)
           {do
@@ -181,7 +197,8 @@
 
         (if (== passed 1)
           {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
-          {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)})
+          {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+              (*test-print-captured* test-name captured)})
 
         (if (== passed 1)
           {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
@@ -385,50 +402,68 @@
 
 
 
-(fun {*test-run-async-one* aio timeout-ms test} {
+(fun {*test-run-async-one* aio ctx test} {
   do
     (= {test-name} (eval (head test)))
     (= {test-body} (eval (head (tail test))))
-    (= {start-time} (time-us {}))
-    
-    ; Test body is (\ {} {returns-handle-completing-with-pass/fail-result})
-    ; Call the test body to get the handle
-    (= {test-handle} (test-body))
-    
-    ; Validate that test body returned a handle - fail fast if not
-    (if (not (handle? test-handle))
-      {(do
-        (printf "\n\nFATAL: test-async body must return a handle!\n")
-        (printf "  Test: %s\n" test-name)
-        (printf "  Got:  %s\n\n" (str test-handle))
-        (shutdown 1))}
-      {true})
-    
-    ; Transform the test result into standardized format with timing
-    (= {result-handle} (aio/then test-handle (\ {result} {
-      (= {end-time} (time-us {}))
-      (= {elapsed} (- end-time start-time))
-      (= {passed} (if (== result true) {1} 
-                    {(if (== result :pass) {1}
-                      {(if (list? result)
-                        {(if (plist/has? result :status) 
-                          {(== (plist/get result :status) :pass)}
-                          {0})}
-                        {0})})}))
-      (if (== passed 1)
-        (list :status :pass :name test-name :elapsed elapsed)
-        (list :status :fail :name test-name :elapsed elapsed))
-    })))
-    
-    ; Apply timeout using aio/within and handle timeout error
-    (= {within-h} (aio/within result-handle timeout-ms))
-    (= {error-fn} (\ {err} {
-                 (= {end-time} (time-us {}))
-                 (= {elapsed} (- end-time start-time))
-                 (list :status :timeout :name test-name :elapsed elapsed)
-               }))
-    (= {catch-h} (aio/catch within-h error-fn))
-    catch-h
+    (= {skip-suite} (plist/get ctx :skip-suite))
+    (= {debug} (plist/get ctx :debug))
+    (= {timeout-ms} (plist/get ctx :timeout-ms))
+
+    (if (== skip-suite 1)
+      {do
+        (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")
+        (plist/set ctx :skipped (+ (plist/get ctx :skipped) 1))}
+      {do
+        (= {cap} (test/capture-start))
+        (= {start-time} (time-us {}))
+
+        (= {test-handle} (test-body))
+
+        ; Validate that test body returned a handle - fail fast if not
+        (if (not (handle? test-handle))
+          {(do
+            (= {captured} (test/capture-stop cap))
+            (printf "\n\nFATAL: test-async body must return a handle!\n")
+            (printf "  Test: %s\n" test-name)
+            (printf "  Got:  %s\n\n" (str test-handle))
+            (*test-print-captured* test-name captured)
+            (shutdown 1))}
+          {true})
+
+        ; Flatten nested handle chains then apply timeout
+        (= {flat-h} (aio/then test-handle (\ {r} {r})))
+        (= {within-h} (aio/within flat-h timeout-ms))
+        (= {catch-h} (aio/catch within-h (\ {err} {:timeout})))
+
+        ; Block until this test completes or times out
+        (= {result} (aio/await catch-h))
+        (= {end-time} (time-us {}))
+        (= {elapsed} (- end-time start-time))
+        (= {captured} (test/capture-stop cap))
+
+        (if (== result :timeout)
+          {do
+            (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
+            (*test-print-captured* test-name captured)
+            (plist/set ctx :timed-out (+ (plist/get ctx :timed-out) 1))}
+          {do
+            (= {passed} (if (== result true) {1}
+                          {(if (== result :pass) {1}
+                            {(if (list? result)
+                              {(if (plist/has? result :status)
+                                {(== (plist/get result :status) :pass)}
+                                {0})}
+                              {0})})}))
+
+            (if (== passed 1)
+              {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+              {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+                  (*test-print-captured* test-name captured)})
+
+            (if (== passed 1)
+              {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
+              {(plist/set ctx :failed (+ (plist/get ctx :failed) 1))})})})
 })
 
 
@@ -471,6 +506,12 @@
   ctx
 })
 
+(fun {*test-run-async-loop* aio ctx remaining} {
+  (if (== (len remaining) 0)
+    {ctx}
+    {(*test-run-async-loop* aio (*test-run-async-one* aio ctx (head remaining)) (tail remaining))})
+})
+
 (fun {test/run-async aio & args} {
   do
     (= {parsed} (*test-async-parse-args* args))
@@ -478,7 +519,7 @@
     (= {config} (head (tail parsed)))
     (= {total} (len tests))
 
-    (= {ctx} (*test-async-ctx-from-config* config))
+    (= {ctx} (*test-ctx-from-config* config))
     (= {suite-name} (plist/get ctx :suite-name))
     (= {expected-exit} (plist/get ctx :expected-exit))
     (= {timeout-ms} (plist/get ctx :timeout-ms))
@@ -492,68 +533,12 @@
           {(shutdown 1)})}
       {do
         (printf "🧪 [%ld/%ld] %s (async, timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms)
-        
-        ; Create handles for all tests
-        (= {test-handles} (map (\ {test} {(*test-run-async-one* aio timeout-ms test)}) tests))
-        
-        ; Use aio/all to collect all test results, with suite timeout
-        (= {all-tests-handle} (aio/all test-handles))
-        (= {suite-timeout-handle} (aio/then (aio/sleep aio suite-timeout-ms) (\ {_} {:suite-timeout})))
-        (= {race-result} (aio/race (list all-tests-handle suite-timeout-handle)))
-        
-        ; Process results
-        (= {results-handle} (aio/then race-result (\ {result} {
-          (if (== result :suite-timeout)
-            {do
-              (printf "\n⏰ SUITE TIMEOUT: Suite exceeded %ldms\n" suite-timeout-ms)
-              (shutdown 1)}
-            {do
-              ; Print individual test results and aggregate counts using foldl
-              (= {counts} (foldl (\ {acc test-result} {
-                (= {status} (plist/get test-result :status))
-                (= {name} (plist/get test-result :name))
-                (= {elapsed} (plist/get test-result :elapsed))
-                (= {passed} (plist/get acc :passed))
-                (= {failed} (plist/get acc :failed))
-                (= {timed-out} (plist/get acc :timed-out))
-                (select
-                  {(== status :pass) (do 
-                    (printf "✅ ") (*test-pad-dots* name 97) (printf "  PASS : in %ld(µs)\n" elapsed)
-                    (plist/set acc :passed (+ passed 1)))}
-                  {(== status :fail) (do 
-                    (printf "❌ ") (*test-pad-dots* name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
-                    (plist/set acc :failed (+ failed 1)))}
-                  {(== status :timeout) (do 
-                    (printf "⏰ ") (*test-pad-dots* name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
-                    (plist/set acc :timed-out (+ timed-out 1)))}
-                  {true (do 
-                    (printf "❓ ") (*test-pad-dots* name 97) (printf "  UNKNOWN : %s\n" (str status))
-                    (plist/set acc :failed (+ failed 1)))})
-              }) {:passed 0 :failed 0 :timed-out 0} result))
-              
-              (= {passed} (plist/get counts :passed))
-              (= {failed} (plist/get counts :failed))
-              (= {timed-out} (plist/get counts :timed-out))
-              
-              ; Print final results
-              (printf "\n🏁 Test Results: ")
-              (if (> timed-out 0)
-                {printf "⏰ %ld timed out, " timed-out}
-                {true})
-              (if (== (+ failed timed-out) 0)
-                {printf "✨ All %ld tests passed! ✨\n" passed}
-                {printf "⚠️  %ld passed, %ld failed\n" passed (+ failed timed-out)})
-              
-              (= {actual-exit} (if (== (+ failed timed-out) 0) {0} {1}))
-              (if (== actual-exit expected-exit)
-                {(shutdown 0)}
-                {(shutdown actual-exit)})})
-        })))
-        
-        (= {on-loop} (aio/on-loop-thread? aio))
-        (if on-loop
-          {true}
-          {(aio/run aio)})})
+
+        ; Run tests sequentially via recursion
+        (= {ctx} (*test-run-async-loop* aio ctx tests))
+
+        (aio/stop aio)
+        (*test-print-results-and-exit* ctx)})
 })
 
 

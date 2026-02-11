@@ -352,6 +352,127 @@ define run_examples
 	@echo "=== All example demos passed ($(1)) ==="
 endef
 
+# ============================================================================
+# JUnit XML Test Output
+# ============================================================================
+# Produces machine-readable JUnit XML for CI, ralph, or other automation.
+# Results land in build/junit/ (one XML per test binary/file).
+#
+# Uses bin/test-to-junit.py as a universal wrapper around any test command.
+# The wrapper always produces XML even if the test crashes, times out, or
+# is killed by a signal. This means you always get a report.
+#
+# Usage:
+#   make test-junit              # Run all tests, produce JUnit XML
+#   make test-c-junit            # C tests only
+#   make test-valk-junit         # Valk tests only
+#   make coverage-tests-junit    # Coverage tests with JUnit XML
+#   TEST=test_memory make test-c-junit   # Single C test
+#   TEST=test/test_prelude.valk make test-valk-junit  # Single Valk test
+#   JUNIT_DIR=my/dir make test-junit     # Custom output directory
+
+JUNIT_DIR ?= build/junit
+JUNIT_TIMEOUT ?= 120
+JUNIT_WRAP = python3 bin/test-to-junit.py --junit-dir $(JUNIT_DIR) --timeout $(JUNIT_TIMEOUT) --
+
+.ONESHELL:
+.PHONY: test-junit
+test-junit: test-c-junit test-valk-junit
+	@echo ""
+	@echo "=== JUnit XML results in $(JUNIT_DIR)/ ==="
+	@echo "Files: $$(ls $(JUNIT_DIR)/*.xml 2>/dev/null | wc -l) XML files"
+
+.ONESHELL:
+.PHONY: test-c-junit
+test-c-junit: export VALK_TEST_TIMEOUT_SECONDS=30
+test-c-junit: build
+	@echo "=== Running C tests (JUnit -> $(JUNIT_DIR)) ==="
+	@mkdir -p $(JUNIT_DIR)
+	@failed=0; \
+	if [ -n "$(TEST)" ]; then \
+		$(JUNIT_WRAP) build/$(TEST) || failed=1; \
+	else \
+		for t in $(C_TESTS_LIST); do \
+			if [ -f "build/$$t" ]; then \
+				$(JUNIT_WRAP) "build/$$t" || failed=1; \
+			fi; \
+		done; \
+	fi; \
+	if [ "$$failed" -ne 0 ]; then \
+		echo "=== Some C tests failed (see $(JUNIT_DIR)/) ==="; \
+		exit 1; \
+	fi
+	@echo "=== All C tests passed (JUnit) ==="
+
+.ONESHELL:
+.PHONY: test-valk-junit
+test-valk-junit: export VALK_TEST_TIMEOUT_SECONDS=30
+test-valk-junit: build
+	@echo "=== Running Valk tests (JUnit -> $(JUNIT_DIR)) ==="
+	@mkdir -p $(JUNIT_DIR)
+	@failed=0; \
+	if [ -n "$(TEST)" ]; then \
+		$(JUNIT_WRAP) build/valk $(TEST) || failed=1; \
+	else \
+		for t in $(VALK_TESTS_LIST); do \
+			$(JUNIT_WRAP) build/valk "$$t" || failed=1; \
+		done; \
+	fi; \
+	if [ "$$failed" -ne 0 ]; then \
+		echo "=== Some Valk tests failed (see $(JUNIT_DIR)/) ==="; \
+		exit 1; \
+	fi
+	@echo "=== All Valk tests passed (JUnit) ==="
+
+# ============================================================================
+# Unified Test Runner (bin/run-tests.py)
+# ============================================================================
+# Discovers tests automatically, runs in parallel, produces JUnit XML in a
+# timestamped folder under test-report/. Prints concise summary with failure
+# details.
+#
+# Usage:
+#   make test-run                        # Run all tests
+#   make test-run F=memory               # Fuzzy filter
+#   make test-run F="sse|http"           # Regex filter
+#   make test-run ONLY=c                 # C tests only
+#   make test-run ONLY=valk              # Valk tests only
+#   make test-run NO_STRESS=1            # Exclude stress tests
+#   make test-run J=4                    # Limit to 4 parallel workers
+#   make test-run-coverage               # Coverage build + JUnit
+#   make test-run-asan                   # ASAN build + JUnit
+
+F ?=
+ONLY ?=
+NO_STRESS ?=
+J ?= 0
+
+TEST_RUN = python3 bin/run-tests.py
+TEST_RUN_ARGS = --timeout $(JUNIT_TIMEOUT) --jobs $(J)
+ifdef F
+  TEST_RUN_ARGS += --filter "$(F)"
+endif
+ifneq ($(ONLY),)
+  TEST_RUN_ARGS += --only $(ONLY)
+endif
+ifneq ($(NO_STRESS),)
+  TEST_RUN_ARGS += --no-stress
+endif
+
+.PHONY: test-run
+test-run: build
+	$(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
+
+.PHONY: test-run-asan
+test-run-asan: build-asan
+	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1 \
+	LSAN_OPTIONS="verbosity=0:log_threads=1:suppressions=$(CURDIR)/lsan_suppressions.txt" \
+	$(TEST_RUN) --build-dir build-asan $(TEST_RUN_ARGS)
+
+.PHONY: test-run-coverage
+test-run-coverage: build-coverage coverage-reset
+	$(TEST_RUN) --build-dir build-coverage --timeout 60 $(TEST_RUN_ARGS)
+
 # Default test target (C + Valk tests, no ASAN)
 .PHONY: test
 test: test-c test-valk
@@ -772,6 +893,40 @@ coverage-report:
 	@echo "║  HTML: coverage-report/index.html                                ║"
 	@echo "║  XML:  coverage-report/coverage.xml (Cobertura format)           ║"
 	@echo "╚══════════════════════════════════════════════════════════════════╝"
+
+# Coverage tests WITH JUnit output (for CI)
+# Runs ALL tests (doesn't stop on first failure) so you get complete JUnit results.
+# Examples still run without the wrapper (they're demos, not test suites).
+.ONESHELL:
+.PHONY: coverage-tests-junit
+coverage-tests-junit: export VALK_TEST_TIMEOUT_SECONDS=60
+coverage-tests-junit: build-coverage coverage-reset
+	echo ""
+	echo "╔══════════════════════════════════════════════════════════════╗"
+	echo "║  Running all tests with coverage + JUnit XML output         ║"
+	echo "╚══════════════════════════════════════════════════════════════╝"
+	echo ""
+	mkdir -p $(JUNIT_DIR) build
+	echo "=== Ensuring SSL certs exist in build/ for tests ==="
+	$(call gen_ssl_certs,build)
+	failed=0
+	echo "=== Running C tests (coverage + JUnit) ==="
+	for t in $(C_TESTS_LIST); do \
+		if [ -f "build-coverage/$$t" ]; then \
+			$(JUNIT_WRAP) "build-coverage/$$t" || failed=1; \
+		fi; \
+	done
+	echo ""
+	echo "=== Running Valk tests (coverage + JUnit) ==="
+	for t in $(VALK_TESTS_LIST); do \
+		$(JUNIT_WRAP) build-coverage/valk "$$t" || failed=1; \
+	done
+	echo ""
+	$(call run_examples,build-coverage)
+	if [ "$$failed" -ne 0 ]; then \
+		echo "=== Some tests failed (see $(JUNIT_DIR)/) ==="; \
+		exit 1; \
+	fi
 
 .PHONY: coverage
 coverage: build-coverage coverage-tests coverage-report coverage-check

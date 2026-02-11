@@ -61,4 +61,4 @@
          (= {successes} (len (filter (\ {r} {r}) results)))
          (printf "Results: %d/%d successes\n" successes total)
          (> successes (/ total 2))}))}))
-) {:suite-name "SSE Concurrency Stress Test" :timeout-ms 120000 :suite-timeout-ms 180000})
+) {:suite-name "SSE Concurrency Stress Test" :timeout-ms 30000 :suite-timeout-ms 60000})

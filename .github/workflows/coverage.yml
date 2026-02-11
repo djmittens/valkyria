@@ -55,9 +55,9 @@ jobs:
         run: |
           make build-coverage
       
-      - name: Run Tests
+      - name: Run Tests (with JUnit XML output)
         run: |
-          make coverage-tests
+          python3 bin/run-tests.py --build-dir build-coverage --timeout 60 --junit-dir build/junit --no-stress
       
       - name: Generate Coverage Report
         run: |
@@ -70,6 +70,23 @@ jobs:
       - name: Check Runtime Coverage Requirements
         run: |
           python3 bin/check-coverage.py --build-dir build-coverage
+      
+      - name: Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Tests (${{ matrix.os }}-${{ matrix.arch }})
+          path: build/junit/*.xml
+          reporter: java-junit
+          fail-on-error: false
+      
+      - name: Upload JUnit Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-results-${{ matrix.os }}-${{ matrix.arch }}
+          path: build/junit/
+          retention-days: 30
       
       - name: Upload Coverage Report
         uses: actions/upload-artifact@v4

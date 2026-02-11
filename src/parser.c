@@ -14,6 +14,7 @@
 void valk_register_metrics_builtins(valk_lenv_t *env);
 void valk_register_ctx_builtins(valk_lenv_t *env);
 void valk_register_coverage_builtins(valk_lenv_t *env);
+void valk_register_test_builtins(valk_lenv_t *env);
 
 u64 __valk_lval_size = sizeof(valk_lval_t);
 u64 __valk_lenv_size = sizeof(valk_lenv_t);
@@ -59,4 +60,5 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_register_aio_diagnostics_builtins(env);
   valk_register_ctx_builtins(env);
   valk_register_coverage_builtins(env);
+  valk_register_test_builtins(env);
 }

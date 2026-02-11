@@ -98,6 +98,7 @@ set(VALKYRIA_SOURCES
   src/builtins_http.c
   src/builtins_aio.c
   src/builtins_server.c
+  src/builtins_test.c
   src/memory.c
   src/slab.c
   src/memory_os.c
