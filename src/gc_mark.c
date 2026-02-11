@@ -279,6 +279,8 @@ void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap) {
 bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
   if (!heap) return false;
 
+  if (atomic_load(&valk_sys->shutting_down)) return false;
+
   u64 num_threads = atomic_load(&valk_sys->threads_registered);
   if (num_threads == 0) return false;
 

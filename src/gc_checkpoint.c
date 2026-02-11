@@ -77,6 +77,14 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
 // LCOV_EXCL_STOP
 
 static void valk_checkpoint_request_stw(void) {
+  // Skip multi-thread coordination during shutdown: worker threads may be
+  // exiting concurrently, so the barrier count would be stale (TOCTOU race
+  // between reading threads_registered and the barrier wait).  The main thread
+  // is the only mutator at this point, so evacuation is still safe.
+  if (atomic_load(&valk_sys->shutting_down)) {
+    return;
+  }
+
   // Use CHECKPOINT_PREPARING to claim exclusive ownership of the checkpoint
   // sequence without yet signaling worker threads.  The VALK_GC_SAFE_POINT
   // macro only fires on phase != IDLE, but valk_gc_safe_point_slow() only

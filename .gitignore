@@ -26,6 +26,9 @@ tla/*_TTrace_*
 tla/*_graph*.dot
 tla/states/
 
+# Test reports
+test-report/
+
 # Ralph Wiggum
 build/ralph-logs/
 .tix/cache.db
