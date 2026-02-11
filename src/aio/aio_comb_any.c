@@ -81,9 +81,6 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *handles_list = valk_lval_list_nth(a, 0);
 
   u64 count = 0;
-  u64 failed_count = 0;
-  valk_async_handle_t *first_success = NULL;
-  valk_lval_t *last_error = NULL;
   valk_lval_t *iter = handles_list;
 
   while (LVAL_TYPE(iter) != LVAL_NIL) {
@@ -96,20 +93,7 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
       return valk_lval_err("aio/any: all elements must be handles");
     }
     // LCOV_EXCL_BR_STOP
-    valk_async_handle_t *handle = h->async.handle;
     count++;
-
-    // LCOV_EXCL_BR_START - status detection: depends on handle status
-    valk_async_status_t h_status = atomic_load_explicit(&handle->status, memory_order_acquire);
-    if (h_status == VALK_ASYNC_COMPLETED && !first_success) {
-      first_success = handle;
-    } else if (h_status == VALK_ASYNC_FAILED ||
-               h_status == VALK_ASYNC_CANCELLED) {
-      failed_count++;
-      valk_lval_t *h_error = atomic_load_explicit(&handle->error, memory_order_acquire);
-      last_error = h_error ? h_error : valk_lval_err("cancelled");
-    }
-    // LCOV_EXCL_BR_STOP
     iter = valk_lval_tail(iter);
   }
 
@@ -131,47 +115,8 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   }
   // LCOV_EXCL_BR_STOP
 
-  if (first_success) {
-    atomic_store_explicit(&any_handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
-    atomic_store_explicit(&any_handle->result, atomic_load_explicit(&first_success->result, memory_order_acquire), memory_order_release);
-
-    // LCOV_EXCL_START - cancel remaining: first_success found
-    iter = handles_list;
-    while (LVAL_TYPE(iter) != LVAL_NIL) {
-      valk_lval_t *h = valk_lval_head(iter);
-      valk_async_handle_t *handle = h->async.handle;
-      valk_async_status_t h_status = atomic_load_explicit(&handle->status, memory_order_acquire);
-      if (handle != first_success &&
-          (h_status == VALK_ASYNC_PENDING || h_status == VALK_ASYNC_RUNNING)) {
-        valk_async_handle_cancel(handle);
-      }
-      iter = valk_lval_tail(iter);
-    }
-    // LCOV_EXCL_STOP
-    return valk_lval_handle(any_handle);
-  }
-
-  if (failed_count == count) {
-    atomic_store_explicit(&any_handle->status, VALK_ASYNC_FAILED, memory_order_release);
-    atomic_store_explicit(&any_handle->error, last_error, memory_order_release);
-    return valk_lval_handle(any_handle);
-  }
-
   atomic_store_explicit(&any_handle->status, VALK_ASYNC_RUNNING, memory_order_release);
   any_handle->env = e;
-
-  // LCOV_EXCL_START - sys detection: depends on handle configuration
-  iter = handles_list;
-  while (LVAL_TYPE(iter) != LVAL_NIL) {
-    valk_lval_t *h = valk_lval_head(iter);
-    valk_async_handle_t *handle = h->async.handle;
-    if (handle->sys) {
-      any_handle->sys = handle->sys;
-      break;
-    }
-    iter = valk_lval_tail(iter);
-  }
-  // LCOV_EXCL_STOP
 
   valk_async_handle_t **handles = calloc(count, sizeof(valk_async_handle_t*));
   // LCOV_EXCL_START - allocation failure: requires OOM
@@ -205,11 +150,14 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
     valk_lval_t *h = valk_lval_head(iter);
     valk_async_handle_t *handle = h->async.handle;
     handles[i] = handle;
+    if (!any_handle->sys && handle->sys) {
+      any_handle->sys = handle->sys;
+    }
     valk_async_handle_add_child(any_handle, handle);
     iter = valk_lval_tail(iter);
   }
 
-   return valk_lval_handle(any_handle);
+  return valk_lval_handle(any_handle);
 }
 
 void valk_register_comb_any(valk_lenv_t *env) {
