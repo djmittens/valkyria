@@ -171,20 +171,20 @@ endif
 TEST_RUN_BASE = --jobs $(J) $(TEST_RUN_FILTER) $(TEST_RUN_ONLY)
 TEST_RUN_ARGS = --timeout $(TIMEOUT) $(TEST_RUN_BASE)
 
-# Default test target (all C + Valk, no stress)
+# Default test target (all C + Valk + stress)
 .PHONY: test
 test: build
-	$(TEST_RUN) --build-dir build --no-stress $(TEST_RUN_ARGS)
+	$(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
 
 # C tests only
 .PHONY: test-c
 test-c: build
-	$(TEST_RUN) --build-dir build --only c --no-stress $(TEST_RUN_ARGS)
+	$(TEST_RUN) --build-dir build --only c $(TEST_RUN_ARGS)
 
 # Valk tests only
 .PHONY: test-valk
 test-valk: build
-	$(TEST_RUN) --build-dir build --only valk --no-stress $(TEST_RUN_ARGS)
+	$(TEST_RUN) --build-dir build --only valk $(TEST_RUN_ARGS)
 
 # C tests with ASAN
 .PHONY: test-c-asan
@@ -227,8 +227,8 @@ test-examples-asan: build-asan
 # Comprehensive: all tests + ASAN + examples
 .PHONY: test-all
 test-all: build build-asan
-	$(TEST_RUN) --build-dir build --no-stress --examples $(TEST_RUN_ARGS)
-	$(TEST_RUN) --build-dir build-asan --no-stress --examples \
+	$(TEST_RUN) --build-dir build --examples $(TEST_RUN_ARGS)
+	$(TEST_RUN) --build-dir build-asan --examples \
 		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt \
 		$(TEST_RUN_ARGS)
 
@@ -436,11 +436,11 @@ endif
 
 .PHONY: test-core
 test-core: build
-	ulimit -c unlimited && $(TEST_RUN) --build-dir build --no-stress $(TEST_RUN_ARGS)
+	ulimit -c unlimited && $(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
 
 .PHONY: test-asan-abort
 test-asan-abort: build-asan
-	ulimit -c unlimited && $(TEST_RUN) --build-dir build-asan --no-stress \
+	ulimit -c unlimited && $(TEST_RUN) --build-dir build-asan \
 		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt \
 		$(TEST_RUN_ARGS)
 
