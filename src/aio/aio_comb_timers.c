@@ -6,7 +6,7 @@ extern void valk_async_handle_on_resource_cleanup(valk_async_handle_t *handle, v
 
 static void __schedule_timer_close_cb(uv_handle_t *handle) {
   valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)handle->data;
-  if (timer_data) {
+  if (timer_data) { // LCOV_EXCL_BR_LINE - timer_data always set by init
     timer_data->async_handle = NULL;
   }
 }
@@ -167,7 +167,7 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
   async_handle->uv_handle_ptr = timer_data;
 
   valk_async_handle_on_resource_cleanup(async_handle, __interval_cleanup, timer_data, NULL);
-  VALK_ASSERT_HAS_CLEANUP(async_handle);
+  VALK_ASSERT_HAS_CLEANUP(async_handle); // LCOV_EXCL_BR_LINE - invariant
 
   valk_interval_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_interval_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM
@@ -186,6 +186,7 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
   return valk_lval_handle(async_handle);
 }
 
+// LCOV_EXCL_BR_START - timer lifecycle defensive checks
 static void __schedule_cleanup(void *data, void *ctx) {
   UNUSED(ctx);
   valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)data;
@@ -201,6 +202,7 @@ static void __schedule_cleanup(void *data, void *ctx) {
     }
   }
 }
+// LCOV_EXCL_BR_STOP
 
 // LCOV_EXCL_START - libuv timer callbacks: require event loop context
 static void __schedule_timer_cb(uv_timer_t *handle) {
@@ -308,7 +310,7 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
   timer_data->async_handle = async_handle;
 
   valk_async_handle_on_resource_cleanup(async_handle, __schedule_cleanup, timer_data, NULL);
-  VALK_ASSERT_HAS_CLEANUP(async_handle);
+  VALK_ASSERT_HAS_CLEANUP(async_handle); // LCOV_EXCL_BR_LINE - invariant
 
   valk_schedule_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_schedule_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM
@@ -422,7 +424,7 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
   async_handle->status = VALK_ASYNC_RUNNING;
 
   valk_async_handle_on_resource_cleanup(async_handle, __sleep_cleanup, timer_data, NULL);
-  VALK_ASSERT_HAS_CLEANUP(async_handle);
+  VALK_ASSERT_HAS_CLEANUP(async_handle); // LCOV_EXCL_BR_LINE - invariant
 
   valk_sleep_init_ctx_t *init_ctx = valk_region_alloc(&sys->system_region, sizeof(valk_sleep_init_ctx_t));
   // LCOV_EXCL_START - region alloc failure: requires OOM

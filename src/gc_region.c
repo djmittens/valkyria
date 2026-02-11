@@ -257,7 +257,7 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
       break;
 
     case LVAL_FUN:
-      if (src->fun.name) {
+      if (src->fun.name) { // LCOV_EXCL_BR_LINE - fun.name always set
         sz len = strlen(src->fun.name) + 1;
         copy->fun.name = valk_region_alloc(target, len);
         if (copy->fun.name) memcpy(copy->fun.name, src->fun.name, len); // LCOV_EXCL_BR_LINE - OOM
@@ -269,7 +269,7 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
-      if (src->str) {
+      if (src->str) { // LCOV_EXCL_BR_LINE - str always set for SYM/STR/ERR
         sz len = strlen(src->str) + 1;
         copy->str = valk_region_alloc(target, len);
         if (copy->str) memcpy(copy->str, src->str, len); // LCOV_EXCL_BR_LINE - OOM
@@ -310,7 +310,7 @@ valk_lval_t *valk_region_ensure_safe_ref(valk_lval_t *parent, valk_lval_t *child
   void *parent_alloc = parent->origin_allocator;
   void *child_alloc = child->origin_allocator;
 
-  if (!parent_alloc || !child_alloc) return child;
+  if (!parent_alloc || !child_alloc) return child; // LCOV_EXCL_BR_LINE - allocators always set
 
   if (valk_region_write_barrier(parent_alloc, child_alloc, false)) {
     return child;

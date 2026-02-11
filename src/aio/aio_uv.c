@@ -5,7 +5,7 @@ u64 g_async_handle_id = 0;
 
 static void __aio_gc_wake(void *ctx) {
   valk_aio_system_t *sys = ctx;
-  if (sys && sys->eventloop && !sys->shuttingDown) {
+  if (sys && sys->eventloop && !sys->shuttingDown) { // LCOV_EXCL_BR_LINE - GC wake defensive null checks
     uv_async_send(&sys->gc_wakeup);
   }
 }

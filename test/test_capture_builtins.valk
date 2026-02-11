@@ -1,0 +1,27 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "capture-start with args returns error"
+    {do
+    (= {result} (test/capture-start "extra"))
+    (error? result)
+  })
+  (test "capture-stop with no args returns error"
+    {do
+    (= {result} (test/capture-stop))
+    (error? result)
+  })
+  (test "capture-stop with wrong type returns error"
+    {do
+    (= {result} (test/capture-stop 42))
+    (error? result)
+  })
+  (test "capture-stop with wrong ref type returns error"
+    {do
+    (= {sys} (aio/await (aio/start)))
+    (= {result} (test/capture-stop sys))
+    (aio/stop sys)
+    (error? result)
+  }))
+  {:suite-name "Capture Builtins Coverage"})

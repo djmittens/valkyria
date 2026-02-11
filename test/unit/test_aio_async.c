@@ -956,6 +956,43 @@ void test_resource_cleanup_runs_on_cancel(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_async_handle_await_timeout_expires(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_system_create(NULL);
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+  handle->status = VALK_ASYNC_RUNNING;
+
+  valk_lval_t *awaited = valk_async_handle_await_timeout(handle, 5);
+  ASSERT_EQ(awaited->flags & LVAL_TYPE_MASK, LVAL_ERR);
+  ASSERT_STR_CONTAINS(awaited->str, "timeout");
+
+  valk_async_handle_free(handle);
+  valk_system_destroy(valk_sys);
+  VALK_PASS();
+}
+
+void test_async_handle_await_timeout_completes_before_timeout(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_system_create(NULL);
+
+  valk_async_handle_t *handle = valk_async_handle_new_in_region(NULL, NULL, NULL);
+  ASSERT_NOT_NULL(handle);
+
+  valk_lval_t *result = valk_lval_num(99);
+  valk_async_handle_complete(handle, result);
+
+  valk_lval_t *awaited = valk_async_handle_await_timeout(handle, 5000);
+  ASSERT_EQ(awaited, result);
+
+  valk_async_handle_free(handle);
+  valk_system_destroy(valk_sys);
+  VALK_PASS();
+}
+
 void test_resource_cleanup_no_double_run(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -1035,6 +1072,8 @@ int main(void) {
   valk_testsuite_add_test(suite, "async_await_timeout_already_completed", test_async_handle_await_timeout_already_completed);
   valk_testsuite_add_test(suite, "async_await_timeout_already_failed", test_async_handle_await_timeout_already_failed);
   valk_testsuite_add_test(suite, "async_cancel_from_running_no_sys", test_async_handle_cancel_from_running_no_sys);
+  valk_testsuite_add_test(suite, "async_await_timeout_expires", test_async_handle_await_timeout_expires);
+  valk_testsuite_add_test(suite, "async_await_timeout_completes_before", test_async_handle_await_timeout_completes_before_timeout);
   valk_testsuite_add_test(suite, "resource_cleanup_runs_on_complete", test_resource_cleanup_runs_on_complete);
   valk_testsuite_add_test(suite, "resource_cleanup_runs_on_fail", test_resource_cleanup_runs_on_fail);
   valk_testsuite_add_test(suite, "resource_cleanup_runs_on_cancel", test_resource_cleanup_runs_on_cancel);

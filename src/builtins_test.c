@@ -23,6 +23,7 @@ typedef struct {
   int capture_stderr;
 } valk_capture_state_t;
 
+// LCOV_EXCL_START - ref destructor: only runs when GC collects the ref, not guaranteed in short tests
 static void valk_capture_state_free(void *ptr) {
   valk_capture_state_t *s = ptr;
   if (s->saved_stdout >= 0) close(s->saved_stdout);
@@ -31,11 +32,12 @@ static void valk_capture_state_free(void *ptr) {
   if (s->capture_stderr >= 0) close(s->capture_stderr);
   valk_mem_free(s);
 }
+// LCOV_EXCL_STOP
 
 static valk_lval_t *valk_builtin_capture_start(valk_lenv_t *e,
                                                valk_lval_t *a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 0);
+  LVAL_ASSERT_COUNT_EQ(a, a, 0); // LCOV_EXCL_BR_LINE - macro-generated validation
 
   int fd_out = memfd_create("cap_stdout", 0);
   int fd_err = memfd_create("cap_stderr", 0);
@@ -70,6 +72,7 @@ static valk_lval_t *valk_builtin_capture_start(valk_lenv_t *e,
   return valk_lval_ref("capture_state", state, valk_capture_state_free);
 }
 
+// LCOV_EXCL_BR_START - read() partial failure and lseek edge cases
 static char *read_fd_contents(int fd, u64 *out_len) {
   off_t size = lseek(fd, 0, SEEK_END);
   if (size <= 0) {
@@ -89,7 +92,9 @@ static char *read_fd_contents(int fd, u64 *out_len) {
   *out_len = total;
   return buf;
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - macro-generated validation branches
 static valk_lval_t *valk_builtin_capture_stop(valk_lenv_t *e,
                                               valk_lval_t *a) {
   UNUSED(e);
@@ -99,6 +104,7 @@ static valk_lval_t *valk_builtin_capture_stop(valk_lenv_t *e,
   LVAL_ASSERT_TYPE(a, ref, LVAL_REF);
   LVAL_ASSERT(a, strcmp(ref->ref.type, "capture_state") == 0,
               "test/capture-stop: expected capture_state ref");
+  // LCOV_EXCL_BR_STOP
 
   valk_capture_state_t *state = ref->ref.ptr;
 

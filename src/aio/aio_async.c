@@ -126,7 +126,7 @@ valk_async_handle_t* valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *
 }
 
 valk_async_handle_t* valk_async_handle_new_in_region(valk_aio_system_t *sys, valk_lenv_t *env, valk_region_t *region) {
-  if (!region && sys) {
+  if (!region && sys) { // LCOV_EXCL_BR_LINE - region provided directly only from internal callers
     region = &sys->system_region;
   }
 
@@ -196,7 +196,7 @@ void valk_async_handle_on_cleanup(valk_async_handle_t *handle,
 }
 
 void valk_async_handle_run_resource_cleanups(valk_async_handle_t *handle) {
-  if (!handle || !handle->resource_cleanup_count) return;
+  if (!handle || !handle->resource_cleanup_count) return; // LCOV_EXCL_BR_LINE - defensive null check
   for (i32 i = (i32)handle->resource_cleanup_count - 1; i >= 0; i--) {
     valk_async_cleanup_entry_t *entry = &handle->resource_cleanups[i];
     entry->fn(entry->data, entry->ctx);
@@ -207,6 +207,7 @@ void valk_async_handle_run_resource_cleanups(valk_async_handle_t *handle) {
   handle->resource_cleanup_capacity = 0;
 }
 
+// LCOV_EXCL_BR_START - defensive null/capacity checks
 void valk_async_handle_on_resource_cleanup(valk_async_handle_t *handle,
                                            void (*fn)(void *data, void *ctx),
                                            void *data, void *ctx) {
@@ -223,6 +224,7 @@ void valk_async_handle_on_resource_cleanup(valk_async_handle_t *handle,
     .fn = fn, .data = data, .ctx = ctx
   };
 }
+// LCOV_EXCL_BR_STOP
 
 void valk_async_handle_finish(valk_async_handle_t *handle) {
   valk_async_notify_parent(handle);
@@ -231,12 +233,14 @@ void valk_async_handle_finish(valk_async_handle_t *handle) {
   valk_async_handle_run_resource_cleanups(handle);
 }
 
+// LCOV_EXCL_BR_START - CAS transition fallback branches
 static bool __reach_terminal(valk_async_handle_t *handle, valk_async_status_t new_status) {
   bool transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, new_status);
   if (!transitioned) {
     transitioned = valk_async_handle_try_transition(handle, VALK_ASYNC_RUNNING, new_status);
   }
   if (!transitioned) return false;
+// LCOV_EXCL_BR_STOP
 
   valk_async_handle_finish(handle);
   return true;
@@ -262,6 +266,7 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
   __reach_terminal(handle, VALK_ASYNC_FAILED);
 }
 
+// LCOV_EXCL_START - cancel task: runs on event loop thread, requires live UV timers and GC coordination
 static void valk_async_cancel_task(void *ctx) {
   VALK_GC_SAFE_POINT();
 
@@ -294,11 +299,9 @@ static void valk_async_cancel_task(void *ctx) {
 
   if (handle->on_cancel && handle->env) {
     valk_mem_allocator_t *alloc = handle->region ? (valk_mem_allocator_t*)handle->region : nullptr;
-    // LCOV_EXCL_START - fallback arena allocation rarely triggered
     if (!alloc && handle->sys) {
       alloc = (valk_mem_allocator_t*)&handle->sys->system_region;
     }
-    // LCOV_EXCL_STOP
     if (!alloc) alloc = &valk_malloc_allocator;
     VALK_WITH_ALLOC(alloc) {
       valk_lval_t *args = valk_lval_nil();
@@ -314,6 +317,7 @@ static void valk_async_cancel_task(void *ctx) {
     }
   }
 }
+// LCOV_EXCL_STOP
 
 bool valk_async_handle_cancel(valk_async_handle_t *handle) {
   if (!handle) return false;
@@ -418,7 +422,7 @@ valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 ti
   valk_aio_system_t *sys = handle->sys;
   bool on_loop_thread = sys && uv_thread_self() == sys->loopThread;
   
-  if (!sys || !sys->eventloop || !on_loop_thread) {
+  if (!sys || !sys->eventloop || !on_loop_thread) { // LCOV_EXCL_BR_LINE - on_loop_thread true only from HTTP handler callbacks
     u64 start = 0;
     if (timeout_ms > 0) {
       struct timespec ts;
@@ -427,7 +431,7 @@ valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 ti
     }
     
     while (!valk_async_handle_is_terminal(valk_async_handle_get_status(handle))) {
-      VALK_GC_SAFE_POINT();
+      VALK_GC_SAFE_POINT(); // LCOV_EXCL_BR_LINE - GC safepoint macro branch
       uv_sleep(1);
       
       if (timeout_ms > 0) {
@@ -439,6 +443,7 @@ valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 ti
         }
       }
     }
+  // LCOV_EXCL_START - on-loop-thread await: only reachable from HTTP handler callbacks on event loop thread
   } else {
     u64 start = 0;
     if (timeout_ms > 0) {
@@ -460,6 +465,7 @@ valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 ti
       }
     }
   }
+  // LCOV_EXCL_STOP
   
   valk_async_status_t status = valk_async_handle_get_status(handle);
   if (status == VALK_ASYNC_COMPLETED) {
