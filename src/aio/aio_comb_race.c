@@ -10,7 +10,6 @@ typedef struct {
   valk_mem_allocator_t *allocator;
 } valk_race_ctx_t;
 
-// LCOV_EXCL_START - async race: internal callbacks called from async system
 static void valk_race_ctx_cleanup(void *ctx) {
   valk_race_ctx_t *race_ctx = (valk_race_ctx_t *)ctx;
   if (!race_ctx) return;
@@ -20,8 +19,6 @@ static void valk_race_ctx_cleanup(void *ctx) {
 }
 
 static void valk_async_race_child_resolved(valk_async_handle_t *child) {
-  if (!child || !child->parent) return;
-
   valk_async_handle_t *parent = child->parent;
   if (!parent->uv_handle_ptr) return;
 
@@ -58,7 +55,6 @@ static void valk_async_race_child_resolved(valk_async_handle_t *child) {
 
   valk_async_handle_finish(ctx->race_handle);
 }
-// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most

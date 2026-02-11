@@ -38,7 +38,6 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
       } else if (inner->status == VALK_ASYNC_FAILED) {
         result->status = VALK_ASYNC_FAILED;
         result->error = valk_evacuate_to_heap(inner->error);
-      // LCOV_EXCL_START - inner handle running: requires nested async with specific timing
       } else {
         result->status = VALK_ASYNC_RUNNING;
         inner->on_complete = valk_lval_lambda(e,
@@ -46,7 +45,6 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
           valk_lval_nil());
         valk_async_handle_add_child(result, inner);
       }
-      // LCOV_EXCL_STOP
     } else {
       result->status = VALK_ASYNC_COMPLETED;
       result->result = valk_evacuate_to_heap(transformed);
@@ -60,12 +58,10 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_handle(result);
   }
 
-  // LCOV_EXCL_START - cancelled status: requires running handle that gets cancelled before aio/then call
   if (source->status == VALK_ASYNC_CANCELLED) {
     result->status = VALK_ASYNC_CANCELLED;
     return valk_lval_handle(result);
   }
-  // LCOV_EXCL_STOP
 
   result->status = VALK_ASYNC_RUNNING;
   result->env = e;
@@ -141,12 +137,10 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_handle(catch_handle);
   }
 
-  // LCOV_EXCL_START - cancelled status: requires specific async lifecycle
   if (source->status == VALK_ASYNC_CANCELLED) {
     catch_handle->status = VALK_ASYNC_CANCELLED;
     return valk_lval_handle(catch_handle);
   }
-  // LCOV_EXCL_STOP
 
   catch_handle->status = VALK_ASYNC_RUNNING;
   catch_handle->env = e;
@@ -198,14 +192,12 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
     atomic_store_explicit(&finally_handle->error, atomic_load_explicit(&source->error, memory_order_acquire), memory_order_release);
     return valk_lval_handle(finally_handle);
   }
-  // LCOV_EXCL_START - cancelled status: requires specific async lifecycle
   if (source_status == VALK_ASYNC_CANCELLED) {
     valk_lval_t *args = valk_lval_nil();
     valk_lval_eval_call(e, fn, args);
     atomic_store_explicit(&finally_handle->status, VALK_ASYNC_CANCELLED, memory_order_release);
     return valk_lval_handle(finally_handle);
   }
-  // LCOV_EXCL_STOP
 
   atomic_store_explicit(&finally_handle->status, VALK_ASYNC_RUNNING, memory_order_release);
   finally_handle->env = e;

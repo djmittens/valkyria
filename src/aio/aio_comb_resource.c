@@ -1,7 +1,6 @@
 #include "aio_combinators_internal.h"
 
 static valk_lval_t* valk_builtin_aio_on_cancel(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 2) {
     return valk_lval_err("aio/on-cancel: expected 2 arguments (handle fn)");
   }
@@ -14,28 +13,22 @@ static valk_lval_t* valk_builtin_aio_on_cancel(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/on-cancel: second argument must be a function");
   }
-  // LCOV_EXCL_STOP
 
   valk_async_handle_t *handle = handle_lval->async.handle;
 
-  // LCOV_EXCL_START - cancelled status: requires specific async lifecycle
   if (handle->status == VALK_ASYNC_CANCELLED) {
     valk_lval_t *args = valk_lval_nil();
     valk_lval_eval_call(e, fn, args);
     return valk_lval_handle(handle);
   }
-  // LCOV_EXCL_STOP
 
   handle->on_cancel = valk_evacuate_to_heap(fn);
-  // LCOV_EXCL_START - env check: defensive
   if (!handle->env) handle->env = e;
-  // LCOV_EXCL_STOP
 
   return valk_lval_handle(handle);
 }
 
 static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 3) {
     return valk_lval_err("aio/bracket: expected 3 arguments (acquire release use)");
   }
@@ -52,7 +45,6 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(use_fn) != LVAL_FUN) {
     return valk_lval_err("aio/bracket: third argument must be a function");
   }
-  // LCOV_EXCL_STOP
 
   valk_async_handle_t *acquire = acquire_lval->async.handle;
 
@@ -65,7 +57,6 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
   bracket_handle->request_ctx = acquire->request_ctx;
 
   valk_async_status_t acquire_status = atomic_load_explicit(&acquire->status, memory_order_acquire);
-  // LCOV_EXCL_START - bracket status dispatch: depends on acquire handle status
   if (acquire_status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *resource = atomic_load_explicit(&acquire->result, memory_order_acquire);
 
@@ -128,7 +119,6 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
     atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_CANCELLED, memory_order_release);
     return valk_lval_handle(bracket_handle);
   }
-  // LCOV_EXCL_STOP
 
   atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_RUNNING, memory_order_release);
   bracket_handle->env = e;
@@ -143,7 +133,6 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_START - arg validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 1) {
     return valk_lval_err("aio/scope: expected 1 argument (fn)");
   }
@@ -152,7 +141,6 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/scope: argument must be a function");
   }
-  // LCOV_EXCL_STOP
 
   valk_async_handle_t *scope_handle = valk_async_handle_new(NULL, e);
   // LCOV_EXCL_START - allocation failure: requires OOM
@@ -168,7 +156,6 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *args = valk_lval_cons(scope_lval, valk_lval_nil());
   valk_lval_t *result = valk_lval_eval_call(e, fn, args);
 
-  // LCOV_EXCL_START - result type dispatch: callback-dependent
   if (LVAL_TYPE(result) == LVAL_ERR) {
     atomic_store_explicit(&scope_handle->status, VALK_ASYNC_FAILED, memory_order_release);
     atomic_store_explicit(&scope_handle->error, result, memory_order_release);
@@ -193,7 +180,6 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
     }
     return scope_lval;
   }
-  // LCOV_EXCL_STOP
 
   atomic_store_explicit(&scope_handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
   atomic_store_explicit(&scope_handle->result, result, memory_order_release);

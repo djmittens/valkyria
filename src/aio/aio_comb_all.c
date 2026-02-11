@@ -18,14 +18,12 @@ typedef struct {
 } valk_all_wrapper_ctx_t;
 
 static void valk_all_ctx_cleanup(void *ctx) {
-  // LCOV_EXCL_START - cleanup callback: called from async system teardown
   valk_all_ctx_t *all_ctx = (valk_all_ctx_t *)ctx;
   if (!all_ctx) return;
   all_ctx->magic = 0;
   if (all_ctx->results) free(all_ctx->results);
   if (all_ctx->handles) free(all_ctx->handles);
   free(all_ctx);
-  // LCOV_EXCL_STOP
 }
 
 static void valk_async_all_child_completed(valk_async_handle_t *child);
@@ -33,7 +31,6 @@ static void valk_async_all_child_failed(valk_async_handle_t *child);
 static void valk_async_all_child_completed_with_ctx(valk_all_ctx_t *ctx, u64 idx, valk_async_handle_t *child);
 static void valk_async_all_child_failed_with_ctx(valk_all_ctx_t *ctx, valk_async_handle_t *child);
 
-// LCOV_EXCL_START - all wrapper on_done: internal async callback
 static void valk_all_wrapper_on_done(valk_async_handle_t *handle, void *ctx) {
   valk_all_wrapper_ctx_t *wrapper_ctx = (valk_all_wrapper_ctx_t *)ctx;
   if (!wrapper_ctx || !wrapper_ctx->all_ctx) {
@@ -49,7 +46,6 @@ static void valk_all_wrapper_on_done(valk_async_handle_t *handle, void *ctx) {
   }
   free(wrapper_ctx);
 }
-// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
@@ -177,26 +173,21 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static inline valk_all_ctx_t* valk_async_get_all_ctx(valk_async_handle_t *handle) {
-  // LCOV_EXCL_START - internal helper: defensive checks
   if (!handle || !handle->parent) return NULL;
   valk_async_handle_t *parent = handle->parent;
   if (!parent->uv_handle_ptr) return NULL;
   valk_all_ctx_t *ctx = (valk_all_ctx_t*)parent->uv_handle_ptr;
   if (ctx->magic != VALK_ALL_CTX_MAGIC) return NULL;
   return ctx;
-  // LCOV_EXCL_STOP
 }
 
 static inline i64 valk_async_all_find_index(valk_all_ctx_t *ctx, valk_async_handle_t *child) {
-  // LCOV_EXCL_START - internal helper: linear search
   for (u64 i = 0; i < ctx->total; i++) {
     if (ctx->handles[i] == child) return (i64)i;
   }
   return -1;
-  // LCOV_EXCL_STOP
 }
 
-// LCOV_EXCL_START - async all completion: internal callback, called from async system
 static void valk_async_all_child_completed(valk_async_handle_t *child) {
   valk_all_ctx_t *ctx = valk_async_get_all_ctx(child);
   if (!ctx) return;
@@ -297,7 +288,6 @@ static void valk_async_all_child_failed_with_ctx(valk_all_ctx_t *ctx, valk_async
 
   valk_async_handle_finish(ctx->all_handle);
 }
-// LCOV_EXCL_STOP
 
 void valk_register_comb_all(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "aio/all", valk_builtin_aio_all);

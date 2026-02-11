@@ -19,22 +19,18 @@ static void valk_async_propagate_single(void *ctx);
 
 static void valk_async_schedule_propagate(valk_async_handle_t *child) {
   valk_aio_system_t *sys = child->sys;
-  // LCOV_EXCL_BR_START - async scheduling: depends on sys configuration
   if (sys) {
     valk_aio_enqueue_task(sys, valk_async_propagate_single, child);
   } else {
     valk_async_propagate_single(child);
   }
-  // LCOV_EXCL_BR_STOP
 }
 
 static void valk_async_propagate_single(void *ctx) {
-  VALK_GC_SAFE_POINT(); // LCOV_EXCL_BR_LINE - GC safepoint: depends on GC state
+  VALK_GC_SAFE_POINT();
   
   valk_async_handle_t *source = (valk_async_handle_t *)ctx;
-  // LCOV_EXCL_BR_START - defensive null check
   if (!source) return;
-  // LCOV_EXCL_BR_STOP
 
   u32 children_count = valk_chunked_ptrs_count(&source->children);
   VALK_INFO("Propagating from handle %llu (status=%d, children=%u)",
@@ -42,7 +38,6 @@ static void valk_async_propagate_single(void *ctx) {
 
   valk_async_status_t source_status = valk_async_handle_get_status(source);
 
-  // LCOV_EXCL_START - async propagation: complex internal state machine
   for (u32 i = 0; i < children_count; i++) {
     valk_async_handle_t *child = valk_chunked_ptrs_get(&source->children, i);
     valk_async_status_t child_status = valk_async_handle_get_status(child);
@@ -138,12 +133,9 @@ static void valk_async_propagate_single(void *ctx) {
       }
     }
   }
-  // LCOV_EXCL_STOP
 }
 
 void valk_async_propagate_completion(valk_async_handle_t *source) {
-  // LCOV_EXCL_BR_START - defensive null check
   if (!source) return;
-  // LCOV_EXCL_BR_STOP
   valk_async_propagate_single(source);
 }

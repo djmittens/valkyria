@@ -13,7 +13,6 @@ typedef struct {
   valk_mem_allocator_t *allocator;
 } valk_all_settled_ctx_t;
 
-// LCOV_EXCL_START - all-settled cleanup and internal callbacks: called from async system
 static void valk_all_settled_ctx_cleanup(void *ctx) {
   valk_all_settled_ctx_t *as_ctx = (valk_all_settled_ctx_t *)ctx;
   if (!as_ctx) return;
@@ -98,10 +97,8 @@ static void valk_async_all_settled_child_completed(valk_async_handle_t *child) {
     valk_async_handle_finish(ctx->all_settled_handle);
   }
 }
-// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_all_settled(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_START - arg/list validation: compile-time checks catch most
   if (valk_lval_list_count(a) != 1) {
     return valk_lval_err("aio/all-settled: expected 1 argument (list of handles)");
   }
@@ -117,7 +114,6 @@ static valk_lval_t* valk_builtin_aio_all_settled(valk_lenv_t* e, valk_lval_t* a)
     if (LVAL_TYPE(h) != LVAL_HANDLE) {
       return valk_lval_err("aio/all-settled: all elements must be handles");
     }
-  // LCOV_EXCL_STOP
     count++;
     iter = valk_lval_tail(iter);
   }

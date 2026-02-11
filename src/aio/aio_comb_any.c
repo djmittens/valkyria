@@ -12,7 +12,6 @@ typedef struct {
   valk_mem_allocator_t *allocator;
 } valk_any_ctx_t;
 
-// LCOV_EXCL_START - async any: internal callbacks called from async system
 static void valk_any_ctx_cleanup(void *ctx) {
   valk_any_ctx_t *any_ctx = (valk_any_ctx_t *)ctx;
   if (!any_ctx) return;
@@ -22,8 +21,6 @@ static void valk_any_ctx_cleanup(void *ctx) {
 }
 
 static void valk_async_any_child_success(valk_async_handle_t *child) {
-  if (!child || !child->parent) return;
-
   valk_async_handle_t *parent = child->parent;
   if (!parent->uv_handle_ptr) return;
 
@@ -48,8 +45,6 @@ static void valk_async_any_child_success(valk_async_handle_t *child) {
 }
 
 static void valk_async_any_child_failed(valk_async_handle_t *child) {
-  if (!child || !child->parent) return;
-
   valk_async_handle_t *parent = child->parent;
   if (!parent->uv_handle_ptr) return;
 
@@ -70,7 +65,6 @@ static void valk_async_any_child_failed(valk_async_handle_t *child) {
     valk_async_handle_finish(ctx->any_handle);
   }
 }
-// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
