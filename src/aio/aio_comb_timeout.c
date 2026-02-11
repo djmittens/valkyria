@@ -7,7 +7,9 @@ static void __within_timeout_timer_cb(uv_timer_t *timer_handle) {
   valk_async_handle_fail(timeout_handle, valk_lval_sym(":timeout"));
 
   uv_timer_stop(timer_handle);
-  uv_close((uv_handle_t *)timer_handle, __sleep_timer_close_cb);
+  if (!uv_is_closing((uv_handle_t *)timer_handle)) {
+    uv_close((uv_handle_t *)timer_handle, __sleep_timer_close_cb);
+  }
 }
 
 typedef struct {
@@ -22,6 +24,11 @@ static void __within_init_on_loop(void *ctx) {
   if (!init_ctx || !init_ctx->sys) return;
   
   valk_async_handle_uv_data_t *timer_data = init_ctx->timer_data;
+
+  if (valk_async_handle_is_terminal(valk_async_handle_get_status(timer_data->handle))) {
+    free(timer_data);
+    return;
+  }
   
   uv_loop_t *loop = init_ctx->sys->eventloop;
   int r = uv_timer_init(loop, &timer_data->uv.timer);
@@ -120,6 +127,7 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("Failed to allocate timer data");
   }
   // LCOV_EXCL_STOP
+  memset(timer_data, 0, sizeof(valk_async_handle_uv_data_t));
 
   timer_data->magic = VALK_UV_DATA_TIMER_MAGIC;
   timer_data->handle = timeout_handle;
@@ -226,6 +234,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
       valk_async_handle_finish(parent);
       return;
     }
+    memset(timer_data, 0, sizeof(valk_async_handle_uv_data_t));
 
     timer_data->magic = VALK_UV_DATA_TIMER_MAGIC;
     timer_data->handle = timer;

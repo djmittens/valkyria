@@ -35,7 +35,9 @@ static inline void __sleep_timer_cb(uv_timer_t *timer_handle) {
   valk_async_handle_uv_data_t *data = (valk_async_handle_uv_data_t *)timer_handle->data;
   valk_async_handle_t *async_handle = data->handle;
   uv_timer_stop(timer_handle);
-  uv_close((uv_handle_t *)timer_handle, __sleep_timer_close_cb);
+  if (!uv_is_closing((uv_handle_t *)timer_handle)) {
+    uv_close((uv_handle_t *)timer_handle, __sleep_timer_close_cb);
+  }
   async_handle->uv_handle_ptr = NULL;
   valk_lval_t *result = valk_lval_nil();
   valk_async_handle_complete(async_handle, result);

@@ -28,6 +28,8 @@ static void __interval_cleanup(void *data, void *ctx) {
   valk_interval_timer_t *timer_data = (valk_interval_timer_t *)data;
   if (!timer_data || timer_data->stopped) return;
   timer_data->stopped = true;
+  if (!timer_data->timer.loop) return;
+  if (uv_is_closing((uv_handle_t *)&timer_data->timer)) return;
   uv_timer_stop(&timer_data->timer);
   uv_close((uv_handle_t *)&timer_data->timer, __interval_timer_close_cb);
   if (timer_data->async_handle) {
@@ -52,7 +54,9 @@ static void __interval_timer_cb(uv_timer_t *handle) {
   if (cancelled) {
     timer_data->stopped = true;
     uv_timer_stop(handle);
-    uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    if (!uv_is_closing((uv_handle_t *)handle)) {
+      uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    }
     if (timer_data->async_handle) {
       timer_data->async_handle->uv_handle_ptr = NULL;
     }
@@ -63,7 +67,9 @@ static void __interval_timer_cb(uv_timer_t *handle) {
   if (!callback) {
     timer_data->stopped = true;
     uv_timer_stop(handle);
-    uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    if (!uv_is_closing((uv_handle_t *)handle)) {
+      uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    }
     if (timer_data->async_handle) {
       timer_data->async_handle->uv_handle_ptr = NULL;
       valk_async_handle_complete(timer_data->async_handle, valk_lval_nil());
@@ -80,7 +86,9 @@ static void __interval_timer_cb(uv_timer_t *handle) {
   if (LVAL_TYPE(result) == LVAL_SYM && strcmp(result->str, ":stop") == 0) {
     timer_data->stopped = true;
     uv_timer_stop(handle);
-    uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    if (!uv_is_closing((uv_handle_t *)handle)) {
+      uv_close((uv_handle_t *)handle, __interval_timer_close_cb);
+    }
     if (timer_data->async_handle) {
       timer_data->async_handle->uv_handle_ptr = NULL;
       valk_async_handle_complete(timer_data->async_handle, valk_lval_nil());
@@ -101,6 +109,8 @@ static void __interval_init_on_loop(void *ctx) {
   if (!init_ctx || !init_ctx->sys) return;
   
   valk_interval_timer_t *timer_data = init_ctx->timer_data;
+
+  if (timer_data->stopped) return;
   
   uv_loop_t *loop = init_ctx->sys->eventloop;
   int r = uv_timer_init(loop, &timer_data->timer);
@@ -134,6 +144,7 @@ valk_lval_t* valk_aio_interval(valk_aio_system_t* sys, u64 interval_ms,
     return valk_lval_err("Failed to allocate interval timer");
   }
   // LCOV_EXCL_STOP
+  memset(timer_data, 0, sizeof(valk_interval_timer_t));
 
   valk_async_handle_t *async_handle = valk_async_handle_new(sys, env);
   // LCOV_EXCL_START - allocation failure: requires OOM
@@ -179,6 +190,8 @@ static void __schedule_cleanup(void *data, void *ctx) {
   UNUSED(ctx);
   valk_schedule_timer_t *timer_data = (valk_schedule_timer_t *)data;
   if (!timer_data) return;
+  if (!timer_data->timer.loop) return;
+  if (uv_is_closing((uv_handle_t *)&timer_data->timer)) return;
   if (uv_is_active((uv_handle_t *)&timer_data->timer)) {
     uv_timer_stop(&timer_data->timer);
     valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
@@ -215,7 +228,9 @@ static void __schedule_timer_cb(uv_timer_t *handle) {
 
   valk_handle_release(&valk_sys->handle_table, timer_data->callback_handle);
   uv_timer_stop(handle);
-  uv_close((uv_handle_t *)handle, __schedule_timer_close_cb);
+  if (!uv_is_closing((uv_handle_t *)handle)) {
+    uv_close((uv_handle_t *)handle, __schedule_timer_close_cb);
+  }
 
   if (timer_data->async_handle) {
     timer_data->async_handle->uv_handle_ptr = NULL;
@@ -234,6 +249,9 @@ static void __schedule_init_on_loop(void *ctx) {
   if (!init_ctx || !init_ctx->sys) return;
   
   valk_schedule_timer_t *timer_data = init_ctx->timer_data;
+
+  if (timer_data->async_handle &&
+      valk_async_handle_is_terminal(valk_async_handle_get_status(timer_data->async_handle))) return;
   
   uv_loop_t *loop = init_ctx->sys->eventloop;
   int r = uv_timer_init(loop, &timer_data->timer);
@@ -271,6 +289,7 @@ valk_lval_t* valk_aio_schedule(valk_aio_system_t* sys, u64 delay_ms,
     return valk_lval_err("Failed to allocate timer");
   }
   // LCOV_EXCL_STOP
+  memset(timer_data, 0, sizeof(valk_schedule_timer_t));
 
   valk_async_handle_t *async_handle = valk_async_handle_new(sys, env);
   // LCOV_EXCL_START - allocation failure: requires OOM
@@ -319,12 +338,12 @@ static void __sleep_cleanup(void *data, void *ctx) {
   UNUSED(ctx);
   valk_async_handle_uv_data_t *timer_data = (valk_async_handle_uv_data_t *)data;
   if (!timer_data) return;
+  if (!timer_data->uv.timer.loop) return;
+  if (uv_is_closing((uv_handle_t *)&timer_data->uv.timer)) return;
   if (uv_is_active((uv_handle_t *)&timer_data->uv.timer)) {
     uv_timer_stop(&timer_data->uv.timer);
-    uv_close((uv_handle_t *)&timer_data->uv.timer, __sleep_timer_close_cb);
-  } else if (!uv_is_closing((uv_handle_t *)&timer_data->uv.timer)) {
-    free(timer_data);
   }
+  uv_close((uv_handle_t *)&timer_data->uv.timer, __sleep_timer_close_cb);
 }
 
 static void __sleep_init_on_loop(void *ctx) {
@@ -332,6 +351,11 @@ static void __sleep_init_on_loop(void *ctx) {
   if (!init_ctx || !init_ctx->sys) return;
   
   valk_async_handle_uv_data_t *timer_data = init_ctx->timer_data;
+
+  if (valk_async_handle_is_terminal(valk_async_handle_get_status(timer_data->handle))) {
+    free(timer_data);
+    return;
+  }
   
   uv_loop_t *loop = init_ctx->sys->eventloop;
   int r = uv_timer_init(loop, &timer_data->uv.timer);
@@ -389,6 +413,7 @@ static valk_lval_t* valk_builtin_aio_sleep(valk_lenv_t* e, valk_lval_t* a) {
   async_handle->request_ctx = req_ctx;
 
   valk_async_handle_uv_data_t *timer_data = aligned_alloc(alignof(valk_async_handle_uv_data_t), sizeof(valk_async_handle_uv_data_t));
+  memset(timer_data, 0, sizeof(valk_async_handle_uv_data_t));
   timer_data->magic = VALK_UV_DATA_TIMER_MAGIC;
   timer_data->handle = async_handle;
   timer_data->uv.timer.data = timer_data;

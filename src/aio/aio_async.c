@@ -270,14 +270,16 @@ static void valk_async_cancel_task(void *ctx) {
     u32 *magic_ptr = (u32*)handle->uv_handle_ptr;
     if (*magic_ptr == VALK_UV_DATA_TIMER_MAGIC) {
       valk_async_handle_uv_data_t *uv_data = handle->uv_handle_ptr;
-      if (uv_is_active((uv_handle_t*)&uv_data->uv.timer) &&
+      if (uv_data->uv.timer.loop &&
+          uv_is_active((uv_handle_t*)&uv_data->uv.timer) &&
           !uv_is_closing((uv_handle_t*)&uv_data->uv.timer)) {
         uv_timer_stop(&uv_data->uv.timer);
       }
     } else if (*magic_ptr == VALK_INTERVAL_TIMER_MAGIC) {
       valk_interval_timer_t *timer_data = (valk_interval_timer_t*)handle->uv_handle_ptr;
       timer_data->stopped = true;
-      if (uv_is_active((uv_handle_t*)&timer_data->timer) &&
+      if (timer_data->timer.loop &&
+          uv_is_active((uv_handle_t*)&timer_data->timer) &&
           !uv_is_closing((uv_handle_t*)&timer_data->timer)) {
         uv_timer_stop(&timer_data->timer);
       }
