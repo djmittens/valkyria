@@ -380,12 +380,19 @@ static void __aio_client_connect_cb(valk_aio_system_t *sys,
   // LCOV_EXCL_STOP
 }
 
-valk_async_handle_t *valk_aio_http2_connect_host(valk_aio_system_t *sys,
-                                                  const char *ip, const int port,
-                                                  const char *hostname) {
+valk_async_handle_t *valk_aio_http2_connect_host_with_done(valk_aio_system_t *sys,
+                                                            const char *ip, const int port,
+                                                            const char *hostname,
+                                                            valk_async_done_fn on_done,
+                                                            void *on_done_ctx) {
   valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
   if (!handle) { // LCOV_EXCL_BR_LINE OOM during handle creation
     return nullptr;
+  }
+
+  if (on_done) {
+    atomic_store_explicit(&handle->on_done, on_done, memory_order_release);
+    atomic_store_explicit(&handle->on_done_ctx, on_done_ctx, memory_order_relaxed);
   }
 
   struct valk_aio_task_new *task;
@@ -432,6 +439,12 @@ valk_async_handle_t *valk_aio_http2_connect_host(valk_aio_system_t *sys,
   valk_uv_exec_task(sys, task);
 
   return handle;
+}
+
+valk_async_handle_t *valk_aio_http2_connect_host(valk_aio_system_t *sys,
+                                                   const char *ip, const int port,
+                                                   const char *hostname) {
+  return valk_aio_http2_connect_host_with_done(sys, ip, port, hostname, NULL, NULL);
 }
 
 valk_async_handle_t *valk_aio_http2_connect(valk_aio_system_t *sys,
@@ -810,9 +823,8 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
   VALK_INFO("http2/client-request[%llu]: async_handle=%p created", 
             (unsigned long long)req_id, (void*)async_handle);
 
-  valk_async_handle_t *connect_handle = valk_aio_http2_connect_host(sys, host, port, host);
-  atomic_store_explicit(&connect_handle->on_done, __http2_client_request_connect_done, memory_order_release);
-  atomic_store_explicit(&connect_handle->on_done_ctx, ctx, memory_order_relaxed);
+  valk_async_handle_t *connect_handle = valk_aio_http2_connect_host_with_done(
+      sys, host, port, host, __http2_client_request_connect_done, ctx);
 
   VALK_INFO("http2/client-request[%llu]: connect_handle=%p created", 
             (unsigned long long)req_id, (void*)connect_handle);

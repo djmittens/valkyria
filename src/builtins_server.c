@@ -278,14 +278,13 @@ static valk_lval_t* valk_builtin_http2_connect(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* heap_callback = valk_evacuate_to_heap(callback);
   valk_handle_t callback_handle = valk_handle_create(&valk_sys->handle_table, heap_callback);
 
-  valk_async_handle_t* connect_handle = valk_aio_http2_connect_host(sys, host, port, host);
+  valk_async_handle_t* connect_handle = valk_aio_http2_connect_host_with_done(
+      sys, host, port, host,
+      valk_http2_connect_done_callback, (void*)(uintptr_t)callback_handle.index);
   if (!connect_handle) {
     valk_handle_release(&valk_sys->handle_table, callback_handle);
     return valk_lval_err("Failed to initiate connection");
   }
-
-  connect_handle->on_done = valk_http2_connect_done_callback;
-  connect_handle->on_done_ctx = (void*)(uintptr_t)callback_handle.index;
 
   return valk_lval_nil();
 }

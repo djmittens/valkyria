@@ -221,11 +221,17 @@ valk_async_handle_t *valk_aio_http2_connect(valk_aio_system_t *sys,
 // Connect to an IP with an explicit SNI/hostname used for TLS and HTTP/2.
 // Returns an async handle that completes with the client.
 valk_async_handle_t *valk_aio_http2_connect_host(valk_aio_system_t *sys,
-                                                  const char *ip, const int port,
-                                                  const char *hostname);
+                                                   const char *ip, const int port,
+                                                   const char *hostname);
+
+valk_async_handle_t *valk_aio_http2_connect_host_with_done(valk_aio_system_t *sys,
+                                                            const char *ip, const int port,
+                                                            const char *hostname,
+                                                            valk_async_done_fn on_done,
+                                                            void *on_done_ctx);
 
 valk_async_handle_t *valk_aio_http2_request_send(valk_http2_request_t *req,
-                                                  valk_aio_http2_client *client);
+                                                   valk_aio_http2_client *client);
 
 #include "aio_metrics.h"
 #include "gc.h"
