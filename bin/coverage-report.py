@@ -18,8 +18,14 @@ from xml.etree import ElementTree as ET
 
 # Import shared coverage data structures and parsing
 from coverage_common import (
-    BranchCoverage, ExprCoverage, LineCoverage, FileCoverage, CoverageReport,
-    collect_coverage, filter_runtime_files, filter_stdlib_files
+    BranchCoverage,
+    ExprCoverage,
+    LineCoverage,
+    FileCoverage,
+    CoverageReport,
+    collect_coverage,
+    filter_runtime_files,
+    filter_stdlib_files,
 )
 
 
@@ -32,99 +38,296 @@ def load_source_file(filepath: str) -> list:
         return []
 
 
-
-
-
 def byte_col_to_char_col(source_line: str, byte_col: int) -> int:
     """Convert a 1-based byte column to a 0-based character index.
-    
+
     The coverage system records byte positions (from the C parser), but Python
     strings are indexed by Unicode code points. Multi-byte characters like
     emojis need this conversion.
     """
     try:
-        line_bytes = source_line.encode('utf-8')
+        line_bytes = source_line.encode("utf-8")
         byte_idx = byte_col - 1
         if byte_idx < 0:
             return 0
         if byte_idx >= len(line_bytes):
             return len(source_line)
-        prefix = line_bytes[:byte_idx].decode('utf-8', errors='replace')
+        prefix = line_bytes[:byte_idx].decode("utf-8", errors="replace")
         return len(prefix)
     except (UnicodeDecodeError, UnicodeEncodeError):
         return byte_col - 1
 
 
 VALK_KEYWORDS = {
-    'if', 'else', 'cond', 'case', 'when', 'unless',
-    'do', 'begin', 'let', 'let*', 'letrec',
-    'lambda', 'fun', 'def', 'define', 'defun', 'defmacro', 'macro',
-    'quote', 'quasiquote', 'unquote', 'unquote-splicing',
-    'and', 'or', 'not',
-    'loop', 'while', 'for', 'recur', 'return',
-    'try', 'catch', 'throw',
-    'import', 'require', 'module',
-    'true', 'false', 'nil', 't',
-    'eq', 'equal', 'eql',
-    'set', 'setq', 'set!',
+    "if",
+    "else",
+    "cond",
+    "case",
+    "when",
+    "unless",
+    "do",
+    "begin",
+    "let",
+    "let*",
+    "letrec",
+    "lambda",
+    "fun",
+    "def",
+    "define",
+    "defun",
+    "defmacro",
+    "macro",
+    "quote",
+    "quasiquote",
+    "unquote",
+    "unquote-splicing",
+    "and",
+    "or",
+    "not",
+    "loop",
+    "while",
+    "for",
+    "recur",
+    "return",
+    "try",
+    "catch",
+    "throw",
+    "import",
+    "require",
+    "module",
+    "true",
+    "false",
+    "nil",
+    "t",
+    "eq",
+    "equal",
+    "eql",
+    "set",
+    "setq",
+    "set!",
 }
 
 VALK_BUILTINS = {
-    '+', '-', '*', '/', '%', 'mod', '\\',
-    '=', '==', '!=', '<', '>', '<=', '>=', '/=',
-    'type', 'typeof', 'string', 'number', 'symbol',
-    'atom', 'pair', 'null', 'empty',
-    'car', 'cdr', 'cons', 'list', 'append', 'reverse', 'map', 'filter', 'reduce', 'fold',
-    'head', 'tail', 'init', 'last', 'take', 'drop', 'nth', 'len', 'join', 'split',
-    'range', 'repeat', 'apply',
-    'eval', 'penv', 'ord', 'exit', 'shutdown',
-    'error', 'error?',
-    'load', 'read', 'read-file', 'write',
-    'print', 'printf', 'println', 'str', 'make-string',
-    'time-us', 'sleep', 'stack-depth',
-    'async-shift', 'async-reset', 'async-resume',
-    'aio/run', 'aio/start', 'aio/delay', 'aio/sleep',
-    'aio/pure', 'aio/fail', 'aio/then', 'aio/catch', 'aio/finally',
-    'aio/let', 'aio/do', 'aio/all', 'aio/any', 'aio/race',
-    'aio/bracket', 'aio/scope', 'aio/cancel', 'aio/cancelled?',
-    'aio/on-cancel', 'aio/status',
-    'aio/metrics', 'aio/metrics-json', 'aio/metrics-prometheus',
-    'aio/systems-json', 'aio/system-stats-prometheus', 'aio/diagnostics-state-json',
-    'http2/request', 'http2/request-add-header', 'http2/connect-async', 'http2/send-async',
-    'http2/response-body', 'http2/response-headers', 'http2/response-status',
-    'http2/server-handle', 'http2/server-listen',
-    'http-client/register', 'http-client/on-cache', 'http-client/on-operation',
-    'http-client/metrics-prometheus',
-    'sse/open', 'sse/send', 'sse/close', 'sse/on-drain', 'sse/writable?',
-    'mem/stats', 'mem/arena/capacity', 'mem/arena/high-water', 'mem/arena/usage',
-    'mem/checkpoint/stats', 'mem/gc/collect', 'mem/gc/set-threshold',
-    'mem/gc/stats', 'mem/gc/threshold',
-    'mem/heap/hard-limit', 'mem/heap/set-hard-limit', 'mem/heap/usage',
-    'metrics/collect-delta', 'metrics/counter', 'metrics/counter-inc',
-    'metrics/delta-json', 'metrics/gauge', 'metrics/gauge-dec',
-    'metrics/gauge-inc', 'metrics/gauge-set', 'metrics/histogram',
-    'metrics/histogram-observe', 'metrics/json', 'metrics/prometheus',
-    'vm/metrics-json', 'vm/metrics-prometheus',
-    'sys/log/set-level',
+    "+",
+    "-",
+    "*",
+    "/",
+    "%",
+    "mod",
+    "\\",
+    "=",
+    "==",
+    "!=",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    "/=",
+    "type",
+    "typeof",
+    "string",
+    "number",
+    "symbol",
+    "atom",
+    "pair",
+    "null",
+    "empty",
+    "car",
+    "cdr",
+    "cons",
+    "list",
+    "append",
+    "reverse",
+    "map",
+    "filter",
+    "reduce",
+    "fold",
+    "head",
+    "tail",
+    "init",
+    "last",
+    "take",
+    "drop",
+    "nth",
+    "len",
+    "join",
+    "split",
+    "range",
+    "repeat",
+    "apply",
+    "eval",
+    "penv",
+    "ord",
+    "exit",
+    "shutdown",
+    "error",
+    "error?",
+    "load",
+    "read",
+    "read-file",
+    "write",
+    "print",
+    "printf",
+    "println",
+    "str",
+    "make-string",
+    "time-us",
+    "sleep",
+    "stack-depth",
+    "async-shift",
+    "async-reset",
+    "async-resume",
+    "aio/run",
+    "aio/start",
+    "aio/delay",
+    "aio/sleep",
+    "aio/pure",
+    "aio/fail",
+    "aio/then",
+    "aio/catch",
+    "aio/finally",
+    "aio/let",
+    "aio/do",
+    "aio/all",
+    "aio/any",
+    "aio/race",
+    "aio/bracket",
+    "aio/scope",
+    "aio/cancel",
+    "aio/cancelled?",
+    "aio/on-cancel",
+    "aio/status",
+    "aio/metrics",
+    "aio/metrics-json",
+    "aio/metrics-prometheus",
+    "aio/systems-json",
+    "aio/system-stats-prometheus",
+    "aio/diagnostics-state-json",
+    "http2/request",
+    "http2/request-add-header",
+    "http2/connect-async",
+    "http2/send-async",
+    "http2/response-body",
+    "http2/response-headers",
+    "http2/response-status",
+    "http2/server-handle",
+    "http2/server-listen",
+    "http-client/register",
+    "http-client/on-cache",
+    "http-client/on-operation",
+    "http-client/metrics-prometheus",
+    "sse/open",
+    "sse/send",
+    "sse/close",
+    "sse/on-drain",
+    "sse/writable?",
+    "mem/stats",
+    "mem/arena/capacity",
+    "mem/arena/high-water",
+    "mem/arena/usage",
+    "mem/checkpoint/stats",
+    "mem/gc/collect",
+    "mem/gc/set-threshold",
+    "mem/gc/stats",
+    "mem/gc/threshold",
+    "mem/heap/hard-limit",
+    "mem/heap/set-hard-limit",
+    "mem/heap/usage",
+    "metrics/collect-delta",
+    "metrics/counter",
+    "metrics/counter-inc",
+    "metrics/delta-json",
+    "metrics/gauge",
+    "metrics/gauge-dec",
+    "metrics/gauge-inc",
+    "metrics/gauge-set",
+    "metrics/histogram",
+    "metrics/histogram-observe",
+    "metrics/json",
+    "metrics/prometheus",
+    "vm/metrics-json",
+    "vm/metrics-prometheus",
+    "sys/log/set-level",
 }
 
 C_KEYWORDS = {
-    'auto', 'break', 'case', 'char', 'const', 'continue', 'default', 'do',
-    'double', 'else', 'enum', 'extern', 'float', 'for', 'goto', 'if',
-    'inline', 'int', 'long', 'register', 'restrict', 'return', 'short',
-    'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef', 'union',
-    'unsigned', 'void', 'volatile', 'while', '_Bool', '_Complex', '_Imaginary',
-    'bool', 'true', 'false', 'NULL', 'nullptr',
-    '_Atomic', '_Alignas', '_Alignof', '_Generic', '_Noreturn', '_Static_assert',
-    '_Thread_local', 'alignas', 'alignof', 'noreturn', 'static_assert', 'thread_local',
+    "auto",
+    "break",
+    "case",
+    "char",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extern",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "register",
+    "restrict",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "while",
+    "_Bool",
+    "_Complex",
+    "_Imaginary",
+    "bool",
+    "true",
+    "false",
+    "NULL",
+    "nullptr",
+    "_Atomic",
+    "_Alignas",
+    "_Alignof",
+    "_Generic",
+    "_Noreturn",
+    "_Static_assert",
+    "_Thread_local",
+    "alignas",
+    "alignof",
+    "noreturn",
+    "static_assert",
+    "thread_local",
 }
 
 C_TYPES = {
-    'int8_t', 'int16_t', 'int32_t', 'int64_t',
-    'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
-    'size_t', 'ssize_t', 'ptrdiff_t', 'intptr_t', 'uintptr_t',
-    'FILE', 'DIR', 'pthread_t', 'pthread_mutex_t',
-    'atomic_int', 'atomic_bool', 'atomic_size_t',
+    "int8_t",
+    "int16_t",
+    "int32_t",
+    "int64_t",
+    "uint8_t",
+    "uint16_t",
+    "uint32_t",
+    "uint64_t",
+    "size_t",
+    "ssize_t",
+    "ptrdiff_t",
+    "intptr_t",
+    "uintptr_t",
+    "FILE",
+    "DIR",
+    "pthread_t",
+    "pthread_mutex_t",
+    "atomic_int",
+    "atomic_bool",
+    "atomic_size_t",
 }
 
 
@@ -133,44 +336,52 @@ def syntax_highlight_valk(source_line: str) -> str:
     result = []
     i = 0
     n = len(source_line)
-    
+
     while i < n:
         ch = source_line[i]
-        
-        if ch == ';':
-            result.append(f'<span class="syn-comment">{html.escape(source_line[i:])}</span>')
+
+        if ch == ";":
+            result.append(
+                f'<span class="syn-comment">{html.escape(source_line[i:])}</span>'
+            )
             break
-        
+
         if ch == '"':
             j = i + 1
             while j < n:
-                if source_line[j] == '\\' and j + 1 < n:
+                if source_line[j] == "\\" and j + 1 < n:
                     j += 2
                 elif source_line[j] == '"':
                     j += 1
                     break
                 else:
                     j += 1
-            result.append(f'<span class="syn-string">{html.escape(source_line[i:j])}</span>')
+            result.append(
+                f'<span class="syn-string">{html.escape(source_line[i:j])}</span>'
+            )
             i = j
             continue
-        
-        if ch.isdigit() or (ch == '-' and i + 1 < n and source_line[i + 1].isdigit()):
-            j = i + 1 if ch == '-' else i
-            while j < n and (source_line[j].isdigit() or source_line[j] == '.'):
+
+        if ch.isdigit() or (ch == "-" and i + 1 < n and source_line[i + 1].isdigit()):
+            j = i + 1 if ch == "-" else i
+            while j < n and (source_line[j].isdigit() or source_line[j] == "."):
                 j += 1
-            result.append(f'<span class="syn-number">{html.escape(source_line[i:j])}</span>')
+            result.append(
+                f'<span class="syn-number">{html.escape(source_line[i:j])}</span>'
+            )
             i = j
             continue
-        
-        if ch in '(){}[]':
+
+        if ch in "(){}[]":
             result.append(f'<span class="syn-paren">{html.escape(ch)}</span>')
             i += 1
             continue
-        
-        if ch.isalpha() or ch in '_-+*/<>=!?&|%':
+
+        if ch.isalpha() or ch in "_-+*/<>=!?&|%":
             j = i
-            while j < n and (source_line[j].isalnum() or source_line[j] in '_-+*/<>=!?&|%'):
+            while j < n and (
+                source_line[j].isalnum() or source_line[j] in "_-+*/<>=!?&|%"
+            ):
                 j += 1
             word = source_line[i:j]
             if word in VALK_KEYWORDS:
@@ -181,11 +392,11 @@ def syntax_highlight_valk(source_line: str) -> str:
                 result.append(html.escape(word))
             i = j
             continue
-        
+
         result.append(html.escape(ch))
         i += 1
-    
-    return ''.join(result)
+
+    return "".join(result)
 
 
 def syntax_highlight_c(source_line: str) -> str:
@@ -193,95 +404,111 @@ def syntax_highlight_c(source_line: str) -> str:
     result = []
     i = 0
     n = len(source_line)
-    in_preprocessor = source_line.lstrip().startswith('#')
-    
+    in_preprocessor = source_line.lstrip().startswith("#")
+
     while i < n:
         ch = source_line[i]
-        
-        if ch == '/' and i + 1 < n:
-            if source_line[i + 1] == '/':
-                result.append(f'<span class="syn-comment">{html.escape(source_line[i:])}</span>')
+
+        if ch == "/" and i + 1 < n:
+            if source_line[i + 1] == "/":
+                result.append(
+                    f'<span class="syn-comment">{html.escape(source_line[i:])}</span>'
+                )
                 break
-            if source_line[i + 1] == '*':
-                end = source_line.find('*/', i + 2)
+            if source_line[i + 1] == "*":
+                end = source_line.find("*/", i + 2)
                 if end == -1:
-                    result.append(f'<span class="syn-comment">{html.escape(source_line[i:])}</span>')
+                    result.append(
+                        f'<span class="syn-comment">{html.escape(source_line[i:])}</span>'
+                    )
                     break
-                result.append(f'<span class="syn-comment">{html.escape(source_line[i:end + 2])}</span>')
+                result.append(
+                    f'<span class="syn-comment">{html.escape(source_line[i : end + 2])}</span>'
+                )
                 i = end + 2
                 continue
-        
-        if ch == '#' and i == len(source_line) - len(source_line.lstrip()):
+
+        if ch == "#" and i == len(source_line) - len(source_line.lstrip()):
             j = i
-            while j < n and source_line[j] not in ' \t':
+            while j < n and source_line[j] not in " \t":
                 j += 1
-            result.append(f'<span class="syn-preproc">{html.escape(source_line[i:j])}</span>')
+            result.append(
+                f'<span class="syn-preproc">{html.escape(source_line[i:j])}</span>'
+            )
             i = j
             continue
-        
+
         if ch == '"':
             j = i + 1
             while j < n:
-                if source_line[j] == '\\' and j + 1 < n:
+                if source_line[j] == "\\" and j + 1 < n:
                     j += 2
                 elif source_line[j] == '"':
                     j += 1
                     break
                 else:
                     j += 1
-            result.append(f'<span class="syn-string">{html.escape(source_line[i:j])}</span>')
+            result.append(
+                f'<span class="syn-string">{html.escape(source_line[i:j])}</span>'
+            )
             i = j
             continue
-        
+
         if ch == "'":
             j = i + 1
             while j < n and j < i + 4:
-                if source_line[j] == '\\' and j + 1 < n:
+                if source_line[j] == "\\" and j + 1 < n:
                     j += 2
                 elif source_line[j] == "'":
                     j += 1
                     break
                 else:
                     j += 1
-            result.append(f'<span class="syn-string">{html.escape(source_line[i:j])}</span>')
+            result.append(
+                f'<span class="syn-string">{html.escape(source_line[i:j])}</span>'
+            )
             i = j
             continue
-        
-        if ch.isdigit() or (ch == '.' and i + 1 < n and source_line[i + 1].isdigit()):
+
+        if ch.isdigit() or (ch == "." and i + 1 < n and source_line[i + 1].isdigit()):
             j = i
-            if j + 1 < n and source_line[j] == '0' and source_line[j + 1] in 'xX':
+            if j + 1 < n and source_line[j] == "0" and source_line[j + 1] in "xX":
                 j += 2
-                while j < n and source_line[j] in '0123456789abcdefABCDEF':
+                while j < n and source_line[j] in "0123456789abcdefABCDEF":
                     j += 1
             else:
-                while j < n and (source_line[j].isdigit() or source_line[j] in '.eEfFuUlL'):
+                while j < n and (
+                    source_line[j].isdigit() or source_line[j] in ".eEfFuUlL"
+                ):
                     j += 1
-            result.append(f'<span class="syn-number">{html.escape(source_line[i:j])}</span>')
+            result.append(
+                f'<span class="syn-number">{html.escape(source_line[i:j])}</span>'
+            )
             i = j
             continue
-        
-        if ch.isalpha() or ch == '_':
+
+        if ch.isalpha() or ch == "_":
             j = i
-            while j < n and (source_line[j].isalnum() or source_line[j] == '_'):
+            while j < n and (source_line[j].isalnum() or source_line[j] == "_"):
                 j += 1
             word = source_line[i:j]
             if word in C_KEYWORDS:
                 result.append(f'<span class="syn-keyword">{html.escape(word)}</span>')
-            elif word in C_TYPES or word.endswith('_t') or word.endswith('_e'):
+            elif word in C_TYPES or word.endswith("_t") or word.endswith("_e"):
                 result.append(f'<span class="syn-type">{html.escape(word)}</span>')
             elif word.isupper() and len(word) > 1:
                 result.append(f'<span class="syn-macro">{html.escape(word)}</span>')
-            elif j < n and source_line[j] == '(':
+            elif j < n and source_line[j] == "(":
                 result.append(f'<span class="syn-function">{html.escape(word)}</span>')
             else:
                 result.append(html.escape(word))
             i = j
             continue
-        
+
         result.append(html.escape(ch))
         i += 1
-    
-    return ''.join(result)
+
+    return "".join(result)
 
 
 def syntax_highlight(source_line: str, is_valk: bool) -> str:
@@ -296,22 +523,22 @@ def highlight_expressions(source_line: str, exprs: list, is_valk: bool) -> str:
     """Highlight individual expressions within a source line with syntax highlighting."""
     if not exprs:
         return syntax_highlight(source_line, is_valk)
-    
+
     sorted_exprs = sorted(exprs, key=lambda e: e.column)
-    
+
     covered = [None] * len(source_line)
-    
+
     for expr in sorted_exprs:
         col = byte_col_to_char_col(source_line, expr.column)
         if col < 0 or col >= len(source_line):
             continue
-        
+
         end_col = col + find_expr_end(source_line, col)
-        
+
         for i in range(col, min(end_col, len(source_line))):
             if covered[i] is None or (expr.hit_count > 0 and covered[i].hit_count == 0):
                 covered[i] = expr
-    
+
     result = []
     i = 0
     while i < len(source_line):
@@ -328,48 +555,54 @@ def highlight_expressions(source_line: str, exprs: list, is_valk: bool) -> str:
                 j += 1
             expr_text = syntax_highlight(source_line[i:j], is_valk)
             if expr.hit_count > 0:
-                result.append(f'<span class="expr-hit" title="Executed {expr.hit_count}x">{expr_text}</span>')
+                result.append(
+                    f'<span class="expr-hit" title="Executed {expr.hit_count}x">{expr_text}</span>'
+                )
             else:
-                result.append(f'<span class="expr-miss-span" title="Not executed">{expr_text}</span>')
+                result.append(
+                    f'<span class="expr-miss-span" title="Not executed">{expr_text}</span>'
+                )
             i = j
-    
-    return ''.join(result)
+
+    return "".join(result)
 
 
 def find_expr_end(source_line: str, start: int) -> int:
     """Find the end of an S-expression starting at start."""
     if start >= len(source_line):
         return 1
-    
+
     ch = source_line[start]
-    if ch == '(':
+    if ch == "(":
         depth = 1
         i = start + 1
         while i < len(source_line) and depth > 0:
-            if source_line[i] == '(':
+            if source_line[i] == "(":
                 depth += 1
-            elif source_line[i] == ')':
+            elif source_line[i] == ")":
                 depth -= 1
             i += 1
         return i - start
-    elif ch == '{':
+    elif ch == "{":
         depth = 1
         i = start + 1
         while i < len(source_line) and depth > 0:
-            if source_line[i] == '{':
+            if source_line[i] == "{":
                 depth += 1
-            elif source_line[i] == '}':
+            elif source_line[i] == "}":
                 depth -= 1
             i += 1
         return i - start
     else:
         i = start
-        while i < len(source_line) and source_line[i] not in ' \t\n\r(){}':
+        while i < len(source_line) and source_line[i] not in " \t\n\r(){}":
             i += 1
         return max(1, i - start)
 
 
-def generate_cobertura_xml(report: CoverageReport, output_path: Path, source_root: Path):
+def generate_cobertura_xml(
+    report: CoverageReport, output_path: Path, source_root: Path
+):
     """Generate Cobertura XML format coverage report."""
     coverage = ET.Element("coverage")
     coverage.set("version", "1.0")
@@ -381,45 +614,45 @@ def generate_cobertura_xml(report: CoverageReport, output_path: Path, source_roo
     coverage.set("branches-covered", str(report.total_branches_hit))
     coverage.set("branch-rate", f"{report.branch_coverage_pct / 100:.4f}")
     coverage.set("complexity", "0")
-    
+
     sources = ET.SubElement(coverage, "sources")
     source = ET.SubElement(sources, "source")
     source.text = str(source_root)
-    
+
     packages = ET.SubElement(coverage, "packages")
-    
+
     c_pkg = ET.SubElement(packages, "package")
     c_pkg.set("name", "c")
     c_pkg.set("line-rate", "0")
     c_pkg.set("branch-rate", "0")
     c_pkg.set("complexity", "0")
     c_classes = ET.SubElement(c_pkg, "classes")
-    
+
     valk_pkg = ET.SubElement(packages, "package")
     valk_pkg.set("name", "valk")
     valk_pkg.set("line-rate", "0")
     valk_pkg.set("branch-rate", "0")
     valk_pkg.set("complexity", "0")
     valk_classes = ET.SubElement(valk_pkg, "classes")
-    
+
     for filepath, fc in sorted(report.files.items()):
         rel_path = filepath
         if filepath.startswith(str(source_root)):
-            rel_path = filepath[len(str(source_root))+1:]
-        
+            rel_path = filepath[len(str(source_root)) + 1 :]
+
         is_valk = filepath.endswith(".valk")
         parent = valk_classes if is_valk else c_classes
-        
+
         cls = ET.SubElement(parent, "class")
         cls.set("name", Path(rel_path).name)
         cls.set("filename", rel_path)
         cls.set("line-rate", f"{fc.line_coverage_pct / 100:.4f}")
         cls.set("branch-rate", f"{fc.branch_coverage_pct / 100:.4f}")
         cls.set("complexity", "0")
-        
+
         methods = ET.SubElement(cls, "methods")
         lines_elem = ET.SubElement(cls, "lines")
-        
+
         for line_no, lc in sorted(fc.lines.items()):
             if lc.hit_count >= 0:
                 line_elem = ET.SubElement(lines_elem, "line")
@@ -429,8 +662,11 @@ def generate_cobertura_xml(report: CoverageReport, output_path: Path, source_roo
                     line_elem.set("branch", "true")
                     total = len(lc.branches)
                     taken = sum(1 for b in lc.branches if b.taken > 0)
-                    line_elem.set("condition-coverage", f"{(taken/total*100) if total else 0:.0f}% ({taken}/{total})")
-    
+                    line_elem.set(
+                        "condition-coverage",
+                        f"{(taken / total * 100) if total else 0:.0f}% ({taken}/{total})",
+                    )
+
     tree = ET.ElementTree(coverage)
     ET.indent(tree, space="  ")
     tree.write(output_path, encoding="utf-8", xml_declaration=True)
@@ -449,25 +685,25 @@ def generate_file_html(fc: FileCoverage, output_dir: Path, source_root: Path) ->
     """Generate HTML page for a single file."""
     rel_path = fc.filename
     if fc.filename.startswith(str(source_root)):
-        rel_path = fc.filename[len(str(source_root))+1:]
-    
+        rel_path = fc.filename[len(str(source_root)) + 1 :]
+
     safe_name = rel_path.replace("/", "_").replace(".", "_") + ".html"
     is_valk = fc.filename.endswith(".valk")
-    
-    source_lines = load_source_file(fc.filename)
-    
 
-    
+    source_lines = load_source_file(fc.filename)
+
     lines_html = []
     for i, source_line in enumerate(source_lines, 1):
         lc = fc.lines.get(i)
-        
+
         has_exprs = lc is not None and len(lc.exprs) > 0
         if has_exprs:
-            source_highlighted = highlight_expressions(source_line.rstrip(), lc.exprs, is_valk)
+            source_highlighted = highlight_expressions(
+                source_line.rstrip(), lc.exprs, is_valk
+            )
         else:
             source_highlighted = syntax_highlight(source_line.rstrip(), is_valk)
-        
+
         if lc is None or lc.hit_count == -1:
             line_class = "line-none"
             count_display = ""
@@ -480,7 +716,7 @@ def generate_file_html(fc: FileCoverage, output_dir: Path, source_root: Path) ->
             line_class = "line-hit" if not has_exprs else "line-has-exprs"
             count_display = str(lc.hit_count)
             branch_display = ""
-        
+
         if lc and lc.branches:
             total_branches = len(lc.branches)
             taken_branches = sum(1 for b in lc.branches if b.taken > 0)
@@ -488,7 +724,7 @@ def generate_file_html(fc: FileCoverage, output_dir: Path, source_root: Path) ->
                 branch_display = f'<span class="branch-partial" title="{taken_branches}/{total_branches} branches taken">[{taken_branches}/{total_branches}]</span>'
             else:
                 branch_display = f'<span class="branch-full" title="All branches taken">[{taken_branches}/{total_branches}]</span>'
-        
+
         expr_display = ""
         # Compute expr_hit/expr_total from the actual exprs list (aggregated correctly)
         # rather than from EXPR records (which get overwritten by later test runs)
@@ -501,7 +737,7 @@ def generate_file_html(fc: FileCoverage, output_dir: Path, source_root: Path) ->
                 expr_display = f'<span class="expr-partial" title="{expr_hit}/{expr_total} eval points hit">{expr_hit}/{expr_total}</span>'
             else:
                 expr_display = ""
-        
+
         lines_html.append(f'''<tr class="{line_class}" id="L{i}">
 <td class="line-no"><a href="#L{i}">{i}</a></td>
 <td class="line-count">{count_display}</td>
@@ -509,8 +745,8 @@ def generate_file_html(fc: FileCoverage, output_dir: Path, source_root: Path) ->
 <td class="line-branch">{branch_display}</td>
 <td class="line-src"><pre>{source_highlighted}</pre></td>
 </tr>''')
-    
-    file_html = f'''<!DOCTYPE html>
+
+    file_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -744,22 +980,22 @@ tr.selection-start.selection-end {{
 <a href="index.html">&larr; Back to Coverage Report</a>
 <h1>{html.escape(rel_path)}</h1>
 <div class="stats">
-{'<div class="stat"><div class="stat-value ' + coverage_class(fc.expr_coverage_pct) + '">' + f'{fc.expr_coverage_pct:.1f}%' + '</div><div class="stat-label">Expression Coverage</div></div>' if is_valk and fc.exprs_found > 0 else '<div class="stat"><div class="stat-value ' + coverage_class(fc.line_coverage_pct) + '">' + f'{fc.line_coverage_pct:.1f}%' + '</div><div class="stat-label">Line Coverage</div></div>'}
+{'<div class="stat"><div class="stat-value ' + coverage_class(fc.expr_coverage_pct) + '">' + f"{fc.expr_coverage_pct:.1f}%" + '</div><div class="stat-label">Expression Coverage</div></div>' if is_valk and fc.exprs_found > 0 else '<div class="stat"><div class="stat-value ' + coverage_class(fc.line_coverage_pct) + '">' + f"{fc.line_coverage_pct:.1f}%" + '</div><div class="stat-label">Line Coverage</div></div>'}
 <div class="stat">
 <div class="stat-value {coverage_class(fc.branch_coverage_pct)}">{fc.branch_coverage_pct:.1f}%</div>
 <div class="stat-label">Branch Coverage</div>
 </div>
 <div class="stat">
-<div class="stat-value">{fc.exprs_hit}/{fc.exprs_found if is_valk and fc.exprs_found > 0 else f'{fc.lines_hit}/{fc.lines_found}'}</div>
-<div class="stat-label">{'Expressions' if is_valk and fc.exprs_found > 0 else 'Lines'}</div>
+<div class="stat-value">{fc.exprs_hit}/{fc.exprs_found if is_valk and fc.exprs_found > 0 else f"{fc.lines_hit}/{fc.lines_found}"}</div>
+<div class="stat-label">{"Expressions" if is_valk and fc.exprs_found > 0 else "Lines"}</div>
 </div>
 <div class="stat">
-<div class="stat-value">{fc.branches_hit}/{fc.branches_found if fc.branches_found > 0 else '-'}</div>
+<div class="stat-value">{fc.branches_hit}/{fc.branches_found if fc.branches_found > 0 else "-"}</div>
 <div class="stat-label">Branches</div>
 </div>
 </div>
 <div class="coverage-bar">
-<div class="coverage-fill {coverage_class(fc.expr_coverage_pct if is_valk and fc.exprs_found > 0 else fc.line_coverage_pct)}-bg" style="width:{fc.expr_coverage_pct if is_valk and fc.exprs_found > 0 else fc.line_coverage_pct}%;background:{'#4caf50' if (fc.expr_coverage_pct if is_valk and fc.exprs_found > 0 else fc.line_coverage_pct) >= 80 else '#ff9800' if (fc.expr_coverage_pct if is_valk and fc.exprs_found > 0 else fc.line_coverage_pct) >= 50 else '#f44336'}"></div>
+<div class="coverage-fill {coverage_class(fc.expr_coverage_pct if is_valk and fc.exprs_found > 0 else fc.line_coverage_pct)}-bg" style="width:{fc.expr_coverage_pct if is_valk and fc.exprs_found > 0 else fc.line_coverage_pct}%;background:{"#4caf50" if (fc.expr_coverage_pct if is_valk and fc.exprs_found > 0 else fc.line_coverage_pct) >= 80 else "#ff9800" if (fc.expr_coverage_pct if is_valk and fc.exprs_found > 0 else fc.line_coverage_pct) >= 50 else "#f44336"}"></div>
 </div>
 </div>
 <table>
@@ -796,7 +1032,7 @@ tr.selection-start.selection-end {{
   
   function applyHashSelection() {{
     const hash = window.location.hash;
-    const match = hash.match(/^#L(\d+)(?:-L(\d+))?$/);
+    const match = hash.match(/^#L(\\d+)(?:-L(\\d+))?$/);
     if (match) {{
       const start = parseInt(match[1], 10);
       const end = match[2] ? parseInt(match[2], 10) : start;
@@ -840,8 +1076,8 @@ tr.selection-start.selection-end {{
 }})();
 </script>
 </body>
-</html>'''
-    
+</html>"""
+
     (output_dir / safe_name).write_text(file_html)
     return safe_name
 
@@ -849,48 +1085,63 @@ tr.selection-start.selection-end {{
 def generate_html_report(report: CoverageReport, output_dir: Path, source_root: Path):
     """Generate HTML coverage report with file browsing."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     c_files = []
     valk_files = []
     file_links = {}
-    
+
     for filepath, fc in sorted(report.files.items()):
         if fc.lines_found == 0:
             continue
-        
+
         rel_path = filepath
         if filepath.startswith(str(source_root)):
-            rel_path = filepath[len(str(source_root))+1:]
-        
-        if rel_path.startswith("test/") or rel_path.startswith("vendor/") or rel_path.startswith("examples/") or rel_path.endswith(".h"):
+            rel_path = filepath[len(str(source_root)) + 1 :]
+
+        if (
+            rel_path.startswith("test/")
+            or rel_path.startswith("vendor/")
+            or rel_path.startswith("examples/")
+            or rel_path.endswith(".h")
+        ):
             continue
-        
+
         file_html_name = generate_file_html(fc, output_dir, source_root)
         file_links[filepath] = file_html_name
-        
+
         entry = (rel_path, fc, file_html_name)
         if filepath.endswith(".valk"):
             valk_files.append(entry)
         else:
             c_files.append(entry)
-    
+
     c_lines_found = sum(fc.lines_found for _, fc, _ in c_files)
     c_lines_hit = sum(fc.lines_hit for _, fc, _ in c_files)
     c_pct = (c_lines_hit / c_lines_found * 100) if c_lines_found > 0 else 0
     c_branches_found = sum(fc.branches_found for _, fc, _ in c_files)
     c_branches_hit = sum(fc.branches_hit for _, fc, _ in c_files)
-    c_branch_pct = (c_branches_hit / c_branches_found * 100) if c_branches_found > 0 else 0
-    
+    c_branch_pct = (
+        (c_branches_hit / c_branches_found * 100) if c_branches_found > 0 else 0
+    )
+
     valk_exprs_found = sum(fc.exprs_found for _, fc, _ in valk_files)
     valk_exprs_hit = sum(fc.exprs_hit for _, fc, _ in valk_files)
     valk_pct = (valk_exprs_hit / valk_exprs_found * 100) if valk_exprs_found > 0 else 0
     valk_branches_found = sum(fc.branches_found for _, fc, _ in valk_files)
     valk_branches_hit = sum(fc.branches_hit for _, fc, _ in valk_files)
-    valk_branch_pct = (valk_branches_hit / valk_branches_found * 100) if valk_branches_found > 0 else 0
+    valk_branch_pct = (
+        (valk_branches_hit / valk_branches_found * 100)
+        if valk_branches_found > 0
+        else 0
+    )
 
     combined_branches_found = c_branches_found + valk_branches_found
     combined_branches_hit = c_branches_hit + valk_branches_hit
-    combined_branch_pct = (combined_branches_hit / combined_branches_found * 100) if combined_branches_found > 0 else 0
+    combined_branch_pct = (
+        (combined_branches_hit / combined_branches_found * 100)
+        if combined_branches_found > 0
+        else 0
+    )
 
     def file_table_rows(files, is_valk=False):
         rows = []
@@ -915,8 +1166,8 @@ def generate_html_report(report: CoverageReport, output_dir: Path, source_root: 
 </td>
 </tr>''')
         return "\n".join(rows)
-    
-    index_html = f'''<!DOCTYPE html>
+
+    index_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1116,86 +1367,126 @@ tr.tier-fail {{
 
 <div class="section">
 <h2>📁 Runtime Files ({len(c_files)})</h2>
-{'<table><thead><tr><th>File</th><th>Lines</th><th>Branches</th><th>L Hit/Total</th><th>B Hit/Total</th><th></th></tr></thead><tbody>' + file_table_rows(c_files) + '</tbody></table>' if c_files else '<div class="empty">No Runtime coverage data available</div>'}
+{"<table><thead><tr><th>File</th><th>Lines</th><th>Branches</th><th>L Hit/Total</th><th>B Hit/Total</th><th></th></tr></thead><tbody>" + file_table_rows(c_files) + "</tbody></table>" if c_files else '<div class="empty">No Runtime coverage data available</div>'}
 </div>
 
 <div class="section">
 <h2>🚀 Stdlib Files ({len(valk_files)})</h2>
-{'<table><thead><tr><th>File</th><th>Exprs</th><th>Branches</th><th>E Hit/Total</th><th>B Hit/Total</th><th></th></tr></thead><tbody>' + file_table_rows(valk_files, is_valk=True) + '</tbody></table>' if valk_files else '<div class="empty">No Stdlib coverage data available</div>'}
+{"<table><thead><tr><th>File</th><th>Exprs</th><th>Branches</th><th>E Hit/Total</th><th>B Hit/Total</th><th></th></tr></thead><tbody>" + file_table_rows(valk_files, is_valk=True) + "</tbody></table>" if valk_files else '<div class="empty">No Stdlib coverage data available</div>'}
 </div>
 
 <div class="timestamp">Generated: {report.timestamp}</div>
 </div>
 </body>
-</html>'''
-    
+</html>"""
+
     (output_dir / "index.html").write_text(index_html)
 
 
 def main():
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Generate unified coverage reports")
-    parser.add_argument("--build-dir", default="build-coverage", help="Build directory with coverage data")
+    parser.add_argument(
+        "--build-dir",
+        default="build-coverage",
+        help="Build directory with coverage data",
+    )
     parser.add_argument("--source-root", default=".", help="Source root directory")
-    parser.add_argument("--output", default="coverage-report", help="Output directory for reports")
-    parser.add_argument("--valk-lcov", help="Path to Valk LCOV file (default: <build-dir>/coverage-valk.info)")
-    parser.add_argument("--xml", action="store_true", help="Also generate Cobertura XML report")
-    
+    parser.add_argument(
+        "--output", default="coverage-report", help="Output directory for reports"
+    )
+    parser.add_argument(
+        "--valk-lcov",
+        help="Path to Valk LCOV file (default: <build-dir>/coverage-valk.info)",
+    )
+    parser.add_argument(
+        "--xml", action="store_true", help="Also generate Cobertura XML report"
+    )
+
     args = parser.parse_args()
-    
+
     build_dir = Path(args.build_dir).resolve()
     source_root = Path(args.source_root).resolve()
     output_dir = Path(args.output).resolve()
-    
+
     valk_lcov = Path(args.valk_lcov) if args.valk_lcov else None
-    
+
     print(f"Collecting coverage data...")
     print(f"  Build dir:    {build_dir}")
     print(f"  Source root:  {source_root}")
     print(f"  Valk LCOV:    {valk_lcov or '(auto-detect per-PID files)'}")
     print(f"  Output:       {output_dir}")
-    
+
     print("\nCollecting coverage data...")
     report = collect_coverage(build_dir, source_root, valk_lcov)
     c_count = len([f for f in report.files.keys() if f.endswith(".c")])
     valk_count = len([f for f in report.files.keys() if f.endswith(".valk")])
     print(f"  Found {c_count} C files, {valk_count} Valk files")
-    
+
     print("\nGenerating HTML report...")
     generate_html_report(report, output_dir, source_root)
     print(f"  HTML: {output_dir}/index.html")
-    
+
     if args.xml:
         xml_path = output_dir / "coverage.xml"
         print("\nGenerating Cobertura XML report...")
         generate_cobertura_xml(report, xml_path, source_root)
         print(f"  XML: {xml_path}")
-    
+
     # Compute Runtime (C) and Stdlib (Valk) stats separately
-    runtime_files = {k: v for k, v in report.files.items()
-                     if not k.endswith(".valk") and not "/test/" in k and not "/vendor/" in k and not k.endswith(".h")}
-    stdlib_files = {k: v for k, v in report.files.items()
-                    if k.endswith(".valk") and not "/test/" in k}
+    runtime_files = {
+        k: v
+        for k, v in report.files.items()
+        if not k.endswith(".valk")
+        and not "/test/" in k
+        and not "/vendor/" in k
+        and not k.endswith(".h")
+    }
+    stdlib_files = {
+        k: v
+        for k, v in report.files.items()
+        if k.endswith(".valk") and not "/test/" in k
+    }
 
     runtime_lines_found = sum(f.lines_found for f in runtime_files.values())
     runtime_lines_hit = sum(f.lines_hit for f in runtime_files.values())
-    runtime_pct = (runtime_lines_hit / runtime_lines_found * 100) if runtime_lines_found > 0 else 0
+    runtime_pct = (
+        (runtime_lines_hit / runtime_lines_found * 100)
+        if runtime_lines_found > 0
+        else 0
+    )
 
     stdlib_exprs_found = sum(f.exprs_found for f in stdlib_files.values())
     stdlib_exprs_hit = sum(f.exprs_hit for f in stdlib_files.values())
-    stdlib_pct = (stdlib_exprs_hit / stdlib_exprs_found * 100) if stdlib_exprs_found > 0 else 0
+    stdlib_pct = (
+        (stdlib_exprs_hit / stdlib_exprs_found * 100) if stdlib_exprs_found > 0 else 0
+    )
 
-    total_branches_found = sum(f.branches_found for f in runtime_files.values()) + sum(f.branches_found for f in stdlib_files.values())
-    total_branches_hit = sum(f.branches_hit for f in runtime_files.values()) + sum(f.branches_hit for f in stdlib_files.values())
-    branches_pct = (total_branches_hit / total_branches_found * 100) if total_branches_found > 0 else 0
+    total_branches_found = sum(f.branches_found for f in runtime_files.values()) + sum(
+        f.branches_found for f in stdlib_files.values()
+    )
+    total_branches_hit = sum(f.branches_hit for f in runtime_files.values()) + sum(
+        f.branches_hit for f in stdlib_files.values()
+    )
+    branches_pct = (
+        (total_branches_hit / total_branches_found * 100)
+        if total_branches_found > 0
+        else 0
+    )
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Coverage Summary:")
-    print(f"  Runtime:  {runtime_pct:.1f}% lines ({runtime_lines_hit}/{runtime_lines_found})")
-    print(f"  Stdlib:   {stdlib_pct:.1f}% exprs ({stdlib_exprs_hit}/{stdlib_exprs_found})")
-    print(f"  Branches: {branches_pct:.1f}% ({total_branches_hit}/{total_branches_found})")
-    print(f"{'='*60}")
+    print(
+        f"  Runtime:  {runtime_pct:.1f}% lines ({runtime_lines_hit}/{runtime_lines_found})"
+    )
+    print(
+        f"  Stdlib:   {stdlib_pct:.1f}% exprs ({stdlib_exprs_hit}/{stdlib_exprs_found})"
+    )
+    print(
+        f"  Branches: {branches_pct:.1f}% ({total_branches_hit}/{total_branches_found})"
+    )
+    print(f"{'=' * 60}")
     print(f"\nOpen {output_dir}/index.html in a browser to view the report.")
 
 

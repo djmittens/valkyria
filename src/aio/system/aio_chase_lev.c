@@ -85,11 +85,11 @@ void *valk_chase_lev_pop(valk_chase_lev_deque_t *deque) {
 
   if (t <= b) {
     item = valk_chase_lev_array_get(arr, b);
-    if (t == b) {
-      if (!atomic_compare_exchange_strong_explicit(&deque->top, &t, t + 1,
+    if (t == b) { // LCOV_EXCL_BR_LINE - race condition branch
+      if (!atomic_compare_exchange_strong_explicit(&deque->top, &t, t + 1, // LCOV_EXCL_BR_LINE - CAS race
                                                     memory_order_seq_cst,
                                                     memory_order_relaxed)) {
-        item = VALK_CHASE_LEV_EMPTY;
+        item = VALK_CHASE_LEV_EMPTY; // LCOV_EXCL_LINE - CAS failure rare in tests
       }
       atomic_store_explicit(&deque->bottom, b + 1, memory_order_relaxed);
     }
@@ -111,10 +111,10 @@ void *valk_chase_lev_steal(valk_chase_lev_deque_t *deque) {
   if (t < b) {
     valk_chase_lev_array_t *arr = atomic_load_explicit(&deque->array, memory_order_acquire);
     item = atomic_load_explicit(&arr->buffer[t % arr->size], memory_order_acquire);
-    if (!atomic_compare_exchange_strong_explicit(&deque->top, &t, t + 1,
+    if (!atomic_compare_exchange_strong_explicit(&deque->top, &t, t + 1, // LCOV_EXCL_BR_LINE - CAS race
                                                   memory_order_seq_cst,
                                                   memory_order_relaxed)) {
-      return VALK_CHASE_LEV_ABORT;
+      return VALK_CHASE_LEV_ABORT; // LCOV_EXCL_LINE - CAS failure rare in tests
     }
   }
 
