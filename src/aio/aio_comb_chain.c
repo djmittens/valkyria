@@ -26,18 +26,19 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_STOP
   result->request_ctx = source->request_ctx;
 
+  // LCOV_EXCL_START - sync completion: timing-dependent, varies by platform
   if (source->status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *args = valk_lval_cons(source->result, valk_lval_nil());
     valk_lval_t *transformed = valk_lval_eval_call(e, fn, args);
     if (LVAL_TYPE(transformed) == LVAL_ERR) {
       result->status = VALK_ASYNC_FAILED;
       result->error = valk_evacuate_to_heap(transformed);
-    } else if (LVAL_TYPE(transformed) == LVAL_HANDLE) { // LCOV_EXCL_BR_LINE - type check
+    } else if (LVAL_TYPE(transformed) == LVAL_HANDLE) {
       valk_async_handle_t *inner = transformed->async.handle;
       if (inner->status == VALK_ASYNC_COMPLETED) {
         result->status = VALK_ASYNC_COMPLETED;
         result->result = valk_evacuate_to_heap(inner->result);
-      } else if (inner->status == VALK_ASYNC_FAILED) { // LCOV_EXCL_BR_LINE - async completion
+      } else if (inner->status == VALK_ASYNC_FAILED) {
         result->status = VALK_ASYNC_FAILED;
         result->error = valk_evacuate_to_heap(inner->error);
       } else {
@@ -54,18 +55,17 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_handle(result);
   }
 
-  // LCOV_EXCL_START - synchronous failure path: less common
   if (source->status == VALK_ASYNC_FAILED) {
     result->status = VALK_ASYNC_FAILED;
     result->error = source->error;
     return valk_lval_handle(result);
   }
-  // LCOV_EXCL_STOP
 
-  if (source->status == VALK_ASYNC_CANCELLED) { // LCOV_EXCL_BR_LINE - cancelled source rare
+  if (source->status == VALK_ASYNC_CANCELLED) {
     result->status = VALK_ASYNC_CANCELLED;
     return valk_lval_handle(result);
   }
+  // LCOV_EXCL_STOP
 
   result->status = VALK_ASYNC_RUNNING;
   result->env = e;
@@ -104,6 +104,7 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_STOP
   catch_handle->request_ctx = source->request_ctx;
 
+  // LCOV_EXCL_START - sync completion: timing-dependent, varies by platform
   valk_async_status_t source_status = atomic_load_explicit(&source->status, memory_order_acquire);
   if (source_status == VALK_ASYNC_COMPLETED) {
     atomic_store_explicit(&catch_handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
@@ -118,13 +119,13 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
     if (LVAL_TYPE(recovered) == LVAL_ERR) {
       atomic_store_explicit(&catch_handle->status, VALK_ASYNC_FAILED, memory_order_release);
       atomic_store_explicit(&catch_handle->error, valk_evacuate_to_heap(recovered), memory_order_release);
-    } else if (LVAL_TYPE(recovered) == LVAL_HANDLE) { // LCOV_EXCL_BR_LINE - type check
+    } else if (LVAL_TYPE(recovered) == LVAL_HANDLE) {
       valk_async_handle_t *inner = recovered->async.handle;
       valk_async_status_t inner_status = atomic_load_explicit(&inner->status, memory_order_acquire);
       if (inner_status == VALK_ASYNC_COMPLETED) {
         atomic_store_explicit(&catch_handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
         atomic_store_explicit(&catch_handle->result, valk_evacuate_to_heap(atomic_load_explicit(&inner->result, memory_order_acquire)), memory_order_release);
-      } else if (inner_status == VALK_ASYNC_FAILED) { // LCOV_EXCL_BR_LINE - async completion
+      } else if (inner_status == VALK_ASYNC_FAILED) {
         atomic_store_explicit(&catch_handle->status, VALK_ASYNC_FAILED, memory_order_release);
         atomic_store_explicit(&catch_handle->error, valk_evacuate_to_heap(atomic_load_explicit(&inner->error, memory_order_acquire)), memory_order_release);
       } else {
@@ -143,7 +144,6 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_handle(catch_handle);
   }
 
-  // LCOV_EXCL_START - cancelled source rare
   if (source->status == VALK_ASYNC_CANCELLED) {
     catch_handle->status = VALK_ASYNC_CANCELLED;
     return valk_lval_handle(catch_handle);
@@ -187,6 +187,7 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_STOP
   finally_handle->request_ctx = source->request_ctx;
 
+  // LCOV_EXCL_START - sync completion: timing-dependent, varies by platform
   valk_async_status_t source_status = atomic_load_explicit(&source->status, memory_order_acquire);
   if (source_status == VALK_ASYNC_COMPLETED) {
     valk_lval_t *args = valk_lval_nil();
@@ -202,7 +203,6 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
     atomic_store_explicit(&finally_handle->error, atomic_load_explicit(&source->error, memory_order_acquire), memory_order_release);
     return valk_lval_handle(finally_handle);
   }
-  // LCOV_EXCL_START - cancelled source rare
   if (source_status == VALK_ASYNC_CANCELLED) {
     valk_lval_t *args = valk_lval_nil();
     valk_lval_eval_call(e, fn, args);
