@@ -1,0 +1,17 @@
+; Test the test framework with a failing test (to cover fail branches)
+; This file intentionally has a failing test to cover the FAIL code path
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Enable debug to cover error debug branch
+
+; Expect exit code 1 (failure) - this makes the suite pass when tests fail
+
+; This test will FAIL (returns error, not true)
+
+; Run tests - expect 1 failure, but suite exits 0 due to expect-exit
+(test/run (list
+  (test "intentional-fail-test"
+    {error "This test intentionally fails"}))
+  {:suite-name "Intentional Fail Test" :debug 1 :expected-exit 1})

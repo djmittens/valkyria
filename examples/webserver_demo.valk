@@ -1,0 +1,421 @@
+; HTTP/2 Web Server Demo - Full Feature Showcase
+; ==============================================
+; Run: ./build/valk examples/webserver_demo.valk
+; Test App:   curl -k https://localhost:8443
+; Test Debug: curl -k https://localhost:6969/debug/
+;
+; This demo showcases Valkyria's HTTP/2 server capabilities built on:
+;   • libuv - Asynchronous I/O event loop
+;   • nghttp2 - HTTP/2 protocol implementation
+;   • OpenSSL - TLS/SSL encryption layer
+;
+; What you'll see demonstrated:
+;   • Asynchronous I/O system initialization
+;   • HTTP/2 server with TLS (self-signed certificates)
+;   • Request handling with custom Lisp handler functions
+;   • Event loop management
+;   • Clean startup and shutdown messaging
+;
+; Architecture Overview:
+; ─────────────────────
+; The server runs in a background thread managed by libuv's event loop.
+; When a request arrives:
+;   1. Client connects via HTTPS
+;   2. TLS handshake using self-signed certificate
+;   3. HTTP/2 protocol negotiation (ALPN)
+;   4. Request routed to your Lisp handler function
+;   5. Handler returns response map {:status "..." :body "..."}
+;   6. Response sent back to client
+;
+; The handler receives a request map containing request details.
+; Currently, the request map structure is being finalized, but will include:
+;   {:method "GET" :path "/api/users" :headers {...} :body "..."}
+
+(load "src/prelude.valk")
+(load "src/async_handles.valk")
+(load "src/modules/aio/debug.valk")
+
+; ╔════════════════════════════════════════════════════════════════════════════╗
+; ║                    VALKYRIA HTTP/2 WEB SERVER DEMO                         ║
+; ╚════════════════════════════════════════════════════════════════════════════╝
+
+(println "")
+(println "════════════════════════════════════════════════════════════════")
+(println "  Valkyria HTTP/2 Web Server Demo")
+(println "════════════════════════════════════════════════════════════════")
+(println "")
+
+; ──────────────────────────────────────────────────────────────────────────────
+; STEP 1: Initialize the Asynchronous I/O System
+; ──────────────────────────────────────────────────────────────────────────────
+;
+; The AIO (Async I/O) system provides the foundation for all asynchronous
+; operations including HTTP/2 networking. It wraps libuv's event loop.
+;
+; Key Functions:
+;   (aio/start)         - Creates AIO system with default config (100 connections)
+;   (aio/start config)  - Creates AIO system with custom configuration
+;   (aio/run sys)       - Runs the event loop (blocks until interrupted)
+;
+; Configuration Options (two primary tuning parameters):
+;   :max-connections          - Maximum concurrent TCP connections (default: 100)
+;   :max-concurrent-streams   - HTTP/2 streams per connection (default: 100)
+;
+; Derived settings (auto-calculated if not specified):
+;   :tcp-buffer-pool-size     - TCP buffer slab size (default: max_conn × (2 + streams/8))
+;   :arena-pool-size          - Request arena pool size (default: max_conn × 2)
+;   :arena-size               - Size of each arena in bytes (default: 64MB)
+;   :max-request-body-size    - Max request body size (default: 8MB)
+
+(println "→ Initializing Async I/O System")
+(println "  • Using libuv for event loop management")
+(println "  • Background thread handles all I/O operations")
+
+; Mellow demo config - low resource footprint, good for demos
+; NOTE: If running via REPL, the REPL pre-creates an AIO system with defaults.
+;       To use custom config, run with: VALK_DISABLE_AIO=1 build/valk examples/webserver_demo.valk
+;
+; This config is tuned for:
+;   • Low memory footprint (~96MB for arenas vs 4GB default)
+;   • Responsive feel for small demos
+;   • Consistent ratios: arena-pool >= connections × streams-per-conn / 4
+;
+; For production or extreme load testing, increase max-connections and arena-pool-size.
+(def {sys} (aio/await (aio/start {:max-connections 8         ; Low connection limit
+                       :max-concurrent-streams 8  ; Low streams per connection
+                       :max-handles 128           ; Small handle pool
+                       :max-servers 3             ; Just enough for demo
+                       :arena-size 4194304        ; 4MB per arena (vs 64MB default)
+                       :arena-pool-size 24        ; 24 × 4MB = 96MB (3x a full connection)
+                       :max-request-body-size 1048576  ; 1MB max request
+                       :backpressure-list-max 50
+                       :pending-stream-pool-size 24})))
+
+(println "  ✓ AIO system ready (mellow demo config)")
+(println "    • max-connections: 8")
+(println "    • max-concurrent-streams: 8 per connection")
+(println "    • arena-pool-size: 24 × 4MB = 96MB (handles 3 full connections)")
+(println "    • pending-stream-pool-size: 24")
+(println "")
+
+; ──────────────────────────────────────────────────────────────────────────────
+; STEP 2: Define the Request Handler
+; ──────────────────────────────────────────────────────────────────────────────
+;
+; The handler is a Lisp function that processes incoming HTTP requests.
+;
+; Handler Signature:
+;   (lambda {request} ...)
+;
+; Parameters:
+;   request - A map containing request details (structure being finalized)
+;
+; Return Value:
+;   A map with response details:
+;     {:status "200" :body "response content"}
+;     {:status "404" :body "Not Found"}
+;     {:status "500" :body "Internal Server Error"}
+;
+; The handler runs in the event loop thread, so it should:
+;   • Return quickly (no blocking operations)
+;   • Handle errors gracefully
+;   • Always return a valid response map
+;
+; Future enhancements will support:
+;   • Reading request method, path, headers, body
+;   • Custom response headers
+;   • Streaming responses
+;   • Middleware composition
+
+(println "→ Defining Request Handler")
+(println "  • Handler receives request details")
+(println "  • Returns response map {:status ... :body ...}")
+
+; ──────────────────────────────────────────────────────────────────────────────
+; Stress Test: 100MB Response
+; ──────────────────────────────────────────────────────────────────────────────
+; Pre-generate the large string at startup (one-time cost)
+(println "→ Pre-generating 100MB stress test payload...")
+(def {STRESS_SIZE} 104857600)  ; 100MB = 104857600 bytes
+(def {stress-pattern} "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz./")
+(def {stress-100mb} (make-string (/ STRESS_SIZE 64) stress-pattern))
+(printf "  ✓ Generated %d bytes for /stress/100mb\n" (len stress-100mb))
+(println "")
+
+; Valkyria favicon - a stylized V with wings (SVG)
+(def {favicon-svg}
+  (str "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\">"
+       "<defs>"
+       "<linearGradient id=\"valkGrad\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\">"
+       "<stop offset=\"0%\" style=\"stop-color:#6366f1\"/>"
+       "<stop offset=\"50%\" style=\"stop-color:#8b5cf6\"/>"
+       "<stop offset=\"100%\" style=\"stop-color:#d946ef\"/>"
+       "</linearGradient>"
+       "</defs>"
+       "<circle cx=\"16\" cy=\"16\" r=\"15\" fill=\"#0f172a\"/>"
+       "<path d=\"M8 8 L16 26 L24 8 L20 8 L16 18 L12 8 Z\" fill=\"url(#valkGrad)\"/>"
+       "<path d=\"M4 10 L8 8 L10 12 Z\" fill=\"url(#valkGrad)\" opacity=\"0.7\"/>"
+       "<path d=\"M28 10 L24 8 L22 12 Z\" fill=\"url(#valkGrad)\" opacity=\"0.7\"/>"
+       "</svg>"))
+
+; Main HTML page
+(def {html-body}
+  (str "<!DOCTYPE html>"
+       "<html>"
+       "<head>"
+       "<meta charset=\"utf-8\">"
+       "<title>Valkyria HTTP/2 Server</title>"
+       "<link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">"
+       "<style>"
+       "body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background: #0f172a; color: #e2e8f0; }"
+       "h1 { background: linear-gradient(135deg, #6366f1, #8b5cf6, #d946ef); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }"
+       "p { color: #94a3b8; line-height: 1.6; }"
+       "strong { color: #e2e8f0; }"
+       "code { background: #1e293b; padding: 0.2rem 0.4rem; border-radius: 4px; font-family: monospace; }"
+       ".hero { text-align: center; padding: 2rem 0; }"
+       ".hero svg { width: 64px; height: 64px; margin-bottom: 1rem; }"
+       "</style>"
+       "</head>"
+       "<body>"
+       "<div class=\"hero\">"
+       favicon-svg
+       "<h1>Valkyria Lisp HTTP/2 Server</h1>"
+       "</div>"
+       "<p>Server is running! This response was generated by a Lisp handler function.</p>"
+       "<p><strong>Architecture:</strong> Valkyria Lisp + libuv + nghttp2 + OpenSSL</p>"
+       "<p><strong>Features:</strong> Async I/O, TLS encryption, HTTP/2 multiplexing</p>"
+       "<p><strong>Debug:</strong> <a href=\"https://localhost:6969/debug/\" style=\"color: #6366f1;\">View Debug Dashboard (port 6969)</a></p>"
+       "</body>"
+       "</html>"))
+
+; Request handler using new aio/let syntax
+; For async routes: uses aio/let with aio/sleep (returns handle)
+; For sync routes: returns response map directly
+;
+; NOTE: aio/sleep, aio/delay, etc. require the AIO system as first argument.
+; The handler closes over 'sys' which was defined at module level.
+; Future improvement: Use Service/Filter API with ctx/sleep to avoid this.
+(def {request-handler}
+  (\ {req} {
+    ; Extract request info
+    (= {method} (req/method req))
+    (= {path} (req/path req))
+    (= {start} (time-us))
+
+    ; Log request - create counter with labels, then increment
+    (= {counter} (metrics/counter "http_demo_requests_total" "method" method "path" path))
+    (metrics/counter-inc counter)
+    (printf "┌─ %s %s (%dµs)\n└─\n" method path (- (time-us) start))
+
+    ; Route based on path
+    (select
+      ; ================================================================
+      ; /slow - Demonstrates aio/do with interleaved side effects
+      ; NOTE: aio/sleep requires 'sys' as first argument
+      ; ================================================================
+      {(== path "/slow")
+       (aio/do {
+         (println "  [/slow] Starting 2s sleep...")
+         (<- _ (aio/sleep sys 2000))
+         (println "  [/slow] Done sleeping!")
+         {:status "200" :content-type "text/plain" :body "slept 2s (async)"}})}
+
+      ; ================================================================
+      ; /slow-chain - Demonstrates aio/do with sequential sleeps
+      ; ================================================================
+      {(== path "/slow-chain")
+       (aio/do {
+         (println "  [/slow-chain] Starting first 5s sleep...")
+         (<- step1 (aio/sleep sys 5000))
+         (println "  [/slow-chain] First sleep done, starting second...")
+         (<- step2 (aio/sleep sys 5000))
+         (println "  [/slow-chain] Both sleeps done!")
+         {:status "200" :content-type "text/plain"
+          :body "slept 10s (5s + 5s sequential)"}})}
+
+      ; ================================================================
+      ; /slow-parallel - Demonstrates aio/let for parallel operations
+      ; (aio/do is sequential, use aio/let for parallel)
+      ; ================================================================
+      {(== path "/slow-parallel")
+       (aio/let
+         {((a (aio/sleep sys 1000))
+           (b (aio/sleep sys 1000))
+           (c (aio/sleep sys 1000)))}
+         {:status "200" :content-type "text/plain"
+          :body "slept ~1s (3x1s parallel)"})}
+
+      ; ================================================================
+      ; /complex - Demonstrates mixed parallel/sequential with aio/let
+      ; ================================================================
+      {(== path "/complex")
+       (aio/let
+         {((user-data (aio/sleep sys 500))
+           (settings-data (aio/sleep sys 500))
+           :then
+           (posts-data (aio/sleep sys 300)))}
+         {:status "200" :content-type "application/json"
+          :body "{\"user\":\"loaded\",\"settings\":\"loaded\",\"posts\":\"loaded\"}"})}
+
+      ; Static routes (unchanged)
+      {(== path "/favicon.svg")
+       `{:status "200" :content-type "image/svg+xml" :body ,favicon-svg}}
+      {(== path "/stress/100mb")
+       `{:status "200" :content-type "text/plain" :body ,stress-100mb}}
+      {otherwise
+       `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body}})
+  }))
+
+(println "  ✓ Handler defined and ready")
+(println "")
+
+; ──────────────────────────────────────────────────────────────────────────────
+; STEP 2.5: Create Debug Server Handler (Separate Port)
+; ──────────────────────────────────────────────────────────────────────────────
+;
+; The debug server runs on a separate port (6969) to keep profiling clean.
+; Dashboard traffic won't pollute application metrics.
+;
+; The debug handler monitors the MAIN application server (sys), not itself.
+
+(println "→ Creating Debug Server Handler")
+(println "  • Debug server will run on port 6969 (separate from app)")
+(println "  • Debug routes: /debug/, /debug/metrics, /metrics")
+(println "  • Monitors: main application server metrics")
+
+; Debug handler that monitors the main app server
+; Use the shared handler from debug.valk (includes all routes like /debug/metrics/state)
+(def {debug-handler} (aio/debug-handler sys))
+
+(println "  ✓ Debug handler ready")
+(println "")
+
+; ──────────────────────────────────────────────────────────────────────────────
+; STEP 3: Start the HTTP/2 Server
+; ──────────────────────────────────────────────────────────────────────────────
+;
+; Start an HTTP/2 server that listens for incoming HTTPS connections.
+;
+; Function Signature:
+;   (http2/server-listen aio-system port handler-function)
+;
+; Parameters:
+;   aio-system      - The AIO system from (aio/start) or the 'aio' global
+;   port            - Port number to listen on (typically 8443 for HTTPS)
+;   handler-function - Lisp function to handle requests
+;
+; TLS Certificates:
+;   The server requires SSL certificates at:
+;     • build/server.key - Private key
+;     • build/server.crt - Self-signed certificate
+;   These are auto-generated by the build system.
+;
+; Return Value:
+;   Returns nil (server runs in background via event loop)
+;
+; Connection Flow:
+;   1. Client connects to port 8443
+;   2. TLS handshake (using self-signed cert)
+;   3. ALPN negotiation (selects HTTP/2)
+;   4. Request handling begins
+;   5. Handler processes request
+;   6. Response sent back
+;   7. Connection closed cleanly
+
+(println "→ Starting HTTP/2 Servers")
+(println "  • Loading TLS certificates:")
+(println "    - build/server.key (private key)")
+(println "    - build/server.crt (self-signed certificate)")
+
+; Start the main application server (port 8443)
+; No debug routes - clean metrics for profiling
+(println "  • Starting main app server on port 8443...")
+(http2/server-listen sys 8443 request-handler)
+(println "  ✓ App server listening on https://localhost:8443")
+
+; Start the debug dashboard server (port 6969)
+; Separate port from app traffic to keep profiling clean
+; Uses the same AIO system but different handler
+(println "  • Starting debug server on port 6969...")
+(http2/server-listen sys 6969 debug-handler)
+(println "  ✓ Debug server listening on https://localhost:6969")
+(println "")
+
+; ──────────────────────────────────────────────────────────────────────────────
+; STEP 4: Display Usage Information
+; ──────────────────────────────────────────────────────────────────────────────
+
+(println "════════════════════════════════════════════════════════════════")
+(println "  Servers are Running!")
+(println "════════════════════════════════════════════════════════════════")
+(println "")
+(println "Two servers are now running:")
+(println "  • App Server:   https://localhost:8443  (application traffic)")
+(println "  • Debug Server: https://localhost:6969  (metrics & dashboard)")
+(println "")
+(println "This separation keeps profiling clean - dashboard requests")
+(println "don't pollute application metrics.")
+(println "")
+(println "App Server Commands (port 8443):")
+(println "  • Basic request:      curl -k https://localhost:8443")
+(println "  • With headers:       curl -k -v https://localhost:8443")
+(println "  • Async endpoints:    curl -k https://localhost:8443/slow")
+(println "                        curl -k https://localhost:8443/slow-chain")
+(println "                        curl -k https://localhost:8443/slow-parallel")
+(println "  • Stress test 100MB:  curl -k https://localhost:8443/stress/100mb -o /dev/null")
+(println "  • In browser:         https://localhost:8443")
+(println "")
+(println "Debug Server Commands (port 6969):")
+(println "  • Debug dashboard:    https://localhost:6969/debug/")
+(println "  • JSON metrics:       curl -k https://localhost:6969/debug/metrics")
+(println "  • Prometheus metrics: curl -k https://localhost:6969/metrics")
+(println "")
+(println "Load Testing:")
+(println "  This mellow config (24 arenas × 4MB = 96MB) handles light demos well.")
+(println "  With 8 streams/conn and 24 arenas, can saturate 3 connections.")
+(println "")
+(println "  Test with concurrent requests to /slow (holds arena for 2s):")
+(println "    for i in $(seq 1 8); do \\")
+(println "      curl -sk -w \"req$i: %{http_code}\\n\" -o /dev/null \\")
+(println "        https://localhost:8443/slow & \\")
+(println "    done; wait")
+(println "")
+(println "  Check metrics (on debug server):")
+(println "    curl -k https://localhost:6969/metrics | grep -E 'arena|pending'")
+(println "")
+(println "The -k flag tells curl to accept the self-signed certificate.")
+(println "In production, you would use a certificate from a trusted CA.")
+(println "")
+(println "Press Ctrl+C to stop both servers.")
+(println "")
+(println "════════════════════════════════════════════════════════════════")
+(println "")
+
+; ──────────────────────────────────────────────────────────────────────────────
+; STEP 5: Run the Event Loop
+; ──────────────────────────────────────────────────────────────────────────────
+;
+; Start the event loop and block until interrupted (Ctrl+C).
+;
+; Function Signature:
+;   (aio/run aio-system)
+;
+; This function:
+;   • Starts the libuv event loop in a background thread
+;   • Processes all async I/O events (HTTP connections, timers, etc.)
+;   • Blocks the main thread until interrupted
+;   • Handles cleanup on shutdown
+;
+; When you press Ctrl+C:
+;   1. Signal caught by the system
+;   2. Event loop gracefully shuts down
+;   3. Active connections are closed
+;   4. Resources are freed
+;   5. Program exits cleanly
+
+; Run the event loop (blocks forever until Ctrl+C)
+(aio/run sys)
+
+; This line is never reached during normal operation (only after Ctrl+C)
+(println "")
+(println "Server stopped.")

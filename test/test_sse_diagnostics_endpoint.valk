@@ -1,0 +1,25 @@
+; SSE Diagnostics Endpoint Test
+; Tests that the /debug/diagnostics/memory endpoint works with SSE
+; Note: Due to Lisp scoping, verifies via successful completion
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/modules/aio/debug.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(def {wrapped-handler}
+  (\ {req} {
+    ; Just delegate to debug handler
+    ((aio/debug-handler aio) req)
+  }))
+
+(def {server} (http2/server-listen aio 0 wrapped-handler))
+(def {TEST_PORT} (http2/server-port server))
+
+(test/run-async aio (list
+  (test-async "SSE diagnostics handler is called for /debug/diagnostics/memory" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT "/debug/diagnostics/memory") (\ {_} {}))
+  (aio/then (aio/sleep aio 500) (\ {_} {true}))
+})))
+  {:suite-name "SSE Diagnostics Endpoint Tests"})

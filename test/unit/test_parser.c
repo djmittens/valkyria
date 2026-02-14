@@ -1,0 +1,2316 @@
+#include "../testing.h"
+#include "../../src/memory.h"
+#include "../../src/parser.h"
+#include "../../src/aio/aio_async.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+void test_lval_num(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_num(42);
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_num should return non-nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be LVAL_NUM");
+  VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
+
+  VALK_PASS();
+}
+
+void test_lval_num_negative(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_num(-1000);
+  VALK_TEST_ASSERT(val != nullptr, "Should create negative number");
+  VALK_TEST_ASSERT(val->num == -1000, "Value should be -1000");
+
+  VALK_PASS();
+}
+
+void test_lval_num_zero(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_num(0);
+  VALK_TEST_ASSERT(val != nullptr, "Should create zero");
+  VALK_TEST_ASSERT(val->num == 0, "Value should be 0");
+
+  VALK_PASS();
+}
+
+void test_lval_sym(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_sym("test-symbol");
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_sym should return non-nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_SYM, "Type should be LVAL_SYM");
+
+  VALK_PASS();
+}
+
+void test_lval_sym_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_sym("");
+  VALK_TEST_ASSERT(val != nullptr, "Should create empty symbol");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_SYM, "Type should be LVAL_SYM");
+
+  VALK_PASS();
+}
+
+void test_lval_str(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("hello world");
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_str should return non-nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be LVAL_STR");
+  VALK_TEST_ASSERT(strcmp(val->str, "hello world") == 0, "String should match");
+
+  VALK_PASS();
+}
+
+void test_lval_str_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("");
+  VALK_TEST_ASSERT(val != nullptr, "Should create empty string");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be LVAL_STR");
+  VALK_TEST_ASSERT(strlen(val->str) == 0, "String should be empty");
+
+  VALK_PASS();
+}
+
+void test_lval_str_n(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  const char *data = "hello\0world";
+  valk_lval_t *val = valk_lval_str_n(data, 11);
+  VALK_TEST_ASSERT(val != nullptr, "Should create string with embedded null");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be LVAL_STR");
+
+  VALK_PASS();
+}
+
+void test_lval_err(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_err("Test error %d", 42);
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_err should return non-nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be LVAL_ERR");
+  VALK_TEST_ASSERT(strstr(val->str, "Test error 42") != nullptr, "Error should contain message");
+
+  VALK_PASS();
+}
+
+void test_lval_err_no_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_err("Simple error");
+  VALK_TEST_ASSERT(val != nullptr, "Should create simple error");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be LVAL_ERR");
+
+  VALK_PASS();
+}
+
+void test_lval_nil(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_nil();
+  VALK_TEST_ASSERT(val != nullptr, "valk_lval_nil should return non-nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NIL, "Type should be LVAL_NIL");
+
+  VALK_PASS();
+}
+
+void test_lval_cons(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *head = valk_lval_num(1);
+  valk_lval_t *tail = valk_lval_nil();
+  valk_lval_t *cons = valk_lval_cons(head, tail);
+
+  VALK_TEST_ASSERT(cons != nullptr, "Should create cons cell");
+  VALK_TEST_ASSERT(LVAL_TYPE(cons) == LVAL_CONS, "Type should be LVAL_CONS");
+
+  valk_lval_t *h = valk_lval_head(cons);
+  VALK_TEST_ASSERT(h == head, "head should return the head");
+
+  valk_lval_t *t = valk_lval_tail(cons);
+  VALK_TEST_ASSERT(t == tail, "tail should return the tail");
+
+  VALK_PASS();
+}
+
+void test_lval_qcons(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *head = valk_lval_num(1);
+  valk_lval_t *tail = valk_lval_nil();
+  valk_lval_t *qcons = valk_lval_qcons(head, tail);
+
+  VALK_TEST_ASSERT(qcons != nullptr, "Should create qexpr cons cell");
+  VALK_TEST_ASSERT(LVAL_TYPE(qcons) == LVAL_QEXPR, "Type should be LVAL_QEXPR");
+
+  VALK_PASS();
+}
+
+void test_lval_list_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *list = valk_lval_list(nullptr, 0);
+  VALK_TEST_ASSERT(list != nullptr, "Should create empty list");
+  VALK_TEST_ASSERT(LVAL_TYPE(list) == LVAL_NIL, "Empty list should be NIL");
+
+  VALK_PASS();
+}
+
+void test_lval_list_single(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *elem = valk_lval_num(42);
+  valk_lval_t *arr[] = {elem};
+  valk_lval_t *list = valk_lval_list(arr, 1);
+
+  VALK_TEST_ASSERT(list != nullptr, "Should create single element list");
+  VALK_TEST_ASSERT(LVAL_TYPE(list) == LVAL_CONS, "Type should be LVAL_CONS");
+
+  VALK_PASS();
+}
+
+void test_lval_list_multiple(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *e1 = valk_lval_num(1);
+  valk_lval_t *e2 = valk_lval_num(2);
+  valk_lval_t *e3 = valk_lval_num(3);
+  valk_lval_t *arr[] = {e1, e2, e3};
+  valk_lval_t *list = valk_lval_list(arr, 3);
+
+  VALK_TEST_ASSERT(list != nullptr, "Should create multi element list");
+
+  VALK_PASS();
+}
+
+void test_lval_qlist_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *qlist = valk_lval_qlist(nullptr, 0);
+  VALK_TEST_ASSERT(qlist != nullptr, "Should create empty qlist");
+
+  VALK_PASS();
+}
+
+void test_lval_head_nil(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *nil = valk_lval_nil();
+  valk_lval_t *head = valk_lval_head(nil);
+  VALK_TEST_ASSERT(head == nullptr, "head of nil should be nullptr");
+
+  VALK_PASS();
+}
+
+void test_lval_tail_nil(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *nil = valk_lval_nil();
+  valk_lval_t *tail = valk_lval_tail(nil);
+  VALK_TEST_ASSERT(tail == nullptr, "tail of nil should be nullptr");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_num(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_num(99);
+  valk_lval_t *copy = valk_lval_copy(orig);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_NUM, "copy type should be NUM");
+  VALK_TEST_ASSERT(copy->num == 99, "copy value should be 99");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_str(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_str("copy test");
+  valk_lval_t *copy = valk_lval_copy(orig);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(strcmp(copy->str, "copy test") == 0, "copy string should match");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_nil(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_nil();
+  valk_lval_t *copy = valk_lval_copy(orig);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_NIL, "copy type should be NIL");
+
+  VALK_PASS();
+}
+
+void test_lenv_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  VALK_TEST_ASSERT(env != nullptr, "valk_lenv_empty should return non-nullptr");
+  VALK_TEST_ASSERT(env->parent == nullptr, "new env should have no parent");
+  VALK_TEST_ASSERT(env->symbols.count == 0, "new env should have no symbols");
+
+  valk_lenv_free(env);
+
+  VALK_PASS();
+}
+
+void test_lenv_put_get(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lval_t *val = valk_lval_num(123);
+  valk_lval_t *key = valk_lval_sym("test-key");
+
+  valk_lenv_put(env, key, val);
+  valk_lval_t *result = valk_lenv_get(env, key);
+
+  VALK_TEST_ASSERT(result != nullptr, "Should find the value");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(result->num == 123, "Value should be 123");
+
+  valk_lenv_free(env);
+
+  VALK_PASS();
+}
+
+void test_lenv_get_not_found(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lval_t *key = valk_lval_sym("nonexistent");
+
+  valk_lval_t *result = valk_lenv_get(env, key);
+  VALK_TEST_ASSERT(result != nullptr, "Should return an error lval");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Type should be ERR");
+
+  valk_lenv_free(env);
+
+  VALK_PASS();
+}
+
+void test_lenv_def(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *parent = valk_lenv_empty();
+  valk_lenv_t *child = valk_lenv_empty();
+  child->parent = parent;
+
+  valk_lval_t *key = valk_lval_sym("global-val");
+  valk_lval_t *val = valk_lval_num(999);
+
+  valk_lenv_def(child, key, val);
+
+  valk_lval_t *result = valk_lenv_get(parent, key);
+  VALK_TEST_ASSERT(result != nullptr, "Should find in parent");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(result->num == 999, "Value should be 999");
+
+  valk_lenv_free(child);
+  valk_lenv_free(parent);
+
+  VALK_PASS();
+}
+
+void test_lenv_copy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *orig = valk_lenv_empty();
+  valk_lval_t *key = valk_lval_sym("copy-key");
+  valk_lval_t *val = valk_lval_num(555);
+  valk_lenv_put(orig, key, val);
+
+  valk_lenv_t *copy = valk_lenv_copy(orig);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
+
+  valk_lval_t *result = valk_lenv_get(copy, key);
+  VALK_TEST_ASSERT(result != nullptr, "Should find value in copy");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Result should be NUM");
+  VALK_TEST_ASSERT(result->num == 555, "Value should be 555");
+
+  VALK_PASS();
+}
+
+void test_lval_type_name(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_NUM), "Number") == 0, "NUM type name");
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_SYM), "Symbol") == 0, "SYM type name");
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_STR), "String") == 0, "STR type name");
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_NIL), "Nil") == 0, "NIL type name");
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_ERR), "Error") == 0, "ERR type name");
+
+  VALK_PASS();
+}
+
+void test_lval_large_num(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *large = valk_lval_num(9999999999L);
+  VALK_TEST_ASSERT(large != nullptr, "Should create large number");
+  VALK_TEST_ASSERT(large->num == 9999999999L, "Value should be correct");
+
+  VALK_PASS();
+}
+
+void test_lval_long_str(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char long_str[1024];
+  memset(long_str, 'x', sizeof(long_str) - 1);
+  long_str[sizeof(long_str) - 1] = '\0';
+
+  valk_lval_t *val = valk_lval_str(long_str);
+  VALK_TEST_ASSERT(val != nullptr, "Should create long string");
+  VALK_TEST_ASSERT(strlen(val->str) == sizeof(long_str) - 1, "String length should match");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_num(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *a = valk_lval_num(42);
+  valk_lval_t *b = valk_lval_num(42);
+  valk_lval_t *c = valk_lval_num(99);
+
+  VALK_TEST_ASSERT(valk_lval_eq(a, b) == 1, "same numbers should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(a, c) == 0, "different numbers should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_str(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *a = valk_lval_str("hello");
+  valk_lval_t *b = valk_lval_str("hello");
+  valk_lval_t *c = valk_lval_str("world");
+
+  VALK_TEST_ASSERT(valk_lval_eq(a, b) == 1, "same strings should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(a, c) == 0, "different strings should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_types_differ(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *num = valk_lval_num(42);
+  valk_lval_t *str = valk_lval_str("42");
+
+  VALK_TEST_ASSERT(valk_lval_eq(num, str) == 0, "different types should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lenv_free_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_free(nullptr);
+
+  VALK_PASS();
+}
+
+void test_lval_print(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *num = valk_lval_num(42);
+  valk_lval_print(num);
+
+  valk_lval_t *str = valk_lval_str("test");
+  valk_lval_print(str);
+
+  valk_lval_t *nil = valk_lval_nil();
+  valk_lval_print(nil);
+
+  VALK_PASS();
+}
+
+void test_lval_println(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_num(100);
+  valk_lval_println(val);
+
+  VALK_PASS();
+}
+
+void test_lval_copy_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *e1 = valk_lval_num(1);
+  valk_lval_t *e2 = valk_lval_num(2);
+  valk_lval_t *arr[] = {e1, e2};
+  valk_lval_t *orig = valk_lval_list(arr, 2);
+  valk_lval_t *copy = valk_lval_copy(orig);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_CONS, "copy should be CONS");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_err(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_err("test error");
+  valk_lval_t *copy = valk_lval_copy(orig);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_ERR, "copy type should be ERR");
+
+  VALK_PASS();
+}
+
+void test_lval_read_number(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "123");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse number");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(val->num == 123, "Value should be 123");
+
+  VALK_PASS();
+}
+
+void test_lval_read_negative_number(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "-456");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse negative number");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(val->num == -456, "Value should be -456");
+
+  VALK_PASS();
+}
+
+void test_lval_read_symbol(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "my-sym");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse symbol");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_SYM, "Type should be SYM");
+  VALK_TEST_ASSERT(strcmp(val->str, "my-sym") == 0, "Symbol should match");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_simple(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse string");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strcmp(val->str, "hello") == 0, "String should match");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_with_escapes(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\\nworld\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse string with escapes");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strcmp(val->str, "hello\nworld") == 0, "String should have newline");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_tab(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"a\\tb\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse tab escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strcmp(val->str, "a\tb") == 0, "Should have tab");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_quote(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"say \\\"hi\\\"\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse quote escapes");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strcmp(val->str, "say \"hi\"") == 0, "Should have quotes");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_unterminated(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"unclosed");
+  VALK_TEST_ASSERT(val != nullptr, "Should return error");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be ERR");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_invalid_escape(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"bad\\x\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should return error");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be ERR for invalid escape");
+
+  VALK_PASS();
+}
+
+void test_lval_read_sexpr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "(+ 1 2)");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse s-expr");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
+  VALK_TEST_ASSERT(valk_lval_list_count(val) == 3, "Should have 3 elements");
+
+  VALK_PASS();
+}
+
+void test_lval_read_qexpr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "{a b c}");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse q-expr");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_QEXPR, "Type should be QEXPR");
+  VALK_TEST_ASSERT(valk_lval_list_count(val) == 3, "Should have 3 elements");
+
+  VALK_PASS();
+}
+
+void test_lval_read_quote(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "'x");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse quote");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_QEXPR, "Type should be QEXPR");
+
+  VALK_PASS();
+}
+
+void test_lval_read_quasiquote(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "`x");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse quasiquote");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
+  valk_lval_t *first = valk_lval_list_nth(val, 0);
+  VALK_TEST_ASSERT(LVAL_TYPE(first) == LVAL_SYM, "First should be symbol");
+  VALK_TEST_ASSERT(strcmp(first->str, "quasiquote") == 0, "Should be quasiquote");
+
+  VALK_PASS();
+}
+
+void test_lval_read_unquote(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, ",x");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse unquote");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
+  valk_lval_t *first = valk_lval_list_nth(val, 0);
+  VALK_TEST_ASSERT(LVAL_TYPE(first) == LVAL_SYM, "First should be symbol");
+  VALK_TEST_ASSERT(strcmp(first->str, "unquote") == 0, "Should be unquote");
+
+  VALK_PASS();
+}
+
+void test_lval_read_unquote_splicing(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, ",@xs");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse unquote-splicing");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
+  valk_lval_t *first = valk_lval_list_nth(val, 0);
+  VALK_TEST_ASSERT(LVAL_TYPE(first) == LVAL_SYM, "First should be symbol");
+  VALK_TEST_ASSERT(strcmp(first->str, "unquote-splicing") == 0, "Should be unquote-splicing");
+
+  VALK_PASS();
+}
+
+void test_lval_read_comment(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "; comment\n42");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse past comment");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
+
+  VALK_PASS();
+}
+
+void test_lval_read_unexpected_char(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "#bad");
+  VALK_TEST_ASSERT(val != nullptr, "Should return error");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be ERR");
+
+  VALK_PASS();
+}
+
+void test_lval_read_unclosed_paren(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "(+ 1 2");
+  VALK_TEST_ASSERT(val != nullptr, "Should return error");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_ERR, "Type should be ERR for unclosed paren");
+
+  VALK_PASS();
+}
+
+void test_lval_pop_first(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *e1 = valk_lval_num(1);
+  valk_lval_t *e2 = valk_lval_num(2);
+  valk_lval_t *e3 = valk_lval_num(3);
+  valk_lval_t *arr[] = {e1, e2, e3};
+  valk_lval_t *list = valk_lval_list(arr, 3);
+
+  valk_lval_t *popped = valk_lval_pop(list, 0);
+  VALK_TEST_ASSERT(popped != nullptr, "popped should not be nullptr");
+  VALK_TEST_ASSERT(popped->num == 1, "popped value should be 1");
+  VALK_TEST_ASSERT(valk_lval_list_count(list) == 2, "list should have 2 elements");
+
+  VALK_PASS();
+}
+
+void test_lval_pop_middle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *e1 = valk_lval_num(1);
+  valk_lval_t *e2 = valk_lval_num(2);
+  valk_lval_t *e3 = valk_lval_num(3);
+  valk_lval_t *arr[] = {e1, e2, e3};
+  valk_lval_t *list = valk_lval_list(arr, 3);
+
+  valk_lval_t *popped = valk_lval_pop(list, 1);
+  VALK_TEST_ASSERT(popped != nullptr, "popped should not be nullptr");
+  VALK_TEST_ASSERT(popped->num == 2, "popped value should be 2");
+  VALK_TEST_ASSERT(valk_lval_list_count(list) == 2, "list should have 2 elements");
+
+  VALK_PASS();
+}
+
+void test_lval_join_two_lists(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *a1 = valk_lval_num(1);
+  valk_lval_t *a2 = valk_lval_num(2);
+  valk_lval_t *arr1[] = {a1, a2};
+  valk_lval_t *list1 = valk_lval_list(arr1, 2);
+
+  valk_lval_t *b1 = valk_lval_num(3);
+  valk_lval_t *b2 = valk_lval_num(4);
+  valk_lval_t *arr2[] = {b1, b2};
+  valk_lval_t *list2 = valk_lval_list(arr2, 2);
+
+  valk_lval_t *joined = valk_lval_join(list1, list2);
+  VALK_TEST_ASSERT(joined != nullptr, "joined should not be nullptr");
+  VALK_TEST_ASSERT(valk_lval_list_count(joined) == 4, "joined should have 4 elements");
+
+  VALK_PASS();
+}
+
+void test_lval_join_single_element(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *a1 = valk_lval_num(1);
+  valk_lval_t *arr1[] = {a1};
+  valk_lval_t *list1 = valk_lval_list(arr1, 1);
+
+  valk_lval_t *single = valk_lval_num(99);
+  valk_lval_t *joined = valk_lval_join(list1, single);
+  VALK_TEST_ASSERT(joined != nullptr, "joined should not be nullptr");
+  VALK_TEST_ASSERT(valk_lval_list_count(joined) == 2, "joined should have 2 elements");
+
+  VALK_PASS();
+}
+
+void test_lval_ref_type_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char long_type[200];
+  memset(long_type, 'x', sizeof(long_type) - 1);
+  long_type[sizeof(long_type) - 1] = '\0';
+
+  valk_lval_t *ref = valk_lval_ref(long_type, nullptr, nullptr);
+  VALK_TEST_ASSERT(ref != nullptr, "ref should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(ref) == LVAL_REF, "Type should be REF");
+  VALK_TEST_ASSERT(strlen(ref->ref.type) <= 100, "Type should be truncated");
+
+  VALK_PASS();
+}
+
+void test_lval_sym_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char long_sym[300];
+  memset(long_sym, 'a', sizeof(long_sym) - 1);
+  long_sym[sizeof(long_sym) - 1] = '\0';
+
+  valk_lval_t *sym = valk_lval_sym(long_sym);
+  VALK_TEST_ASSERT(sym != nullptr, "sym should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(sym) == LVAL_SYM, "Type should be SYM");
+  VALK_TEST_ASSERT(strlen(sym->str) <= 200, "Symbol should be truncated");
+
+  VALK_PASS();
+}
+
+void test_lenv_parent_lookup(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *parent = valk_lenv_empty();
+  valk_lenv_t *child = valk_lenv_empty();
+  child->parent = parent;
+
+  valk_lval_t *key = valk_lval_sym("parent-val");
+  valk_lval_t *val = valk_lval_num(777);
+  valk_lenv_put(parent, key, val);
+
+  valk_lval_t *result = valk_lenv_get(child, key);
+  VALK_TEST_ASSERT(result != nullptr, "Should find in parent");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(result->num == 777, "Value should be 777");
+
+  valk_lenv_free(child);
+  valk_lenv_free(parent);
+
+  VALK_PASS();
+}
+
+// Fallback lookup test removed - we now use pure lexical scoping
+// The fallback chain was for dynamic scoping which we no longer support
+
+void test_lenv_put_overwrite(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lval_t *key = valk_lval_sym("x");
+  valk_lval_t *val1 = valk_lval_num(100);
+  valk_lval_t *val2 = valk_lval_num(200);
+
+  valk_lenv_put(env, key, val1);
+  valk_lenv_put(env, key, val2);
+
+  valk_lval_t *result = valk_lenv_get(env, key);
+  VALK_TEST_ASSERT(result != nullptr, "Should find value");
+  VALK_TEST_ASSERT(result->num == 200, "Should be overwritten value");
+
+  valk_lenv_free(env);
+
+  VALK_PASS();
+}
+
+void test_lval_list_is_empty(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *nil = valk_lval_nil();
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(nil) == 1, "nil should be empty");
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(nullptr) == 1, "nullptr should be empty");
+
+  valk_lval_t *elem = valk_lval_num(1);
+  valk_lval_t *arr[] = {elem};
+  valk_lval_t *list = valk_lval_list(arr, 1);
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(list) == 0, "non-empty list should not be empty");
+
+  VALK_PASS();
+}
+
+void test_lval_list_nth_out_of_bounds(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *elem = valk_lval_num(1);
+  valk_lval_t *arr[] = {elem};
+  valk_lval_t *list = valk_lval_list(arr, 1);
+
+  valk_lval_t *result = valk_lval_list_nth(list, 10);
+  VALK_TEST_ASSERT(result == nullptr, "out of bounds should return nullptr");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_nil(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *nil1 = valk_lval_nil();
+  valk_lval_t *nil2 = valk_lval_nil();
+
+  VALK_TEST_ASSERT(valk_lval_eq(nil1, nil2) == 1, "nils should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(nil1, nullptr) == 0, "nil should not equal nullptr");
+  VALK_TEST_ASSERT(valk_lval_eq(nullptr, nullptr) == 1, "NULLs should be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_cons(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *a1[] = {valk_lval_num(1), valk_lval_num(2)};
+  valk_lval_t *a2[] = {valk_lval_num(1), valk_lval_num(2)};
+  valk_lval_t *a3[] = {valk_lval_num(1), valk_lval_num(3)};
+
+  valk_lval_t *list1 = valk_lval_list(a1, 2);
+  valk_lval_t *list2 = valk_lval_list(a2, 2);
+  valk_lval_t *list3 = valk_lval_list(a3, 2);
+
+  VALK_TEST_ASSERT(valk_lval_eq(list1, list2) == 1, "identical lists should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(list1, list3) == 0, "different lists should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_sym(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_sym("my-symbol");
+  valk_lval_t *copy = valk_lval_copy(orig);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_SYM, "copy type should be SYM");
+  VALK_TEST_ASSERT(strcmp(copy->str, "my-symbol") == 0, "copy value should match");
+  VALK_TEST_ASSERT(copy->str != orig->str, "copy should have its own string");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_ref(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int data = 42;
+  valk_lval_t *orig = valk_lval_ref("test-ref", &data, nullptr);
+  valk_lval_t *copy = valk_lval_copy(orig);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_REF, "copy type should be REF");
+  VALK_TEST_ASSERT(strcmp(copy->ref.type, "test-ref") == 0, "copy type should match");
+  VALK_TEST_ASSERT(copy->ref.ptr == &data, "copy ptr should match");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *copy = valk_lval_copy(nullptr);
+  VALK_TEST_ASSERT(copy == nullptr, "copy of nullptr should be nullptr");
+
+  VALK_PASS();
+}
+
+void test_ltype_name_unknown(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+  const char *name = valk_ltype_name((valk_ltype_e)99);
+  VALK_TEST_ASSERT(name != nullptr, "Should return a name");
+  VALK_TEST_ASSERT(strcmp(name, "Unknown") == 0, "Should be Unknown");
+
+  VALK_PASS();
+}
+
+void test_ltype_name_all_types(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_FUN), "Function") == 0, "FUN type");
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_CONS), "List") == 0, "CONS type");
+  // LVAL_QEXPR is now an alias for LVAL_CONS
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_QEXPR), "List") == 0, "QEXPR type (alias for CONS)");
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_REF), "Reference") == 0, "REF type");
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_HANDLE), "Handle") == 0, "HANDLE type");
+  VALK_TEST_ASSERT(strcmp(valk_ltype_name(LVAL_UNDEFINED), "UNDEFINED") == 0, "UNDEFINED type");
+
+  VALK_PASS();
+}
+
+void test_str_join(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  const char *strs[] = {"hello", "world", "test"};
+  char *result = valk_str_join(3, strs, ", ");
+
+  VALK_TEST_ASSERT(result != nullptr, "result should not be nullptr");
+  VALK_TEST_ASSERT(strcmp(result, "hello, world, test") == 0, "join should work");
+
+  valk_mem_free(result);
+
+  VALK_PASS();
+}
+
+void test_str_join_single(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  const char *strs[] = {"only"};
+  char *result = valk_str_join(1, strs, ", ");
+
+  VALK_TEST_ASSERT(result != nullptr, "result should not be nullptr");
+  VALK_TEST_ASSERT(strcmp(result, "only") == 0, "single join should work");
+
+  valk_mem_free(result);
+
+  VALK_PASS();
+}
+
+void test_lenv_copy_null(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *copy = valk_lenv_copy(nullptr);
+  VALK_TEST_ASSERT(copy == nullptr, "copy of nullptr env should be nullptr");
+
+  VALK_PASS();
+}
+
+void test_lenv_copy_with_parent_chain(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *grandparent = valk_lenv_empty();
+  valk_lenv_t *parent = valk_lenv_empty();
+  valk_lenv_t *child = valk_lenv_empty();
+  parent->parent = grandparent;
+  child->parent = parent;
+
+  valk_lval_t *gp_key = valk_lval_sym("gp-val");
+  valk_lval_t *gp_val = valk_lval_num(111);
+  valk_lenv_put(grandparent, gp_key, gp_val);
+
+  valk_lval_t *p_key = valk_lval_sym("p-val");
+  valk_lval_t *p_val = valk_lval_num(222);
+  valk_lenv_put(parent, p_key, p_val);
+
+  valk_lval_t *c_key = valk_lval_sym("c-val");
+  valk_lval_t *c_val = valk_lval_num(333);
+  valk_lenv_put(child, c_key, c_val);
+
+  valk_lenv_t *copy = valk_lenv_copy(child);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy->parent == nullptr, "copy should have flattened parent");
+
+  valk_lval_t *res_gp = valk_lenv_get(copy, gp_key);
+  VALK_TEST_ASSERT(LVAL_TYPE(res_gp) == LVAL_NUM, "Should find grandparent value");
+  VALK_TEST_ASSERT(res_gp->num == 111, "grandparent value should be correct");
+
+  valk_lval_t *res_p = valk_lenv_get(copy, p_key);
+  VALK_TEST_ASSERT(LVAL_TYPE(res_p) == LVAL_NUM, "Should find parent value");
+  VALK_TEST_ASSERT(res_p->num == 222, "parent value should be correct");
+
+  valk_lval_t *res_c = valk_lenv_get(copy, c_key);
+  VALK_TEST_ASSERT(LVAL_TYPE(res_c) == LVAL_NUM, "Should find child value");
+  VALK_TEST_ASSERT(res_c->num == 333, "child value should be correct");
+
+  VALK_PASS();
+}
+
+void test_lval_str_n_zero_length(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str_n("hello", 0);
+  VALK_TEST_ASSERT(val != nullptr, "Should create empty string");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strlen(val->str) == 0, "String should be empty");
+
+  VALK_PASS();
+}
+
+
+
+void test_lval_print_undefined(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t val;
+  val.flags = LVAL_UNDEFINED;
+  valk_lval_print(&val);
+
+  VALK_PASS();
+}
+
+void test_lval_print_ref(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int data = 42;
+  valk_lval_t *ref = valk_lval_ref("test-type", &data, nullptr);
+  valk_lval_print(ref);
+
+  VALK_PASS();
+}
+
+void test_lval_print_lambda(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lval_t *formals = valk_lval_nil();
+  valk_lval_t *body = valk_lval_nil();
+  valk_lval_t *lambda = valk_lval_lambda(env, formals, body);
+  valk_lval_print(lambda);
+
+  VALK_PASS();
+}
+
+void test_lval_read_minus_only(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "-");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse minus");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_SYM, "Minus alone should be symbol");
+  VALK_TEST_ASSERT(strcmp(val->str, "-") == 0, "Should be minus symbol");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_lambda(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env1 = valk_lenv_empty();
+  valk_lenv_t *env2 = valk_lenv_empty();
+
+  valk_lval_t *formals1 = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("x")}, 1);
+  valk_lval_t *body1 = valk_lval_sym("x");
+  valk_lval_t *lambda1 = valk_lval_lambda(env1, formals1, body1);
+
+  valk_lval_t *formals2 = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("x")}, 1);
+  valk_lval_t *body2 = valk_lval_sym("x");
+  valk_lval_t *lambda2 = valk_lval_lambda(env2, formals2, body2);
+
+  valk_lval_t *formals3 = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("y")}, 1);
+  valk_lval_t *body3 = valk_lval_sym("y");
+  valk_lval_t *lambda3 = valk_lval_lambda(env1, formals3, body3);
+
+  VALK_TEST_ASSERT(valk_lval_eq(lambda1, lambda2) == 1, "identical lambdas should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(lambda1, lambda3) == 0, "different lambdas should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_ref(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int data1 = 42;
+  int data2 = 99;
+
+  valk_lval_t *ref1 = valk_lval_ref("test", &data1, nullptr);
+  valk_lval_t *ref2 = valk_lval_ref("test", &data1, nullptr);
+  valk_lval_t *ref3 = valk_lval_ref("test", &data2, nullptr);
+
+  VALK_TEST_ASSERT(valk_lval_eq(ref1, ref2) == 1, "refs to same data should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(ref1, ref3) == 0, "refs to different data should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_lambda(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lval_t *formals = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("x")}, 1);
+  valk_lval_t *body = valk_lval_sym("x");
+  valk_lval_t *lambda = valk_lval_lambda(env, formals, body);
+
+  valk_lval_t *copy = valk_lval_copy(lambda);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy != lambda, "copy should be different pointer");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_FUN, "copy type should be FUN");
+  VALK_TEST_ASSERT(copy->fun.builtin == nullptr, "copy should be lambda");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_builtin(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env);
+
+  valk_lval_t *plus_sym = valk_lval_sym("+");
+  valk_lval_t *plus = valk_lenv_get(env, plus_sym);
+
+  VALK_TEST_ASSERT(plus != nullptr, "+ builtin should exist");
+  VALK_TEST_ASSERT(LVAL_TYPE(plus) == LVAL_FUN, "+ should be a function");
+  VALK_TEST_ASSERT(plus->fun.builtin != nullptr, "+ should be a builtin");
+
+  valk_lval_t *copy = valk_lval_copy(plus);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy != plus, "copy should be different pointer");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_FUN, "copy type should be FUN");
+  VALK_TEST_ASSERT(copy->fun.builtin == plus->fun.builtin, "copy should have same builtin");
+  VALK_TEST_ASSERT(copy->fun.env == nullptr, "copy env should be null for builtin");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_qexpr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *e1 = valk_lval_num(1);
+  valk_lval_t *e2 = valk_lval_num(2);
+  valk_lval_t *arr[] = {e1, e2};
+  valk_lval_t *orig = valk_lval_qlist(arr, 2);
+  valk_lval_t *copy = valk_lval_copy(orig);
+
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_QEXPR, "copy should be QEXPR");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new(NULL, NULL);
+  VALK_TEST_ASSERT(handle != nullptr, "handle should be created");
+
+  valk_lval_t *orig = valk_lval_handle(handle);
+  VALK_TEST_ASSERT(orig != nullptr, "orig should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(orig) == LVAL_HANDLE, "orig should be LVAL_HANDLE");
+
+  valk_lval_t *copy = valk_lval_copy(orig);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_HANDLE, "copy should be LVAL_HANDLE");
+  VALK_TEST_ASSERT(copy->async.handle == orig->async.handle, "copy should share same handle");
+
+  valk_async_handle_free(handle);
+
+  VALK_PASS();
+}
+
+void test_lval_eq_qexpr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *a1[] = {valk_lval_num(1), valk_lval_num(2)};
+  valk_lval_t *a2[] = {valk_lval_num(1), valk_lval_num(2)};
+  valk_lval_t *a3[] = {valk_lval_num(1), valk_lval_num(3)};
+
+  valk_lval_t *qlist1 = valk_lval_qlist(a1, 2);
+  valk_lval_t *qlist2 = valk_lval_qlist(a2, 2);
+  valk_lval_t *qlist3 = valk_lval_qlist(a3, 2);
+
+  VALK_TEST_ASSERT(valk_lval_eq(qlist1, qlist2) == 1, "identical qlists should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(qlist1, qlist3) == 0, "different qlists should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_err(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *err1 = valk_lval_err("test error");
+  valk_lval_t *err2 = valk_lval_err("test error");
+  valk_lval_t *err3 = valk_lval_err("different error");
+
+  VALK_TEST_ASSERT(valk_lval_eq(err1, err2) == 1, "same errors should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(err1, err3) == 0, "different errors should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_sym(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *sym1 = valk_lval_sym("test");
+  valk_lval_t *sym2 = valk_lval_sym("test");
+  valk_lval_t *sym3 = valk_lval_sym("other");
+
+  VALK_TEST_ASSERT(valk_lval_eq(sym1, sym2) == 1, "same symbols should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(sym1, sym3) == 0, "different symbols should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *handle1 = valk_lval_handle(NULL);
+  valk_lval_t *handle2 = valk_lval_handle(NULL);
+
+  VALK_TEST_ASSERT(valk_lval_eq(handle1, handle1) == 1, "same handle should equal itself");
+  VALK_TEST_ASSERT(valk_lval_eq(handle1, handle2) == 0, "different handles should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_read_nested_expr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "(+ (* 2 3) (- 5 1))");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse nested expr");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
+  VALK_TEST_ASSERT(valk_lval_list_count(val) == 3, "Should have 3 elements");
+
+  VALK_PASS();
+}
+
+void test_lval_read_empty_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "()");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse empty list");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NIL, "Empty list should be NIL");
+
+  VALK_PASS();
+}
+
+void test_lval_read_empty_qexpr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "{}");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse empty qexpr");
+
+  VALK_PASS();
+}
+
+void test_lval_read_deeply_nested(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "(((((x)))))");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse deeply nested");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
+
+  VALK_PASS();
+}
+
+void test_eval_stack_init_destroy(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  ASSERT_NOT_NULL(stack.frames);
+  ASSERT_EQ(stack.count, 0);
+  ASSERT_EQ(stack.capacity, VALK_EVAL_STACK_INIT_CAP);
+
+  valk_eval_stack_destroy(&stack);
+  ASSERT_NULL(stack.frames);
+  ASSERT_EQ(stack.count, 0);
+  ASSERT_EQ(stack.capacity, 0);
+
+  VALK_PASS();
+}
+
+void test_eval_stack_push_single(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_DONE,
+    .env = NULL,
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  ASSERT_EQ(stack.count, 1);
+  ASSERT_EQ(stack.frames[0].kind, CONT_DONE);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_push_pop_single(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_IF_BRANCH,
+    .env = NULL,
+  };
+  valk_eval_stack_push(&stack, frame);
+  ASSERT_EQ(stack.count, 1);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(stack.count, 0);
+  ASSERT_EQ(popped.kind, CONT_IF_BRANCH);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_push_multiple(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  for (int i = 0; i < 10; i++) {
+    valk_cont_frame_t frame = {
+      .kind = (valk_cont_kind_e)(i % 5),
+      .env = NULL,
+    };
+    valk_eval_stack_push(&stack, frame);
+  }
+
+  ASSERT_EQ(stack.count, 10);
+
+  for (int i = 9; i >= 0; i--) {
+    valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+    ASSERT_EQ(popped.kind, (valk_cont_kind_e)(i % 5));
+  }
+
+  ASSERT_EQ(stack.count, 0);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_grow(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  u64 initial_cap = stack.capacity;
+
+  for (u64 i = 0; i < initial_cap + 10; i++) {
+    valk_cont_frame_t frame = {
+      .kind = CONT_DONE,
+      .env = NULL,
+    };
+    valk_eval_stack_push(&stack, frame);
+  }
+
+  ASSERT_GT(stack.capacity, initial_cap);
+  ASSERT_EQ(stack.count, initial_cap + 10);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_cont_kinds(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_cont_kind_e kinds[] = {
+    CONT_DONE,
+    CONT_EVAL_ARGS,
+    CONT_COLLECT_ARG,
+    CONT_APPLY_FUNC,
+    CONT_IF_BRANCH,
+    CONT_DO_NEXT,
+    CONT_SELECT_CHECK,
+    CONT_BODY_NEXT,
+    CONT_SINGLE_ELEM,
+    CONT_LAMBDA_DONE,
+    CONT_CTX_DEADLINE,
+    CONT_CTX_WITH,
+  };
+
+  for (size_t i = 0; i < sizeof(kinds)/sizeof(kinds[0]); i++) {
+    valk_cont_frame_t frame = {
+      .kind = kinds[i],
+      .env = NULL,
+    };
+    valk_eval_stack_push(&stack, frame);
+  }
+
+  ASSERT_EQ(stack.count, sizeof(kinds)/sizeof(kinds[0]));
+
+  for (size_t i = sizeof(kinds)/sizeof(kinds[0]); i > 0; i--) {
+    valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+    ASSERT_EQ(popped.kind, kinds[i-1]);
+  }
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_if_branch_frame(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lval_t *true_branch = valk_lval_num(1);
+  valk_lval_t *false_branch = valk_lval_num(0);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_IF_BRANCH,
+    .env = NULL,
+    .if_branch = {
+      .true_branch = true_branch,
+      .false_branch = false_branch,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(popped.kind, CONT_IF_BRANCH);
+  ASSERT_EQ(popped.if_branch.true_branch, true_branch);
+  ASSERT_EQ(popped.if_branch.false_branch, false_branch);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_do_next_frame(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lval_t *remaining = valk_lval_list((valk_lval_t*[]){valk_lval_num(1)}, 1);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_DO_NEXT,
+    .env = NULL,
+    .do_next = {
+      .remaining = remaining,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(popped.kind, CONT_DO_NEXT);
+  ASSERT_EQ(popped.do_next.remaining, remaining);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_collect_arg_cleanup(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lval_t **args = malloc(sizeof(valk_lval_t*) * 4);
+  args[0] = valk_lval_num(1);
+  args[1] = valk_lval_num(2);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_COLLECT_ARG,
+    .env = NULL,
+    .collect_arg = {
+      .func = NULL,
+      .args = args,
+      .count = 2,
+      .capacity = 4,
+      .remaining = NULL,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  ASSERT_EQ(stack.count, 1);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_eval_stack_body_next_frame(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lval_t *remaining = valk_lval_num(42);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_BODY_NEXT,
+    .env = NULL,
+    .body_next = {
+      .remaining = remaining,
+      .call_env = env,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(popped.kind, CONT_BODY_NEXT);
+  ASSERT_EQ(popped.body_next.remaining, remaining);
+  ASSERT_EQ(popped.body_next.call_env, env);
+
+  valk_eval_stack_destroy(&stack);
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+void test_eval_stack_with_env(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_lenv_t *env = valk_lenv_empty();
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_DONE,
+    .env = env,
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  valk_cont_frame_t popped = valk_eval_stack_pop(&stack);
+  ASSERT_EQ(popped.env, env);
+
+  valk_eval_stack_destroy(&stack);
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+void test_lval_print_handle(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_async_handle_t *handle = valk_async_handle_new(NULL, NULL);
+  valk_lval_t *val = valk_lval_handle(handle);
+  valk_lval_print(val);
+  valk_async_handle_free(handle);
+
+  VALK_PASS();
+}
+
+void test_lval_print_improper_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *head = valk_lval_num(1);
+  valk_lval_t *tail = valk_lval_num(2);
+  valk_lval_t *cons = valk_lval_cons(head, tail);
+  valk_lval_print(cons);
+
+  VALK_PASS();
+}
+
+void test_lval_print_string_with_escapes(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("hello\nworld\ttab\\slash");
+  valk_lval_print(val);
+
+  VALK_PASS();
+}
+
+void test_lval_print_builtin(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env);
+  valk_lval_t *plus_sym = valk_lval_sym("+");
+  valk_lval_t *plus = valk_lenv_get(env, plus_sym);
+  valk_lval_print(plus);
+
+  VALK_PASS();
+}
+
+void test_lval_eq_two_lambdas(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env1 = valk_lenv_empty();
+  valk_lenv_t *env2 = valk_lenv_empty();
+
+  valk_lval_t *formals1 = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("x")}, 1);
+  valk_lval_t *body1 = valk_lval_sym("x");
+  valk_lval_t *lambda1 = valk_lval_lambda(env1, formals1, body1);
+
+  valk_lval_t *formals2 = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("x")}, 1);
+  valk_lval_t *body2 = valk_lval_sym("x");
+  valk_lval_t *lambda2 = valk_lval_lambda(env2, formals2, body2);
+
+  valk_lval_t *formals3 = valk_lval_qlist((valk_lval_t*[]){valk_lval_sym("y")}, 1);
+  valk_lval_t *body3 = valk_lval_sym("y");
+  valk_lval_t *lambda3 = valk_lval_lambda(env2, formals3, body3);
+
+  VALK_TEST_ASSERT(valk_lval_eq(lambda1, lambda2) == 1, "identical lambdas should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(lambda1, lambda3) == 0, "different lambdas should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_eq_builtin_functions(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env);
+
+  valk_lval_t *plus = valk_lenv_get(env, valk_lval_sym("+"));
+  valk_lval_t *minus = valk_lenv_get(env, valk_lval_sym("-"));
+  valk_lval_t *plus2 = valk_lenv_get(env, valk_lval_sym("+"));
+
+  VALK_TEST_ASSERT(valk_lval_eq(plus, plus2) == 1, "same builtin should be equal");
+  VALK_TEST_ASSERT(valk_lval_eq(plus, minus) == 0, "different builtins should not be equal");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_bell(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\\aworld\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse bell escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\a') != nullptr, "Should contain bell char");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_backspace(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\\bworld\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse backspace escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\b') != nullptr, "Should contain backspace char");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_formfeed(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\\fworld\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse formfeed escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\f') != nullptr, "Should contain formfeed char");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_vtab(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"hello\\vworld\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse vtab escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\v') != nullptr, "Should contain vtab char");
+
+  VALK_PASS();
+}
+
+void test_lval_read_string_escape_single_quote(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\"it\\'s\"");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse single quote escape");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_STR, "Type should be STR");
+  VALK_TEST_ASSERT(strchr(val->str, '\'') != nullptr, "Should contain single quote");
+
+  VALK_PASS();
+}
+
+void test_lval_print_string_rare_escapes(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("bell:\a bs:\b ff:\f vt:\v sq:\'");
+  valk_lval_print(val);
+
+  VALK_PASS();
+}
+
+void test_lval_print_string_carriage_return(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("line1\rline2");
+  valk_lval_print(val);
+
+  VALK_PASS();
+}
+
+void test_lval_print_string_double_quote(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *val = valk_lval_str("he said \"hello\"");
+  valk_lval_print(val);
+
+  VALK_PASS();
+}
+
+void test_lenv_capacity_growth(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+
+  for (int i = 0; i < 50; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "var-%d", i);
+    valk_lval_t *key = valk_lval_sym(name);
+    valk_lval_t *val = valk_lval_num(i);
+    valk_lenv_put(env, key, val);
+  }
+
+  VALK_TEST_ASSERT(env->symbols.count == 50, "Should have 50 symbols");
+
+  for (int i = 0; i < 50; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "var-%d", i);
+    valk_lval_t *key = valk_lval_sym(name);
+    valk_lval_t *result = valk_lenv_get(env, key);
+    VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Should find NUM");
+    VALK_TEST_ASSERT(result->num == i, "Value should match");
+  }
+
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+void test_lval_pop_deep_index(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *e1 = valk_lval_num(1);
+  valk_lval_t *e2 = valk_lval_num(2);
+  valk_lval_t *e3 = valk_lval_num(3);
+  valk_lval_t *e4 = valk_lval_num(4);
+  valk_lval_t *e5 = valk_lval_num(5);
+  valk_lval_t *arr[] = {e1, e2, e3, e4, e5};
+  valk_lval_t *list = valk_lval_list(arr, 5);
+
+  valk_lval_t *popped = valk_lval_pop(list, 3);
+  VALK_TEST_ASSERT(popped != nullptr, "Should pop element");
+  VALK_TEST_ASSERT(popped->num == 4, "Popped value should be 4");
+
+  VALK_PASS();
+}
+
+void test_lval_pop_last_element(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *e1 = valk_lval_num(10);
+  valk_lval_t *e2 = valk_lval_num(20);
+  valk_lval_t *e3 = valk_lval_num(30);
+  valk_lval_t *arr[] = {e1, e2, e3};
+  valk_lval_t *list = valk_lval_list(arr, 3);
+
+  valk_lval_t *popped = valk_lval_pop(list, 2);
+  VALK_TEST_ASSERT(popped != nullptr, "Should pop last element");
+  VALK_TEST_ASSERT(popped->num == 30, "Popped value should be 30");
+
+  VALK_PASS();
+}
+
+void test_lenv_get_null_env(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *key = valk_lval_sym("test");
+  valk_lval_t *result = valk_lenv_get(nullptr, key);
+  VALK_TEST_ASSERT(result != nullptr, "Should return error");
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR, "Should be error type");
+
+  VALK_PASS();
+}
+
+void test_lenv_copy_with_many_symbols(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  for (int i = 0; i < 30; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "sym-%d", i);
+    valk_lval_t *key = valk_lval_sym(name);
+    valk_lval_t *val = valk_lval_num(i * 10);
+    valk_lenv_put(env, key, val);
+  }
+
+  valk_lenv_t *copy = valk_lenv_copy(env);
+  VALK_TEST_ASSERT(copy != nullptr, "Should copy env");
+  VALK_TEST_ASSERT(copy->symbols.count == 30, "Copy should have 30 symbols");
+
+  for (int i = 0; i < 30; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "sym-%d", i);
+    valk_lval_t *key = valk_lval_sym(name);
+    valk_lval_t *result = valk_lenv_get(copy, key);
+    VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Should find NUM");
+    VALK_TEST_ASSERT(result->num == i * 10, "Value should match");
+  }
+
+  valk_lenv_free(env);
+  VALK_PASS();
+}
+
+void test_lval_read_very_long_list(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char buffer[1024] = "(";
+  for (int i = 0; i < 30; i++) {
+    char num[8];
+    snprintf(num, sizeof(num), "%d ", i);
+    strcat(buffer, num);
+  }
+  strcat(buffer, ")");
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, buffer);
+  VALK_TEST_ASSERT(val != nullptr, "Should parse long list");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_CONS, "Type should be CONS");
+  VALK_TEST_ASSERT(valk_lval_list_count(val) == 30, "Should have 30 elements");
+
+  VALK_PASS();
+}
+
+void test_lval_print_nil(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *nil = valk_lval_nil();
+  valk_lval_print(nil);
+
+  VALK_PASS();
+}
+
+void test_lenv_masked_parent_symbol(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *parent = valk_lenv_empty();
+  valk_lval_t *key = valk_lval_sym("x");
+  valk_lenv_put(parent, key, valk_lval_num(10));
+
+  valk_lenv_t *child = valk_lenv_empty();
+  child->parent = parent;
+  valk_lenv_put(child, key, valk_lval_num(20));
+
+  valk_lenv_t *copy = valk_lenv_copy(child);
+
+  valk_lval_t *result = valk_lenv_get(copy, key);
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Should find NUM");
+  VALK_TEST_ASSERT(result->num == 20, "Should be child value");
+
+  valk_lenv_free(parent);
+  valk_lenv_free(child);
+  VALK_PASS();
+}
+
+void test_lval_err_very_long_message(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  char long_str[15000];
+  memset(long_str, 'x', 14999);
+  long_str[14999] = '\0';
+
+  valk_lval_t *err = valk_lval_err("Error: %s", long_str);
+  VALK_TEST_ASSERT(err != nullptr, "Should create error");
+  VALK_TEST_ASSERT(LVAL_TYPE(err) == LVAL_ERR, "Type should be LVAL_ERR");
+  VALK_TEST_ASSERT(strlen(err->str) <= 512, "Should truncate to 512 chars");
+
+  VALK_PASS();
+}
+
+void test_lval_read_comment_eof(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "42 ;comment no newline");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse number before comment");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
+
+  VALK_PASS();
+}
+
+void test_lval_read_only_comment_eof(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, ";only comment no newline");
+  VALK_TEST_ASSERT(val == nullptr || LVAL_TYPE(val) == LVAL_ERR, "Should return null or error for only comment");
+
+  VALK_PASS();
+}
+
+void test_eval_stack_collect_arg_null_args(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+
+  valk_cont_frame_t frame = {
+    .kind = CONT_COLLECT_ARG,
+    .env = NULL,
+    .collect_arg = {
+      .func = NULL,
+      .args = NULL,
+      .count = 0,
+      .capacity = 0,
+      .remaining = NULL,
+    },
+  };
+  valk_eval_stack_push(&stack, frame);
+
+  ASSERT_EQ(stack.count, 1);
+
+  valk_eval_stack_destroy(&stack);
+  VALK_PASS();
+}
+
+void test_lval_list_is_empty_null_head(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *cons = valk_mem_alloc(sizeof(valk_lval_t));
+  cons->flags = LVAL_CONS;
+  cons->cons.head = NULL;
+  cons->cons.tail = NULL;
+
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(cons) == 1, "Should be empty when head is NULL");
+
+  VALK_PASS();
+}
+
+void test_lval_list_nth_early_end(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *list = valk_lval_cons(valk_lval_num(1), valk_lval_nil());
+  valk_lval_t *result = valk_lval_list_nth(list, 5);
+  VALK_TEST_ASSERT(result == nullptr, "Should return nullptr for index past end");
+
+  VALK_PASS();
+}
+
+void test_lval_read_vtab_whitespace(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\v42");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse number after vtab");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
+
+  VALK_PASS();
+}
+
+void test_lval_read_carriage_return_whitespace(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  int pos = 0;
+  valk_lval_t *val = valk_lval_read(&pos, "\r42");
+  VALK_TEST_ASSERT(val != nullptr, "Should parse number after CR");
+  VALK_TEST_ASSERT(LVAL_TYPE(val) == LVAL_NUM, "Type should be NUM");
+  VALK_TEST_ASSERT(val->num == 42, "Value should be 42");
+
+  VALK_PASS();
+}
+
+void test_eval_stack_destroy_null_frames(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  stack.frames = NULL;
+  stack.count = 0;
+  stack.capacity = 0;
+
+  valk_eval_stack_destroy(&stack);
+
+  ASSERT_NULL(stack.frames);
+  ASSERT_EQ(stack.count, 0);
+  ASSERT_EQ(stack.capacity, 0);
+
+  VALK_PASS();
+}
+
+void test_eval_stack_destroy_twice(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_eval_stack_t stack;
+  valk_eval_stack_init(&stack);
+  valk_cont_frame_t frame = {.kind = CONT_DONE, .env = NULL};
+  valk_eval_stack_push(&stack, frame);
+
+  valk_eval_stack_destroy(&stack);
+  ASSERT_NULL(stack.frames);
+
+  valk_eval_stack_destroy(&stack);
+  ASSERT_NULL(stack.frames);
+
+  VALK_PASS();
+}
+
+void test_lval_list_is_empty_qexpr_null_head(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *qexpr = valk_mem_alloc(sizeof(valk_lval_t));
+  qexpr->flags = LVAL_QEXPR;
+  qexpr->cons.head = NULL;
+  qexpr->cons.tail = NULL;
+
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(qexpr) == 1, "QEXPR with NULL head should be empty");
+
+  VALK_PASS();
+}
+
+void test_lval_list_is_empty_non_empty_qexpr(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *qexpr = valk_lval_qcons(valk_lval_num(1), valk_lval_nil());
+
+  VALK_TEST_ASSERT(valk_lval_list_is_empty(qexpr) == 0, "Non-empty QEXPR should not be empty");
+
+  VALK_PASS();
+}
+
+void test_lval_lambda_null_env(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *formals = valk_lval_nil();
+  valk_lval_t *body = valk_lval_num(42);
+  valk_lval_t *lambda = valk_lval_lambda(NULL, formals, body);
+
+  VALK_TEST_ASSERT(lambda != nullptr, "Lambda with NULL env should be created");
+  VALK_TEST_ASSERT(LVAL_TYPE(lambda) == LVAL_FUN, "Type should be FUN");
+  VALK_TEST_ASSERT(lambda->fun.env == NULL, "Lambda env should be NULL");
+  VALK_TEST_ASSERT(lambda->fun.builtin == NULL, "Should not be builtin");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_sym_long_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_sym("x");
+  char *long_str = malloc(300);
+  memset(long_str, 'a', 299);
+  long_str[299] = '\0';
+  free(orig->str);
+  orig->str = long_str;
+
+  valk_lval_t *copy = valk_lval_copy(orig);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_SYM, "copy type should be SYM");
+  VALK_TEST_ASSERT(strlen(copy->str) == 200, "copy should truncate to 200");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_err_long_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_err("x");
+  char *long_str = malloc(3000);
+  memset(long_str, 'e', 2999);
+  long_str[2999] = '\0';
+  free(orig->str);
+  orig->str = long_str;
+
+  valk_lval_t *copy = valk_lval_copy(orig);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_ERR, "copy type should be ERR");
+  VALK_TEST_ASSERT(strlen(copy->str) == 2000, "copy should truncate to 2000");
+
+  VALK_PASS();
+}
+
+void test_lval_copy_ref_long_type_truncation(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lval_t *orig = valk_lval_ref("x", nullptr, nullptr);
+  char *long_type = malloc(200);
+  memset(long_type, 't', 199);
+  long_type[199] = '\0';
+  free((void*)orig->ref.type);
+  orig->ref.type = long_type;
+
+  valk_lval_t *copy = valk_lval_copy(orig);
+  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
+  VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_REF, "copy type should be REF");
+  VALK_TEST_ASSERT(strlen(copy->ref.type) == 100, "copy should truncate to 100");
+
+  VALK_PASS();
+}
+
+int main(void) {
+  valk_mem_init_malloc();
+  valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
+
+  valk_testsuite_add_test(suite, "test_lval_num", test_lval_num);
+  valk_testsuite_add_test(suite, "test_lval_num_negative", test_lval_num_negative);
+  valk_testsuite_add_test(suite, "test_lval_num_zero", test_lval_num_zero);
+  valk_testsuite_add_test(suite, "test_lval_sym", test_lval_sym);
+  valk_testsuite_add_test(suite, "test_lval_sym_empty", test_lval_sym_empty);
+  valk_testsuite_add_test(suite, "test_lval_str", test_lval_str);
+  valk_testsuite_add_test(suite, "test_lval_str_empty", test_lval_str_empty);
+  valk_testsuite_add_test(suite, "test_lval_str_n", test_lval_str_n);
+  valk_testsuite_add_test(suite, "test_lval_err", test_lval_err);
+  valk_testsuite_add_test(suite, "test_lval_err_no_args", test_lval_err_no_args);
+  valk_testsuite_add_test(suite, "test_lval_nil", test_lval_nil);
+  valk_testsuite_add_test(suite, "test_lval_cons", test_lval_cons);
+  valk_testsuite_add_test(suite, "test_lval_qcons", test_lval_qcons);
+  valk_testsuite_add_test(suite, "test_lval_list_empty", test_lval_list_empty);
+  valk_testsuite_add_test(suite, "test_lval_list_single", test_lval_list_single);
+  valk_testsuite_add_test(suite, "test_lval_list_multiple", test_lval_list_multiple);
+  valk_testsuite_add_test(suite, "test_lval_qlist_empty", test_lval_qlist_empty);
+  valk_testsuite_add_test(suite, "test_lval_head_nil", test_lval_head_nil);
+  valk_testsuite_add_test(suite, "test_lval_tail_nil", test_lval_tail_nil);
+  valk_testsuite_add_test(suite, "test_lval_copy_num", test_lval_copy_num);
+  valk_testsuite_add_test(suite, "test_lval_copy_str", test_lval_copy_str);
+  valk_testsuite_add_test(suite, "test_lval_copy_nil", test_lval_copy_nil);
+  valk_testsuite_add_test(suite, "test_lenv_empty", test_lenv_empty);
+  valk_testsuite_add_test(suite, "test_lenv_put_get", test_lenv_put_get);
+  valk_testsuite_add_test(suite, "test_lenv_get_not_found", test_lenv_get_not_found);
+  valk_testsuite_add_test(suite, "test_lenv_def", test_lenv_def);
+  valk_testsuite_add_test(suite, "test_lenv_copy", test_lenv_copy);
+  valk_testsuite_add_test(suite, "test_lval_type_name", test_lval_type_name);
+  valk_testsuite_add_test(suite, "test_lval_large_num", test_lval_large_num);
+  valk_testsuite_add_test(suite, "test_lval_long_str", test_lval_long_str);
+  valk_testsuite_add_test(suite, "test_lval_eq_num", test_lval_eq_num);
+  valk_testsuite_add_test(suite, "test_lval_eq_str", test_lval_eq_str);
+  valk_testsuite_add_test(suite, "test_lval_eq_types_differ", test_lval_eq_types_differ);
+  valk_testsuite_add_test(suite, "test_lenv_free_null", test_lenv_free_null);
+  valk_testsuite_add_test(suite, "test_lval_print", test_lval_print);
+  valk_testsuite_add_test(suite, "test_lval_println", test_lval_println);
+  valk_testsuite_add_test(suite, "test_lval_copy_list", test_lval_copy_list);
+  valk_testsuite_add_test(suite, "test_lval_copy_err", test_lval_copy_err);
+  valk_testsuite_add_test(suite, "test_lval_read_number", test_lval_read_number);
+  valk_testsuite_add_test(suite, "test_lval_read_negative_number", test_lval_read_negative_number);
+  valk_testsuite_add_test(suite, "test_lval_read_symbol", test_lval_read_symbol);
+  valk_testsuite_add_test(suite, "test_lval_read_string_simple", test_lval_read_string_simple);
+  valk_testsuite_add_test(suite, "test_lval_read_string_with_escapes", test_lval_read_string_with_escapes);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_tab", test_lval_read_string_escape_tab);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_quote", test_lval_read_string_escape_quote);
+  valk_testsuite_add_test(suite, "test_lval_read_string_unterminated", test_lval_read_string_unterminated);
+  valk_testsuite_add_test(suite, "test_lval_read_string_invalid_escape", test_lval_read_string_invalid_escape);
+  valk_testsuite_add_test(suite, "test_lval_read_sexpr", test_lval_read_sexpr);
+  valk_testsuite_add_test(suite, "test_lval_read_qexpr", test_lval_read_qexpr);
+  valk_testsuite_add_test(suite, "test_lval_read_quote", test_lval_read_quote);
+  valk_testsuite_add_test(suite, "test_lval_read_quasiquote", test_lval_read_quasiquote);
+  valk_testsuite_add_test(suite, "test_lval_read_unquote", test_lval_read_unquote);
+  valk_testsuite_add_test(suite, "test_lval_read_unquote_splicing", test_lval_read_unquote_splicing);
+  valk_testsuite_add_test(suite, "test_lval_read_comment", test_lval_read_comment);
+  valk_testsuite_add_test(suite, "test_lval_read_unexpected_char", test_lval_read_unexpected_char);
+  valk_testsuite_add_test(suite, "test_lval_read_unclosed_paren", test_lval_read_unclosed_paren);
+  valk_testsuite_add_test(suite, "test_lval_pop_first", test_lval_pop_first);
+  valk_testsuite_add_test(suite, "test_lval_pop_middle", test_lval_pop_middle);
+  valk_testsuite_add_test(suite, "test_lval_join_two_lists", test_lval_join_two_lists);
+  valk_testsuite_add_test(suite, "test_lval_join_single_element", test_lval_join_single_element);
+  valk_testsuite_add_test(suite, "test_lval_ref_type_truncation", test_lval_ref_type_truncation);
+  valk_testsuite_add_test(suite, "test_lval_sym_truncation", test_lval_sym_truncation);
+  valk_testsuite_add_test(suite, "test_lenv_parent_lookup", test_lenv_parent_lookup);
+  valk_testsuite_add_test(suite, "test_lenv_put_overwrite", test_lenv_put_overwrite);
+  valk_testsuite_add_test(suite, "test_lval_list_is_empty", test_lval_list_is_empty);
+  valk_testsuite_add_test(suite, "test_lval_list_nth_out_of_bounds", test_lval_list_nth_out_of_bounds);
+  valk_testsuite_add_test(suite, "test_lval_eq_nil", test_lval_eq_nil);
+  valk_testsuite_add_test(suite, "test_lval_eq_cons", test_lval_eq_cons);
+  valk_testsuite_add_test(suite, "test_lval_copy_sym", test_lval_copy_sym);
+  valk_testsuite_add_test(suite, "test_lval_copy_ref", test_lval_copy_ref);
+  valk_testsuite_add_test(suite, "test_lval_copy_null", test_lval_copy_null);
+  valk_testsuite_add_test(suite, "test_ltype_name_unknown", test_ltype_name_unknown);
+  valk_testsuite_add_test(suite, "test_ltype_name_all_types", test_ltype_name_all_types);
+  valk_testsuite_add_test(suite, "test_str_join", test_str_join);
+  valk_testsuite_add_test(suite, "test_str_join_single", test_str_join_single);
+  valk_testsuite_add_test(suite, "test_lenv_copy_null", test_lenv_copy_null);
+  valk_testsuite_add_test(suite, "test_lenv_copy_with_parent_chain", test_lenv_copy_with_parent_chain);
+  valk_testsuite_add_test(suite, "test_lval_str_n_zero_length", test_lval_str_n_zero_length);
+  valk_testsuite_add_test(suite, "test_lval_print_undefined", test_lval_print_undefined);
+  valk_testsuite_add_test(suite, "test_lval_print_ref", test_lval_print_ref);
+  valk_testsuite_add_test(suite, "test_lval_print_lambda", test_lval_print_lambda);
+  valk_testsuite_add_test(suite, "test_lval_read_minus_only", test_lval_read_minus_only);
+  valk_testsuite_add_test(suite, "test_lval_eq_lambda", test_lval_eq_lambda);
+  valk_testsuite_add_test(suite, "test_lval_eq_ref", test_lval_eq_ref);
+  valk_testsuite_add_test(suite, "test_lval_copy_lambda", test_lval_copy_lambda);
+  valk_testsuite_add_test(suite, "test_lval_copy_builtin", test_lval_copy_builtin);
+  valk_testsuite_add_test(suite, "test_lval_copy_qexpr", test_lval_copy_qexpr);
+  valk_testsuite_add_test(suite, "test_lval_copy_handle", test_lval_copy_handle);
+  valk_testsuite_add_test(suite, "test_lval_eq_qexpr", test_lval_eq_qexpr);
+  valk_testsuite_add_test(suite, "test_lval_eq_err", test_lval_eq_err);
+  valk_testsuite_add_test(suite, "test_lval_eq_sym", test_lval_eq_sym);
+  valk_testsuite_add_test(suite, "test_lval_eq_handle", test_lval_eq_handle);
+  valk_testsuite_add_test(suite, "test_lval_read_nested_expr", test_lval_read_nested_expr);
+  valk_testsuite_add_test(suite, "test_lval_read_empty_list", test_lval_read_empty_list);
+  valk_testsuite_add_test(suite, "test_lval_read_empty_qexpr", test_lval_read_empty_qexpr);
+  valk_testsuite_add_test(suite, "test_lval_read_deeply_nested", test_lval_read_deeply_nested);
+
+  valk_testsuite_add_test(suite, "test_eval_stack_init_destroy", test_eval_stack_init_destroy);
+  valk_testsuite_add_test(suite, "test_eval_stack_push_single", test_eval_stack_push_single);
+  valk_testsuite_add_test(suite, "test_eval_stack_push_pop_single", test_eval_stack_push_pop_single);
+  valk_testsuite_add_test(suite, "test_eval_stack_push_multiple", test_eval_stack_push_multiple);
+  valk_testsuite_add_test(suite, "test_eval_stack_grow", test_eval_stack_grow);
+  valk_testsuite_add_test(suite, "test_eval_stack_cont_kinds", test_eval_stack_cont_kinds);
+  valk_testsuite_add_test(suite, "test_eval_stack_if_branch_frame", test_eval_stack_if_branch_frame);
+  valk_testsuite_add_test(suite, "test_eval_stack_do_next_frame", test_eval_stack_do_next_frame);
+  valk_testsuite_add_test(suite, "test_eval_stack_collect_arg_cleanup", test_eval_stack_collect_arg_cleanup);
+  valk_testsuite_add_test(suite, "test_eval_stack_body_next_frame", test_eval_stack_body_next_frame);
+  valk_testsuite_add_test(suite, "test_eval_stack_with_env", test_eval_stack_with_env);
+
+  valk_testsuite_add_test(suite, "test_lval_print_handle", test_lval_print_handle);
+  valk_testsuite_add_test(suite, "test_lval_print_improper_list", test_lval_print_improper_list);
+  valk_testsuite_add_test(suite, "test_lval_print_string_with_escapes", test_lval_print_string_with_escapes);
+  valk_testsuite_add_test(suite, "test_lval_print_builtin", test_lval_print_builtin);
+  valk_testsuite_add_test(suite, "test_lval_eq_two_lambdas", test_lval_eq_two_lambdas);
+  valk_testsuite_add_test(suite, "test_lval_eq_builtin_functions", test_lval_eq_builtin_functions);
+
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_bell", test_lval_read_string_escape_bell);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_backspace", test_lval_read_string_escape_backspace);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_formfeed", test_lval_read_string_escape_formfeed);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_vtab", test_lval_read_string_escape_vtab);
+  valk_testsuite_add_test(suite, "test_lval_read_string_escape_single_quote", test_lval_read_string_escape_single_quote);
+  valk_testsuite_add_test(suite, "test_lval_print_string_rare_escapes", test_lval_print_string_rare_escapes);
+  valk_testsuite_add_test(suite, "test_lval_print_string_carriage_return", test_lval_print_string_carriage_return);
+  valk_testsuite_add_test(suite, "test_lval_print_string_double_quote", test_lval_print_string_double_quote);
+  valk_testsuite_add_test(suite, "test_lenv_capacity_growth", test_lenv_capacity_growth);
+  valk_testsuite_add_test(suite, "test_lval_pop_deep_index", test_lval_pop_deep_index);
+  valk_testsuite_add_test(suite, "test_lval_pop_last_element", test_lval_pop_last_element);
+  valk_testsuite_add_test(suite, "test_lenv_get_null_env", test_lenv_get_null_env);
+  valk_testsuite_add_test(suite, "test_lenv_copy_with_many_symbols", test_lenv_copy_with_many_symbols);
+  valk_testsuite_add_test(suite, "test_lval_read_very_long_list", test_lval_read_very_long_list);
+  valk_testsuite_add_test(suite, "test_lval_print_nil", test_lval_print_nil);
+  valk_testsuite_add_test(suite, "test_lenv_masked_parent_symbol", test_lenv_masked_parent_symbol);
+
+  valk_testsuite_add_test(suite, "test_lval_err_very_long_message", test_lval_err_very_long_message);
+  valk_testsuite_add_test(suite, "test_lval_read_comment_eof", test_lval_read_comment_eof);
+  valk_testsuite_add_test(suite, "test_lval_read_only_comment_eof", test_lval_read_only_comment_eof);
+  valk_testsuite_add_test(suite, "test_eval_stack_collect_arg_null_args", test_eval_stack_collect_arg_null_args);
+  valk_testsuite_add_test(suite, "test_lval_list_is_empty_null_head", test_lval_list_is_empty_null_head);
+  valk_testsuite_add_test(suite, "test_lval_list_nth_early_end", test_lval_list_nth_early_end);
+  valk_testsuite_add_test(suite, "test_lval_read_vtab_whitespace", test_lval_read_vtab_whitespace);
+  valk_testsuite_add_test(suite, "test_lval_read_carriage_return_whitespace", test_lval_read_carriage_return_whitespace);
+  valk_testsuite_add_test(suite, "test_eval_stack_destroy_null_frames", test_eval_stack_destroy_null_frames);
+  valk_testsuite_add_test(suite, "test_eval_stack_destroy_twice", test_eval_stack_destroy_twice);
+  valk_testsuite_add_test(suite, "test_lval_list_is_empty_qexpr_null_head", test_lval_list_is_empty_qexpr_null_head);
+  valk_testsuite_add_test(suite, "test_lval_list_is_empty_non_empty_qexpr", test_lval_list_is_empty_non_empty_qexpr);
+  valk_testsuite_add_test(suite, "test_lval_lambda_null_env", test_lval_lambda_null_env);
+  valk_testsuite_add_test(suite, "test_lval_copy_sym_long_truncation", test_lval_copy_sym_long_truncation);
+  valk_testsuite_add_test(suite, "test_lval_copy_err_long_truncation", test_lval_copy_err_long_truncation);
+  valk_testsuite_add_test(suite, "test_lval_copy_ref_long_type_truncation", test_lval_copy_ref_long_type_truncation);
+
+  int result = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
+  valk_testsuite_free(suite);
+
+  return result;
+}

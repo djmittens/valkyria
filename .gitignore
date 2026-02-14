@@ -1,3 +1,38 @@
+# Helps with debugging
+.gdbinit
+
 .cache
 build/
+build-asan/
+build-tsan/
+build-coverage/
+coverage-report/
 .venv/
+.mcp.json
+cclsp.json
+__pycache__/
+
+# Coverage temporary files (should only exist in build dirs)
+*.gcov
+*.gcda
+*.gcno
+
+# Logs n shit
+*.log
+*.log.*
+
+# TLA+ / TLC model checker artifacts
+tla/*_TTrace_*
+tla/*_graph*.dot
+tla/states/
+
+# Test reports
+test-report/
+
+# Ralph Wiggum
+build/ralph-logs/
+.tix/cache.db
+
+# Session artifacts
+session-*.md
+states/

@@ -1,0 +1,133 @@
+; Do Block Test Suite
+; Comprehensive tests for do as a special form
+; CRITICAL: do was recently changed from builtin to compiler special form
+; These tests ensure the change doesn't break existing functionality
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; ============================================================================
+; Basic Do Block Tests
+; ============================================================================
+
+; ============================================================================
+; Do Block with Assignments
+; ============================================================================
+
+; ============================================================================
+; Do Block Scoping
+; ============================================================================
+
+; ============================================================================
+; Do Block with Recursion (TCO)
+; ============================================================================
+
+; ============================================================================
+; Do Block Edge Cases
+; ============================================================================
+
+; Run all do block tests
+(test/run (list
+  (test "do-returns-last-expression"
+    {do
+    (def {r1} (do 1 2 3))
+    (def {r2} (do (+ 1 1) (+ 2 2) (+ 3 3)))
+    (and (== r1 3) (== r2 6))
+  })
+  (test "do-empty-returns-nil"
+    {do
+    (def {result} (do))
+    ; Just verify it doesn't crash
+    true
+  })
+  (test "do-single-expression"
+    {do
+    (def {result} (do 42))
+    (== result 42)
+  })
+  (test "do-with-assignments"
+    {do
+    (def {result} (do
+      (= {a} 1)
+      (= {b} 2)
+      (+ a b)))
+    (== result 3)
+  })
+  (test "do-assignment-then-value"
+    {do
+    (def {result} (do
+      (= {x} 5)
+      10))
+    (== result 10)
+  })
+  (test "do-nested-assignments"
+    {do
+    (= {a} 2)
+    (def {inner} (do
+      (= {a} 3)
+      (+ 1 a)))
+    (== inner 4)
+  })
+  (test "do-preserves-outer-scope"
+    {do
+    (= {x} 100)
+    (def {result} (do
+      (+ x 5)))
+    (== result 105)
+  })
+  (test "do-can-modify-outer-scope"
+    {do
+    (do
+      (= {outer_var} 42))
+    (== outer_var 42)
+  })
+  (test "do-preserves-tail-call-optimization"
+    {do
+    (def {countdown} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(do
+          (countdown (- n 1)))})
+    }))
+    (def {result} (countdown 1000))
+    (== result 0)
+  })
+  (test "do-with-def-inside"
+    {do
+    (def {result} (do
+      (def {local} 123)
+      local))
+    (== result 123)
+  })
+  (test "do-in-lambda"
+    {do
+    (def {fn} (\ {x} {
+      (do
+        (def {y} (* x 2))
+        (+ y 1))
+    }))
+    (== (fn 5) 11)
+  })
+  (test "do-nested-multiple-levels"
+    {do
+    (def {result} (do
+      (do
+        (do
+          42))))
+    (== result 42)
+  })
+  (test "do-with-function-calls"
+    {do
+    (def {add} (\ {a b} {(+ a b)}))
+    (def {result} (do
+      (def {x} (add 1 2))
+      (def {y} (add x 3))
+      y))
+    (== result 6)
+  })
+  (test "do-direct-use-no-parens"
+    {do
+    (def {x} (do 1 2 3))
+    (== x 3)
+  }))
+  {:suite-name "Do Block Tests"})

@@ -1,0 +1,281 @@
+; bench.valk - Advanced HTTP/2 Benchmarking Tool for Valkyria
+;
+; Features:
+;   - Per-request latency tracking
+;   - Latency statistics (min, max, mean)
+;   - Bucket-based latency distribution
+;   - Concurrency control
+;   - Connection reuse (single HTTP/2 connection)
+;
+; Usage: ./build/valk tools/bench.valk
+; First start: ./build/valk tools/test_server.valk
+
+(load "src/prelude.valk")
+
+; ============================================================================
+; Configuration - Edit these values
+; ============================================================================
+(def {cfg-host} "localhost")
+(def {cfg-port} 18443)
+(def {cfg-path} "/")
+(def {cfg-total} 100)
+(def {cfg-concurrency} 10)
+
+; ============================================================================
+; Statistics Counters (all atoms for thread safety)
+; ============================================================================
+(def {completed} (atom 0))
+(def {successes} (atom 0))
+(def {errors} (atom 0))
+(def {in-flight} (atom 0))
+(def {next-idx} (atom 0))
+
+; Latency stats
+(def {latency-sum} (atom 0))
+(def {latency-min} (atom 999999999))
+(def {latency-max} (atom 0))
+
+; Latency buckets (count per bucket)
+(def {bucket-0-1ms} (atom 0))      ; < 1ms
+(def {bucket-1-5ms} (atom 0))      ; 1-5ms
+(def {bucket-5-10ms} (atom 0))     ; 5-10ms
+(def {bucket-10-25ms} (atom 0))    ; 10-25ms
+(def {bucket-25-50ms} (atom 0))    ; 25-50ms
+(def {bucket-50-100ms} (atom 0))   ; 50-100ms
+(def {bucket-100-250ms} (atom 0))  ; 100-250ms
+(def {bucket-250-1s} (atom 0))     ; 250ms-1s
+(def {bucket-over-1s} (atom 0))    ; > 1s
+
+; ============================================================================
+; AIO Setup
+; ============================================================================
+(def {aio} (aio/await (aio/start)))
+(def {start-time} (atom 0))
+
+; Store client connection (will be set after connect)
+(def {client-conn} (atom nil))
+
+; ============================================================================
+; Utility Functions
+; ============================================================================
+
+; Update latency bucket based on latency in microseconds
+(fun {update-bucket lat-us} {
+  (if (< lat-us 1000)
+    {(atom/add! bucket-0-1ms 1)}
+    {(if (< lat-us 5000)
+       {(atom/add! bucket-1-5ms 1)}
+       {(if (< lat-us 10000)
+          {(atom/add! bucket-5-10ms 1)}
+          {(if (< lat-us 25000)
+             {(atom/add! bucket-10-25ms 1)}
+             {(if (< lat-us 50000)
+                {(atom/add! bucket-25-50ms 1)}
+                {(if (< lat-us 100000)
+                   {(atom/add! bucket-50-100ms 1)}
+                   {(if (< lat-us 250000)
+                      {(atom/add! bucket-100-250ms 1)}
+                      {(if (< lat-us 1000000)
+                         {(atom/add! bucket-250-1s 1)}
+                         {(atom/add! bucket-over-1s 1)})})})})})})})})
+})
+
+; Estimate percentile from buckets (returns upper bound of bucket containing pth percentile)
+; Uses cumulative count to find which bucket contains the Nth percentile
+(fun {bucket-percentile p b1 b2 b3 b4 b5 b6 b7 b8 b9 total} {
+  (= {target} (/ (* total p) 100))
+  ; Cumulative counts for each bucket boundary
+  (= {c1} b1)
+  (= {c2} (+ c1 b2))
+  (= {c3} (+ c2 b3))
+  (= {c4} (+ c3 b4))
+  (= {c5} (+ c4 b5))
+  (= {c6} (+ c5 b6))
+  (= {c7} (+ c6 b7))
+  (= {c8} (+ c7 b8))
+  ; Return upper bound of bucket containing target
+  (if (>= c1 target) {1000}
+    {(if (>= c2 target) {5000}
+       {(if (>= c3 target) {10000}
+          {(if (>= c4 target) {25000}
+             {(if (>= c5 target) {50000}
+                {(if (>= c6 target) {100000}
+                   {(if (>= c7 target) {250000}
+                      {(if (>= c8 target) {1000000}
+                         {999999999})})})})})})})})
+})
+
+; ============================================================================
+; Header
+; ============================================================================
+(println "")
+(println "bench.valk - HTTP/2 Benchmarking Tool (Connection Reuse)")
+(println "=========================================================")
+(printf "Target:      https://%s:%d%s\n" cfg-host cfg-port cfg-path)
+(printf "Requests:    %d\n" cfg-total)
+(printf "Concurrency: %d\n" cfg-concurrency)
+(println "")
+(println "Connecting...")
+
+; ============================================================================
+; Request Handling
+; ============================================================================
+
+; Function to send a single request on the existing connection
+(fun {send-one-request} {
+  (= {idx} (atom/get next-idx))
+  (= {conn} (atom/get client-conn))
+  (if (< idx cfg-total)
+    {(atom/add! next-idx 1)
+     (atom/add! in-flight 1)
+     (= {req-start} (time-us))
+     (http2/request-on-conn conn cfg-path (\ {resp} {
+       (= {req-end} (time-us))
+       (= {latency} (- req-end req-start))
+
+       ; Update latency stats
+       (atom/add! latency-sum latency)
+       (= {cur-min} (atom/get latency-min))
+       (= {cur-max} (atom/get latency-max))
+       (if (< latency cur-min)
+         {(atom/set! latency-min latency)}
+         {1})
+       (if (> latency cur-max)
+         {(atom/set! latency-max latency)}
+         {1})
+
+       ; Update bucket
+       (update-bucket latency)
+
+       ; Update counters
+       (atom/add! completed 1)
+       (atom/add! in-flight -1)
+
+       (if (error? resp)
+         {(atom/add! errors 1)}
+         {(atom/add! successes 1)})
+
+       (= {done} (atom/get completed))
+       (if (>= done cfg-total)
+         {(print-results)}
+         {(maybe-send-next)})
+     }))
+     1}
+    {1})
+})
+
+; Try to send next request if under concurrency limit
+(fun {maybe-send-next} {
+  (= {flying} (atom/get in-flight))
+  (= {idx} (atom/get next-idx))
+  (if (< flying cfg-concurrency)
+    {(if (< idx cfg-total)
+       {(send-one-request)}
+       {1})}
+    {1})
+})
+
+; ============================================================================
+; Results Printing
+; ============================================================================
+(fun {print-results} {
+  (= {end-time} (time-us))
+  (= {bench-start} (atom/get start-time))
+  (= {total-dur-us} (- end-time bench-start))
+  (= {total-dur-ms} (/ total-dur-us 1000))
+
+  (= {done} (atom/get completed))
+  (= {succ} (atom/get successes))
+  (= {err} (atom/get errors))
+  (= {sum-lat} (atom/get latency-sum))
+  (= {min-lat} (atom/get latency-min))
+  (= {max-lat} (atom/get latency-max))
+
+  (println "")
+  (println "=========================================================")
+  (println "Results")
+  (println "=========================================================")
+  (println "")
+
+  ; Summary
+  (println "Summary:")
+  (printf "  Total:       %d requests\n" done)
+  (printf "  Successful:  %d\n" succ)
+  (printf "  Failed:      %d\n" err)
+  (printf "  Duration:    %d ms\n" total-dur-ms)
+
+  (if (> total-dur-ms 0)
+    {(printf "  RPS:         %d req/s\n" (/ (* done 1000) total-dur-ms))}
+    {1})
+
+  (if (> done 0)
+    {(printf "  Error rate:  %d%%\n" (/ (* err 100) done))}
+    {1})
+
+  ; Get bucket counts
+  (= {b1} (atom/get bucket-0-1ms))
+  (= {b2} (atom/get bucket-1-5ms))
+  (= {b3} (atom/get bucket-5-10ms))
+  (= {b4} (atom/get bucket-10-25ms))
+  (= {b5} (atom/get bucket-25-50ms))
+  (= {b6} (atom/get bucket-50-100ms))
+  (= {b7} (atom/get bucket-100-250ms))
+  (= {b8} (atom/get bucket-250-1s))
+  (= {b9} (atom/get bucket-over-1s))
+
+  ; Latency statistics
+  (println "")
+  (println "Latency:")
+  (printf "  Min:    %d us\n" min-lat)
+  (printf "  Max:    %d us\n" max-lat)
+  (if (> done 0)
+    {(printf "  Mean:   %d us\n" (/ sum-lat done))}
+    {1})
+
+  ; Percentiles (estimated from buckets)
+  (= {p50} (bucket-percentile 50 b1 b2 b3 b4 b5 b6 b7 b8 b9 done))
+  (= {p90} (bucket-percentile 90 b1 b2 b3 b4 b5 b6 b7 b8 b9 done))
+  (= {p95} (bucket-percentile 95 b1 b2 b3 b4 b5 b6 b7 b8 b9 done))
+  (= {p99} (bucket-percentile 99 b1 b2 b3 b4 b5 b6 b7 b8 b9 done))
+  (printf "  p50:    %d us\n" p50)
+  (printf "  p90:    %d us\n" p90)
+  (printf "  p95:    %d us\n" p95)
+  (printf "  p99:    %d us\n" p99)
+
+  ; Histogram
+  (println "")
+  (println "Latency Distribution:")
+
+  ; Print non-zero buckets with simple bars
+  (if (> b1 0) {(printf "  < 1ms     : %d (%d%%)\n" b1 (/ (* b1 100) done))} {1})
+  (if (> b2 0) {(printf "  1-5ms     : %d (%d%%)\n" b2 (/ (* b2 100) done))} {1})
+  (if (> b3 0) {(printf "  5-10ms    : %d (%d%%)\n" b3 (/ (* b3 100) done))} {1})
+  (if (> b4 0) {(printf "  10-25ms   : %d (%d%%)\n" b4 (/ (* b4 100) done))} {1})
+  (if (> b5 0) {(printf "  25-50ms   : %d (%d%%)\n" b5 (/ (* b5 100) done))} {1})
+  (if (> b6 0) {(printf "  50-100ms  : %d (%d%%)\n" b6 (/ (* b6 100) done))} {1})
+  (if (> b7 0) {(printf "  100-250ms : %d (%d%%)\n" b7 (/ (* b7 100) done))} {1})
+  (if (> b8 0) {(printf "  250ms-1s  : %d (%d%%)\n" b8 (/ (* b8 100) done))} {1})
+  (if (> b9 0) {(printf "  > 1s      : %d (%d%%)\n" b9 (/ (* b9 100) done))} {1})
+
+  (println "")
+  (println "=========================================================")
+
+  (aio/stop aio)
+})
+
+; ============================================================================
+; Start benchmark - First establish connection, then fire requests
+; ============================================================================
+(http2/connect aio cfg-host cfg-port (\ {conn} {
+  (if (error? conn)
+    {(println "Connection failed!")
+     (println (error-msg conn))
+     (aio/stop aio)}
+    {(println "Connected! Starting benchmark...")
+     (atom/set! client-conn conn)
+     (atom/set! start-time (time-us))
+     (map (\ {_} {(send-one-request)}) (range 0 cfg-concurrency))})
+}))
+
+; Run event loop
+(aio/run aio)

@@ -1,10 +1,10 @@
 ; This is the beginning of my fun.
 ; Default program to be parsed and loaded
-(print "Hello and welcome to the prelude n Shit")
+; Valkyria Standard Prelude
 
 ; Function Definitions
-(def {fun} (\ {f b}  {
-   def (head f) (\ (tail f) b)
+(def {fun} (\ {_fn _body}  {
+   def (head _fn) (\ (tail _fn) _body)
 }))
 
 ;(error "And this is an error n stuff")
@@ -12,42 +12,53 @@
 (def {nil} {})
 (def {true} 1)
 (def {false} 0)
+
+; Check if value is nil (empty list)
+(fun {nil? x} {== x nil})
  
 ; unpack list for a function
 
 (fun {unpack f l} {
      eval (join (list f) l)
 })
+
 (def {curry} unpack)
 
 ; Pack the list for a function
-; eg for a function  f, pack (f 1 2 3) into {f { 1 2 3}}
+; eg for a function f, (pack f 1 2 3) becomes (f {1 2 3})
+; Note: pack requires at least one argument beyond f to work
+; For currying/uncurrying, use the curry/uncurry wrappers
 (fun {pack f & xs} {f xs})
-(def {uncurry} pack)
+
+; uncurry: Takes a function that expects a list and returns one that takes varargs
+; (uncurry f) returns a function that collects args into a list and calls f
+(fun {uncurry f} {
+  (\ {& args} {f args})
+})
 
 ; Perform several things in sequence, and return the last result
-(fun {do & l} {
-     if (== l nil)
-       {nil}
-       {last l}
-})
+; NOTE: 'do' is a builtin (parser.c:valk_builtin_do) for TCO support
+; This is a necessary primitive for control flow with side effects
 
 ; Open a new scope
 (fun {let  b} {
    ((\ {_} b) ())
 })
 
-; list functions and shit
-; LISTS ARE 1 BASED LIKE LUA, CAUSE FUCK YEAH
+; List functions
+; LISTS ARE 1-BASED LIKE LUA
+
+; Identity function for unpacking
+(fun {id x} {x})
 
 ; Return first item in the list
-(fun {fst _l} {eval (head _l) })
+(fun {fst _l} {head _l})
 
 ; Return the second item in the list
-(fun {snd _y} {eval (head (tail _y)) })
+(fun {snd _y} {head (tail _y)})
 
 ; Return the third item in the list
-(fun {trd l} {eval (head (tail (tail l))) })
+(fun {trd l} {head (tail (tail l))})
 
 ; length of the list (there is a builtin for that??)
 ; i need to draw a line here, the builtin would be way more performant
@@ -59,25 +70,24 @@
 ; })
 
 ; Nth item in the list
-; perhaps builtin for this would not be bad either
-; LISTS ARE 1 BASED LIKE LUA, CAUSE FUCK YEAH
-; TODO(main): why the hell does calling this variable simply l reak this function?
+; LISTS ARE 1-BASED LIKE LUA
+; Using if-else instead of select due to scoping limitations
 (fun {nth n _l} {
-    select
-       ; TODO(main): Errors dont support format strings yet
-      { (<= n 0) (error "Invalid array index (should start with 1)" ) }
-      { (== n 1) (fst _l) }
-      { otherwise (nth (- n 1) (tail _l)) }
+    if (<= n 0)
+      {error "Invalid array index (should start with 1)"}
+      {if (== n 1)
+        {fst _l}
+        {nth (- n 1) (tail _l)}}
 })
 
 ;last item in the list
 (fun {last l} {nth (len l) l})
 
 ; Take N items from the front of the list
-(fun { take n l} {
+(fun {take n l} {
      if (== n 0)
       {nil}
-      {join (head l) (take (- n 1) (tail l))}
+      {join (list (head l)) (take (- n 1) (tail l))}
 })
 
 ; Drop N items from the front of the list
@@ -96,32 +106,41 @@
 })
 
 ; true if value exists inside of a list
-; 1 BASED it starts with 1, its an index !!!
 (fun {exists x l} {
      if(== l nil)
       {false}
-      {if (== x (fst l)) { true } {exists x (tail l)}}
+      {if (== x (head l)) { true } {exists x (tail l)}}
 })
 
 ; Apply a function to List
 (fun {map f l} {
      if(== l nil)
       {nil}
-      {join (list (f (fst l))) (map f (tail l))}
+      {join (list (f (head l))) (map f (tail l))}
 })
 
 ; Filter the list n stuff
 (fun {filter f l} {
      if(== l nil)
        {nil}
-       {join (if (f (fst l)) {head l} {nil}) (filter f (tail l))}
+       {join (if (f (head l)) {list (head l)} {nil}) (filter f (tail l))}
 })
 
 ; fold left or something
 (fun {foldl f z l} {
      if (== l nil)
       {z}
-      {foldl f (f z (fst l)) (tail  l)}
+      {foldl f (f z (head l)) (tail  l)}
+})
+
+; Reverse a list
+(fun {reverse l} {
+  (= {reverse-helper} (\ {acc remaining} {
+    (if (== remaining nil)
+      {acc}
+      {(reverse-helper (join (list (head remaining)) acc) (tail remaining))})
+  }))
+  (reverse-helper nil l)
 })
 
 ; Returns the sum of the list
@@ -139,10 +158,10 @@
 ; x and y
 (fun {and x y} {* x y})
 
-; Function functions, you know that lambda shit
+; Higher-order function utilities
 
 ; TODO(main): there is a bug where partial application doesnt work
-; definitely need to look into that.  Also the error message is fucked too
+; definitely need to look into that. Also the error message is broken
 ; valkyria> flip def
 ; > 
 ;   regex 
@@ -166,23 +185,83 @@
 ;     { (== n 1) 1 }
 ;     { otherwise (+ (fib (- n 1)) (fib (- n 2))) }
 ; })
-(fun {select & cs} {
-     if (== cs nil)
-       {error "No selection found"}
-       {if (fst (fst cs)) {snd (fst cs)} {unpack select (tail cs)}}
-})
+; select is a C builtin (valk_builtin_select) - it needs to evaluate
+; conditions in the caller's environment, which requires special handling
+; that can't be done in pure Lisp with lexical scoping
 
 ; This is a default case and stuff, i guess its useful, just an alias to true tho
 (def  {otherwise} true)
 
-; Convenient way to match on some shit instead of a select, to match on specific value
-(fun {case x & cs} {
+; Convenient way to match on a specific value instead of using select
+; Usage: (case val {{1} "one"} {{2} "two"} {{3} "three"})
+; Helper: takes x and cases as separate args (allows recursion without unpack)
+; With QEXPR: {1} evals directly to 1, so no fst needed after eval
+(fun {case-impl x cs} {
      if (== cs nil)
       {error "No case found"}
-      { if (== x (fst (fst  cs)) ) 
-          {snd (fst cs)} 
-          {
-            unpack case (join (list x) (tail cs))
-          }
+      {if (== x (eval (fst (fst cs))))
+          {snd (fst cs)}
+          {case-impl x (tail cs)}
       }
 })
+(fun {case x & cs} {case-impl x cs})
+
+; Property Lists (plists)
+; A plist is a flat list of alternating keys and values: {:key1 val1 :key2 val2 ...}
+; Common in Lisp for lightweight key-value storage without a dedicated map type
+
+; Get value for key from plist, returns nil if not found
+; Usage: (plist/get {:name "Alice" :age 30} :name) => "Alice"
+(fun {plist/get pl key} {
+  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
+    {nil}
+    {if (== (head pl) key)
+      {head (tail pl)}
+      {plist/get (tail (tail pl)) key}}
+})
+
+; Set/update a key in plist, returns new plist
+; Usage: (plist/set {:name "Alice"} :age 30) => {:name "Alice" :age 30}
+(fun {plist/set pl key val} {
+  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
+    {list key val}
+    {if (== (head pl) key)
+      {join (list key val) (tail (tail pl))}
+      {join (list (head pl) (head (tail pl))) (plist/set (tail (tail pl)) key val)}}
+})
+
+; Check if key exists in plist
+; Usage: (plist/has? {:name "Alice"} :name) => true
+(fun {plist/has? pl key} {
+  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
+    {false}
+    {if (== (head pl) key)
+      {true}
+      {plist/has? (tail (tail pl)) key}}
+})
+
+; Get all keys from plist
+; Usage: (plist/keys {:name "Alice" :age 30}) => {:name :age}
+(fun {plist/keys pl} {
+  if (== pl nil)
+    {nil}
+    {join (list (head pl)) (plist/keys (tail (tail pl)))}
+})
+
+; Get all values from plist
+; Usage: (plist/vals {:name "Alice" :age 30}) => {"Alice" 30}
+(fun {plist/vals pl} {
+  if (== pl nil)
+    {nil}
+    {join (list (head (tail pl))) (plist/vals (tail (tail pl)))}
+})
+
+; 3-argument get function with default value
+; Usage: (get plist key default) => value or default
+(fun {get pl key default} {
+  (= {val} (plist/get pl key))
+  (if (== val nil) {default} {val})
+})
+
+; Load async handles library (aio/delay, with-timeout, etc.)
+(load "src/async_handles.valk")

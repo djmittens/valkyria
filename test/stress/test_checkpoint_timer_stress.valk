@@ -1,0 +1,46 @@
+; Stress test: interval timers while main thread evaluates expressions with checkpoints
+; This tests for races in gc.c:1911-2166 where checkpoint mutates env pointers
+
+(load "src/prelude.valk")
+
+(def {aio} (aio/await (aio/start)))
+(def {iterations} 50)
+
+(println "=== Checkpoint + Timer Stress Test ===")
+(println "Running interval timer while evaluating expressions...")
+
+; Use a simple counter in the interval - the test verifies timers work during checkpoints
+(def {timer-ran} 0)
+
+; Timer callback reads from env (callback->fun.env) while main thread checkpoints
+; We use aio/schedule chained calls instead of mutable state
+(fun {run-timer-iteration n}
+  {(if (>= n iterations)
+     nil
+     (aio/schedule aio 10 (\ {} {(run-timer-iteration (+ n 1))})))})
+
+(run-timer-iteration 0)
+
+; Evaluate expressions to trigger checkpoints between expressions
+; These should coordinate with the timer via STW
+(def {x1} (+ 1 2 3 4 5))
+(def {x2} (* x1 x1))
+(def {x3} (list x1 x2 (+ x1 x2)))
+(def {x4} (map (\ {n} {* n 2}) x3))
+(def {x5} (filter (\ {n} {> n 10}) x4))
+
+; Wait for timers to complete, then verify expressions worked
+(aio/schedule aio 1000 (\ {} {
+  (printf "x1=%d x2=%d\n" x1 x2)
+  (print "x5=" x5)
+  (if (and (== x1 15) (== x2 225))
+    (do
+      (println "PASS: Expressions evaluated correctly while timers ran")
+      (aio/stop aio))
+    (do
+      (println "FAIL: Expression evaluation corrupted")
+      (aio/stop aio)
+      (exit 1)))}))
+
+(aio/run aio)
+(exit 0)

@@ -1,0 +1,37 @@
+; Sleep Timer Leak Detection Test
+; Creates many aio/sleep handles and verifies they all complete cleanly
+; ASAN will catch any leaked timer allocations
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(test/run-async aio (list
+  (test-async "100 sleep timers complete without leak" (\ {} {
+    (= {handles} (list
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)
+      (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1) (aio/sleep aio 1)))
+    (aio/then (aio/all handles) (\ {results} {
+      (== (len results) 100)
+    }))
+  })))
+  {:suite-name "Sleep Timer Leak Detection"})

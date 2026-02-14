@@ -1,0 +1,108 @@
+name: Coverage
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/coverage.yml'
+  push:
+    branches:
+      - main
+
+jobs:
+  coverage:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Install Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm cmake ninja pkg-config openssl@3 libuv nghttp2
+          echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
+      
+      - name: Install Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev libgcc-14-dev llvm
+          # libbacktrace.a lives under /usr/lib/gcc/<triple>/14/ - symlink so CMake find_library can find it
+          sudo ln -sf /usr/lib/gcc/$(gcc -dumpmachine)/14/libbacktrace.a /usr/lib/libbacktrace.a
+      
+      - name: System Info
+        run: |
+          ulimit -a
+          cat /proc/meminfo 2>/dev/null | head -5 || sysctl hw.memsize 2>/dev/null || true
+          uname -m
+
+      - name: Build with Coverage
+        run: |
+          make build-coverage
+      
+      - name: Run Tests (with JUnit XML output)
+        run: |
+          python3 bin/run-tests.py --build-dir build-coverage --timeout 60 --junit-dir build/junit --no-stress --examples
+      
+      - name: Generate Coverage Report
+        run: |
+          make coverage-report
+      
+      - name: Check Global Mutation Lint
+        run: |
+          python3 bin/check-no-globals.py
+      
+      - name: Check Runtime Coverage Requirements
+        run: |
+          python3 bin/check-coverage.py --build-dir build-coverage
+      
+      - name: Remove expected-failure JUnit
+        if: always()
+        run: rm -f build/junit/test_test_framework_fail.xml build/junit/test_test_framework_async_fail.xml
+
+      - name: Test Summary
+        uses: test-summary/action@v2
+        if: always()
+        with:
+          paths: build/junit/*.xml
+          show: fail
+      
+      - name: Upload JUnit Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-results-${{ matrix.os }}-${{ matrix.arch }}
+          path: build/junit/
+          retention-days: 30
+      
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report-${{ matrix.os }}-${{ matrix.arch }}
+          path: coverage-report/
+          retention-days: 30
+      
+      - name: Upload Coverage to Codecov (optional)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage-report/coverage.xml
+          flags: ${{ matrix.os }}-${{ matrix.arch }}
+          fail_ci_if_error: false
+          verbose: true

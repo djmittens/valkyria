@@ -1,0 +1,48 @@
+; Test the test framework itself
+; Run with: ./build/valk test/test_test_framework.valk
+;
+; This file exercises the test.valk module's internal functions
+; to improve code coverage.
+
+; Load prelude first (has all the standard functions)
+(load "src/prelude.valk")
+
+; Load test framework
+(load "src/modules/test.valk")
+
+; Run all tests
+(test/run (list
+  (test "test-assert-passes"
+    {test/assert true "this should pass"})
+  (test "test-assert-eq-passes"
+    {test/assert-eq 42 42 "42 should equal 42"})
+  (test "test-assert-fails-returns-error"
+    {do
+    (= {result} (test/assert false "expected failure"))
+    (test/assert (error? result) "assert should return error on false")
+    true
+  })
+  (test "test-assert-eq-fails-returns-error"
+    {do
+    (= {result} (test/assert-eq 1 2 "expected mismatch"))
+    (test/assert (error? result) "assert-eq should return error on mismatch")
+    true
+  })
+  (test "test-context-new-works"
+    {do
+    (= {ctx} (test/context-new))
+    (test/assert-eq 0 (plist/get ctx :passed) "passed should start at 0")
+    (test/assert-eq 0 (plist/get ctx :failed) "failed should start at 0")
+    (test/assert-eq 0 (plist/get ctx :skipped) "skipped should start at 0")
+    (test/assert-eq "Valkyria Test Suite" (plist/get ctx :suite-name) "default suite name")
+    true
+  })
+  (test "test-builder-pattern"
+    {do
+    (= {tests} {})
+    (= {tests} (test/add tests "test1" {true}))
+    (= {tests} (test/add tests "test2" {true}))
+    (test/assert-eq 2 (len tests) "builder should add 2 tests")
+    true
+  }))
+  {:suite-name "Test Framework Tests" :debug 1})

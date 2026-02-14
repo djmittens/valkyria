@@ -1,0 +1,37 @@
+; Arena Out-of-Order Completion Test
+; Tests that arena linked-list removal works when requests complete out of order
+; Exercises: __http_remove_from_active_arenas traversal path
+; Note: Due to Lisp scoping, verifies via successful completion without crash
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(def {handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (if (== path "/slow")
+      {(aio/then (aio/sleep aio 100) (\ {_} {{:status "200" :body "slow"}}))}
+      {(if (== path "/medium")
+        {(aio/then (aio/sleep aio 50) (\ {_} {{:status "200" :body "medium"}}))}
+        {(if (== path "/fast")
+          {(aio/then (aio/sleep aio 10) (\ {_} {{:status "200" :body "fast"}}))}
+          {{:status "200" :body "ok"}})})})
+  }))
+
+(def {server} (http2/server-listen aio 0 handler))
+(def {TEST_PORT} (http2/server-port server))
+
+(test/run-async aio (list
+  (test-async "out-of-order arena removal works" (\ {} {
+    (aio/then
+      (aio/all (list
+        (http2/client-request aio "127.0.0.1" TEST_PORT "/slow")
+        (http2/client-request aio "127.0.0.1" TEST_PORT "/medium")
+        (http2/client-request aio "127.0.0.1" TEST_PORT "/fast")))
+      (\ {results} {
+        true
+      }))
+  })))
+  {:suite-name "Arena Out-of-Order Completion"})

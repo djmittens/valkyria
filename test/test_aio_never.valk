@@ -1,0 +1,35 @@
+; Test suite for aio/never combinator
+; Tests: aio/never creates handle that never completes, race behavior, cancellation
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "aio/never creates running handle that never completes"
+  {do
+  (= {sys} (aio/await (aio/start)))
+  (def {h} (aio/never sys))
+  (def {status} (aio/status h))
+  (aio/stop sys)
+  (== status (quote :running))
+})
+
+  (test "aio/race with aio/never vs immediate value - immediate wins"
+    {do
+    (= {sys} (aio/await (aio/start)))
+    (def {never-handle} (aio/never sys))
+    (def {immediate-handle} (aio/pure 42))
+    (def {race-result} (aio/race (list never-handle immediate-handle)))
+    (aio/stop sys)
+    (== (aio/status race-result) (quote :completed))
+  })
+
+  (test "aio/cancel on aio/never returns true"
+    {do
+    (= {sys} (aio/await (aio/start)))
+    (def {h} (aio/never sys))
+    (def {cancel-result} (aio/cancel h))
+    (aio/stop sys)
+    (== cancel-result (quote :true))
+  })
+))

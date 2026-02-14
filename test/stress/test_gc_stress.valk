@@ -1,0 +1,120 @@
+; GC Stress Test Suite
+; Heavy allocation and garbage collection tests
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; ============================================================================
+; Allocation Stress Tests
+; ============================================================================
+
+; ============================================================================
+; Live Data Preservation Tests
+; ============================================================================
+
+; ============================================================================
+; Memory Churn Tests
+; ============================================================================
+
+; Run all GC stress tests
+(test/run (list
+  (test "gc-stress-allocate-100-lists"
+    {do
+    (def {allocate} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(do
+           (def {temp} (list 1 2 3 4 5 6 7 8 9 10))
+           (allocate (- n 1)))})
+    }))
+    (def {result} (allocate 100))
+    (== result 0)
+  })
+  (test "gc-stress-allocate-1000-lists"
+    {do
+    (def {allocate} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(do
+           (def {temp} (list 1 2 3 4 5))
+           (allocate (- n 1)))})
+    }))
+    (def {result} (allocate 1000))
+    (== result 0)
+  })
+  (test "gc-stress-nested-structures-depth-50"
+    {do
+    (def {make-nested} (\ {depth} {
+      (if (<= depth 0)
+        {42}
+        {(list (make-nested (- depth 1)))})
+    }))
+    (def {nested} (make-nested 50))
+    (!= nested ())
+  })
+  (test "gc-stress-nested-structures-depth-100"
+    {do
+    (def {make-nested} (\ {depth} {
+      (if (<= depth 0)
+        {42}
+        {(list (make-nested (- depth 1)))})
+    }))
+    (def {nested} (make-nested 100))
+    (!= nested ())
+  })
+  (test "gc-stress-preserve-large-list"
+    {do
+    ; Create a large list that should survive garbage collection
+    (def {large-list} (list 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20))
+    ; Allocate a bunch of garbage
+    (def {allocate-garbage} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(do
+           (def {garbage} (list 99 99 99 99 99))
+           (allocate-garbage (- n 1)))})
+    }))
+    (allocate-garbage 50)
+    ; Verify original list is still intact
+    (== (len large-list) 20)
+  })
+  (test "gc-stress-interleaved-allocation"
+    {do
+    (def {data1} (list 1 2 3))
+    (def {garbage1} (list 9 9 9 9 9))
+    (def {data2} (list 4 5 6))
+    (def {garbage2} (list 8 8 8 8 8))
+    (def {data3} (list 7 8 9))
+    ; Verify data survived
+    (if (== (len data1) 3)
+      {(if (== (len data2) 3)
+        {(== (len data3) 3)}
+        {0})}
+      {0})
+  })
+  (test "gc-stress-repeated-allocation-cycles"
+    {do
+    (def {cycle} (\ {n} {
+      (if (<= n 0)
+        {0}
+        {(do
+           (def {temp1} (list 1 2 3 4 5))
+           (def {temp2} (list 6 7 8 9 10))
+           (def {temp3} (join temp1 temp2))
+           (cycle (- n 1)))})
+    }))
+    (def {result} (cycle 100))
+    (== result 0)
+  })
+  (test "gc-stress-large-list-operations"
+    {do
+    (def {make-range} (\ {n acc} {
+      (if (<= n 0)
+        {acc}
+        {(make-range (- n 1) (join (list n) acc))})
+    }))
+    (def {numbers} (make-range 100 ()))
+    (def {sum} (foldl + 0 numbers))
+    (== sum 5050)
+  }))
+  {:suite-name "GC Stress Tests"})

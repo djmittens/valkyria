@@ -1,0 +1,59 @@
+; src/modules/aio/debug-broadcaster.valk
+; SSE broadcaster for debug diagnostics streams
+; Load with: (load "src/modules/aio/debug-broadcaster.valk")
+
+(load "src/modules/aio/sse.valk")
+
+(def {debug/broadcast-interval-ms} 100)
+(def {debug/backpressure-threshold} 10)
+
+(fun {debug/_diagnostics-state sys}
+  {(= {aio-json} (aio/metrics-json sys))
+   (= {modular-json} (metrics/json))
+   (= {vm-json} (vm/metrics-json))
+   (= {registry-json} (metrics/registry-json))
+   (= {memory-json} (aio/diagnostics-state-json sys))
+   (str "{\"metrics\":{\"aio\":" aio-json ",\"modular\":" modular-json ",\"vm\":" vm-json ",\"registry\":" registry-json "},\"memory\":" memory-json "}")})
+
+(fun {debug/_diagnostics-delta-with-baseline sys baseline}
+  {(= {delta} (metrics/collect-delta-stateless baseline))
+   (= {delta-json} (metrics/delta-json delta))
+   (= {vm-json} (vm/metrics-json))
+   (= {memory-json} (aio/diagnostics-state-json-compact sys))
+   (str "{\"metrics\":{\"modular\":" delta-json ",\"vm\":" vm-json "},\"memory\":" memory-json "}")})
+
+; Simplified broadcaster that just sends the initial state and then continues sending deltas
+; without tracking failures or first-event flags (those caused state mutation issues)
+(fun {debug/subscribe sys stream}
+  {(= {baseline} (metrics/baseline))
+   
+   ; Send initial state immediately
+   (= {initial-state} (debug/_diagnostics-state sys))
+   (= {initial-msg} (str "event: diagnostics\ndata: " initial-state "\n\n"))
+   (stream/write stream initial-msg)
+   
+   ; Start interval for delta updates
+   (= {timer-handle} (aio/interval sys debug/broadcast-interval-ms (\ {} {
+     (if (== (stream/writable? stream) 0)
+       :stop
+       (do
+         (= {delta-data} (debug/_diagnostics-delta-with-baseline sys baseline))
+         (= {delta-msg} (str "event: diagnostics-delta\ndata: " delta-data "\n\n"))
+         (= {result} (stream/write stream delta-msg))
+         (if (error? result)
+           :stop
+           :continue)))})))
+   
+   ; Cancel timer when stream closes
+   (stream/on-close stream (\ {} {(aio/cancel timer-handle)}))
+   
+   :subscribed})
+
+(fun {debug/unsubscribe stream}
+  {:unsubscribed})
+
+(fun {debug/get-subscriber-count}
+  {0})
+
+(fun {debug/reset-state}
+  {:reset})

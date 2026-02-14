@@ -1,0 +1,82 @@
+; Debug Handler Route Matching Tests
+; Tests that aio/debug-handle-request routes requests correctly
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/modules/aio/debug.valk")
+
+(def {aio} (aio/await (aio/start)))
+(def {test-handler} (aio/debug-handler aio))
+(def {server} (http2/server-listen aio 0 test-handler))
+(def {port} (http2/server-port server))
+
+(fun {str-contains? haystack needle}
+  {(> (len (str/split haystack needle)) 1)})
+
+(fun {get-header headers name} {
+  if (nil? headers)
+    {nil}
+    {if (== (head (head headers)) name)
+      {head (tail (head headers))}
+      {get-header (tail headers) name}}
+})
+
+(test/run-async aio (list
+  (test-async "/debug returns HTML dashboard" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug")
+      (\ {r} {(and (== (http2/response-status r) "200") (str-contains? (http2/response-body r) "<!DOCTYPE"))}))}))
+
+  (test-async "/debug/ returns HTML dashboard" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/")
+      (\ {r} {(and (== (http2/response-status r) "200") (str-contains? (http2/response-body r) "<!DOCTYPE"))}))}))
+
+  (test-async "/debug/metrics returns JSON with aio_metrics" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics")
+      (\ {r} {(str-contains? (http2/response-body r) "aio_metrics")}))}))
+
+  (test-async "/debug/metrics/state returns diagnostics JSON" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics/state")
+      (\ {r} {(str-contains? (http2/response-body r) "\"metrics\"")}))}))
+
+  (test-async "/debug/metrics/state has metrics.aio structure" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics/state")
+      (\ {r} {(str-contains? (http2/response-body r) "\"aio\":")}))}))
+
+  (test-async "/debug/metrics/state has memory structure" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics/state")
+      (\ {r} {(str-contains? (http2/response-body r) "\"memory\":")}))}))
+
+  (test-async "/debug/metrics/state returns Content-Type: application/json" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics/state")
+      (\ {r} {(== (get-header (http2/response-headers r) "content-type") "application/json")}))}))
+
+  (test-async "/metrics returns Prometheus format with 200" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/metrics")
+      (\ {r} {(== (http2/response-status r) "200")}))}))
+
+  (test-async "/metrics contains valk_gc_ metrics" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/metrics")
+      (\ {r} {(and (str-contains? (http2/response-body r) "valk_gc_cycles_total")
+                   (str-contains? (http2/response-body r) "valk_gc_heap_used_bytes"))}))}))
+
+  (test-async "/metrics has HELP and TYPE lines" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/metrics")
+      (\ {r} {(and (str-contains? (http2/response-body r) "# HELP")
+                   (str-contains? (http2/response-body r) "# TYPE"))}))}))
+
+  (test-async "/debug/slab/buckets returns JSON" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/slab/buckets")
+      (\ {r} {(and (== (http2/response-status r) "200") (str-contains? (http2/response-body r) "{"))}))}))
+
+  (test-async "/unknown routes redirect to /debug/" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/unknown/route")
+      (\ {r} {(str-contains? (http2/response-body r) "url=/debug/")}))}))
+
+  (test-async "debug/reset-state returns success" (\ {} {
+    (= {result} (debug/reset-state))
+    (aio/pure (== result :reset))}))
+
+  (test-async "debug/get-subscriber-count returns zero after reset" (\ {} {
+    (do (debug/reset-state)
+        (aio/pure (== (debug/get-subscriber-count) 0)))}))
+) {:suite-name "Debug Handler Route Matching Tests" :timeout-ms 10000 :suite-timeout-ms 60000})

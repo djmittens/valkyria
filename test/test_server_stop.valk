@@ -1,0 +1,33 @@
+; HTTP/2 Server Stop Tests
+; Tests graceful server shutdown with http2/server-stop
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(def {simple-handler}
+  (\ {req} {
+    {:status "200" :body "OK"}
+  }))
+
+(test/run-async aio (list
+  (test-async "server-stop completes successfully" (\ {} {
+    (= {server} (http2/server-listen aio 0 simple-handler))
+    (aio/then (http2/server-stop server) (\ {result} {(nil? result)}))
+  }))
+  (test-async "stopped server rejects new connections" (\ {} {
+    (= {server} (http2/server-listen aio 0 simple-handler))
+    (= {port} (http2/server-port server))
+    (aio/then (http2/server-stop server) (\ {_} {
+      (aio/catch (http2/client-request aio "127.0.0.1" port "/")
+        (\ {err} {(error? err)}))
+    }))
+  }))
+  (test-async "double stop is idempotent" (\ {} {
+    (= {server} (http2/server-listen aio 0 simple-handler))
+    (aio/then (http2/server-stop server) (\ {_} {
+      (aio/then (http2/server-stop server) (\ {result2} {(nil? result2)}))
+    }))
+  })))
+  {:suite-name "HTTP/2 Server Stop Tests"})

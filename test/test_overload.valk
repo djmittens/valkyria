@@ -1,0 +1,47 @@
+; Test: Basic Overload Handling
+; Run with: ./build/valk test/test_overload.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Test: aio/start creates valid system
+
+; Test: system can be started multiple times (independent instances)
+
+; Test: metrics available immediately after aio/start
+
+; Test: global metrics functions work
+
+(test/run (list
+  (test "aio/start creates system"
+    {do
+    (= {aio} (aio/await (aio/start)))
+    (test/assert (!= aio nil) "aio/start should return a system")
+    true
+  })
+  (test "multiple aio systems can be created"
+    {do
+    (= {aio1} (aio/await (aio/start)))
+    (= {aio2} (aio/await (aio/start)))
+    (test/assert (!= aio1 nil) "first aio/start should return a system")
+    (test/assert (!= aio2 nil) "second aio/start should return a system")
+    true
+  })
+  (test "metrics available after aio/start"
+    {do
+    (= {aio} (aio/await (aio/start)))
+    (= {json} (aio/metrics-json aio))
+    (= {prom} (aio/metrics-prometheus aio))
+    (test/assert (string? json) "aio/metrics-json should return string")
+    (test/assert (string? prom) "aio/metrics-prometheus should return string")
+    true
+  })
+  (test "global metrics functions work"
+    {do
+    (= {json} (metrics/json))
+    (= {prom} (metrics/prometheus))
+    (test/assert (string? json) "metrics/json should return string")
+    (test/assert (string? prom) "metrics/prometheus should return string")
+    true
+  }))
+  {:suite-name "Overload Handling Tests"})

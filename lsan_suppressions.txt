@@ -1,0 +1,70 @@
+# LeakSanitizer suppressions for Valkyria
+# These are intentional global allocations that persist for the program's lifetime
+
+# Delta snapshots created during metrics collection may not be freed
+# when tests exit quickly (pending global env cleanup)
+leak:valk_delta_snapshot_init
+leak:valk_builtin_metrics_collect_delta
+
+# Baselines created via debug/subscribe in broadcaster may not be freed
+# when tests exit without proper cleanup (pending global env cleanup)
+leak:valk_builtin_metrics_baseline
+
+# Async handles and combinator state may not be freed during shutdown
+leak:valk_async_handle_new
+leak:valk_builtin_aio_sleep
+leak:valk_builtin_aio_all
+leak:valk_builtin_aio_within
+leak:valk_builtin_aio_race
+leak:valk_builtin_aio_then
+leak:valk_builtin_aio_catch
+leak:valk_builtin_aio_any
+
+# Slabs allocated by aio system may not be freed on test exit
+leak:valk_slab_init
+leak:valk_slab_new
+
+# GC heap allocations may leak when tests exit without full cleanup
+leak:valk_gc_heap_alloc
+
+# Memory allocator allocations during timer callbacks may leak on exit
+leak:valk_mem_allocator_alloc
+
+# Mock responses in test framework may leak on exit
+leak:valk_builtin_http2_mock_response
+
+# GC thread registration in test code may not be unregistered on test exit
+leak:valk_gc_thread_register
+
+# Handle table may not be destroyed in test code on exit
+leak:valk_handle_table_init
+
+# System create allocations may not be cleaned up in tests
+leak:valk_system_create
+
+# AIO metrics state may not be cleaned up in tests
+leak:valk_aio_metrics_state_new
+
+# HTTP2 request/response buffers may not be freed during shutdown
+leak:__valk_aio_http2_request_send_cb
+leak:valk_builtin_http2_request
+
+# AIO start allocations may not be cleaned up in tests
+leak:valk_aio_start
+
+# Interned strings for metrics are never freed (intentional lifetime)
+leak:intern_string
+
+# HTTP2 connection structures may not be freed when connection fails early
+leak:valk_aio_http2_connect_host
+
+# SSL/OpenSSL allocations routed through our custom allocator may not be freed
+# when tests exit without proper cleanup
+leak:__ssl_malloc
+leak:__ssl_realloc
+
+# nghttp2 allocations routed through our custom allocator may not be freed
+# when tests exit without proper cleanup
+leak:__nghttp2_malloc
+leak:__nghttp2_realloc
+leak:__nghttp2_calloc

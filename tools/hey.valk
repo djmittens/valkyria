@@ -1,0 +1,72 @@
+; hey.valk - HTTP/2 Load Testing Tool for Valkyria
+;
+; Usage: ./build/valk tools/hey.valk
+; First start: ./build/valk tools/test_server.valk
+;
+; Edit cfg-* values below to configure
+
+(load "src/prelude.valk")
+
+; ============================================================================
+; Configuration - Edit these values
+; ============================================================================
+(def {cfg-host} "localhost")
+(def {cfg-port} 18443)
+(def {cfg-path} "/")
+(def {cfg-total} 200)
+
+; ============================================================================
+; Implementation
+; ============================================================================
+(def {aio} (aio/await (aio/start)))
+
+; Counters (using atoms for thread-safe updates)
+(def {completed} (atom 0))
+(def {successes} (atom 0))
+(def {errors} (atom 0))
+(def {start-time} (time-us))
+
+; Header
+(println "hey.valk - HTTP/2 Load Tester")
+(printf "Target: https://%s:%d%s\n" cfg-host cfg-port cfg-path)
+(printf "Requests: %d\n\n" cfg-total)
+(println "Running...")
+
+; Fire all requests concurrently
+(map (\ {_} {
+  (= {t0} (time-us))
+  (aio/then (http2/client-request aio cfg-host cfg-port cfg-path) (\ {resp} {
+    (atom/add! completed 1)
+    
+    (if (error? resp)
+      {(atom/add! errors 1)}
+      {(atom/add! successes 1)})
+    
+    ; Check if all done
+    (= {done} (atom/get completed))
+    (if (>= done cfg-total)
+      {; Print results
+       (= {end-t} (time-us))
+       (= {dur} (/ (- end-t start-time) 1000))
+       (= {succ} (atom/get successes))
+       (= {err} (atom/get errors))
+       
+       (println "")
+       (println "Summary:")
+       (printf "  Completed: %d/%d\n" done cfg-total)
+       (printf "  Success:   %d\n" succ)
+       (printf "  Errors:    %d\n" err)
+       (printf "  Duration:  %d ms\n" dur)
+       (if (> dur 0)
+         {(printf "  RPS:       %d\n" (/ (* done 1000) dur))}
+         {1})
+       (if (> done 0)
+         {(printf "  Error %%:   %d%%\n" (/ (* err 100) done))}
+         {1})
+       
+       (aio/stop aio)}
+      {1})
+  }))
+}) (range 0 cfg-total))
+
+(aio/run aio)

@@ -1,0 +1,46 @@
+; Backpressure Timeout and Recovery Test
+; Phase 1: exhaust buffers with concurrent requests, all settle (success or fail)
+; Phase 2: after timeouts free buffers, a new request succeeds
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/await (aio/start {
+  :max-connections 4
+  :tcp-buffer-pool-size 6
+  :backpressure-timeout-ms 1000
+  :connection-idle-timeout-ms 500
+  :maintenance-interval-ms 100
+})))
+
+(def {server} (http2/server-listen aio 0 (\ {req} {
+  {:status "200" :body "OK"}
+})))
+(def {test-port} (http2/server-port server))
+
+(test/run-async aio (list
+  (test-async "requests settle under buffer exhaustion" (\ {} {
+    (= {reqs} (list
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/")
+      (http2/client-request aio "127.0.0.1" test-port "/")))
+
+    (aio/then (aio/all-settled reqs) (\ {results} {
+      (= {settled} (foldl (\ {c r} {
+        (if (or (plist/has? r :value) (plist/has? r :error)) {(+ c 1)} {c})
+      }) 0 results))
+      (== settled 4)
+    }))
+  }))
+
+  (test-async "recovery: request succeeds after backpressure clears" (\ {} {
+    ; Wait for BP timeouts to kill stale connections and free buffers
+    (aio/then (aio/sleep aio 2000) (\ {_} {
+      (aio/then (http2/client-request aio "127.0.0.1" test-port "/recovery")
+        (\ {resp} {
+          (== (http2/response-status resp) "200")
+        }))
+    }))
+  })))
+  {:suite-name "Backpressure Timeout and Recovery" :timeout-ms 8000 :suite-timeout-ms 12000})

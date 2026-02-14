@@ -1,0 +1,22 @@
+(load "src/prelude.valk")
+
+; Demonstration: inline lambda pattern for proper closure capture
+;
+; FIX: When a named function needs to capture variables from enclosing scope,
+; use (= {name} (\ {args} body)) instead of (fun {name args} body).
+; The fun macro uses def (global scope), which doesn't capture locals.
+;
+; Expected: "Processing a with 5000", "Processing b with 5000"
+
+(print "=== FIX: inline lambda captures closure correctly ===")
+(fun {outer items} {
+  (= {my-value} 5000)
+  
+  (= {process} (\ {item} {
+    (= {name} (eval item))
+    (printf "Processing %s with %ld\n" name my-value)
+  }))
+  
+  (map process items)
+})
+(outer {"a" "b"})

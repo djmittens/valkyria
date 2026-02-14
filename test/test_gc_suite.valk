@@ -1,0 +1,31 @@
+; GC Test Suite
+; Tests for garbage collection functionality
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Set the test suite name
+
+; ============================================================================
+; Basic GC Tests
+; ============================================================================
+
+; Run all GC tests
+(test/run (list
+  (test "gc-basic-allocation"
+    {do
+    (def {x} 42)
+    (== x 42)
+  })
+  (test "gc-list-allocation"
+    {do
+    (def {lst} (list 1 2 3))
+    (== (len lst) 3)
+  })
+  (test "gc-preserves-values"
+    {do
+    (def {a} 10)
+    (def {b} 20)
+    (== (+ a b) 30)
+  }))
+  {:suite-name "Garbage Collection Tests"})

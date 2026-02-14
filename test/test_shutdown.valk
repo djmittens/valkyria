@@ -1,0 +1,7 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(def {aio} (aio/await (aio/start)))
+(def {result} (shutdown 0))
+(test/run (list
+  (test "shutdown-returns-code" {(== result 0)})
+) {:suite-name "Shutdown"})

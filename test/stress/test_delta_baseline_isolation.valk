@@ -1,0 +1,48 @@
+; Delta Baseline Isolation Test
+; Tests whether metrics/collect-delta uses per-connection or shared state
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/modules/aio/debug.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(fun {str-contains? haystack needle}
+  {(> (len (str/split haystack needle)) 1)})
+
+(fun {yes-no b} {(if b "yes" "no")})
+
+(def {isolation-counter} (metrics/counter "isolation_test_counter" "Test counter for isolation"))
+
+(test/run-async aio (list
+  (test-async "Sequential deltas: each should see changes since last collect" (\ {} {
+    (= {seq-counter} (metrics/counter "seq_test_counter" "Sequential test counter"))
+    (= {d-baseline} (metrics/collect-delta))
+    (metrics/counter-inc seq-counter 10)
+    (= {d1} (metrics/collect-delta))
+    (= {d1-json} (metrics/delta-json d1))
+    (= {d1-has} (str-contains? d1-json "seq_test_counter"))
+    (metrics/counter-inc seq-counter 20)
+    (= {d2} (metrics/collect-delta))
+    (= {d2-json} (metrics/delta-json d2))
+    (= {d2-has} (str-contains? d2-json "seq_test_counter"))
+    (println "Sequential deltas test:")
+    (println "  Delta 1 saw counter:" (yes-no d1-has))
+    (println "  Delta 2 saw counter:" (yes-no d2-has))
+    (aio/pure (and d1-has d2-has))}))
+
+  (test-async "Two deltas: second should see increment from first" (\ {} {
+    (= {d1} (metrics/collect-delta))
+    (= {d2} (metrics/collect-delta))
+    (metrics/counter-inc isolation-counter 5)
+    (= {d1-after} (metrics/collect-delta))
+    (= {d1-json} (metrics/delta-json d1-after))
+    (= {d1-has-inc} (str-contains? d1-json "isolation_test_counter"))
+    (= {d2-after} (metrics/collect-delta))
+    (= {d2-json} (metrics/delta-json d2-after))
+    (= {d2-has-inc} (str-contains? d2-json "isolation_test_counter"))
+    (println "Delta Baseline Isolation Test:")
+    (println "  First delta saw counter:" (yes-no d1-has-inc))
+    (println "  Second delta saw counter:" (yes-no d2-has-inc))
+    (aio/pure (or d1-has-inc d2-has-inc))}))
+) {:suite-name "Delta Baseline Isolation"})

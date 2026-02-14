@@ -1,0 +1,202 @@
+; SSE Integration Tests
+; Tests SSE functionality with real HTTP/2 server
+; Verifies that all SSE builtins work correctly in an actual request/response cycle
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/modules/aio/sse.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+; Single handler using select for routing
+(def {test-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (= {stream} (sse/open req))
+    (select
+      {(== path "/sse-basic")
+       (do (sse/send stream "hello world") (sse/close stream))}
+
+      {(== path "/sse-multi")
+       (do (sse/send stream "event 1")
+           (sse/send stream "event 2")
+           (sse/send stream "event 3")
+           (sse/close stream))}
+
+      {(== path "/sse-typed")
+       (do (sse/event stream "message" "typed data") (sse/close stream))}
+
+      {(== path "/sse-on-drain")
+       (do (sse/on-drain stream (\ {} {}))
+           (sse/send stream "drain test")
+           (sse/close stream))}
+
+      {(== path "/sse-id")
+       (do (sse/id stream "evt-123" "event with id") (sse/close stream))}
+
+      {(== path "/sse-retry")
+       (do (sse/retry stream 5000)
+           (sse/send stream "retry test")
+           (sse/close stream))}
+
+      {(== path "/sse-json")
+       (do (sse/json stream {:key "value" :num 42}) (sse/close stream))}
+
+      {(== path "/sse-json-event")
+       (do (sse/json-event stream "update" {:status "ok"}) (sse/close stream))}
+
+      {(== path "/sse-full")
+       (do (sse/full stream "update" "id-001" "full event data") (sse/close stream))}
+
+      {(== path "/sse-full-invalid")
+       (do (= {result} (sse/full stream "bad\ntype" "id-002" "invalid event"))
+           (sse/send stream (str "error:" (error? result)))
+           (sse/close stream))}
+
+      {(== path "/sse-comment")
+       (do (sse/comment stream "keep-alive comment") (sse/close stream))}
+
+      {(== path "/sse-heartbeat")
+       (do (sse/heartbeat stream) (sse/close stream))}
+
+      {(== path "/sse-writable")
+       (do (= {writable} (sse/writable? stream))
+           (sse/send stream (str "writable:" writable))
+           (sse/close stream))}
+
+      {(== path "/sse-cancel")
+       (do (sse/send stream "about to cancel") (sse/cancel stream))}
+
+      {(== path "/sse-message")
+       (do (sse/message stream "message alias test") (sse/close stream))}
+
+      {(== path "/sse-event-invalid")
+       (do (= {result} (sse/event stream "invalid\ntype" "should fail"))
+           (sse/send stream (str "error:" (error? result)))
+           (sse/close stream))}
+
+      {true (do (sse/send stream "unknown") (sse/close stream))})
+    :deferred
+  }))
+
+; Handler using sse/handler wrapper
+(def {wrapped-handler}
+  (sse/handler (\ {stream req} {
+    (sse/send stream "wrapped handler test")
+    (sse/close stream)
+  })))
+
+; Combined handler that routes wrapped-handler for its test
+(def {combined-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (if (== path "/sse-wrapped")
+      {(wrapped-handler req)}
+      {(test-handler req)})
+  }))
+
+(def {server} (http2/server-listen aio 0 combined-handler))
+(def {port} (http2/server-port server))
+
+; Helper for response body verification
+(fun {check-body resp expected} {
+  (if (error? resp)
+    {(do (print "Error:" resp) false)}
+    {(do
+      (= {body} (http2/response-body resp))
+      (if (== body expected)
+        {true}
+        {(do (print "Expected:" expected) (print "Got:" body) false)}))})
+})
+
+(test/run-async aio (list
+  (test-async "sse/open creates stream and sse/send works" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-basic")
+      (\ {resp} {(check-body resp "data: hello world\n\n")}))
+  }))
+
+  (test-async "Multiple sse/send calls produce multiple data blocks" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-multi")
+      (\ {resp} {(check-body resp "data: event 1\n\ndata: event 2\n\ndata: event 3\n\n")}))
+  }))
+
+  (test-async "sse/event sends typed event" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-typed")
+      (\ {resp} {(check-body resp "event: message\ndata: typed data\n\n")}))
+  }))
+
+  (test-async "sse/on-drain callback registration works" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-on-drain")
+      (\ {resp} {(check-body resp "data: drain test\n\n")}))
+  }))
+
+  (test-async "sse/id sends event with ID field" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-id")
+      (\ {resp} {(check-body resp "id: evt-123\ndata: event with id\n\n")}))
+  }))
+
+  (test-async "sse/retry sends retry directive" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-retry")
+      (\ {resp} {(check-body resp "retry: 5000\n\ndata: retry test\n\n")}))
+  }))
+
+  (test-async "sse/json sends data as string" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-json")
+      (\ {resp} {(check-body resp "data: {:key value :num 42}\n\n")}))
+  }))
+
+  (test-async "sse/json-event sends typed event with data" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-json-event")
+      (\ {resp} {(check-body resp "event: update\ndata: {:status ok}\n\n")}))
+  }))
+
+  (test-async "sse/full sends event with id, type, and data" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-full")
+      (\ {resp} {(check-body resp "id: id-001\nevent: update\ndata: full event data\n\n")}))
+  }))
+
+  (test-async "sse/full rejects newlines in event-type" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-full-invalid")
+      (\ {resp} {(check-body resp "data: error:1\n\n")}))
+  }))
+
+  (test-async "sse/comment sends comment line" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-comment")
+      (\ {resp} {(check-body resp ": keep-alive comment\n")}))
+  }))
+
+  (test-async "sse/heartbeat sends empty comment" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-heartbeat")
+      (\ {resp} {(check-body resp ":\n")}))
+  }))
+
+  (test-async "sse/writable? returns stream writable status" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-writable")
+      (\ {resp} {(check-body resp "data: writable:1\n\n")}))
+  }))
+
+  (test-async "sse/cancel cancels stream" (\ {} {
+    (aio/catch
+      (aio/then (http2/client-request aio "127.0.0.1" port "/sse-cancel")
+        (\ {resp} {false}))
+      (\ {err} {true}))
+  }))
+
+  (test-async "sse/message alias works" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-message")
+      (\ {resp} {(check-body resp "data: message alias test\n\n")}))
+  }))
+
+  (test-async "sse/event rejects newlines in event-type" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-event-invalid")
+      (\ {resp} {(check-body resp "data: error:1\n\n")}))
+  }))
+
+  (test-async "sse/handler wrapper works" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/sse-wrapped")
+      (\ {resp} {(check-body resp "data: wrapped handler test\n\n")}))
+  })))
+  {:suite-name "SSE Integration Tests" :timeout-ms 5000})
+
+(http2/server-stop server)
+(aio/stop aio)

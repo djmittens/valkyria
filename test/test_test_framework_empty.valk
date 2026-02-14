@@ -1,0 +1,9 @@
+; Test the test framework when no tests are registered
+; This tests the empty registry error path
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Run with empty list - would normally exit 1, but expected-exit makes suite pass
+(test/run (list)
+  {:suite-name "Empty Suite Test" :expected-exit 1})

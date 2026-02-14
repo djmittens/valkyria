@@ -1,0 +1,109 @@
+; src/modules/aio/sse.valk - Server-Sent Events
+; Load with: (load "src/modules/aio/sse.valk")
+;
+; SSE wrapper over generic stream/* builtins.
+; Implements the WHATWG HTML Living Standard Section 9.2 event stream format.
+;
+; Core API:
+;   (sse/open request)              - Open SSE stream with proper headers
+;   (sse/send stream data)          - Send data event
+;   (sse/event stream type data)    - Send named event  
+;   (sse/id stream event-id data)   - Send event with ID
+;   (sse/retry stream ms)           - Send retry directive
+;   (sse/close stream)              - Close stream
+;   (sse/writable? stream)          - Check backpressure
+;   (sse/on-drain stream callback)  - Register drain callback
+;
+; High-level utilities:
+;   (sse/create request)            - Alias for sse/open
+;   (sse/message stream data)       - Alias for sse/send
+;   (sse/json stream data)          - Send JSON-encoded data
+;   (sse/json-event stream type d)  - Send named event with JSON data
+;   (sse/full stream type id data)  - Send event with type, id and data
+;   (sse/comment stream text)       - Send comment (keep-alive)
+;   (sse/heartbeat stream)          - Send empty comment (keep-alive)
+;   (sse/handler body-fn)           - Create SSE endpoint handler
+
+; Default max session: 30 minutes (DoS protection)
+(def {sse/default-max-session-ms} 1800000)
+
+(fun {sse/open request}
+  {(= {stream} (stream/open request 
+                {:status "200"
+                 :content-type "text/event-stream"
+                 :cache-control "no-cache"}))
+   (stream/set-max-session stream sse/default-max-session-ms)
+   stream})
+
+; Internal helper: format multi-line data per SSE spec
+; Each line must be prefixed with "data: " and events end with double newline
+; Example: "line1\nline2" becomes "data: line1\ndata: line2\n\n"
+(fun {sse/_format-data data}
+  {str "data: " (str/replace data "\n" "\ndata: ") "\n\n"})
+
+; Internal helper: validate event type (no newlines allowed per spec)
+(fun {sse/_valid-event-type? event-type}
+  {== event-type (str/replace event-type "\n" "")})
+
+(fun {sse/send stream data}
+  {stream/write stream (sse/_format-data data)})
+
+(fun {sse/event stream event-type data}
+  {if (sse/_valid-event-type? event-type)
+    {stream/write stream (str "event: " event-type "\n" (sse/_format-data data))}
+    {error "sse/event: event-type cannot contain newlines"}})
+
+(fun {sse/id stream event-id data}
+  {stream/write stream (str "id: " event-id "\n" (sse/_format-data data))})
+
+; Send event with type, id, and data (id comes first for proper resumption)
+(fun {sse/full stream event-type event-id data}
+  {if (sse/_valid-event-type? event-type)
+    {stream/write stream (str "id: " event-id "\nevent: " event-type "\n" (sse/_format-data data))}
+    {error "sse/full: event-type cannot contain newlines"}})
+
+(fun {sse/retry stream ms}
+  {stream/write stream (str "retry: " ms "\n\n")})
+
+; Send a comment line (lines starting with : are ignored by clients)
+; Useful for keep-alive to prevent proxy timeouts (recommended every 15-30s)
+(fun {sse/comment stream text}
+  {stream/write stream (str ": " (str/replace text "\n" "\n: ") "\n")})
+
+; Send empty comment as heartbeat/keep-alive
+(fun {sse/heartbeat stream}
+  {stream/write stream ":\n"})
+
+(fun {sse/close stream}
+  {stream/close stream})
+
+(fun {sse/writable? stream}
+  {stream/writable? stream})
+
+(fun {sse/on-drain stream callback}
+  {stream/on-drain stream callback})
+
+(fun {sse/cancel stream}
+  {stream/cancel stream})
+
+; Aliases
+(def {sse/create} sse/open)
+(fun {sse/message stream data} {sse/send stream data})
+
+; JSON helpers
+; Note: Uses str to serialize data. For proper JSON, implement json/encode.
+(fun {sse/json stream data}
+  {sse/send stream (str data)})
+
+(fun {sse/json-event stream event-type data}
+  {sse/event stream event-type (str data)})
+
+; Handler wrapper - creates SSE endpoint from body function
+; Usage: (def {handler} (sse/handler (\ {stream req} { ... })))
+; body-fn should call stream/close when done; handler returns completion handle
+(fun {sse/handler body-fn}
+  {\ {req}
+    {(do
+      (= {stream} (sse/open req))
+      (body-fn stream req)
+      (stream/closed stream))}})

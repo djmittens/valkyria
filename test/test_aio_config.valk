@@ -1,0 +1,80 @@
+; AIO Configuration Tests
+; Run with: ./build/valk test/test_aio_config.valk
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "aio-config-default"
+    {do
+    (= {test-sys} (aio/await (aio/start)))
+    (test/assert (not (== test-sys nil)) "aio/start with defaults should succeed")
+    true
+  })
+  (test "aio-config-custom-connections"
+    {do
+    (= {test-sys} (aio/await (aio/start {:max-connections 50})))
+    (test/assert (not (== test-sys nil)) "aio/start with max-connections should succeed")
+    true
+  })
+  (test "aio-config-custom-streams"
+    {do
+    (= {test-sys} (aio/await (aio/start {:max-concurrent-streams 50})))
+    (test/assert (not (== test-sys nil)) "aio/start with max-concurrent-streams should succeed")
+    true
+  })
+  (test "aio-config-full"
+    {do
+    (= {test-sys} (aio/await (aio/start {
+      :max-connections 200
+      :max-concurrent-streams 50
+      :arena-pool-size 100
+    }))
+    (test/assert (not (== test-sys nil)) "aio/start with full config should succeed")
+    true
+  })
+  (test "aio-config-invalid-returns-error"
+    {do
+    (= {test-sys} (aio/await (aio/start {:max-connections 0})))
+    (test/assert (error? test-sys) "aio/start with invalid config should return error")
+    true
+  })
+  (test "aio-config-backwards-compat"
+    {do
+    (= {test-sys} (aio/await (aio/start)))
+    (test/assert (not (== test-sys nil)) "legacy aio/start call should still work")
+    true
+  })
+  (test "aio-config-tcp-buffer-pool"
+    {do
+    (= {test-sys} (aio/await (aio/start {:tcp-buffer-pool-size 256})))
+    (test/assert (not (== test-sys nil)) "aio/start with tcp-buffer-pool-size should succeed")
+    true
+  })
+  (test "aio-config-arena-size"
+    {do
+    ; arena-size must be between 1MB and 256MB
+    (= {test-sys} (aio/await (aio/start {:arena-size 1048576})))
+    (test/assert (not (== test-sys nil)) "aio/start with arena-size should succeed")
+    true
+  })
+  (test "aio-config-max-request-body"
+    {do
+    (= {test-sys} (aio/await (aio/start {:max-request-body-size 1048576})))
+    (test/assert (not (== test-sys nil)) "aio/start with max-request-body-size should succeed")
+    true
+  })
+  (test "aio-config-all-options"
+    {do
+    (= {test-sys} (aio/await (aio/start {
+      :max-connections 100
+      :max-concurrent-streams 25
+      :tcp-buffer-pool-size 128
+      :arena-pool-size 50
+      :arena-size 1048576
+      :max-request-body-size 524288
+    }))
+    (test/assert (not (== test-sys nil)) "aio/start with all config options should succeed")
+    true
+  }))
+  {:suite-name "AIO Configuration Tests"})

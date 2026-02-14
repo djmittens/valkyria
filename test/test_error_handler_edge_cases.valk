@@ -1,0 +1,60 @@
+; test_error_handler_edge_cases.valk
+; Tests error handler edge cases: when handler returns error or wrong type
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+; Handler that returns an error instead of a string
+(def {error-returning-handler} (\ {status-code} {
+  (error "handler crashed")
+}))
+
+; Handler that returns a number instead of a string
+(def {number-returning-handler} (\ {status-code} {
+  42
+}))
+
+; Handler that returns a list instead of a string
+(def {list-returning-handler} (\ {status-code} {
+  (list 1 2 3)
+}))
+
+; Basic request handler
+(def {request-handler} (\ {req} {
+  `{:status "200" :body "OK"}
+}))
+
+; Test 1: Error-returning handler should not crash, server uses default page
+(def {server1} (http2/server-listen aio 0 request-handler {:error-handler error-returning-handler}))
+(def {port1} (http2/server-port server1))
+
+; Test 2: Number-returning handler should not crash, server uses default page
+(def {server2} (http2/server-listen aio 0 request-handler {:error-handler number-returning-handler}))
+(def {port2} (http2/server-port server2))
+
+; Test 3: List-returning handler should not crash, server uses default page
+(def {server3} (http2/server-listen aio 0 request-handler {:error-handler list-returning-handler}))
+(def {port3} (http2/server-port server3))
+
+(test/run-async aio (list
+  (test-async "error-returning handler: server starts successfully" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" port1 "/")
+    (\ {resp} {
+      (if (error? resp) {false} {(== (http2/response-status resp) "200")})
+    }))
+}))
+  (test-async "number-returning handler: server starts successfully" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" port2 "/")
+    (\ {resp} {
+      (if (error? resp) {false} {(== (http2/response-status resp) "200")})
+    }))
+}))
+  (test-async "list-returning handler: server starts successfully" (\ {} {
+  (aio/then (http2/client-request aio "127.0.0.1" port3 "/")
+    (\ {resp} {
+      (if (error? resp) {false} {(== (http2/response-status resp) "200")})
+    }))
+})))
+  {:suite-name "Error Handler Edge Cases"})
