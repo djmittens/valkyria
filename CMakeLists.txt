@@ -544,7 +544,7 @@ include_directories(test_http2_server_unit src/)
 
 # HTTP/2 session tests (callbacks, stream arenas, headers)
 add_executable(test_http2_session_unit test/unit/test_http2_session.c test/testing.c)
-target_link_libraries(test_http2_session_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES} nghttp2::nghttp2)
+target_link_libraries(test_http2_session_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES} nghttp2::nghttp2 OpenSSL::SSL OpenSSL::Crypto)
 include_directories(test_http2_session_unit src/)
 
 # Connection admission tests (overload admission control)

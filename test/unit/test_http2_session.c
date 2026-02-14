@@ -5,6 +5,7 @@
 #include "../../src/aio/http2/aio_http2_conn.h"
 #include "../../src/aio/aio_internal.h"
 #include "../../src/aio/aio_ops.h"
+#include "../../src/aio/http2/aio_ssl.h"
 
 #include <stdlib.h>
 
@@ -722,6 +723,9 @@ void test_release_stream_arena_backpressure_exit(VALK_TEST_ARGS()) {
   srv->sys = sys;
   conn->http.server = srv;
 
+  SSL_CTX *ssl_ctx = SSL_CTX_new(TLS_server_method());
+  valk_aio_ssl_accept(&conn->http.io.ssl, ssl_ctx);
+
   nghttp2_session_callbacks *callbacks;
   nghttp2_session_callbacks_new(&callbacks);
   nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, valk_http2_on_begin_headers_callback);
@@ -774,6 +778,8 @@ void test_release_stream_arena_backpressure_exit(VALK_TEST_ARGS()) {
   nghttp2_hd_deflate_del(deflater);
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
+  valk_aio_ssl_free(&conn->http.io.ssl);
+  SSL_CTX_free(ssl_ctx);
   free(srv);
   free(conn);
   valk_slab_free(sys->httpStreamArenas);
