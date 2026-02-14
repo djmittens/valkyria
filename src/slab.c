@@ -126,6 +126,7 @@ static inline u64 __valk_slab_offset_pack(u64 offset, u64 version) {
 #endif
 }
 
+// LCOV_EXCL_BR_START Treiber stack: CAS retry loops generate arch-specific branches
 valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   valk_slab_item_t *res;
 #ifdef VALK_SLAB_TREIBER_STACK
@@ -147,7 +148,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   do {
     oldTag = __atomic_load_n(&self->head, __ATOMIC_ACQUIRE);
     head = __valk_slab_offset_unpack(oldTag, &version);
-    if (head == SIZE_MAX) { // LCOV_EXCL_BR_LINE
+    if (head == SIZE_MAX) {
       __atomic_fetch_add(&self->numFree, 1, __ATOMIC_RELAXED);
       return nullptr;
     }
@@ -170,7 +171,7 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
   do {
     current_peak = __atomic_load_n(&self->peakUsed, __ATOMIC_RELAXED);
     if (used <= current_peak) break;
-  } while (!__atomic_compare_exchange_n(&self->peakUsed, &current_peak, used, // LCOV_EXCL_BR_LINE
+  } while (!__atomic_compare_exchange_n(&self->peakUsed, &current_peak, used,
                                          false, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
 
   atomic_fetch_add_explicit(&self->total_acquires, 1, memory_order_relaxed);
@@ -202,7 +203,9 @@ valk_slab_item_t *valk_slab_aquire(valk_slab_t *self) {
 #endif
   return res;
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START Treiber stack: CAS retry loops generate arch-specific branches
 void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
 #ifdef VALK_SLAB_TREIBER_STACK
   sz slot_idx = item->handle;
@@ -246,6 +249,7 @@ void valk_slab_release(valk_slab_t *self, valk_slab_item_t *item) {
              item->handle);
 #endif
 }
+// LCOV_EXCL_BR_STOP
 
 void valk_slab_release_ptr(valk_slab_t *self, void *data) {
   u64 v;
