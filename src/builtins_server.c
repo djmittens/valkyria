@@ -90,7 +90,7 @@ static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
     if (status != VALK_ASYNC_COMPLETED) { // LCOV_EXCL_BR_LINE - handle usually completed by call time
       server_ref = valk_async_handle_await(handle);
       if (LVAL_TYPE(server_ref) == LVAL_ERR) { // LCOV_EXCL_BR_LINE - await error
-        return server_ref;
+        return server_ref; // LCOV_EXCL_LINE
       }
     } else {
       server_ref = atomic_load_explicit(&handle->result, memory_order_acquire);
@@ -99,15 +99,17 @@ static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
       return valk_lval_err("http2/server-port: handle result is not a server ref"); // LCOV_EXCL_LINE
     }
   } else if (LVAL_TYPE(arg) == LVAL_REF) { // LCOV_EXCL_BR_LINE - type dispatch: tests always pass handle
-    server_ref = arg;
+    server_ref = arg; // LCOV_EXCL_LINE
   } else {
+    // LCOV_EXCL_START - type error: tests always pass handle or ref
     return valk_lval_err("http2/server-port: expected Handle or Reference, got %s",
                          valk_ltype_name(LVAL_TYPE(arg)));
+    // LCOV_EXCL_STOP
   }
 
   valk_aio_http_server* srv = (valk_aio_http_server*)server_ref->ref.ptr;
   if (valk_aio_http2_server_is_stopped(srv)) { // LCOV_EXCL_BR_LINE - stopped server check
-    return valk_lval_err("http2/server-port: server is stopped");
+    return valk_lval_err("http2/server-port: server is stopped"); // LCOV_EXCL_LINE
   }
   return valk_lval_num(valk_aio_http2_server_get_port(srv));
 }
@@ -126,7 +128,7 @@ static valk_lval_t* valk_builtin_http2_server_stop(valk_lenv_t* e,
     if (status != VALK_ASYNC_COMPLETED) { // LCOV_EXCL_BR_LINE - handle usually completed by call time
       server_ref = valk_async_handle_await(handle);
       if (LVAL_TYPE(server_ref) == LVAL_ERR) { // LCOV_EXCL_BR_LINE - await error
-        return server_ref;
+        return server_ref; // LCOV_EXCL_LINE
       }
     } else {
       server_ref = atomic_load_explicit(&handle->result, memory_order_acquire);
@@ -135,10 +137,12 @@ static valk_lval_t* valk_builtin_http2_server_stop(valk_lenv_t* e,
       return valk_lval_err("http2/server-stop: handle result is not a server ref"); // LCOV_EXCL_LINE
     }
   } else if (LVAL_TYPE(arg) == LVAL_REF) { // LCOV_EXCL_BR_LINE - type dispatch: tests always pass handle
-    server_ref = arg;
+    server_ref = arg; // LCOV_EXCL_LINE
   } else {
+    // LCOV_EXCL_START - type error: tests always pass handle or ref
     return valk_lval_err("http2/server-stop: expected Handle or Reference, got %s",
                          valk_ltype_name(LVAL_TYPE(arg)));
+    // LCOV_EXCL_STOP
   }
 
   valk_aio_http_server* srv = (valk_aio_http_server*)server_ref->ref.ptr;
