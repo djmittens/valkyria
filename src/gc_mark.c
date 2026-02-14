@@ -286,7 +286,7 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
 
   valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
   if (!atomic_compare_exchange_strong(&valk_sys->phase, &expected,
-                                       VALK_GC_PHASE_STW_REQUESTED)) {
+                                       VALK_GC_PHASE_PREPARING)) {
     return false;
   }
 
@@ -299,7 +299,9 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
 
   atomic_store(&__gc_heap_current, heap);
 
-  atomic_thread_fence(memory_order_seq_cst);
+  atomic_store_explicit(&valk_sys->phase,
+                        VALK_GC_PHASE_STW_REQUESTED,
+                        memory_order_release);
 
   valk_system_wake_threads(valk_sys);
 

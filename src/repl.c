@@ -115,11 +115,7 @@ int main(int argc, char* argv[]) {
             break;
           }
 
-          // Checkpoint at safe point: between top-level expressions
-          // This evacuates any values stored in env (via def) to GC heap
-          valk_checkpoint(scratch, gc_heap, env);
-
-          // GC safe point: expression evaluated, env and remaining AST (res) are live
+          VALK_GC_SAFE_POINT();
           if (valk_gc_should_collect(gc_heap)) {
             valk_gc_heap_collect(gc_heap);  // Mark res as additional root
           }
@@ -182,9 +178,7 @@ int main(int argc, char* argv[]) {
 
     free(input);
 
-    // Checkpoint: evacuate any values stored in env (via def) to GC heap,
-    // then reset scratch arena. This replaces the simple arena reset.
-    valk_checkpoint(scratch, gc_heap, env);
+    VALK_GC_SAFE_POINT();
 
     valk_repl_mem_take_snapshot(gc_heap, scratch, &g_last_eval_after);
     i64 heap_delta, scratch_delta, lval_delta, lenv_delta;

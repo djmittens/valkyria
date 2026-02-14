@@ -324,12 +324,6 @@ void valk_gc_thread_unregister(void) {
 void valk_gc_safe_point_slow(void) {
   valk_gc_phase_e phase = atomic_load(&valk_sys->phase);
 
-  if (phase == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
-    valk_barrier_wait(&valk_sys->barrier);
-    valk_barrier_wait(&valk_sys->barrier);
-    return;
-  }
-
   if (phase == VALK_GC_PHASE_STW_REQUESTED) {
     if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
         valk_thread_ctx.heap && valk_thread_ctx.root_env) {
@@ -340,6 +334,15 @@ void valk_gc_safe_point_slow(void) {
 
     valk_barrier_wait(&valk_sys->barrier);
     valk_gc_participate_in_parallel_gc();
+    return;
+  }
+
+  if (valk_thread_ctx.checkpoint_enabled &&
+      valk_thread_ctx.scratch && valk_thread_ctx.heap && valk_thread_ctx.root_env &&
+      valk_should_checkpoint(valk_thread_ctx.scratch, valk_thread_ctx.checkpoint_threshold)) {
+    valk_checkpoint(valk_thread_ctx.scratch,
+                    valk_thread_ctx.heap,
+                    valk_thread_ctx.root_env);
   }
 }
 // LCOV_EXCL_STOP

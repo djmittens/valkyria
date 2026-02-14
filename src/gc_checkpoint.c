@@ -76,62 +76,6 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
 }
 // LCOV_EXCL_STOP
 
-static void valk_checkpoint_request_stw(void) {
-  // Skip multi-thread coordination during shutdown: worker threads may be
-  // exiting concurrently, so the barrier count would be stale (TOCTOU race
-  // between reading threads_registered and the barrier wait).  The main thread
-  // is the only mutator at this point, so evacuation is still safe.
-  if (atomic_load(&valk_sys->shutting_down)) {
-    return;
-  }
-
-  // Use CHECKPOINT_PREPARING to claim exclusive ownership of the checkpoint
-  // sequence without yet signaling worker threads.  The VALK_GC_SAFE_POINT
-  // macro only fires on phase != IDLE, but valk_gc_safe_point_slow() only
-  // enters the barrier path when phase == CHECKPOINT_REQUESTED.  By first
-  // CASing to PREPARING, we can safely reset the barrier before any worker
-  // thread touches it.
-  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
-  // LCOV_EXCL_BR_START - CAS race: another thread may have changed phase
-  if (!atomic_compare_exchange_strong(&valk_sys->phase, &expected,
-                                       VALK_GC_PHASE_CHECKPOINT_PREPARING)) {
-  // LCOV_EXCL_BR_STOP
-    return;
-  }
-
-  u64 num_threads = atomic_load(&valk_sys->threads_registered);
-  if (num_threads <= 1) {
-    atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
-    return;
-  }
-
-  if (valk_sys->barrier_initialized) {
-    valk_barrier_reset(&valk_sys->barrier, num_threads);
-  } else {
-    valk_barrier_init(&valk_sys->barrier, num_threads);
-    valk_sys->barrier_initialized = true;
-  }
-
-  // Barrier is now ready — publish CHECKPOINT_REQUESTED so worker threads
-  // enter the barrier path in valk_gc_safe_point_slow().
-  atomic_store_explicit(&valk_sys->phase,
-                        VALK_GC_PHASE_CHECKPOINT_REQUESTED,
-                        memory_order_release);
-
-  valk_system_wake_threads(valk_sys);
-
-  valk_barrier_wait(&valk_sys->barrier);
-}
-
-static void valk_checkpoint_release_stw(void) {
-  valk_gc_phase_e phase = atomic_load(&valk_sys->phase);
-  if (phase != VALK_GC_PHASE_CHECKPOINT_REQUESTED) return;
-
-  atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
-
-  valk_barrier_wait(&valk_sys->barrier);
-}
-
 // LCOV_EXCL_BR_START - checkpoint null checks and iteration
 void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_heap_t* heap,
                      valk_lenv_t* root_env) {
@@ -140,9 +84,9 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_heap_t* heap,
     return;
   }
 
-  VALK_DEBUG("Checkpoint starting, scratch offset=%llu", (unsigned long long)scratch->offset);
+  if (scratch->offset == 0) return;
 
-  valk_checkpoint_request_stw();
+  VALK_DEBUG("Checkpoint starting, scratch offset=%llu", (unsigned long long)scratch->offset);
 
   valk_evacuation_ctx_t ctx = {
     .scratch = scratch,
@@ -199,7 +143,5 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_heap_t* heap,
   valk_mem_arena_reset(scratch);
 
   evac_ctx_free(&ctx);
-
-  valk_checkpoint_release_stw();
 }
 // LCOV_EXCL_BR_STOP

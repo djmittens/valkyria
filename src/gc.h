@@ -273,9 +273,8 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v);
 
 typedef enum {
   VALK_GC_PHASE_IDLE = 0,
+  VALK_GC_PHASE_PREPARING,
   VALK_GC_PHASE_STW_REQUESTED,
-  VALK_GC_PHASE_CHECKPOINT_PREPARING,
-  VALK_GC_PHASE_CHECKPOINT_REQUESTED,
   VALK_GC_PHASE_MARKING,
   VALK_GC_PHASE_SWEEPING,
 } valk_gc_phase_e;

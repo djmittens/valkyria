@@ -219,8 +219,8 @@ void valk_repl_set_eval_delta(i64 heap, i64 scratch, i64 lval, i64 lenv) {
 static const char *valk_gc_phase_name(valk_gc_phase_e phase) {
   switch (phase) {
     case VALK_GC_PHASE_IDLE: return "IDLE";
+    case VALK_GC_PHASE_PREPARING: return "PREPARING";
     case VALK_GC_PHASE_STW_REQUESTED: return "STW_REQUESTED";
-    case VALK_GC_PHASE_CHECKPOINT_REQUESTED: return "CHECKPOINT_REQUESTED";
     case VALK_GC_PHASE_MARKING: return "MARKING";
     case VALK_GC_PHASE_SWEEPING: return "SWEEPING";
     default: return "UNKNOWN";
@@ -298,7 +298,7 @@ void valk_diag_dump_on_timeout(void) {
 #endif
 
   fprintf(stderr, "=== Likely Cause ===\n");
-  if (phase == VALK_GC_PHASE_STW_REQUESTED || phase == VALK_GC_PHASE_CHECKPOINT_REQUESTED) {
+  if (phase == VALK_GC_PHASE_STW_REQUESTED) {
     fprintf(stderr, "  GC/checkpoint requested but not all threads reached safe point.\n");
     fprintf(stderr, "  A thread may be stuck in a long-running operation without\n");
     fprintf(stderr, "  calling VALK_GC_SAFE_POINT().\n");
