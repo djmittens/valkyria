@@ -84,7 +84,7 @@ void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_heap_t* heap,
     return;
   }
 
-  if (scratch->offset == 0) return;
+  if (atomic_load_explicit(&scratch->stats.total_allocations, memory_order_relaxed) == 0) return;
 
   VALK_DEBUG("Checkpoint starting, scratch offset=%llu", (unsigned long long)scratch->offset);
 

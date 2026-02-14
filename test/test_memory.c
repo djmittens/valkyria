@@ -537,16 +537,18 @@ void test_checkpoint_empty(VALK_TEST_ARGS()) {
 
   valk_lenv_t *env = valk_lenv_empty();
 
-  // Run checkpoint on empty arena
+  sz initial_offset = arena->offset;
+
+  // Run checkpoint on empty arena - should be a no-op (early return)
   valk_checkpoint(arena, heap, env);
 
-  // Stats should show 0 evacuations
-  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 1,
-                   "num_checkpoints should be 1");
+  // Empty arena checkpoint is skipped entirely (no allocations = no work)
+  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 0,
+                   "num_checkpoints should be 0 for empty arena (skipped)");
   VALK_TEST_ASSERT(atomic_load(&arena->stats.values_evacuated) == 0,
                    "values_evacuated should be 0 for empty arena");
-  VALK_TEST_ASSERT(arena->offset == 0,
-                   "Arena offset should be 0 after checkpoint");
+  VALK_TEST_ASSERT(arena->offset == initial_offset,
+                   "Arena offset should be unchanged after skipped checkpoint");
 
   valk_thread_ctx = old_ctx;
   free(arena);
