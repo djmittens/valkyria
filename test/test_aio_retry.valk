@@ -7,41 +7,41 @@
 (test/run (list
   (test "aio/retry returns a handle"
     {do
-    (def {sys} (aio/await (aio/start)))
-    (def {h} (aio/retry sys
+    (= {sys} (aio/await (aio/start)))
+    (= {h} (aio/retry sys
       (\ {} {(aio/pure 42)})
       {:max-attempts 3 :backoff :exponential :base-ms 10}))
-    (aio/stop sys)
+    (aio/await (aio/stop sys))
     (not (== h nil))
     })
   (test "aio/retry with exponential backoff"
     {do
-    (def {sys} (aio/await (aio/start)))
-    (def {h} (aio/retry sys
+    (= {sys} (aio/await (aio/start)))
+    (= {h} (aio/retry sys
       (\ {} {(aio/pure 1)})
       {:max-attempts 3 :backoff :exponential :base-ms 5}))
-    (aio/stop sys)
-    (def {status} (aio/status h))
+    (aio/await (aio/stop sys))
+    (= {status} (aio/status h))
     (not (== status nil))
     })
   (test "aio/retry with linear backoff"
     {do
-    (def {sys} (aio/await (aio/start)))
-    (def {h} (aio/retry sys
+    (= {sys} (aio/await (aio/start)))
+    (= {h} (aio/retry sys
       (\ {} {(aio/pure 1)})
       {:max-attempts 3 :backoff :linear :base-ms 5}))
-    (aio/stop sys)
-    (def {status} (aio/status h))
+    (aio/await (aio/stop sys))
+    (= {status} (aio/status h))
     (not (== status nil))
     })
   (test "aio/retry with no backoff"
     {do
-    (def {sys} (aio/await (aio/start)))
-    (def {h} (aio/retry sys
+    (= {sys} (aio/await (aio/start)))
+    (= {h} (aio/retry sys
       (\ {} {(aio/pure 1)})
       {:max-attempts 3 :backoff :none :base-ms 5}))
-    (aio/stop sys)
-    (def {status} (aio/status h))
+    (aio/await (aio/stop sys))
+    (= {status} (aio/status h))
     (not (== status nil))
     })
   (test "aio/retry with wrong arg count returns error"
@@ -51,16 +51,16 @@
     })
   (test "aio/retry with non-function second arg returns error"
     {do
-    (def {sys} (aio/await (aio/start)))
+    (= {sys} (aio/await (aio/start)))
     (= {result} (aio/retry sys 42 {:max-attempts 1}))
-    (aio/stop sys)
+    (aio/await (aio/stop sys))
     (error? result)
     })
   (test "aio/retry with non-qexpr third arg returns error"
     {do
-    (def {sys} (aio/await (aio/start)))
+    (= {sys} (aio/await (aio/start)))
     (= {result} (aio/retry sys (\ {} {(aio/pure 1)}) 42))
-    (aio/stop sys)
+    (aio/await (aio/stop sys))
     (error? result)
     }))
   {:suite-name "aio/retry Tests"})

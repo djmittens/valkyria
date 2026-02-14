@@ -302,8 +302,8 @@ valk_err_e valk_aio_ssl_on_read(valk_aio_ssl_t *ssl, valk_buffer_t *In,
 
   if (In->count > 0) {
     n = BIO_write(ssl->read_bio, In->items, In->count);
-    VALK_ASSERT(n >= 0, "OpenSSL BIO_write failed: %d", n); // LCOV_EXCL_BR_LINE - OpenSSL internal failure
-    VALK_ASSERT((size_t)n == In->count, "BIO_write partial: %d of %llu", // LCOV_EXCL_BR_LINE - memory BIO always accepts full write
+    VALK_ASSERT(n >= 0, "OpenSSL BIO_write failed: %d", n);
+    VALK_ASSERT((size_t)n == In->count, "BIO_write partial: %d of %llu",
                 n, (unsigned long long)In->count);
     In->count = 0;
   } else {

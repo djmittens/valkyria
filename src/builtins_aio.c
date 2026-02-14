@@ -49,6 +49,12 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
     if ((val = valk_plist_get(config_map, ":backpressure-list-max")) && LVAL_TYPE(val) == LVAL_NUM)
       config.backpressure_list_max = (u32)val->num;
+
+    if ((val = valk_plist_get(config_map, ":maintenance-interval-ms")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.maintenance_interval_ms = (u32)val->num;
+
+    if ((val = valk_plist_get(config_map, ":connection-idle-timeout-ms")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.connection_idle_timeout_ms = (u32)val->num;
   }
   // LCOV_EXCL_BR_STOP
 
@@ -87,7 +93,7 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
     uv_sleep(100);
   }
 
-  if (!sys->threadJoined &&
+  if (!sys->threadJoined && // LCOV_EXCL_BR_LINE - shutdown guard: thread typically not yet joined
       !valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
     uv_thread_join(&sys->loopThread);
     sys->threadJoined = true;

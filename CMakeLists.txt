@@ -534,13 +534,18 @@ include_directories(test_stream_builtins_unit src/)
 
 # HTTP/2 connection tests (write buffer, backpressure, alloc callbacks)
 add_executable(test_http2_conn_unit test/unit/test_http2_conn.c test/testing.c)
-target_link_libraries(test_http2_conn_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES})
+target_link_libraries(test_http2_conn_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES} nghttp2::nghttp2)
 include_directories(test_http2_conn_unit src/)
 
 # HTTP/2 server tests (lifecycle, metrics, getters)
 add_executable(test_http2_server_unit test/unit/test_http2_server.c test/testing.c)
 target_link_libraries(test_http2_server_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES})
 include_directories(test_http2_server_unit src/)
+
+# HTTP/2 session tests (callbacks, stream arenas, headers)
+add_executable(test_http2_session_unit test/unit/test_http2_session.c test/testing.c)
+target_link_libraries(test_http2_session_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES} nghttp2::nghttp2)
+include_directories(test_http2_session_unit src/)
 
 # Connection admission tests (overload admission control)
 add_executable(test_conn_admission_unit test/unit/test_conn_admission.c test/testing.c)

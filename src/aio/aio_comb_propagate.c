@@ -19,7 +19,7 @@ static void valk_async_propagate_single(void *ctx);
 
 static void valk_async_schedule_propagate(valk_async_handle_t *child) {
   valk_aio_system_t *sys = child->sys;
-  if (sys) {
+  if (sys) { // LCOV_EXCL_BR_LINE - sys-null fallback: handles without system propagate inline
     valk_aio_enqueue_task(sys, valk_async_propagate_single, child);
   } else {
     valk_async_propagate_single(child);
@@ -51,7 +51,7 @@ static void valk_async_propagate_single(void *ctx) {
         if (child->on_complete && child->env) { // LCOV_EXCL_BR_LINE - callback presence
           valk_lval_t *args;
           valk_lval_t *transformed;
-          valk_mem_allocator_t *alloc = child->sys ? (valk_mem_allocator_t*)&child->sys->system_region : nullptr;
+          valk_mem_allocator_t *alloc = child->sys ? (valk_mem_allocator_t*)&child->sys->system_region : nullptr; // LCOV_EXCL_BR_LINE - allocator selection
           if (!alloc && child->region) { // LCOV_EXCL_BR_LINE - allocator fallback
             alloc = (valk_mem_allocator_t*)child->region;
           }
@@ -106,7 +106,7 @@ static void valk_async_propagate_single(void *ctx) {
         if (child->on_error && child->env) { // LCOV_EXCL_BR_LINE - error handler presence
           valk_lval_t *args;
           valk_lval_t *recovered;
-          valk_mem_allocator_t *alloc = child->sys ? (valk_mem_allocator_t*)&child->sys->system_region : nullptr;
+          valk_mem_allocator_t *alloc = child->sys ? (valk_mem_allocator_t*)&child->sys->system_region : nullptr; // LCOV_EXCL_BR_LINE - allocator selection
           if (!alloc && child->region) { // LCOV_EXCL_BR_LINE - allocator fallback
             alloc = (valk_mem_allocator_t*)child->region;
           }

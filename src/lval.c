@@ -256,7 +256,7 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
       LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
-  INHERIT_SOURCE_LOC(res, body);  // LCOV_EXCL_BR_LINE - coverage macro
+  INHERIT_SOURCE_LOC(res, body);
 
   res->fun.builtin = nullptr;
 
@@ -310,7 +310,7 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
       LVAL_CONS | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
-  INHERIT_SOURCE_LOC(res, head);  // LCOV_EXCL_BR_LINE - coverage macro
+  INHERIT_SOURCE_LOC(res, head);
   res->cons.head = valk_region_ensure_safe_ref(res, head);
   res->cons.tail = valk_region_ensure_safe_ref(res, tail);
   return res;
@@ -322,7 +322,7 @@ valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
       LVAL_CONS | LVAL_FLAG_QUOTED | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   LVAL_INIT_SOURCE_LOC(res);
-  INHERIT_SOURCE_LOC(res, head);  // LCOV_EXCL_BR_LINE - coverage macro
+  INHERIT_SOURCE_LOC(res, head);
   res->cons.head = valk_region_ensure_safe_ref(res, head);
   res->cons.tail = valk_region_ensure_safe_ref(res, tail);
   return res;
@@ -358,7 +358,7 @@ valk_lval_t* valk_qexpr_to_cons(valk_lval_t* qexpr) {
   if (qexpr == NULL || LVAL_TYPE(qexpr) == LVAL_NIL) {  // LCOV_EXCL_BR_LINE - defensive null check
     return valk_lval_nil();
   }
-  VALK_COVERAGE_RECORD_LVAL(qexpr);  // LCOV_EXCL_BR_LINE - coverage macro
+  VALK_COVERAGE_RECORD_LVAL(qexpr);
   valk_lval_t* res = valk_lval_cons(qexpr->cons.head, valk_qexpr_to_cons(qexpr->cons.tail));
   valk_copy_source_loc(res, qexpr);
   return res;
@@ -369,14 +369,14 @@ static inline int valk_is_list_type(valk_ltype_e type) {
 }
 
 valk_lval_t* valk_lval_head(valk_lval_t* cons) {
-  VALK_ASSERT(valk_is_list_type(LVAL_TYPE(cons)),  // LCOV_EXCL_BR_LINE - precondition
+  VALK_ASSERT(valk_is_list_type(LVAL_TYPE(cons)),
               "Expected list (S-Expr, Q-Expr, or Nil), got %s",
               valk_ltype_name(LVAL_TYPE(cons)));
   return cons->cons.head;
 }
 
 valk_lval_t* valk_lval_tail(valk_lval_t* cons) {
-  VALK_ASSERT(valk_is_list_type(LVAL_TYPE(cons)),  // LCOV_EXCL_BR_LINE - precondition
+  VALK_ASSERT(valk_is_list_type(LVAL_TYPE(cons)),
               "Expected list (S-Expr, Q-Expr, or Nil), got %s",
               valk_ltype_name(LVAL_TYPE(cons)));
   return cons->cons.tail;
@@ -571,13 +571,13 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
 }
 
 valk_lval_t* valk_lval_pop(valk_lval_t* lval, u64 i) {
-  VALK_ASSERT(lval != nullptr, "valk_lval_pop: lval must not be null");  // LCOV_EXCL_BR_LINE - precondition
+  VALK_ASSERT(lval != nullptr, "valk_lval_pop: lval must not be null");
   u64 count = valk_lval_list_count(lval);
-  LVAL_ASSERT(  // LCOV_EXCL_BR_LINE - precondition
+  LVAL_ASSERT(
       (valk_lval_t*)0, i < count,
       "Cant pop from list at invalid position: [%zu] total length: [%zu]", i,
       count);
-  LVAL_ASSERT((valk_lval_t*)0, count > 0, "Cant pop from empty");  // LCOV_EXCL_BR_LINE - precondition
+  LVAL_ASSERT((valk_lval_t*)0, count > 0, "Cant pop from empty");
 
   if (i == 0) {
     valk_lval_t* cell = lval->cons.head;
@@ -643,7 +643,7 @@ valk_lval_t* valk_lval_join(valk_lval_t* a, valk_lval_t* b) {
 
   da_free(&tmp);
 
-  INHERIT_SOURCE_LOC(res, orig_a);  // LCOV_EXCL_BR_LINE - coverage macro
+  INHERIT_SOURCE_LOC(res, orig_a);
   return res;
 }
 

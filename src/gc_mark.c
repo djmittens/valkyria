@@ -331,7 +331,7 @@ void valk_gc_participate_in_parallel_gc(void) {
 sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
   if (!heap) return 0;
 
-  VALK_ASSERT(atomic_load(&valk_sys->threads_registered) > 0, // LCOV_EXCL_BR_LINE
+  VALK_ASSERT(atomic_load(&valk_sys->threads_registered) > 0,
               "GC collect requires at least one registered thread");
 
   // LCOV_EXCL_START - STW request contention: requires concurrent GC requests

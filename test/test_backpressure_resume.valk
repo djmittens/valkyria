@@ -1,0 +1,67 @@
+; Backpressure Resume Test (without timeout)
+; Proves that connections resume via try_resume_one on connection close,
+; not via the backpressure timeout path.
+;
+; Key: backpressure-timeout-ms is set to 30000 (30s), but the test
+; timeout is only 8s. If requests succeed, it MUST be the resume path,
+; not the timeout path.
+;
+; Uses separate client/server AIO: server has generous buffers,
+; client has constrained buffers so client-side connections enter
+; backpressure. As completed client connections close (idle timeout),
+; their buffers are freed and try_resume_one fires on close.
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(def {server-aio} (aio/await (aio/start {:max-connections 8 :tcp-buffer-pool-size 64})))
+(def {client-aio} (aio/await (aio/start {
+  :max-connections 4
+  :tcp-buffer-pool-size 6
+  :backpressure-timeout-ms 30000
+  :connection-idle-timeout-ms 200
+  :maintenance-interval-ms 50
+})))
+
+(def {server} (http2/server-listen server-aio 0 (\ {req} {
+  {:status "200" :body "OK"}
+})))
+(def {test-port} (http2/server-port server))
+
+(test/run-async client-aio (list
+  (test-async "requests recover via resume, not timeout" (\ {} {
+    (= {reqs} (list
+      (http2/client-request client-aio "127.0.0.1" test-port "/a")
+      (http2/client-request client-aio "127.0.0.1" test-port "/b")
+      (http2/client-request client-aio "127.0.0.1" test-port "/c")
+      (http2/client-request client-aio "127.0.0.1" test-port "/d")))
+
+    (aio/then (aio/all-settled reqs) (\ {results} {
+      (= {successes} (foldl (\ {c r} {
+        (if (plist/has? r :value) {(+ c 1)} {c})
+      }) 0 results))
+      (printf "[BP-RESUME] %ld/4 requests succeeded (all settled)\n" successes)
+      (>= successes 1)
+    }))
+  }))
+
+  (test-async "sequential recovery without timeout" (\ {} {
+    ; Wait for idle timeouts to close client connections and free buffers
+    (aio/then (aio/sleep client-aio 500) (\ {_} {
+      (aio/then (http2/client-request client-aio "127.0.0.1" test-port "/recovery1")
+        (\ {resp1} {
+          (= {ok1} (== (http2/response-status resp1) "200"))
+          (printf "[BP-RESUME] recovery1: %s\n" (if ok1 {"200 OK"} {"FAIL"}))
+          (aio/then (aio/sleep client-aio 300) (\ {_} {
+            (aio/then (http2/client-request client-aio "127.0.0.1" test-port "/recovery2")
+              (\ {resp2} {
+                (= {ok2} (== (http2/response-status resp2) "200"))
+                (printf "[BP-RESUME] recovery2: %s\n" (if ok2 {"200 OK"} {"FAIL"}))
+                (aio/stop server-aio)
+                (and ok1 ok2)
+              }))
+          }))
+        }))
+    }))
+  })))
+  {:suite-name "Backpressure Resume (no timeout)" :timeout-ms 8000 :suite-timeout-ms 15000})

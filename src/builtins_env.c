@@ -21,7 +21,7 @@ static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
   }
   // LCOV_EXCL_STOP
 
-  LVAL_ASSERT_COUNT_GT(a, a, 1); // LCOV_EXCL_BR_LINE
+  LVAL_ASSERT_COUNT_GT(a, a, 1);
 
   valk_lval_t* first_arg = valk_lval_list_nth(a, 0);
 
@@ -81,16 +81,16 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 2); // LCOV_EXCL_BR_LINE
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
 
   valk_lval_t* formals = valk_lval_list_nth(a, 0);
   valk_lval_t* body = valk_lval_list_nth(a, 1);
 
-  LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL); // LCOV_EXCL_BR_LINE
-  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL); // LCOV_EXCL_BR_LINE
+  LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
   for (u64 i = 0; i < valk_lval_list_count(formals); i++) { // LCOV_EXCL_BR_LINE
-    LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM, // LCOV_EXCL_BR_LINE
+    LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
                 "Cannot use a non symbol[%s] for bind",
                 valk_ltype_name(LVAL_TYPE(valk_lval_list_nth(formals, i))));
   }
@@ -123,7 +123,7 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
 
   for (u64 i = 0; i < count; i++) {
     valk_lval_t* clause = valk_lval_list_nth(a, i);
-    LVAL_ASSERT_TYPE(a, clause, LVAL_CONS, LVAL_QEXPR); // LCOV_EXCL_BR_LINE
+    LVAL_ASSERT_TYPE(a, clause, LVAL_CONS, LVAL_QEXPR);
 
 #ifdef VALK_COVERAGE
     u16 file_id = clause->cov_file_id;

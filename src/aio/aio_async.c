@@ -431,7 +431,7 @@ valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 ti
     }
     
     while (!valk_async_handle_is_terminal(valk_async_handle_get_status(handle))) {
-      VALK_GC_SAFE_POINT(); // LCOV_EXCL_BR_LINE - GC safepoint macro branch
+      VALK_GC_SAFE_POINT();
       uv_sleep(1);
       
       if (timeout_ms > 0) {

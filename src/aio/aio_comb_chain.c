@@ -1,6 +1,5 @@
 #include "aio_combinators_internal.h"
 
-// LCOV_EXCL_START - arg validation: compile-time checks catch most
 static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_lval_list_count(a) != 2) {
     return valk_lval_err("aio/then: expected 2 arguments (handle fn)");
@@ -14,7 +13,6 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/then: second argument must be a function");
   }
-  // LCOV_EXCL_STOP
 
   valk_async_handle_t *source = source_lval->async.handle;
 
@@ -78,7 +76,6 @@ static valk_lval_t* valk_builtin_aio_then(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_handle(result);
 }
 
-// LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
 static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_lval_list_count(a) != 2) {
     return valk_lval_err("aio/catch: expected 2 arguments (handle fn)");
@@ -92,7 +89,6 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/catch: second argument must be a function");
   }
-  // LCOV_EXCL_BR_STOP
 
   valk_async_handle_t *source = source_lval->async.handle;
 
@@ -148,7 +144,6 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
     catch_handle->status = VALK_ASYNC_CANCELLED;
     return valk_lval_handle(catch_handle);
   }
-  // LCOV_EXCL_STOP
 
   catch_handle->status = VALK_ASYNC_RUNNING;
   catch_handle->env = e;
@@ -161,7 +156,6 @@ static valk_lval_t* valk_builtin_aio_catch(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_handle(catch_handle);
 }
 
-// LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
 static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_lval_list_count(a) != 2) {
     return valk_lval_err("aio/finally: expected 2 arguments (handle fn)");
@@ -175,7 +169,6 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/finally: second argument must be a function");
   }
-  // LCOV_EXCL_BR_STOP
 
   valk_async_handle_t *source = source_lval->async.handle;
 
@@ -209,7 +202,6 @@ static valk_lval_t* valk_builtin_aio_finally(valk_lenv_t* e, valk_lval_t* a) {
     atomic_store_explicit(&finally_handle->status, VALK_ASYNC_CANCELLED, memory_order_release);
     return valk_lval_handle(finally_handle);
   }
-  // LCOV_EXCL_STOP
 
   atomic_store_explicit(&finally_handle->status, VALK_ASYNC_RUNNING, memory_order_release);
   finally_handle->env = e;

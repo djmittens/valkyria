@@ -39,7 +39,7 @@ static void valk_capture_state_free(void *ptr) {
 static valk_lval_t *valk_builtin_capture_start(valk_lenv_t *e,
                                                valk_lval_t *a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 0); // LCOV_EXCL_BR_LINE - macro-generated validation
+  LVAL_ASSERT_COUNT_EQ(a, a, 0);
 
   int fd_out = memfd_create("cap_stdout", 0);
   int fd_err = memfd_create("cap_stderr", 0);

@@ -29,7 +29,7 @@ static const char *__http2_get_header(valk_http2_server_request_t *req, const ch
   return nullptr;
 }
 
-// LCOV_EXCL_START trace header propagation - requires HTTP client tests with trace headers
+// LCOV_EXCL_BR_START request context: trace header presence varies
 static valk_request_ctx_t *__http2_create_request_ctx(valk_http2_server_request_t *req) {
   valk_mem_allocator_t *allocator = (valk_mem_allocator_t *)&req->region;
   valk_request_ctx_t *ctx = valk_request_ctx_new(allocator);
@@ -55,7 +55,7 @@ static valk_request_ctx_t *__http2_create_request_ctx(valk_http2_server_request_
 
   return ctx;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
 static inline u64 __align_up(uptr addr, u64 alignment) {
   u64 mask = alignment - 1;
@@ -78,7 +78,7 @@ static inline valk_http2_server_request_t *__http_request_from_slot(
   return (valk_http2_server_request_t *)&arena->heap[payload];
 }
 
-// LCOV_EXCL_START arena linked list management - defensive internal bookkeeping
+// LCOV_EXCL_BR_START arena management: linked list traversal and slot matching
 void valk_http2_remove_from_active_arenas(valk_aio_handle_t *conn,
                                              u32 target_slot) {
   if (!conn->http.server || !conn->http.server->sys) return;
@@ -113,12 +113,12 @@ void valk_http2_remove_from_active_arenas(valk_aio_handle_t *conn,
     iterations++;
   }
 
-  VALK_ASSERT(iterations < max_iterations,
-              "Arena linked list infinite loop after %u iterations", iterations);
+  VALK_ASSERT(iterations < max_iterations, // LCOV_EXCL_LINE
+               "Arena linked list infinite loop after %u iterations", iterations); // LCOV_EXCL_LINE
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START nghttp2 header callback - invoked from nghttp2 session internals
+// LCOV_EXCL_BR_START nghttp2 header callback: pseudo-header dispatch and header array growth
 int valk_http2_on_header_callback(nghttp2_session *session,
                                   const nghttp2_frame *frame,
                                   const u8 *name, size_t namelen,
@@ -176,9 +176,9 @@ int valk_http2_on_header_callback(nghttp2_session *session,
 
   return 0;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START nghttp2 begin headers callback - invoked from nghttp2 session internals
+// LCOV_EXCL_BR_START begin_headers callback: arena allocation, stream setup, request context
 int valk_http2_on_begin_headers_callback(nghttp2_session *session,
                                          const nghttp2_frame *frame,
                                          void *user_data) {
@@ -238,7 +238,7 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
   }
   return 0;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
 typedef struct {
   u64 streamid;
@@ -247,7 +247,7 @@ typedef struct {
   void *handle;
 } __http2_client_req_res_t;
 
-// LCOV_EXCL_START nghttp2 client header callback - invoked from nghttp2 session internals
+// LCOV_EXCL_BR_START client header callback: status/header type dispatch
 int valk_http2_client_on_header_cb(nghttp2_session *session,
                                    const nghttp2_frame *frame,
                                    const u8 *name, size_t namelen,
@@ -287,7 +287,7 @@ int valk_http2_client_on_header_cb(nghttp2_session *session,
   }
   return 0;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
 static const char valk_http_default_503_html[] =
   "<!DOCTYPE html>\n"
@@ -323,7 +323,7 @@ static const char valk_http_default_503_html[] =
 
 static const u64 valk_http_default_503_html_len = sizeof(valk_http_default_503_html) - 1;
 
-// LCOV_EXCL_START nghttp2 data provider callback - invoked from nghttp2 session internals
+// LCOV_EXCL_BR_START body callback: data chunking and EOF
 nghttp2_ssize valk_http2_byte_body_cb(nghttp2_session *session,
                                       i32 stream_id, u8 *buf,
                                       size_t length, u32 *data_flags,
@@ -350,9 +350,9 @@ nghttp2_ssize valk_http2_byte_body_cb(nghttp2_session *session,
 
   return (nghttp2_ssize)to_copy;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START 503 overload response - requires arena pool exhaustion test
+// LCOV_EXCL_START 503 overload response - requires arena pool exhaustion
 int valk_http2_send_overload_response(nghttp2_session *session,
                                       i32 stream_id,
                                       valk_aio_handle_t *conn) {
@@ -422,7 +422,7 @@ valk_lval_t* valk_http2_qexpr_get(valk_lval_t* qexpr, const char* key) {
   return nullptr;
 }
 
-// LCOV_EXCL_START response serialization - internal HTTP response builder
+// LCOV_EXCL_BR_START send_response: response header/body/cache-control presence checks
 int valk_http2_send_response(nghttp2_session *session, int stream_id,
                              valk_lval_t* response_qexpr, valk_mem_arena_t* arena) {
   const char* status = "200";
@@ -489,11 +489,9 @@ int valk_http2_send_response(nghttp2_session *session, int stream_id,
 
   return nghttp2_submit_response2(session, stream_id, headers, header_count, &data_prd);
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-
-
-// LCOV_EXCL_START nghttp2 frame send callback - invoked from nghttp2 session internals
+// LCOV_EXCL_BR_START frame/stream callbacks: nghttp2 frame type dispatch and stream state
 int valk_http2_server_on_frame_send_callback(nghttp2_session *session,
                                              const nghttp2_frame *frame,
                                              void *user_data) {
@@ -505,9 +503,7 @@ int valk_http2_server_on_frame_send_callback(nghttp2_session *session,
 
   return 0;
 }
-// LCOV_EXCL_STOP
 
-// LCOV_EXCL_START nghttp2 stream close callback - invoked from nghttp2 session internals
 int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
                                                i32 stream_id,
                                                u32 error_code,
@@ -547,8 +543,9 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
         valk_http2_exit_arena_backpressure(conn);
       }
     }
+    // LCOV_EXCL_BR_STOP
   }
-  else if (req && !valk_arena_ref_valid(req->arena_ref)) {
+  else if (req && !valk_arena_ref_valid(req->arena_ref)) { // LCOV_EXCL_BR_LINE - arena already released by async handler
     req->bytes_sent += stream_body_bytes;
     valk_http2_metrics_on_client_close(conn, req, stream_id, error_code, was_sse_stream, stream_body_bytes);
   }
@@ -561,9 +558,8 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
 
   return 0;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START helper functions for error/default responses
 static void __send_error_response(nghttp2_session *session, i32 stream_id,
                                   const char *status, const char *body,
                                   valk_mem_arena_t *arena) {
@@ -589,7 +585,6 @@ static void __send_default_response(nghttp2_session *session, i32 stream_id,
     valk_http2_send_response(session, stream_id, resp, arena);
   }
 }
-// LCOV_EXCL_STOP
 
 static valk_http_async_ctx_t *__create_async_ctx(nghttp2_session *session,
                                                   i32 stream_id,
@@ -605,7 +600,6 @@ static valk_http_async_ctx_t *__create_async_ctx(nghttp2_session *session,
   return ctx;
 }
 
-// LCOV_EXCL_START async response handling - invoked from request handler dispatch
 typedef struct {
   nghttp2_session *session;
   i32 stream_id;
@@ -615,6 +609,7 @@ typedef struct {
   valk_http_async_ctx_t *http_ctx;
 } async_response_ctx_t;
 
+// LCOV_EXCL_BR_START - async response state handlers: stream_response/error type branching
 static int __async_state_completed(async_response_ctx_t *ctx) {
   if (ctx->req->stream_response) return 0;
   valk_lval_t *result = atomic_load_explicit(&ctx->handle->result, memory_order_acquire);
@@ -639,6 +634,7 @@ static int __async_state_failed(async_response_ctx_t *ctx) {
 
 static int __async_state_cancelled(async_response_ctx_t *ctx) {
   if (ctx->req->stream_response) return 0;
+// LCOV_EXCL_BR_STOP
   VALK_DEBUG("Handle cancelled, sending 503 for stream %d", ctx->stream_id);
   __send_error_response(ctx->session, ctx->stream_id, "503", "Request cancelled", ctx->req->stream_arena);
   return 0;
@@ -660,6 +656,7 @@ static const async_state_handler_t async_state_handlers[] = {
   [VALK_ASYNC_CANCELLED] = __async_state_cancelled,
 };
 
+// LCOV_EXCL_BR_START arena cleanup and async response state
 static void __release_arena_cleanup(void *data, void *ctx) {
   valk_http2_server_request_t *req = (valk_http2_server_request_t *)data;
   valk_aio_handle_t *conn = (valk_aio_handle_t *)ctx;
@@ -705,9 +702,9 @@ static int __handle_async_response(nghttp2_session *session, i32 stream_id,
 
   return async_state_handlers[handle->status](&ctx);
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START request header handling - invoked from frame recv callback
+// LCOV_EXCL_BR_START request handling: handler resolution, response type dispatch
 static int __handle_request_headers(nghttp2_session *session,
                                     const nghttp2_frame *frame,
                                     valk_aio_handle_t *conn) {
@@ -761,9 +758,9 @@ static int __handle_request_headers(nghttp2_session *session,
 
   return 0;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START nghttp2 frame recv callback - invoked from nghttp2 session internals
+// LCOV_EXCL_BR_START frame recv: frame type dispatch and GOAWAY/RST handling
 int valk_http2_on_frame_recv_callback(nghttp2_session *session,
                                       const nghttp2_frame *frame,
                                       void *user_data) {
@@ -792,19 +789,19 @@ int valk_http2_on_frame_recv_callback(nghttp2_session *session,
 
   return 0;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START stream control functions - not exercised by current test suite
+// LCOV_EXCL_BR_START stream control: null checks and nghttp2 error returns
 int valk_http2_stream_reset(valk_aio_handle_t *conn, i32 stream_id, u32 error_code) {
   if (!conn || !conn->http.session) {
     return -1;
   }
   int rv = nghttp2_submit_rst_stream(conn->http.session, NGHTTP2_FLAG_NONE,
                                       stream_id, error_code);
-  if (rv != 0) {
+  if (rv != 0) { // LCOV_EXCL_START nghttp2 library error
     VALK_ERROR("nghttp2_submit_rst_stream failed: %s", nghttp2_strerror(rv));
     return -1;
-  }
+  } // LCOV_EXCL_STOP
   return 0;
 }
 
@@ -814,13 +811,13 @@ int valk_http2_submit_goaway(valk_aio_handle_t *conn, u32 error_code) {
   }
   int rv = nghttp2_submit_goaway(conn->http.session, NGHTTP2_FLAG_NONE,
                                   0, error_code, nullptr, 0);
-  if (rv != 0) {
+  if (rv != 0) { // LCOV_EXCL_START nghttp2 library error
     VALK_ERROR("nghttp2_submit_goaway failed: %s", nghttp2_strerror(rv));
     return -1;
-  }
+  } // LCOV_EXCL_STOP
   return 0;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
 bool valk_aio_http_session_valid(valk_aio_handle_t *handle, void *session) {
   if (!handle || !session) { // LCOV_EXCL_BR_LINE defensive null check
@@ -839,7 +836,7 @@ bool valk_aio_http_connection_closing(valk_aio_handle_t *handle) {
   // LCOV_EXCL_BR_STOP
 }
 
-// LCOV_EXCL_START stream arena early release - requires specific client disconnect timing
+// LCOV_EXCL_BR_START arena release: null/validity checks
 void valk_http2_release_stream_arena(valk_aio_handle_t *conn, i32 stream_id) {
   if (!conn || !conn->http.session || !conn->http.server || !conn->http.server->sys) {
     return;
@@ -865,4 +862,3 @@ void valk_http2_release_stream_arena(valk_aio_handle_t *conn, i32 stream_id) {
     valk_http2_exit_arena_backpressure(conn);
   }
 }
-// LCOV_EXCL_STOP

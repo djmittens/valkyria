@@ -9,6 +9,7 @@
   :max-connections 4
   :tcp-buffer-pool-size 6
   :backpressure-timeout-ms 1000
+  :connection-idle-timeout-ms 500
   :maintenance-interval-ms 100
 })))
 

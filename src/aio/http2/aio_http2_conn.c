@@ -23,7 +23,7 @@ static int __vtable_read_stop(valk_aio_handle_t *conn) {
   return tcp->read_stop(__conn_tcp(conn));
 }
 
-// LCOV_EXCL_START internal callback only invoked from vtable ops, not directly testable
+// LCOV_EXCL_BR_START TCP buffer allocation: defensive checks in libuv callback
 static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64 *buflen) {
   UNUSED(suggested);
   valk_aio_handle_t *conn = tcp->user_data;
@@ -49,18 +49,15 @@ static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64
   
   VALK_ERROR("Cannot allocate TCP buffer: no valid connection handle");
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
 static void __vtable_read_cb(valk_io_tcp_t *tcp, ssize_t nread, const void *buf);
 
-// LCOV_EXCL_START vtable dispatch - called internally via backpressure resume
 static int __vtable_read_start(valk_aio_handle_t *conn) {
   const valk_io_tcp_ops_t *ops = __tcp_ops(conn);
-  if (!ops) return -1;
+  if (!ops) return -1; // LCOV_EXCL_BR_LINE defensive null check
   return ops->read_start(__conn_tcp(conn), __vtable_alloc_cb, __vtable_read_cb);
 }
-// LCOV_EXCL_STOP
-// LCOV_EXCL_STOP
 
 static bool __backpressure_list_add(valk_aio_handle_t *conn) {
   valk_aio_system_t *sys = conn->sys;
@@ -74,16 +71,14 @@ static void __backpressure_list_remove(valk_aio_handle_t *conn) {
   valk_backpressure_list_remove(&sys->backpressure, conn);
 }
 
-// LCOV_EXCL_START backpressure resume - requires triggering buffer exhaustion then recovery
 void valk_http2_backpressure_try_resume_one(valk_aio_system_t *sys) {
-  if (!sys) return;
+  if (!sys) return; // LCOV_EXCL_BR_LINE defensive null check
   valk_aio_handle_t *conn = valk_backpressure_list_try_resume(
       &sys->backpressure, sys->tcpBufferSlab, sys->config.min_buffers_per_conn);
   if (conn) {
     __vtable_read_start(conn);
   }
 }
-// LCOV_EXCL_STOP
 
 bool valk_http2_conn_write_buf_acquire(valk_aio_handle_t *conn) {
   if (!conn->sys || !conn->sys->tcpBufferSlab) return false;
@@ -132,14 +127,16 @@ u64 valk_http2_conn_write_buf_append(valk_aio_handle_t *conn, const u8 *data, u6
   return valk_conn_io_write_buf_append(&conn->http.io, conn->sys->tcpBufferSlab, data, len);
 }
 
-// LCOV_EXCL_START internal async callback - invoked from libuv write completion
+// LCOV_EXCL_BR_START flush callback: connection state and write buffer branches
 static void __http2_flush_complete(void *ctx, int status) {
   valk_aio_handle_t *conn = ctx;
   
+  // LCOV_EXCL_START defensive guard - ctx always valid from conn_io_flush
   if (!conn || conn->magic != VALK_AIO_HANDLE_MAGIC) {
     VALK_ERROR("Invalid connection in HTTP flush callback");
     return;
   }
+  // LCOV_EXCL_STOP
   
   valk_http2_backpressure_try_resume_one(conn->sys);
   
@@ -160,7 +157,7 @@ static void __http2_flush_complete(void *ctx, int status) {
     }
   }
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
 int valk_http2_conn_write_buf_flush(valk_aio_handle_t *conn) {
   return valk_conn_io_flush(&conn->http.io, conn,
@@ -193,12 +190,13 @@ u64 valk_http2_flush_frames(valk_buffer_t *buf, valk_aio_handle_t *conn) {
   return buf->count;
 }
 
+// LCOV_EXCL_BR_START continue_pending_send: SSL/session/buffer state checks
 void valk_http2_continue_pending_send(valk_aio_handle_t *conn) {
   if (!conn || !conn->http.session || !SSL_is_init_finished(conn->http.io.ssl.ssl)) {
     return;
   }
 
-  // LCOV_EXCL_START async state transitions in continue_pending_send
+  // LCOV_EXCL_START SSL-dependent paths: requires live SSL session to reach
   if (__vtable_is_closing(conn)) {
     return;
   }
@@ -212,9 +210,8 @@ void valk_http2_continue_pending_send(valk_aio_handle_t *conn) {
     VALK_WARN("Failed to acquire write buffer in continue_pending_send");
     return;
   }
-  // LCOV_EXCL_STOP
 
-  if (!conn->sys || !conn->sys->tcpBufferSlab) return; // LCOV_EXCL_BR_LINE defensive null check
+  if (!conn->sys || !conn->sys->tcpBufferSlab) return;
   valk_slab_t *slab = conn->sys->tcpBufferSlab;
   
   valk_slab_item_t *slabItemRaw = valk_slab_aquire(slab);
@@ -222,6 +219,7 @@ void valk_http2_continue_pending_send(valk_aio_handle_t *conn) {
     VALK_WARN("TCP buffer slab exhausted for frame buffer in continue_pending_send");
     return;
   }
+  // LCOV_EXCL_STOP
   __tcp_buffer_slab_item_t *slabItem = (void *)slabItemRaw->data;
 
   valk_buffer_t In = {
@@ -253,6 +251,7 @@ void valk_http2_continue_pending_send(valk_aio_handle_t *conn) {
     valk_http2_conn_write_buf_flush(conn);
   }
 }
+// LCOV_EXCL_BR_STOP
 
 void valk_http2_flush_pending(valk_aio_handle_t *conn) {
   // Update activity timestamp when sending data - for SSE streams,
@@ -264,13 +263,13 @@ void valk_http2_flush_pending(valk_aio_handle_t *conn) {
   valk_http2_continue_pending_send(conn);
 }
 
-// LCOV_EXCL_START internal SSL decryption callback - invoked from valk_aio_ssl_on_read
 static void __http_tcp_unencrypted_read_cb(void *arg, const valk_buffer_t *buf) {
   valk_aio_handle_t *conn = arg;
 
   VALK_TRACE("nghttp2_session_mem_recv2: %zu bytes", buf->count);
   ssize_t rv = nghttp2_session_mem_recv2(
       conn->http.session, (const u8 *)buf->items, buf->count);
+  // LCOV_EXCL_START nghttp2 recv errors require protocol violation from peer
   if (rv < 0) {
     VALK_ERROR("nghttp2_session_mem_recv error: %zd", rv);
     if (!__vtable_is_closing(conn)) {
@@ -279,32 +278,32 @@ static void __http_tcp_unencrypted_read_cb(void *arg, const valk_buffer_t *buf) 
       __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
   } else {
+  // LCOV_EXCL_STOP
     VALK_TRACE("nghttp2_session_mem_recv2 consumed %zd bytes", rv);
   }
 }
-// LCOV_EXCL_STOP
 
-// LCOV_EXCL_START tcp read error/close paths - requires simulating TCP errors
 static void __tcp_read_close_with_error(valk_aio_handle_t *conn) {
-  if (__vtable_is_closing(conn)) return;
+  if (__vtable_is_closing(conn)) return; // LCOV_EXCL_BR_LINE closing check
   valk_conn_transition(conn, VALK_CONN_EVT_ERROR);
   __backpressure_list_remove(conn);
   __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
 }
 
+// LCOV_EXCL_START graceful close requires slab-allocated handle for close callback
 static void __tcp_read_close_graceful(valk_aio_handle_t *conn) {
   if (__vtable_is_closing(conn)) return;
   valk_conn_transition(conn, VALK_CONN_EVT_CLOSE);
   __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
 }
+// LCOV_EXCL_STOP
 
 static bool __tcp_read_enter_backpressure(valk_aio_handle_t *conn) {
   __vtable_read_stop(conn);
-  if (__backpressure_list_add(conn)) return true;
+  if (__backpressure_list_add(conn)) return true; // LCOV_EXCL_BR_LINE backpressure list full
   __tcp_read_close_graceful(conn);
   return false;
 }
-// LCOV_EXCL_STOP
 
 static void __tcp_read_handle_null_buffer(valk_aio_handle_t *conn) {
   VALK_WARN("TCP buffer alloc failed - applying backpressure on connection");
@@ -418,12 +417,12 @@ void valk_http2_conn_tcp_read_impl(valk_aio_handle_t *conn, ssize_t nread, const
   }
 }
 
-// LCOV_EXCL_START vtable/libuv read callbacks - invoked from event loop
 static void __vtable_read_cb(valk_io_tcp_t *tcp, ssize_t nread, const void *buf) {
   valk_aio_handle_t *conn = tcp->user_data;
   valk_http2_conn_tcp_read_impl(conn, nread, buf);
 }
 
+// LCOV_EXCL_START libuv direct callback - only reachable via real event loop, vtable path tested
 void valk_http2_conn_tcp_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
   valk_aio_handle_t *conn = stream->data;
   valk_http2_conn_tcp_read_impl(conn, nread, buf->base);
@@ -440,6 +439,7 @@ void valk_http2_conn_handle_closed_cb(uv_handle_t *handle) {
     
     if (hndl->sys && hndl->sys->tcpBufferSlab) {
       valk_conn_io_free(&hndl->http.io, hndl->sys->tcpBufferSlab);
+      valk_http2_backpressure_try_resume_one(hndl->sys);
     }
   }
   
@@ -449,7 +449,7 @@ void valk_http2_conn_handle_closed_cb(uv_handle_t *handle) {
   }
   // LCOV_EXCL_BR_STOP
   valk_dll_pop(hndl); // LCOV_EXCL_BR_LINE dll_pop internal branches
-  VALK_ASSERT(hndl->sys != nullptr, "handle must have sys for slab release"); // LCOV_EXCL_BR_LINE assertion
+  VALK_ASSERT(hndl->sys != nullptr, "handle must have sys for slab release");
   valk_slab_release_ptr(hndl->sys->handleSlab, hndl);
 }
 

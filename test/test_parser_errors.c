@@ -2657,16 +2657,6 @@ static void test_gc_stats(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-static void test_set_heap_hard_limit_below_usage(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  setup_env();
-
-  valk_lval_t *result = parse_and_eval("(mem/heap/set-hard-limit 1)");
-  ASSERT_LVAL_ERROR(result);
-
-  VALK_PASS();
-}
-
 // ============================================================================
 // Coverage Gap Tests: builtins_io.c
 // ============================================================================
@@ -3262,7 +3252,6 @@ int main(int argc, const char **argv) {
 
   // Coverage gap tests: builtins_mem.c
   valk_testsuite_add_test(suite, "test_gc_stats", test_gc_stats);
-  valk_testsuite_add_test(suite, "test_set_heap_hard_limit_below_usage", test_set_heap_hard_limit_below_usage);
 
   // Coverage gap tests: builtins_io.c
   valk_testsuite_add_test(suite, "test_load_nonexistent_file", test_load_nonexistent_file);

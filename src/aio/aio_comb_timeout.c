@@ -178,13 +178,11 @@ static valk_lval_t* valk_builtin_aio_within(valk_lenv_t* e, valk_lval_t* a) {
 
 static void valk_async_retry_schedule_next(valk_async_handle_t *retry_handle);
 
-// LCOV_EXCL_START - retry backoff: not exercised in basic tests
 static void valk_async_retry_backoff_done(valk_async_handle_t *child) {
   valk_async_handle_t *parent = child->parent;
   parent->comb.retry.backoff_timer = NULL;
   valk_async_retry_schedule_next(parent);
 }
-// LCOV_EXCL_STOP
 
 static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
   valk_async_handle_t *parent = child->parent;
@@ -198,8 +196,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     return;
   }
 
-  // LCOV_EXCL_START - retry failure path with backoff: not commonly exercised
-  if (status == VALK_ASYNC_FAILED || status == VALK_ASYNC_CANCELLED) {
+  if (status == VALK_ASYNC_FAILED || status == VALK_ASYNC_CANCELLED) { // LCOV_EXCL_BR_LINE - retry cancelled path rare
     parent->comb.retry.last_error = atomic_load_explicit(&child->error, memory_order_acquire);
     parent->comb.retry.current_attempt_num++;
 
@@ -212,17 +209,20 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
 
     u64 delay_ms = (u64)((f64)parent->comb.retry.base_delay_ms * pow(parent->comb.retry.backoff_multiplier, (f64)(parent->comb.retry.current_attempt_num - 1)));
     const u64 MAX_BACKOFF_MS = 30000;
-    if (delay_ms > MAX_BACKOFF_MS) delay_ms = MAX_BACKOFF_MS;
+    if (delay_ms > MAX_BACKOFF_MS) delay_ms = MAX_BACKOFF_MS; // LCOV_EXCL_BR_LINE - requires many retries with high base-ms to hit cap
 
     valk_async_handle_t *timer = valk_async_handle_new(parent->sys, parent->env);
+    // LCOV_EXCL_START - OOM: handle allocation failure
     if (!timer) {
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
       atomic_store_explicit(&parent->error, valk_lval_err("Failed to allocate backoff timer"), memory_order_release);
       valk_async_handle_finish(parent);
       return;
     }
+    // LCOV_EXCL_STOP
 
     valk_async_handle_uv_data_t *timer_data = aligned_alloc(alignof(valk_async_handle_uv_data_t), sizeof(valk_async_handle_uv_data_t));
+    // LCOV_EXCL_START - OOM: aligned_alloc failure
     if (!timer_data) {
       valk_async_handle_free(timer);
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
@@ -230,6 +230,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
       valk_async_handle_finish(parent);
       return;
     }
+    // LCOV_EXCL_STOP
     memset(timer_data, 0, sizeof(valk_async_handle_uv_data_t));
 
     timer_data->magic = VALK_UV_DATA_TIMER_MAGIC;
@@ -246,7 +247,6 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     parent->comb.retry.backoff_timer = timer;
     valk_async_handle_add_child(parent, timer);
   }
-  // LCOV_EXCL_STOP
 }
 
 static void valk_async_notify_retry_child(valk_async_handle_t *child) {

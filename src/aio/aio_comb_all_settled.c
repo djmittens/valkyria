@@ -1,10 +1,6 @@
 #include "aio_combinators_internal.h"
 
-#define VALK_ALL_SETTLED_CTX_MAGIC 0xA11C5E7D
-#define VALK_ALL_SETTLED_CTX_MAGIC_EARLY 0xA11C5E7D
-
 typedef struct {
-  u32 magic;
   valk_async_handle_t *all_settled_handle;
   valk_lval_t **results;
   valk_async_handle_t **handles;
@@ -13,11 +9,10 @@ typedef struct {
   valk_mem_allocator_t *allocator;
 } valk_all_settled_ctx_t;
 
-// LCOV_EXCL_START - cleanup function: null checks for defensive programming
+// LCOV_EXCL_START - cleanup defensive null-checks: ctx always valid when called
 static void valk_all_settled_ctx_cleanup(void *ctx) {
   valk_all_settled_ctx_t *as_ctx = (valk_all_settled_ctx_t *)ctx;
   if (!as_ctx) return;
-  as_ctx->magic = 0;
   if (as_ctx->results) free(as_ctx->results);
   if (as_ctx->handles) free(as_ctx->handles);
   free(as_ctx);
@@ -26,16 +21,9 @@ static void valk_all_settled_ctx_cleanup(void *ctx) {
 
 static void valk_async_all_settled_child_completed(valk_async_handle_t *child);
 
-// LCOV_EXCL_START - ctx accessor with defensive null checks
 static inline valk_all_settled_ctx_t* valk_async_get_all_settled_ctx(valk_async_handle_t *handle) {
-  if (!handle || !handle->parent) return NULL;
-  valk_async_handle_t *parent = handle->parent;
-  if (!parent->uv_handle_ptr) return NULL;
-  valk_all_settled_ctx_t *ctx = (valk_all_settled_ctx_t*)parent->uv_handle_ptr;
-  if (ctx->magic != VALK_ALL_SETTLED_CTX_MAGIC) return NULL;
-  return ctx;
+  return (valk_all_settled_ctx_t*)handle->parent->uv_handle_ptr;
 }
-// LCOV_EXCL_STOP
 
 static inline i64 valk_async_all_settled_find_index(valk_all_settled_ctx_t *ctx, valk_async_handle_t *child) {
   for (u64 i = 0; i < ctx->total; i++) { // LCOV_EXCL_BR_LINE - loop always finds child
@@ -72,7 +60,6 @@ static void valk_async_all_settled_child_completed(valk_async_handle_t *child) {
       valk_lval_sym(":error"), error
     };
     result_obj = valk_lval_qlist(items, 4);
-  // LCOV_EXCL_START - cancelled path: not commonly triggered in tests
   } else if (child_status == VALK_ASYNC_CANCELLED) {
     valk_lval_t *items[] = {
       valk_lval_sym(":status"), valk_lval_sym(":error"),
@@ -82,7 +69,6 @@ static void valk_async_all_settled_child_completed(valk_async_handle_t *child) {
   } else {
     return;
   }
-  // LCOV_EXCL_STOP
 
   ctx->results[idx] = result_obj;
   u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
@@ -140,12 +126,10 @@ static valk_lval_t* valk_builtin_aio_all_settled(valk_lenv_t* e, valk_lval_t* a)
   }
   // LCOV_EXCL_STOP
 
-  // LCOV_EXCL_START - request ctx propagation: depends on caller setup
   valk_lval_t *first_h = valk_lval_head(handles_list);
-  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) {
+  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) { // LCOV_EXCL_BR_LINE - first_h/type always valid after count check; request_ctx only set in HTTP
     as_handle->request_ctx = first_h->async.handle->request_ctx;
   }
-  // LCOV_EXCL_STOP
 
   valk_lval_t **results = calloc(count, sizeof(valk_lval_t*));
   // LCOV_EXCL_START - OOM: calloc failure
@@ -174,7 +158,6 @@ static valk_lval_t* valk_builtin_aio_all_settled(valk_lenv_t* e, valk_lval_t* a)
     return valk_lval_err("Failed to allocate all-settled context");
   }
   // LCOV_EXCL_STOP
-  ctx->magic = VALK_ALL_SETTLED_CTX_MAGIC;
   ctx->all_settled_handle = as_handle;
   ctx->results = results;
   ctx->handles = handles;

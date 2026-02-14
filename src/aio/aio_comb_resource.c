@@ -1,6 +1,5 @@
 #include "aio_combinators_internal.h"
 
-// LCOV_EXCL_START - arg validation and cancelled state: compile-time checks catch most
 static valk_lval_t* valk_builtin_aio_on_cancel(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_lval_list_count(a) != 2) {
     return valk_lval_err("aio/on-cancel: expected 2 arguments (handle fn)");
@@ -14,11 +13,10 @@ static valk_lval_t* valk_builtin_aio_on_cancel(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/on-cancel: second argument must be a function");
   }
-  // LCOV_EXCL_STOP
 
   valk_async_handle_t *handle = handle_lval->async.handle;
 
-  // LCOV_EXCL_START - already-cancelled handle: rare in practice
+  // LCOV_EXCL_START - synchronous cancelled: requires async cancel to complete before on-cancel call
   if (handle->status == VALK_ASYNC_CANCELLED) {
     valk_lval_t *args = valk_lval_nil();
     valk_lval_eval_call(e, fn, args);
@@ -27,12 +25,11 @@ static valk_lval_t* valk_builtin_aio_on_cancel(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_STOP
 
   handle->on_cancel = valk_evacuate_to_heap(fn);
-  if (!handle->env) handle->env = e; // LCOV_EXCL_BR_LINE - env usually set
+  if (!handle->env) handle->env = e; // LCOV_EXCL_BR_LINE - env usually set at creation
 
   return valk_lval_handle(handle);
 }
 
-// LCOV_EXCL_START - arg validation: compile-time checks catch most
 static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_lval_list_count(a) != 3) {
     return valk_lval_err("aio/bracket: expected 3 arguments (acquire release use)");
@@ -50,7 +47,6 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(use_fn) != LVAL_FUN) {
     return valk_lval_err("aio/bracket: third argument must be a function");
   }
-  // LCOV_EXCL_STOP
 
   valk_async_handle_t *acquire = acquire_lval->async.handle;
 
@@ -69,14 +65,15 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
     valk_lval_t *use_args = valk_lval_cons(resource, valk_lval_nil());
     valk_lval_t *use_result = valk_lval_eval_call(e, use_fn, use_args);
 
-    if (LVAL_TYPE(use_result) == LVAL_HANDLE) { // LCOV_EXCL_BR_LINE - return type varies
+    if (LVAL_TYPE(use_result) == LVAL_HANDLE) {
       valk_async_handle_t *use_handle = use_result->async.handle;
       valk_async_status_t use_status = atomic_load_explicit(&use_handle->status, memory_order_acquire);
 
-      // LCOV_EXCL_START - synchronous completion paths for bracket: rarely tested
+      // LCOV_EXCL_BR_START - cancelled status: requires async cancel before bracket use-fn completes
       if (use_status == VALK_ASYNC_COMPLETED ||
           use_status == VALK_ASYNC_FAILED ||
           use_status == VALK_ASYNC_CANCELLED) {
+      // LCOV_EXCL_BR_STOP
         valk_lval_t *release_args = valk_lval_cons(resource, valk_lval_nil());
         valk_lval_eval_call(e, release_fn, release_args);
 
@@ -86,13 +83,14 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
         } else if (use_status == VALK_ASYNC_FAILED) {
           atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_FAILED, memory_order_release);
           atomic_store_explicit(&bracket_handle->error, atomic_load_explicit(&use_handle->error, memory_order_acquire), memory_order_release);
-        } else {
-          atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_CANCELLED, memory_order_release);
+        } else { // LCOV_EXCL_LINE - use-fn returning cancelled handle synchronously
+          atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_CANCELLED, memory_order_release); // LCOV_EXCL_LINE
         }
       } else {
         atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_RUNNING, memory_order_release);
         bracket_handle->env = e;
         bracket_handle->parent = use_handle;
+        if (!bracket_handle->sys && use_handle->sys) bracket_handle->sys = use_handle->sys;
 
         bracket_handle->on_cancel = valk_evacuate_to_heap(release_fn);
         atomic_store_explicit(&bracket_handle->result, resource, memory_order_release);
@@ -112,18 +110,17 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
       atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
       atomic_store_explicit(&bracket_handle->result, use_result, memory_order_release);
     }
-    // LCOV_EXCL_STOP
 
     return valk_lval_handle(bracket_handle);
   }
 
-  // LCOV_EXCL_START - synchronous failure/cancel paths: rarely tested
   if (acquire_status == VALK_ASYNC_FAILED) {
     atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_FAILED, memory_order_release);
     atomic_store_explicit(&bracket_handle->error, atomic_load_explicit(&acquire->error, memory_order_acquire), memory_order_release);
     return valk_lval_handle(bracket_handle);
   }
 
+  // LCOV_EXCL_START - synchronous cancelled: requires async cancel to complete before bracket call
   if (acquire_status == VALK_ASYNC_CANCELLED) {
     atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_CANCELLED, memory_order_release);
     return valk_lval_handle(bracket_handle);
@@ -142,7 +139,6 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_handle(bracket_handle);
 }
 
-// LCOV_EXCL_START - arg validation: compile-time checks catch most
 static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_lval_list_count(a) != 1) {
     return valk_lval_err("aio/scope: expected 1 argument (fn)");
@@ -152,7 +148,6 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     return valk_lval_err("aio/scope: argument must be a function");
   }
-  // LCOV_EXCL_STOP
 
   valk_async_handle_t *scope_handle = valk_async_handle_new(NULL, e);
   // LCOV_EXCL_START - allocation failure: requires OOM
@@ -168,13 +163,12 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t *args = valk_lval_cons(scope_lval, valk_lval_nil());
   valk_lval_t *result = valk_lval_eval_call(e, fn, args);
 
-  if (LVAL_TYPE(result) == LVAL_ERR) { // LCOV_EXCL_BR_LINE - error type
+  if (LVAL_TYPE(result) == LVAL_ERR) {
     atomic_store_explicit(&scope_handle->status, VALK_ASYNC_FAILED, memory_order_release);
     atomic_store_explicit(&scope_handle->error, result, memory_order_release);
     return scope_lval;
   }
 
-  // LCOV_EXCL_START - synchronous completion paths: inner handle status branches rarely tested
   if (LVAL_TYPE(result) == LVAL_HANDLE) {
     valk_async_handle_t *inner = result->async.handle;
     valk_async_status_t inner_status = atomic_load_explicit(&inner->status, memory_order_acquire);
@@ -185,10 +179,11 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
     } else if (inner_status == VALK_ASYNC_FAILED) {
       atomic_store_explicit(&scope_handle->status, VALK_ASYNC_FAILED, memory_order_release);
       atomic_store_explicit(&scope_handle->error, atomic_load_explicit(&inner->error, memory_order_acquire), memory_order_release);
-    } else if (inner_status == VALK_ASYNC_CANCELLED) {
-      atomic_store_explicit(&scope_handle->status, VALK_ASYNC_CANCELLED, memory_order_release);
+    } else if (inner_status == VALK_ASYNC_CANCELLED) { // LCOV_EXCL_LINE - scope fn returning cancelled handle is unusual
+      atomic_store_explicit(&scope_handle->status, VALK_ASYNC_CANCELLED, memory_order_release); // LCOV_EXCL_LINE
     } else {
       scope_handle->parent = inner;
+      if (!scope_handle->sys && inner->sys) scope_handle->sys = inner->sys;
       valk_async_handle_add_child(inner, scope_handle);
     }
     return scope_lval;
@@ -196,7 +191,6 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
 
   atomic_store_explicit(&scope_handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
   atomic_store_explicit(&scope_handle->result, result, memory_order_release);
-  // LCOV_EXCL_STOP
   return scope_lval;
 }
 

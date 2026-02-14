@@ -15,7 +15,7 @@ static void __maintenance_timer_cb(uv_timer_t *timer) {
   valk_aio_system_t *sys = timer->data;
   if (!sys || sys->shuttingDown) return; // LCOV_EXCL_BR_LINE
   
-  VALK_GC_SAFE_POINT(); // LCOV_EXCL_BR_LINE
+  VALK_GC_SAFE_POINT();
 
   u64 now = sys->ops->loop->now(sys);
 

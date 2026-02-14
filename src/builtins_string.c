@@ -227,7 +227,7 @@ static valk_lval_t* valk_builtin_println(valk_lenv_t* e, valk_lval_t* a) {
 
 static valk_lval_t* valk_builtin_make_string(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 2); // LCOV_EXCL_BR_LINE
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
 
   valk_lval_t* count_val = valk_lval_list_nth(a, 0);
   valk_lval_t* pattern_val = valk_lval_list_nth(a, 1);

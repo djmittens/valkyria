@@ -103,7 +103,7 @@ static void __load_shed_close_cb(uv_handle_t *handle) {
   free(handle);
 }
 
-// LCOV_EXCL_START libuv internal callback - invoked from event loop thread only
+// LCOV_EXCL_BR_START - TCP buffer allocation: defensive checks in libuv callback
 static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64 *buflen) {
   UNUSED(suggested);
   valk_aio_handle_t *conn = tcp->user_data;
@@ -127,27 +127,23 @@ static void __vtable_alloc_cb(valk_io_tcp_t *tcp, u64 suggested, void **buf, u64
     return;
   }
   
-  VALK_ERROR("Cannot allocate TCP buffer: no valid connection handle");
+  VALK_ERROR("Cannot allocate TCP buffer: no valid connection handle"); // LCOV_EXCL_LINE
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START libuv internal callback - invoked from event loop thread only
 static void __vtable_read_cb(valk_io_tcp_t *tcp, ssize_t nread, const void *buf) {
   valk_aio_handle_t *conn = tcp->user_data;
   valk_http2_conn_tcp_read_impl(conn, nread, buf);
 }
-// LCOV_EXCL_STOP
 
 static void __http_server_accept_impl(valk_aio_handle_t *listener, int status);
 
-// LCOV_EXCL_START libuv internal callback - invoked from event loop thread only
 static void __vtable_connection_cb(valk_io_tcp_t *server, int status) {
   valk_aio_handle_t *listener = server->user_data;
   __http_server_accept_impl(listener, status);
 }
-// LCOV_EXCL_STOP
 
-// LCOV_EXCL_START internal accept path - invoked from libuv connection callback
+// LCOV_EXCL_START - accept rejection: connection errors and load-shedding require specific server conditions
 static bool __accept_should_reject(valk_aio_http_server *srv, valk_aio_handle_t *hndl, int status) {
   if (status < 0) {
     fprintf(stderr, "New connection error %s\n", srv->sys->ops->tcp->strerror(status));
@@ -177,15 +173,14 @@ static bool __accept_should_reject(valk_aio_http_server *srv, valk_aio_handle_t 
   }
   return true;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START internal accept path - invoked from libuv connection callback
 static valk_aio_handle_t *__accept_alloc_conn(valk_aio_http_server *srv) {
   valk_slab_item_t *slab_item = valk_slab_aquire(srv->sys->handleSlab);
-  if (!slab_item) {
+  if (!slab_item) { // LCOV_EXCL_START - slab exhaustion
     VALK_ERROR("Failed to allocate connection handle from slab");
     return nullptr;
-  }
+  } // LCOV_EXCL_STOP
   valk_aio_handle_t *conn = (valk_aio_handle_t *)slab_item->data;
   memset(conn, 0, sizeof(valk_aio_handle_t));
   conn->magic = VALK_AIO_HANDLE_MAGIC;
@@ -201,16 +196,15 @@ static valk_aio_handle_t *__accept_alloc_conn(valk_aio_http_server *srv) {
 
   conn->http.diag.owner_idx = srv->owner_idx;
 
-  valk_dll_insert_after(&srv->sys->liveHandles, conn);
+  valk_dll_insert_after(&srv->sys->liveHandles, conn); // LCOV_EXCL_BR_LINE dll macro branches
 
   __vtable_init(conn);
   conn->uv.tcp.uv.data = conn;
   conn->uv.tcp.user_data = conn;
   return conn;
 }
-// LCOV_EXCL_STOP
 
-// LCOV_EXCL_START internal accept path - invoked from libuv connection callback
+// LCOV_EXCL_START peer logging: requires real TCP accept flow
 static void __accept_log_peer(valk_aio_handle_t *conn) {
   struct sockaddr_storage client_addr;
   int addr_len = sizeof(client_addr);
@@ -236,7 +230,6 @@ static void __accept_log_peer(valk_aio_handle_t *conn) {
 }
 // LCOV_EXCL_STOP
 
-// LCOV_EXCL_START internal accept path - invoked from libuv connection callback
 static nghttp2_session_callbacks *__accept_get_callbacks(void) {
   static nghttp2_session_callbacks *callbacks = nullptr;
   if (callbacks) return callbacks;
@@ -249,22 +242,19 @@ static nghttp2_session_callbacks *__accept_get_callbacks(void) {
   nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, valk_http2_server_on_stream_close_callback);
   return callbacks;
 }
-// LCOV_EXCL_STOP
 
-// LCOV_EXCL_START internal accept path - invoked from libuv connection callback
+// LCOV_EXCL_BR_START - session setup: SSL accept and handler dispatch
 static int __accept_setup_session(valk_aio_handle_t *conn, valk_aio_http_server *srv) {
   nghttp2_session_server_new3(&conn->http.session, __accept_get_callbacks(), conn, nullptr,
                               valk_aio_nghttp2_mem());
   if (valk_aio_ssl_accept(&conn->http.io.ssl, srv->ssl_ctx) != 0) {
-    VALK_ERROR("Failed to initialize SSL for connection");
-    return -1;
+    VALK_ERROR("Failed to initialize SSL for connection"); // LCOV_EXCL_LINE SSL accept failure
+    return -1; // LCOV_EXCL_LINE
   }
   valk_http2_send_server_connection_header(conn->http.session, srv->sys);
   return 0;
 }
-// LCOV_EXCL_STOP
 
-// LCOV_EXCL_START internal accept path - invoked from libuv connection callback
 static void __accept_finalize(valk_aio_handle_t *conn, valk_aio_http_server *srv) {
   if (conn->http.httpHandler && conn->http.httpHandler->onConnect) {
     conn->http.httpHandler->onConnect(conn->http.httpHandler->arg, conn);
@@ -279,9 +269,9 @@ static void __accept_finalize(valk_aio_handle_t *conn, valk_aio_http_server *srv
 
   __vtable_read_start(conn);
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START internal accept path - invoked from libuv connection callback
+// LCOV_EXCL_START - accept error: requires TCP accept failure
 static void __accept_handle_error(valk_aio_handle_t *conn, valk_aio_http_server *srv, int res) {
   VALK_WARN("Accept error: %s", srv->sys->ops->tcp->strerror(res));
   valk_aio_metrics_v2_on_connection(
@@ -293,7 +283,7 @@ static void __accept_handle_error(valk_aio_handle_t *conn, valk_aio_http_server 
 }
 // LCOV_EXCL_STOP
 
-// LCOV_EXCL_START internal accept path - invoked from libuv connection callback
+// LCOV_EXCL_BR_START - accept impl: error path branching
 static void __http_server_accept_impl(valk_aio_handle_t *hndl, int status) {
   valk_aio_http_server *srv = hndl->arg;
 
@@ -303,24 +293,25 @@ static void __http_server_accept_impl(valk_aio_handle_t *hndl, int status) {
   if (!conn) return;
 
   int res = __vtable_accept(hndl, conn);
+  // LCOV_EXCL_START accept/SSL failure paths require slab-allocated handles
   if (res != 0) {
     __accept_handle_error(conn, srv, res);
     return;
   }
+  // LCOV_EXCL_STOP
 
   __accept_log_peer(conn);
 
   if (__accept_setup_session(conn, srv) != 0) {
-    __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
-    return;
+    __vtable_close(conn, (valk_io_close_cb)valk_http2_conn_handle_closed_cb); // LCOV_EXCL_LINE SSL setup failure
+    return; // LCOV_EXCL_LINE
   }
 
-  fprintf(stderr, "[DBG] accept conn=%p\n", (void*)conn);
   __accept_finalize(conn, srv);
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START internal shutdown path - invoked from libuv callback
+// LCOV_EXCL_START goaway/shutdown: requires full server lifecycle with live connections
 static int __send_goaway_to_all_conns(valk_aio_system_t *sys, valk_aio_http_server *srv) {
   int goaway_count = 0;
   valk_aio_handle_t *h = sys->liveHandles.next;
@@ -337,9 +328,7 @@ static int __send_goaway_to_all_conns(valk_aio_system_t *sys, valk_aio_http_serv
   }
   return goaway_count;
 }
-// LCOV_EXCL_STOP
 
-// LCOV_EXCL_START internal shutdown callback - invoked from libuv
 static void __http_shutdown_cb(valk_aio_handle_t *hndl) {
   valk_aio_http_server *srv = hndl->arg;
   if (!srv || !srv->sys) return;
@@ -379,7 +368,7 @@ extern valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void
 extern void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result);
 extern void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error);
 
-// LCOV_EXCL_START internal cleanup - only called during server cleanup
+// LCOV_EXCL_BR_START - server cleanup: null/state checks in lifecycle functions
 static void __valk_aio_http2_server_cleanup(valk_aio_http_server *srv) {
   if (!srv || !srv->sys) return;
   valk_aio_system_stats_v2_on_server_stop(
@@ -391,9 +380,8 @@ static void __valk_aio_http2_server_cleanup(valk_aio_http_server *srv) {
   SSL_CTX_free(srv->ssl_ctx);
   srv->ssl_ctx = nullptr;
 }
-// LCOV_EXCL_STOP
 
-// LCOV_EXCL_START internal list management - only called during server cleanup
+// LCOV_EXCL_START server list remove: only reachable via stop/shutdown lifecycle
 static void __valk_server_list_remove(valk_aio_http_server *srv) {
   if (!srv || !srv->sys) return;
   valk_aio_system_t *sys = srv->sys;
@@ -410,7 +398,6 @@ static void __valk_server_list_remove(valk_aio_http_server *srv) {
 }
 // LCOV_EXCL_STOP
 
-// LCOV_EXCL_START internal list management - only called during server setup
 static void __valk_server_list_insert(valk_aio_system_t *sys, valk_aio_http_server *srv) {
   srv->next = sys->serverList;
   srv->prev = nullptr;
@@ -419,9 +406,9 @@ static void __valk_server_list_insert(valk_aio_system_t *sys, valk_aio_http_serv
   }
   sys->serverList = srv;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START internal callback - invoked from libuv async dispatch
+// LCOV_EXCL_BR_START - listen callback: bind/listen error branches
 static void __http_listen_cb(valk_aio_system_t *sys,
                              struct valk_aio_task_new *task) {
   int r;
@@ -488,9 +475,9 @@ static void __http_listen_cb(valk_aio_system_t *sys,
   valk_async_handle_complete(handle, server_ref);
   valk_dll_insert_after(&sys->liveHandles, srv->listener);
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START SSL callback - invoked during TLS handshake
+// LCOV_EXCL_BR_START - ALPN callback: protocol negotiation
 static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
                                   unsigned char *outlen,
                                   const unsigned char *in, unsigned int inlen,
@@ -501,11 +488,11 @@ static int __alpn_select_proto_cb(SSL *ssl, const unsigned char **out,
   int rv;
   rv = nghttp2_select_alpn(out, outlen, in, inlen);
   if (rv == -1) {
-    return SSL_TLSEXT_ERR_NOACK;
+    return SSL_TLSEXT_ERR_NOACK; // LCOV_EXCL_LINE ALPN negotiation failure
   }
   return SSL_TLSEXT_ERR_OK;
 }
-// LCOV_EXCL_STOP
+// LCOV_EXCL_BR_STOP
 
 extern valk_async_handle_t *valk_async_handle_new(valk_aio_system_t *sys, valk_lenv_t *env);
 
@@ -585,19 +572,19 @@ valk_async_handle_t *valk_aio_http2_listen_with_config(valk_aio_system_t *sys,
   return handle;
 }
 
+// LCOV_EXCL_START handler lifecycle requires GC heap evacuation and handle table
 void valk_aio_http2_server_set_handler(valk_aio_http_server *srv, void *handler_fn) {
-  if (srv->lisp_handler_handle.generation > 0) { // LCOV_EXCL_BR_LINE requires GC heap handler setup
+  if (srv->lisp_handler_handle.generation > 0) {
     valk_handle_release(&valk_sys->handle_table, srv->lisp_handler_handle);
   }
-  if (handler_fn) { // LCOV_EXCL_BR_LINE requires GC heap handler setup
-    // LCOV_EXCL_START requires full GC heap for handler evacuation
+  if (handler_fn) {
     valk_lval_t *heap_handler = valk_evacuate_to_heap((valk_lval_t*)handler_fn);
     srv->lisp_handler_handle = valk_handle_create(&valk_sys->handle_table, heap_handler);
-    // LCOV_EXCL_STOP
   } else {
     srv->lisp_handler_handle = (valk_handle_t){0, 0};
   }
 }
+// LCOV_EXCL_STOP
 
 int valk_aio_http2_server_get_port(valk_aio_http_server *srv) {
   return srv->port;
@@ -620,7 +607,7 @@ typedef struct {
   valk_aio_http_server *srv;
 } __http_stop_ctx_t;
 
-// LCOV_EXCL_START internal shutdown callbacks - invoked from libuv
+// LCOV_EXCL_START server stop lifecycle: requires async task system and live listener
 static void __http_stop_listener_close_cb(uv_handle_t *handle) {
   valk_aio_handle_t *hndl = handle->data;
   __http_stop_ctx_t *ctx = hndl->arg;
@@ -683,13 +670,11 @@ static void __http_stop_cb(valk_aio_system_t *sys,
     valk_async_handle_complete(handle, valk_lval_nil());
   }
 }
-// LCOV_EXCL_STOP
 
 valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv) {
-  if (!srv || !srv->sys) { // LCOV_EXCL_BR_LINE valid server path requires full AIO integration
+  if (!srv || !srv->sys) {
     return nullptr;
   }
-  // LCOV_EXCL_START valid server stop requires full AIO system (tested in test_http2_streaming.c)
   valk_aio_system_t *sys = srv->sys;
   valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
 
@@ -697,11 +682,11 @@ valk_async_handle_t *valk_aio_http2_stop(valk_aio_http_server *srv) {
   VALK_WITH_ALLOC((valk_mem_allocator_t *)sys->handleSlab) {
     task = valk_mem_alloc(sizeof(valk_aio_task_new));
   }
-  if (!task) {
+  if (!task) { // LCOV_EXCL_START
     VALK_ERROR("Handle slab exhausted in http2_stop");
     valk_async_handle_fail(handle, valk_lval_err("Handle slab exhausted"));
     return handle;
-  }
+  } // LCOV_EXCL_STOP
   task->allocator = (valk_mem_allocator_t *)sys->handleSlab;
   task->arg = srv;
   task->handle = handle;

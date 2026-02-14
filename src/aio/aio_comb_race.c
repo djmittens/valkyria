@@ -1,20 +1,16 @@
 #include "aio_combinators_internal.h"
 
-#define VALK_RACE_CTX_MAGIC 0x9ACE7821
-
 typedef struct {
-  u32 magic;
   valk_async_handle_t *race_handle;
   valk_async_handle_t **handles;
   u64 total;
   valk_mem_allocator_t *allocator;
 } valk_race_ctx_t;
 
-// LCOV_EXCL_START - cleanup function: null checks for defensive programming
+// LCOV_EXCL_START - cleanup defensive null-checks: ctx always valid when called
 static void valk_race_ctx_cleanup(void *ctx) {
   valk_race_ctx_t *race_ctx = (valk_race_ctx_t *)ctx;
   if (!race_ctx) return;
-  race_ctx->magic = 0;
   if (race_ctx->handles) free(race_ctx->handles);
   free(race_ctx);
 }
@@ -22,10 +18,7 @@ static void valk_race_ctx_cleanup(void *ctx) {
 
 static void valk_async_race_child_resolved(valk_async_handle_t *child) {
   valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) return; // LCOV_EXCL_LINE - defensive null check
-
   valk_race_ctx_t *ctx = (valk_race_ctx_t*)parent->uv_handle_ptr;
-  if (ctx->magic != VALK_RACE_CTX_MAGIC) return; // LCOV_EXCL_LINE - magic always valid
 
   valk_async_status_t child_status = valk_async_handle_get_status(child);
   valk_async_status_t new_status;
@@ -94,12 +87,10 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
   }
   // LCOV_EXCL_STOP
 
-  // LCOV_EXCL_BR_START - request ctx propagation: depends on caller setup
   valk_lval_t *first_h = valk_lval_head(handles_list);
-  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) {
+  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) { // LCOV_EXCL_BR_LINE - first_h/type always valid after count check; request_ctx only set in HTTP
     race_handle->request_ctx = first_h->async.handle->request_ctx;
   }
-  // LCOV_EXCL_BR_STOP
 
   race_handle->status = VALK_ASYNC_RUNNING;
   race_handle->env = e;
@@ -120,7 +111,6 @@ static valk_lval_t* valk_builtin_aio_race(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("Failed to allocate race context");
   }
   // LCOV_EXCL_STOP
-  ctx->magic = VALK_RACE_CTX_MAGIC;
   ctx->race_handle = race_handle;
   ctx->handles = handles;
   ctx->total = count;

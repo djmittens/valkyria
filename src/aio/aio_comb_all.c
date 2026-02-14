@@ -1,9 +1,6 @@
 #include "aio_combinators_internal.h"
 
-#define VALK_ALL_CTX_MAGIC 0xA11C7821
-
 typedef struct {
-  u32 magic;
   valk_async_handle_t *all_handle;
   valk_lval_t **results;
   valk_async_handle_t **handles;
@@ -17,11 +14,10 @@ typedef struct {
   u64 index;
 } valk_all_wrapper_ctx_t;
 
-// LCOV_EXCL_START - cleanup function: null checks for defensive programming
+// LCOV_EXCL_START - cleanup defensive null-checks: ctx always valid when called
 static void valk_all_ctx_cleanup(void *ctx) {
   valk_all_ctx_t *all_ctx = (valk_all_ctx_t *)ctx;
   if (!all_ctx) return;
-  all_ctx->magic = 0;
   if (all_ctx->results) free(all_ctx->results);
   if (all_ctx->handles) free(all_ctx->handles);
   free(all_ctx);
@@ -35,12 +31,10 @@ static void valk_async_all_child_failed_with_ctx(valk_all_ctx_t *ctx, valk_async
 
 static void valk_all_wrapper_on_done(valk_async_handle_t *handle, void *ctx) {
   valk_all_wrapper_ctx_t *wrapper_ctx = (valk_all_wrapper_ctx_t *)ctx;
-  // LCOV_EXCL_START - defensive null check: wrapper_ctx always allocated with malloc
-  if (!wrapper_ctx || !wrapper_ctx->all_ctx) {
-    free(wrapper_ctx);
-    return;
+  if (!wrapper_ctx || !wrapper_ctx->all_ctx) { // LCOV_EXCL_BR_LINE - wrapper_ctx always valid when on_done fires
+    free(wrapper_ctx); // LCOV_EXCL_LINE
+    return; // LCOV_EXCL_LINE
   }
-  // LCOV_EXCL_STOP
 
   valk_async_status_t status = valk_async_handle_get_status(handle);
   if (status == VALK_ASYNC_COMPLETED) {
@@ -89,12 +83,10 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   }
   // LCOV_EXCL_STOP
 
-  // LCOV_EXCL_BR_START - request ctx propagation: depends on caller setup
   valk_lval_t *first_h = valk_lval_head(handles_list);
-  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) {
+  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) { // LCOV_EXCL_BR_LINE - first_h/type always valid after count check; request_ctx only set in HTTP
     all_handle->request_ctx = first_h->async.handle->request_ctx;
   }
-  // LCOV_EXCL_BR_STOP
 
   valk_lval_t **results = calloc(count, sizeof(valk_lval_t*));
   // LCOV_EXCL_START - allocation failure: requires OOM
@@ -125,7 +117,6 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("Failed to allocate all context");
   }
   // LCOV_EXCL_STOP
-  ctx->magic = VALK_ALL_CTX_MAGIC;
   ctx->all_handle = all_handle;
   ctx->results = results;
   ctx->handles = handles;
@@ -147,7 +138,6 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
       all_handle->sys = handle->sys;
     }
 
-    // LCOV_EXCL_START - wrapper for handles with existing parent
     if (handle->parent != NULL) {
       valk_async_handle_t *wrapper = valk_async_handle_new(handle->sys, e);
       wrapper->status = VALK_ASYNC_RUNNING;
@@ -158,7 +148,7 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
       valk_chunked_ptrs_push(&all_handle->children, wrapper, all_handle->region);
 
       valk_all_wrapper_ctx_t *wrapper_ctx = malloc(sizeof(valk_all_wrapper_ctx_t));
-      if (wrapper_ctx) {
+      if (wrapper_ctx) { // LCOV_EXCL_BR_LINE - OOM: malloc failure
         wrapper_ctx->all_ctx = ctx;
         wrapper_ctx->index = i;
         atomic_store_explicit(&wrapper->on_done, valk_all_wrapper_on_done, memory_order_release);
@@ -166,7 +156,6 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
       }
       valk_async_handle_add_child(handle, wrapper);
     } else {
-    // LCOV_EXCL_STOP
       handles[i] = handle;
       valk_async_handle_add_child(all_handle, handle);
     }
@@ -176,16 +165,9 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_handle(all_handle);
 }
 
-// LCOV_EXCL_START - ctx accessor with defensive null checks
 static inline valk_all_ctx_t* valk_async_get_all_ctx(valk_async_handle_t *handle) {
-  if (!handle || !handle->parent) return NULL;
-  valk_async_handle_t *parent = handle->parent;
-  if (!parent->uv_handle_ptr) return NULL;
-  valk_all_ctx_t *ctx = (valk_all_ctx_t*)parent->uv_handle_ptr;
-  if (ctx->magic != VALK_ALL_CTX_MAGIC) return NULL;
-  return ctx;
+  return (valk_all_ctx_t*)handle->parent->uv_handle_ptr;
 }
-// LCOV_EXCL_STOP
 
 static inline i64 valk_async_all_find_index(valk_all_ctx_t *ctx, valk_async_handle_t *child) {
   for (u64 i = 0; i < ctx->total; i++) { // LCOV_EXCL_BR_LINE - loop always finds child

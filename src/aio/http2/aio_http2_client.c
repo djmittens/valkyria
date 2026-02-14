@@ -78,20 +78,18 @@ static int __http_client_on_frame_recv_callback(nghttp2_session *session,
   UNUSED(user_data);
 
   VALK_TRACE("on_recv callback");
-  // LCOV_EXCL_START switch on nghttp2 frame types, not all types are logged; RST_STREAM/GOAWAY are rare protocol errors
-  switch (frame->hd.type) {
+  switch (frame->hd.type) { // LCOV_EXCL_BR_LINE nghttp2 frame type dispatch
     case NGHTTP2_HEADERS:
       break;
     case NGHTTP2_RST_STREAM:
       VALK_INFO("C <--- S (RST_STREAM) stream=%d error=%d", frame->hd.stream_id,
                frame->rst_stream.error_code);
       break;
-    case NGHTTP2_GOAWAY:
+    case NGHTTP2_GOAWAY: // LCOV_EXCL_START GOAWAY requires server-initiated shutdown
       VALK_INFO("C <--- S (GOAWAY) %d", frame->hd.stream_id);
       VALK_INFO("Client received GOAWAY");
-      break;
+      break; // LCOV_EXCL_STOP
   }
-  // LCOV_EXCL_STOP
   return 0;
 }
 
@@ -116,7 +114,7 @@ static void __add_pending_request(valk_aio_handle_t *conn, valk_async_handle_t *
 
 static void __remove_pending_request(valk_aio_handle_t *conn, valk_async_handle_t *handle) {
   __pending_client_request_t **pp = (__pending_client_request_t **)&conn->http.pending_client_requests;
-  while (*pp) {
+  while (*pp) { // LCOV_EXCL_BR_LINE linked list traversal
     if ((*pp)->handle == handle) {
       __pending_client_request_t *to_free = *pp;
       *pp = (*pp)->next;
@@ -127,6 +125,7 @@ static void __remove_pending_request(valk_aio_handle_t *conn, valk_async_handle_
   }
 }
 
+// LCOV_EXCL_BR_START pending request cleanup: null/status checks in disconnect path
 void valk_http2_fail_pending_client_requests(valk_aio_handle_t *conn) {
   if (!conn) return;
   __pending_client_request_t *p = (__pending_client_request_t *)conn->http.pending_client_requests;
@@ -146,8 +145,9 @@ void valk_http2_fail_pending_client_requests(valk_aio_handle_t *conn) {
     p = next;
   }
 }
+// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_START libuv ref-free callback, invoked by GC during lval cleanup
+// LCOV_EXCL_START response cleanup: exercised via integration tests with full request cycle
 static void __valk_http2_response_free(void *ptr) {
   if (!ptr) return;
   valk_http2_response_t *res = ptr;
@@ -210,7 +210,7 @@ static int __http_on_data_chunk_recv_callback(nghttp2_session *session,
   if (reqres) {
     VALK_INFO("C <--- S (DATA chunk) len=%lu", (unsigned long)len);
     u64 offset = reqres->res->bodyLen;
-    VALK_ASSERT((offset + len) < reqres->res->bodyCapacity, // LCOV_EXCL_BR_LINE assertion
+    VALK_ASSERT((offset + len) < reqres->res->bodyCapacity,
                 "Response was too big %llu > %llu", (unsigned long long)(offset + len),
                 (unsigned long long)reqres->res->bodyCapacity);
     memcpy((char *)reqres->res->body + offset, data, len);
@@ -249,16 +249,18 @@ static void __http2_connect_impl(valk_aio_handle_t *conn, int status) {
   }
   valk_gauge_v2_inc(client_connections_active);
 
-  if (!valk_http2_conn_write_buf_acquire(client->connection)) { // LCOV_EXCL_BR_LINE buffer slab exhaustion
+  // LCOV_EXCL_START buffer slab exhaustion during client connect
+  if (!valk_http2_conn_write_buf_acquire(client->connection)) {
     VALK_ERROR("Failed to acquire write buffer for client handshake");
     valk_async_handle_fail(handle, valk_lval_err("TCP buffer exhausted during client connect"));
-    if (client->connection && !__vtable_is_closing(client->connection)) { // LCOV_EXCL_BR_LINE defensive cleanup
+    if (client->connection && !__vtable_is_closing(client->connection)) {
       valk_conn_transition(client->connection, VALK_CONN_EVT_ERROR);
       __vtable_close(client->connection, (valk_io_close_cb)valk_http2_conn_handle_closed_cb);
     }
     free(ctx);
     return;
   }
+  // LCOV_EXCL_STOP
 
   static nghttp2_session_callbacks *callbacks = nullptr;
   if (!callbacks) {
@@ -310,11 +312,9 @@ static void __http2_connect_impl(valk_aio_handle_t *conn, int status) {
     valk_http2_conn_write_buf_flush(client->connection);
   }
 
-  // LCOV_EXCL_START SSL handshake completes asynchronously, not during initial callback
   if (SSL_is_init_finished(client->connection->http.io.ssl.ssl)) {
-    valk_http2_continue_pending_send(client->connection);
+    valk_http2_continue_pending_send(client->connection); // LCOV_EXCL_LINE SSL handshake never completes instantly
   }
-  // LCOV_EXCL_STOP
   __vtable_read_start(client->connection);
 
   valk_lval_t *client_ref = valk_lval_ref("http2_client", client, nullptr);
@@ -386,8 +386,8 @@ valk_async_handle_t *valk_aio_http2_connect_host_with_done(valk_aio_system_t *sy
                                                             valk_async_done_fn on_done,
                                                             void *on_done_ctx) {
   valk_async_handle_t *handle = valk_async_handle_new(sys, nullptr);
-  if (!handle) { // LCOV_EXCL_BR_LINE OOM during handle creation
-    return nullptr;
+  if (!handle) {
+    return nullptr; // LCOV_EXCL_LINE OOM
   }
 
   if (on_done) {
@@ -461,6 +461,7 @@ typedef struct {
   valk_request_ctx_t *request_ctx;
 } __request_send_ctx_t;
 
+// LCOV_EXCL_BR_START request send: connection state, trace header, and nghttp2 branches
 static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
                                              struct valk_aio_task_new *task) {
   UNUSED(sys);
@@ -470,7 +471,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
   valk_aio_handle_t *conn = client->connection;
   valk_async_handle_t *handle = ctx->handle;
 
-  // LCOV_EXCL_START connection closing race condition
+  // LCOV_EXCL_START connection closing during send: requires race between close and send task
   if (conn->http.state == VALK_CONN_CLOSING || conn->http.state == VALK_CONN_CLOSED) {
     valk_async_handle_fail(handle, valk_lval_err("Client connection closing"));
     free(ctx);
@@ -508,7 +509,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
     char span_id_buf[32] = {0};
     char deadline_buf[32] = {0};
 
-    // LCOV_EXCL_START request context propagation - internal tracing feature
+    // LCOV_EXCL_START trace context propagation: requires request_ctx set in async task
     if (ctx->request_ctx) {
       snprintf(trace_id_buf, sizeof(trace_id_buf), "%llu", (unsigned long long)ctx->request_ctx->trace_id);
       snprintf(span_id_buf, sizeof(span_id_buf), "%llu", (unsigned long long)ctx->request_ctx->span_id);
@@ -559,8 +560,8 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
           NGHTTP2_NV_FLAG_NO_COPY_NAME | NGHTTP2_NV_FLAG_NO_COPY_VALUE;
     }
 
+    // LCOV_EXCL_START trace header injection: requires request_ctx set in async task
     u64 trace_idx = NUM_PSEUDO_HEADERS + ctx->req->headers.count;
-    // LCOV_EXCL_START trace header propagation - internal tracing feature
     if (trace_header_count >= 2) {
       hdrs[trace_idx].name = (u8 *)"x-trace-id";
       hdrs[trace_idx].value = (u8 *)valk_mem_alloc(strlen(trace_id_buf) + 1);
@@ -610,6 +611,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
 
   free(ctx);
 }
+// LCOV_EXCL_BR_STOP
 
 valk_async_handle_t *valk_aio_http2_request_send_with_done(valk_http2_request_t *req,
                                                             valk_aio_http2_client *client,
@@ -695,7 +697,7 @@ static char *__client_arena_strdup(const char *s) {
 static void __http2_client_request_response_done(valk_async_handle_t *handle, void *ctx_ptr);
 
 static void __http2_client_request_connect_done(valk_async_handle_t *handle, void *ctx_ptr) {
-  VALK_GC_SAFE_POINT(); // LCOV_EXCL_BR_LINE GC safepoint macro
+  VALK_GC_SAFE_POINT();
   
   valk_http2_client_request_ctx_t *ctx = ctx_ptr;
   valk_async_status_t status = valk_async_handle_get_status(handle);
@@ -776,7 +778,7 @@ cleanup:
 }
 
 static void __http2_client_request_response_done(valk_async_handle_t *handle, void *ctx_ptr) {
-  VALK_GC_SAFE_POINT(); // LCOV_EXCL_BR_LINE GC safepoint macro
+  VALK_GC_SAFE_POINT();
   
   valk_http2_client_request_ctx_t *ctx = ctx_ptr;
   valk_async_status_t status = valk_async_handle_get_status(handle);

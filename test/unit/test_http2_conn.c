@@ -4,6 +4,7 @@
 #include "../../src/aio/aio_internal.h"
 #include "../../src/aio/aio_ops.h"
 
+#include <nghttp2/nghttp2.h>
 #include <stdlib.h>
 
 static valk_aio_handle_t *create_test_conn(void) {
@@ -512,6 +513,220 @@ void test_alloc_callback_slab_exhausted(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// --- backpressure resume with actual conn (exercises __vtable_read_start) ---
+
+void test_backpressure_try_resume_one_with_conn(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_system_t *sys = create_test_system();
+  sys->tcpBufferSlab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 10);
+  valk_backpressure_list_init(&sys->backpressure, 100, 5000);
+
+  valk_aio_handle_t *conn = create_test_conn();
+  conn->sys = sys;
+  conn->uv.tcp.user_data = conn;
+
+  valk_backpressure_list_add(&sys->backpressure, conn, 0);
+  ASSERT_EQ(sys->backpressure.size, 1);
+  ASSERT_TRUE(conn->http.backpressure);
+
+  valk_http2_backpressure_try_resume_one(sys);
+
+  ASSERT_FALSE(conn->http.backpressure);
+  ASSERT_EQ(sys->backpressure.size, 0);
+
+  valk_slab_free(sys->tcpBufferSlab);
+  free_test_conn(conn);
+  free_test_system(sys);
+  VALK_PASS();
+}
+
+// --- vtable_alloc_cb + vtable_read_cb via inject_data after resume ---
+
+void test_vtable_read_path_via_inject_data(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_system_t *sys = create_test_system();
+  sys->tcpBufferSlab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 10);
+  valk_backpressure_list_init(&sys->backpressure, 100, 5000);
+
+  valk_aio_handle_t *conn = create_test_conn();
+  conn->sys = sys;
+  conn->uv.tcp.user_data = conn;
+  conn->http.state = VALK_CONN_ESTABLISHED;
+
+  valk_backpressure_list_add(&sys->backpressure, conn, 0);
+  valk_http2_backpressure_try_resume_one(sys);
+
+  conn->http.state = VALK_CONN_CLOSING;
+  valk_test_tcp_inject_data(&conn->uv.tcp, "test", 4);
+
+  ASSERT_NOT_NULL(conn->http.io.read_buf);
+
+  valk_conn_io_free(&conn->http.io, sys->tcpBufferSlab);
+  valk_slab_free(sys->tcpBufferSlab);
+  free_test_conn(conn);
+  free_test_system(sys);
+  VALK_PASS();
+}
+
+// --- vtable_alloc_cb existing read_buf path ---
+
+void test_vtable_alloc_cb_existing_buf(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_system_t *sys = create_test_system();
+  sys->tcpBufferSlab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 10);
+  valk_backpressure_list_init(&sys->backpressure, 100, 5000);
+
+  valk_aio_handle_t *conn = create_test_conn();
+  conn->sys = sys;
+  conn->uv.tcp.user_data = conn;
+  conn->http.state = VALK_CONN_ESTABLISHED;
+
+  valk_backpressure_list_add(&sys->backpressure, conn, 0);
+  valk_http2_backpressure_try_resume_one(sys);
+
+  conn->http.state = VALK_CONN_CLOSING;
+  valk_test_tcp_inject_data(&conn->uv.tcp, "first", 5);
+  ASSERT_NOT_NULL(conn->http.io.read_buf);
+
+  valk_test_tcp_inject_data(&conn->uv.tcp, "second", 6);
+
+  valk_conn_io_free(&conn->http.io, sys->tcpBufferSlab);
+  valk_slab_free(sys->tcpBufferSlab);
+  free_test_conn(conn);
+  free_test_system(sys);
+  VALK_PASS();
+}
+
+// --- vtable_alloc_cb slab exhausted ---
+
+void test_vtable_alloc_cb_slab_exhausted(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_system_t *sys = create_test_system();
+  sys->tcpBufferSlab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 4);
+  valk_backpressure_list_init(&sys->backpressure, 100, 5000);
+
+  valk_aio_handle_t *conn = create_test_conn();
+  conn->sys = sys;
+  conn->uv.tcp.user_data = conn;
+  conn->http.state = VALK_CONN_ESTABLISHED;
+
+  valk_backpressure_list_add(&sys->backpressure, conn, 0);
+  valk_http2_backpressure_try_resume_one(sys);
+  ASSERT_FALSE(conn->http.backpressure);
+
+  void *s1 = valk_slab_aquire(sys->tcpBufferSlab);
+  void *s2 = valk_slab_aquire(sys->tcpBufferSlab);
+  void *s3 = valk_slab_aquire(sys->tcpBufferSlab);
+  void *s4 = valk_slab_aquire(sys->tcpBufferSlab);
+  ASSERT_EQ(valk_slab_available(sys->tcpBufferSlab), 0);
+
+  conn->http.state = VALK_CONN_CLOSING;
+  valk_test_tcp_inject_data(&conn->uv.tcp, "data", 4);
+  ASSERT_NULL(conn->http.io.read_buf);
+
+  valk_slab_release(sys->tcpBufferSlab, s1);
+  valk_slab_release(sys->tcpBufferSlab, s2);
+  valk_slab_release(sys->tcpBufferSlab, s3);
+  valk_slab_release(sys->tcpBufferSlab, s4);
+  valk_slab_free(sys->tcpBufferSlab);
+  free_test_conn(conn);
+  free_test_system(sys);
+  VALK_PASS();
+}
+
+// --- vtable_alloc_cb invalid conn ---
+
+void test_vtable_alloc_cb_invalid_conn(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_system_t *sys = create_test_system();
+  sys->tcpBufferSlab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 10);
+  valk_backpressure_list_init(&sys->backpressure, 100, 5000);
+
+  valk_aio_handle_t *conn = create_test_conn();
+  conn->sys = sys;
+  conn->uv.tcp.user_data = conn;
+  conn->http.state = VALK_CONN_ESTABLISHED;
+
+  valk_backpressure_list_add(&sys->backpressure, conn, 0);
+  valk_http2_backpressure_try_resume_one(sys);
+  ASSERT_FALSE(conn->http.backpressure);
+
+  conn->magic = 0;
+
+  valk_test_tcp_inject_data(&conn->uv.tcp, "data", 4);
+  ASSERT_NULL(conn->http.io.read_buf);
+
+  conn->magic = VALK_AIO_HANDLE_MAGIC;
+  valk_slab_free(sys->tcpBufferSlab);
+  free_test_conn(conn);
+  free_test_system(sys);
+  VALK_PASS();
+}
+
+// --- flush_complete with backpressure exercises resume path ---
+
+void test_flush_complete_resumes_backpressure(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_system_t *sys = create_test_system();
+  sys->tcpBufferSlab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 10);
+  valk_backpressure_list_init(&sys->backpressure, 100, 5000);
+
+  valk_aio_handle_t *conn = create_test_conn();
+  conn->sys = sys;
+  conn->uv.tcp.user_data = conn;
+  conn->http.state = VALK_CONN_ESTABLISHED;
+  conn->http.backpressure = true;
+
+  nghttp2_session_callbacks *callbacks;
+  nghttp2_session_callbacks_new(&callbacks);
+  nghttp2_session_server_new(&conn->http.session, callbacks, conn);
+
+  valk_backpressure_list_add(&sys->backpressure, conn, 0);
+
+  bool acquired = valk_http2_conn_write_buf_acquire(conn);
+  ASSERT_TRUE(acquired);
+
+  u8 *write_data = valk_http2_conn_write_buf_data(conn);
+  ASSERT_NOT_NULL(write_data);
+  memcpy(write_data, "HTTP/2 data", 11);
+  conn->http.io.write_pos = 11;
+
+  valk_http2_conn_write_buf_flush(conn);
+
+  ASSERT_FALSE(conn->http.backpressure);
+
+  nghttp2_session_del(conn->http.session);
+  nghttp2_session_callbacks_del(callbacks);
+  valk_conn_io_free(&conn->http.io, sys->tcpBufferSlab);
+  valk_slab_free(sys->tcpBufferSlab);
+  free_test_conn(conn);
+  free_test_system(sys);
+  VALK_PASS();
+}
+
+// --- tcp_read_impl with null buffer triggers backpressure ---
+
+void test_tcp_read_impl_null_buffer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_aio_system_t *sys = create_test_system();
+  sys->tcpBufferSlab = valk_slab_new(sizeof(__tcp_buffer_slab_item_t), 10);
+  valk_backpressure_list_init(&sys->backpressure, 100, 5000);
+
+  valk_aio_handle_t *conn = create_test_conn();
+  conn->sys = sys;
+  conn->uv.tcp.user_data = conn;
+
+  valk_http2_conn_tcp_read_impl(conn, 0, nullptr);
+
+  ASSERT_TRUE(conn->http.backpressure);
+  ASSERT_EQ(sys->backpressure.size, 1);
+
+  valk_slab_free(sys->tcpBufferSlab);
+  free_test_conn(conn);
+  free_test_system(sys);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -560,6 +775,14 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_alloc_callback_existing_read_buf", test_alloc_callback_existing_read_buf);
   valk_testsuite_add_test(suite, "test_alloc_callback_acquire_new_buf", test_alloc_callback_acquire_new_buf);
   valk_testsuite_add_test(suite, "test_alloc_callback_slab_exhausted", test_alloc_callback_slab_exhausted);
+
+  valk_testsuite_add_test(suite, "test_backpressure_try_resume_one_with_conn", test_backpressure_try_resume_one_with_conn);
+  valk_testsuite_add_test(suite, "test_vtable_read_path_via_inject_data", test_vtable_read_path_via_inject_data);
+  valk_testsuite_add_test(suite, "test_vtable_alloc_cb_existing_buf", test_vtable_alloc_cb_existing_buf);
+  valk_testsuite_add_test(suite, "test_vtable_alloc_cb_slab_exhausted_vtable", test_vtable_alloc_cb_slab_exhausted);
+  valk_testsuite_add_test(suite, "test_vtable_alloc_cb_invalid_conn", test_vtable_alloc_cb_invalid_conn);
+  valk_testsuite_add_test(suite, "test_flush_complete_resumes_backpressure", test_flush_complete_resumes_backpressure);
+  valk_testsuite_add_test(suite, "test_tcp_read_impl_null_buffer", test_tcp_read_impl_null_buffer);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

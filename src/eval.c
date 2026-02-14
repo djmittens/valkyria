@@ -28,7 +28,7 @@ void valk_eval_stack_push(valk_eval_stack_t *stack, valk_cont_frame_t frame) {
 }
 
 valk_cont_frame_t valk_eval_stack_pop(valk_eval_stack_t *stack) {
-  VALK_ASSERT(stack->count > 0, "Cannot pop from empty eval stack");  // LCOV_EXCL_BR_LINE - invariant
+  VALK_ASSERT(stack->count > 0, "Cannot pop from empty eval stack");
   return stack->frames[--stack->count];
 }
 
@@ -355,7 +355,7 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
     valk_thread_ctx.eval_expr = expr;
     valk_thread_ctx.eval_value = value;
 
-    VALK_GC_SAFE_POINT();  // LCOV_EXCL_BR_LINE - GC pause rarely triggered
+    VALK_GC_SAFE_POINT();
     
     expr = valk_thread_ctx.eval_expr;
     value = valk_thread_ctx.eval_value;
@@ -386,7 +386,7 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
         goto apply_cont;
       }
       
-      VALK_COVERAGE_RECORD_LVAL(expr);  // LCOV_EXCL_BR_LINE - coverage macro
+      VALK_COVERAGE_RECORD_LVAL(expr);
 
       if (LVAL_TYPE(expr) == LVAL_CONS) {  // LCOV_EXCL_BR_LINE - evaluator dispatch
         u64 count = valk_lval_list_count(expr);
@@ -500,7 +500,7 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
     
 apply_cont:
     {
-      VALK_ASSERT(value != nullptr, "value must not be null at apply_cont");  // LCOV_EXCL_BR_LINE - invariant
+      VALK_ASSERT(value != nullptr, "value must not be null at apply_cont");
       valk_cont_frame_t frame = valk_eval_stack_pop(&stack);
 
       switch (frame.kind) {  // LCOV_EXCL_BR_LINE - continuation dispatch (not all types exercised)

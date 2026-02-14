@@ -1,9 +1,6 @@
 #include "aio_combinators_internal.h"
 
-#define VALK_ANY_CTX_MAGIC 0xA4177821
-
 typedef struct {
-  u32 magic;
   valk_async_handle_t *any_handle;
   valk_async_handle_t **handles;
   u64 total;
@@ -12,11 +9,10 @@ typedef struct {
   valk_mem_allocator_t *allocator;
 } valk_any_ctx_t;
 
-// LCOV_EXCL_START - cleanup function: null checks for defensive programming
+// LCOV_EXCL_START - cleanup defensive null-checks: ctx always valid when called
 static void valk_any_ctx_cleanup(void *ctx) {
   valk_any_ctx_t *any_ctx = (valk_any_ctx_t *)ctx;
   if (!any_ctx) return;
-  any_ctx->magic = 0;
   if (any_ctx->handles) free(any_ctx->handles);
   free(any_ctx);
 }
@@ -24,10 +20,7 @@ static void valk_any_ctx_cleanup(void *ctx) {
 
 static void valk_async_any_child_success(valk_async_handle_t *child) {
   valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) return; // LCOV_EXCL_LINE - defensive null check
-
   valk_any_ctx_t *ctx = (valk_any_ctx_t*)parent->uv_handle_ptr;
-  if (ctx->magic != VALK_ANY_CTX_MAGIC) return; // LCOV_EXCL_LINE - magic always valid
 
   if (!valk_async_handle_try_transition(ctx->any_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED)) { // LCOV_EXCL_BR_LINE - race protection
     return; // LCOV_EXCL_LINE
@@ -48,8 +41,6 @@ static void valk_async_any_child_success(valk_async_handle_t *child) {
 
 static void valk_async_any_child_failed(valk_async_handle_t *child) {
   valk_async_handle_t *parent = child->parent;
-  if (!parent->uv_handle_ptr) return; // LCOV_EXCL_LINE - defensive null check
-
   valk_any_ctx_t *ctx = (valk_any_ctx_t*)parent->uv_handle_ptr;
 
   if (valk_async_handle_is_terminal(valk_async_handle_get_status(ctx->any_handle))) { // LCOV_EXCL_BR_LINE - race protection
@@ -104,12 +95,10 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
   }
   // LCOV_EXCL_STOP
 
-  // LCOV_EXCL_BR_START - request ctx propagation: depends on caller setup
   valk_lval_t *first_h = valk_lval_head(handles_list);
-  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) {
+  if (first_h && LVAL_TYPE(first_h) == LVAL_HANDLE && first_h->async.handle->request_ctx) { // LCOV_EXCL_BR_LINE - first_h/type always valid after count check; request_ctx only set in HTTP
     any_handle->request_ctx = first_h->async.handle->request_ctx;
   }
-  // LCOV_EXCL_BR_STOP
 
   atomic_store_explicit(&any_handle->status, VALK_ASYNC_RUNNING, memory_order_release);
   any_handle->env = e;
@@ -128,7 +117,6 @@ static valk_lval_t* valk_builtin_aio_any(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("Failed to allocate any context");
   }
   // LCOV_EXCL_STOP
-  ctx->magic = VALK_ANY_CTX_MAGIC;
   ctx->any_handle = any_handle;
   ctx->handles = handles;
   ctx->total = count;

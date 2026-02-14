@@ -296,6 +296,22 @@ def parse_gcov_files(build_dir: Path, source_root: Path, report: CoverageReport)
         gcov_file.unlink()
 
 
+MACRO_BRANCH_FILTER_RE = re.compile(
+    r'(?:^|\s|;)'
+    r'(?:'
+    r'VALK_ASSERT(?:_HANDLE|_HAS_CLEANUP|_SERVER|_SESSION|_SYS)?\s*\('
+    r'|VALK_GC_SAFE_POINT\s*\('
+    r'|INHERIT_SOURCE_LOC\s*\('
+    r'|VALK_COVERAGE_RECORD_LVAL\s*\('
+    r'|LVAL_ASSERT_TYPE\s*\('
+    r'|LVAL_ASSERT_COUNT_(?:EQ|NEQ|LT|LE|GT|GE)\s*\('
+    r'|LVAL_ASSERT_AIO_SYSTEM\s*\('
+    r'|LVAL_ASSERT\s*\('
+    r'|VALK_(?:ERROR|WARN|INFO|DEBUG|TRACE)\s*\('
+    r')'
+)
+
+
 def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path):
     """Parse a .gcov file and add to report.
     
@@ -304,6 +320,10 @@ def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path
     - LCOV_EXCL_START/STOP: Exclude region
     - LCOV_EXCL_BR_LINE: Exclude branches on single line
     - LCOV_EXCL_BR_START/STOP: Exclude branches in region
+    
+    Also auto-excludes branches on lines matching known macro patterns
+    (VALK_ASSERT, VALK_GC_SAFE_POINT, LVAL_ASSERT_*, etc.) that generate
+    untestable gcov branches from their internal if-statements.
     """
     source_file = None
     current_line_no = 0
@@ -343,7 +363,10 @@ def parse_gcov_output(gcov_path: Path, report: CoverageReport, source_root: Path
                     in_br_excl_region = False
                 
                 # Track single-line branch exclusion for subsequent branch lines
-                current_line_br_excl = "LCOV_EXCL_BR_LINE" in source_content
+                current_line_br_excl = (
+                    "LCOV_EXCL_BR_LINE" in source_content
+                    or bool(MACRO_BRANCH_FILTER_RE.search(source_content))
+                )
             
             # Check for single-line exclusion
             excl_line = "LCOV_EXCL_LINE" in source_content

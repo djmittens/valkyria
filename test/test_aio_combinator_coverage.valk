@@ -1,0 +1,448 @@
+; Coverage gap tests for async combinators
+; Targets: aio_comb_resource.c, aio_comb_timeout.c, aio_comb_timers.c,
+;          aio_comb_chain.c, aio_comb_all.c, aio_comb_race.c, aio_comb_any.c
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; ============================================================================
+; PART 1: Synchronous tests (no AIO system needed)
+; ============================================================================
+
+(test/run (list
+
+  ; --- aio/bracket (aio_comb_resource.c) ---
+
+  (test "bracket: acquire fails synchronously"
+    {do
+    (= {released} 0)
+    (= {h} (aio/bracket
+      (aio/fail "acquire failed")
+      (\ {r} {(= {released} 1)})
+      (\ {r} {(aio/pure r)})))
+    (== (aio/status h) (quote :failed))
+  })
+
+  (test "bracket: acquire cancelled synchronously"
+    {do
+    (= {h} (aio/pure 1))
+    (aio/cancel h)
+    (= {b} (aio/bracket
+      h
+      (\ {r} {nil})
+      (\ {r} {(aio/pure r)})))
+    (= {status} (aio/status b))
+    (or (== status (quote :cancelled)) (== status (quote :completed)))
+  })
+
+  (test "bracket: use-fn returns error"
+    {do
+    (= {released} false)
+    (= {h} (aio/bracket
+      (aio/pure "resource")
+      (\ {r} {(= {released} true)})
+      (\ {r} {(error "use failed")})))
+    (== (aio/status h) (quote :failed))
+  })
+
+  (test "bracket: use-fn returns plain value (not handle)"
+    {do
+    (= {h} (aio/bracket
+      (aio/pure "resource")
+      (\ {r} {nil})
+      (\ {r} {42})))
+    (== (aio/status h) (quote :completed))
+  })
+
+  (test "bracket: use-fn returns completed handle synchronously"
+    {do
+    (= {h} (aio/bracket
+      (aio/pure "res")
+      (\ {r} {nil})
+      (\ {r} {(aio/pure (* 2 21))})))
+    (== (aio/status h) (quote :completed))
+  })
+
+  (test "bracket: use-fn returns failed handle synchronously"
+    {do
+    (= {h} (aio/bracket
+      (aio/pure "res")
+      (\ {r} {nil})
+      (\ {r} {(aio/fail "use handle failed")})))
+    (== (aio/status h) (quote :failed))
+  })
+
+  (test "bracket: arg validation - wrong arg count"
+    {do
+    (= {result} (aio/bracket (aio/pure 1) (\ {r} {nil})))
+    (error? result)
+  })
+
+  (test "bracket: arg validation - non-function release"
+    {do
+    (= {result} (aio/bracket (aio/pure 1) 42 (\ {r} {nil})))
+    (error? result)
+  })
+
+  (test "bracket: arg validation - non-function use"
+    {do
+    (= {result} (aio/bracket (aio/pure 1) (\ {r} {nil}) 42))
+    (error? result)
+  })
+
+  ; --- aio/scope (aio_comb_resource.c) ---
+
+  (test "scope: fn returns plain value"
+    {do
+    (= {h} (aio/scope (\ {s} {42})))
+    (== (aio/status h) (quote :completed))
+  })
+
+  (test "scope: fn returns error"
+    {do
+    (= {h} (aio/scope (\ {s} {(error "scope err")})))
+    (== (aio/status h) (quote :failed))
+  })
+
+  (test "scope: fn returns completed handle"
+    {do
+    (= {h} (aio/scope (\ {s} {(aio/pure 99)})))
+    (== (aio/status h) (quote :completed))
+  })
+
+  (test "scope: fn returns failed handle"
+    {do
+    (= {h} (aio/scope (\ {s} {(aio/fail "inner fail")})))
+    (== (aio/status h) (quote :failed))
+  })
+
+  (test "scope: arg validation - wrong arg count"
+    {do
+    (= {result} (aio/scope))
+    (error? result)
+  })
+
+  (test "scope: arg validation - non-function"
+    {do
+    (= {result} (aio/scope 42))
+    (error? result)
+  })
+
+  ; --- aio/on-cancel (aio_comb_resource.c) ---
+
+  (test "on-cancel: registers handler on running handle"
+    {do
+    (= {h} (aio/pure 1))
+    (= {result} (aio/on-cancel h (\ {} {nil})))
+    (not (== result nil))
+  })
+
+  (test "on-cancel: arg validation - no args"
+    {do
+    (= {result} (aio/on-cancel))
+    (error? result)
+  })
+
+  (test "on-cancel: arg validation - non-handle"
+    {do
+    (= {result} (aio/on-cancel 42 (\ {} {nil})))
+    (error? result)
+  })
+
+  (test "on-cancel: arg validation - non-function"
+    {do
+    (= {result} (aio/on-cancel (aio/pure 1) 42))
+    (error? result)
+  })
+
+  ; --- aio/then arg validation (aio_comb_chain.c) ---
+  ; NOTE: cancelled-source tests for then/catch/finally are in async section
+  ; because aio/cancel on a completed handle (aio/pure) is a no-op
+
+  (test "then: arg validation - no args"
+    {do
+    (= {result} (aio/then))
+    (error? result)
+  })
+
+  (test "then: arg validation - one arg"
+    {do
+    (= {result} (aio/then (aio/pure 1)))
+    (error? result)
+  })
+
+  (test "then: arg validation - non-handle"
+    {do
+    (= {result} (aio/then 42 (\ {x} {x})))
+    (error? result)
+  })
+
+  (test "then: arg validation - non-function"
+    {do
+    (= {result} (aio/then (aio/pure 1) 42))
+    (error? result)
+  })
+
+  (test "catch: arg validation - non-handle"
+    {do
+    (= {result} (aio/catch 42 (\ {e} {e})))
+    (error? result)
+  })
+
+  (test "catch: arg validation - non-function"
+    {do
+    (= {result} (aio/catch (aio/fail "e") 42))
+    (error? result)
+  })
+
+  (test "finally: arg validation - non-handle"
+    {do
+    (= {result} (aio/finally 42 (\ {} {nil})))
+    (error? result)
+  })
+
+  (test "finally: arg validation - non-function"
+    {do
+    (= {result} (aio/finally (aio/pure 1) 42))
+    (error? result)
+  })
+
+  (test "then: synchronous failure - failed source"
+    {do
+    (= {h} (aio/fail "source failed"))
+    (= {h2} (aio/then h (\ {x} {(aio/pure x)})))
+    (== (aio/status h2) (quote :failed))
+  })
+
+  ; --- aio/all (aio_comb_all.c) ---
+
+  (test "all: one failure cancels others"
+    {do
+    (= {h} (aio/all (list (aio/pure 1) (aio/fail "err") (aio/pure 3))))
+    (== (aio/status h) (quote :failed))
+  })
+
+  (test "all: all fail"
+    {do
+    (= {h} (aio/all (list (aio/fail "e1") (aio/fail "e2"))))
+    (== (aio/status h) (quote :failed))
+  })
+
+  (test "all: empty list returns completed"
+    {do
+    (= {h} (aio/all (list)))
+    (== (aio/status h) (quote :completed))
+  })
+
+  (test "all: single element"
+    {do
+    (= {h} (aio/all (list (aio/pure 42))))
+    (== (aio/status h) (quote :completed))
+  })
+
+  ; --- aio/race and aio/any (aio_comb_race.c, aio_comb_any.c) ---
+
+  (test "race: first fails, sets status"
+    {do
+    (= {h} (aio/race (list (aio/fail "e1") (aio/fail "e2"))))
+    (== (aio/status h) (quote :failed))
+  })
+
+  (test "any: all fail"
+    {do
+    (= {h} (aio/any (list (aio/fail "e1") (aio/fail "e2") (aio/fail "e3"))))
+    (== (aio/status h) (quote :failed))
+  })
+
+  ; --- aio/all-settled (aio_comb_all_settled.c) ---
+
+  (test "all-settled: mix of success and failure"
+    {do
+    (= {h} (aio/all-settled (list (aio/pure 1) (aio/fail "err") (aio/pure 3))))
+    (== (aio/status h) (quote :completed))
+  })
+
+  (test "all-settled: all failures"
+    {do
+    (= {h} (aio/all-settled (list (aio/fail "e1") (aio/fail "e2"))))
+    (== (aio/status h) (quote :completed))
+  })
+
+  (test "all-settled: empty list"
+    {do
+    (= {h} (aio/all-settled (list)))
+    (== (aio/status h) (quote :completed))
+  })
+
+  ; --- aio/sleep arg validation (aio_comb_timers.c) ---
+
+  (test "sleep: arg validation - wrong count"
+    {do
+    (= {result} (aio/sleep))
+    (error? result)
+  })
+
+  (test "sleep: arg validation - wrong type"
+    {do
+    (= {result} (aio/sleep 42 100))
+    (error? result)
+  })
+
+) {:suite-name "AIO Combinator Coverage - Sync Tests"})
+
+
+; ============================================================================
+; PART 2: Async tests (need AIO event loop running)
+; ============================================================================
+
+(def {aio} (aio/await (aio/start)))
+
+(test/run-async aio (list
+
+  ; --- aio/retry with failures and backoff (aio_comb_timeout.c lines 199-249) ---
+
+  (test-async "retry: fn that always fails exhausts attempts" (\ {} {
+    (= {h} (aio/retry aio
+      (\ {} {(aio/fail "always fails")})
+      {:max-attempts 3 :backoff :exponential :base-ms 10}))
+    (aio/then h (\ {_} {false}))
+    (aio/catch h (\ {_} {true}))
+  }))
+
+  (test-async "retry: fn fails then succeeds" (\ {} {
+    (def {__retry_attempt} 0)
+    (= {h} (aio/retry aio
+      (\ {} {do
+        (def {__retry_attempt} (+ __retry_attempt 1))
+        (if (< __retry_attempt 3)
+          {(aio/fail "not yet")}
+          {(aio/pure "success")})
+      })
+      {:max-attempts 5 :backoff :exponential :base-ms 10}))
+    (aio/then h (\ {result} {(== result "success")}))
+  }))
+
+  ; --- aio/sleep and aio/schedule (aio_comb_timers.c) ---
+
+  (test-async "sleep: completes after delay" (\ {} {
+    (= {h} (aio/sleep aio 10))
+    (aio/then h (\ {_} {true}))
+  }))
+
+  (test-async "sleep: zero delay completes" (\ {} {
+    (= {h} (aio/sleep aio 0))
+    (aio/then h (\ {_} {true}))
+  }))
+
+  (test-async "schedule: runs callback and completes" (\ {} {
+    (= {h} (aio/schedule aio 10 (\ {} {42})))
+    (aio/then h (\ {result} {(== result 42)}))
+  }))
+
+  (test-async "schedule: zero delay" (\ {} {
+    (= {h} (aio/schedule aio 0 (\ {} {"immediate"})))
+    (aio/then h (\ {result} {(== result "immediate")}))
+  }))
+
+  ; --- aio/within (aio_comb_timeout.c) ---
+
+  (test-async "within: source completes before timeout" (\ {} {
+    (= {h} (aio/within (aio/sleep aio 10) 5000))
+    (aio/then h (\ {_} {true}))
+  }))
+
+  (test-async "within: source times out" (\ {} {
+    (= {h} (aio/within (aio/sleep aio 5000) 10))
+    (= {caught} (aio/catch h (\ {err} {:timed-out})))
+    (aio/then caught (\ {result} {(== result :timed-out)}))
+  }))
+
+  ; --- aio/bracket with async use-fn (aio_comb_resource.c lines 89-97) ---
+
+  (test-async "bracket: use-fn returns running handle" (\ {} {
+    (= {h} (aio/bracket
+      (aio/pure "resource")
+      (\ {r} {nil})
+      (\ {r} {(aio/sleep aio 10)})))
+    (aio/then h (\ {_} {true}))
+  }))
+
+  ; --- aio/then/catch/finally with cancelled source (aio_comb_chain.c) ---
+
+  (test-async "then: cancelled source propagates" (\ {} {
+    (= {h} (aio/never aio))
+    (aio/cancel h)
+    (aio/await (aio/sleep aio 30))
+    (= {h2} (aio/then h (\ {x} {(aio/pure (+ x 1))})))
+    (aio/pure (== (aio/status h2) :cancelled))
+  }))
+
+  (test-async "catch: cancelled source propagates" (\ {} {
+    (= {h} (aio/never aio))
+    (aio/cancel h)
+    (aio/await (aio/sleep aio 30))
+    (= {h2} (aio/catch h (\ {e} {(aio/pure 0)})))
+    (aio/pure (== (aio/status h2) :cancelled))
+  }))
+
+  (test-async "finally: cancelled source propagates" (\ {} {
+    (= {h} (aio/never aio))
+    (aio/cancel h)
+    (aio/await (aio/sleep aio 30))
+    (= {h2} (aio/finally h (\ {} {nil})))
+    (aio/pure (== (aio/status h2) :cancelled))
+  }))
+
+  ; --- aio/all-settled with cancelled child (aio_comb_all_settled.c line 61) ---
+
+  (test-async "all-settled: cancelled child" (\ {} {
+    (= {never-h} (aio/never aio))
+    (aio/cancel never-h)
+    (aio/await (aio/sleep aio 30))
+    (= {h} (aio/all-settled (list (aio/pure 1) never-h (aio/fail "err"))))
+    (aio/then (aio/sleep aio 30) (\ {_} {
+      (== (aio/status h) :completed)
+    }))
+  }))
+
+  ; --- aio/interval (aio_comb_timers.c) ---
+
+  (test-async "interval: fires and can be cancelled" (\ {} {
+    (= {h} (aio/interval aio 10 (\ {} {nil})))
+    (aio/then (aio/sleep aio 60) (\ {_} {
+      (aio/cancel h)
+      true
+    }))
+  }))
+
+  (test-async "interval: callback returns :stop" (\ {} {
+    (def {__interval_tick} 0)
+    (= {h} (aio/interval aio 10 (\ {} {
+      (def {__interval_tick} (+ __interval_tick 1))
+      (if (>= __interval_tick 3) {:stop} {nil})
+    })))
+    (aio/then (aio/sleep aio 200) (\ {_} {
+      (>= __interval_tick 3)
+    }))
+  }))
+
+  (test-async "interval: callback returns error continues" (\ {} {
+    (def {__interval_err_tick} 0)
+    (= {h} (aio/interval aio 10 (\ {} {
+      (def {__interval_err_tick} (+ __interval_err_tick 1))
+      (if (>= __interval_err_tick 3)
+        {:stop}
+        {(error "oops")})
+    })))
+    (aio/then (aio/sleep aio 200) (\ {_} {
+      (>= __interval_err_tick 3)
+    }))
+  }))
+
+  (test-async "schedule: callback error still completes" (\ {} {
+    (= {h} (aio/schedule aio 10 (\ {} {(error "schedule err")})))
+    (= {caught} (aio/catch h (\ {e} {:caught})))
+    (aio/then caught (\ {result} {true}))
+  }))
+
+) {:suite-name "AIO Combinator Coverage - Async Tests" :timeout-ms 5000})
