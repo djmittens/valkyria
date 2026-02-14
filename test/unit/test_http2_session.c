@@ -9,6 +9,8 @@
 
 #include <stdlib.h>
 
+static SSL_CTX *test_ssl_ctx;
+
 static valk_aio_system_t *create_test_system(void) {
   valk_aio_system_t *sys = calloc(1, sizeof(valk_aio_system_t));
   sys->ops = &valk_aio_ops_test;
@@ -19,6 +21,9 @@ static valk_aio_system_t *create_test_system(void) {
   sys->metrics_state = calloc(1, sizeof(valk_aio_metrics_state_t));
   sys->metrics_state->metrics_v2 = calloc(1, 256);
   sys->metrics_state->system_stats_v2 = calloc(1, 256);
+  if (!test_ssl_ctx) {
+    test_ssl_ctx = SSL_CTX_new(TLS_server_method());
+  }
   return sys;
 }
 
@@ -38,7 +43,13 @@ static valk_aio_handle_t *create_test_conn(valk_aio_system_t *sys) {
   conn->sys = sys;
   conn->http.active_arena_head = UINT32_MAX;
   valk_conn_io_init(&conn->http.io, HTTP_SLAB_ITEM_SIZE);
+  valk_aio_ssl_accept(&conn->http.io.ssl, test_ssl_ctx);
   return conn;
+}
+
+static void free_test_conn(valk_aio_handle_t *conn) {
+  valk_aio_ssl_free(&conn->http.io.ssl);
+  free(conn);
 }
 
 // --- byte_body_cb tests ---
@@ -173,7 +184,7 @@ void test_session_valid_matching(VALK_TEST_ARGS()) {
   bool valid = valk_aio_http_session_valid(conn, fake_session);
   ASSERT_TRUE(valid);
 
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -186,7 +197,7 @@ void test_session_valid_mismatch(VALK_TEST_ARGS()) {
   bool valid = valk_aio_http_session_valid(conn, (void *)0x99999);
   ASSERT_FALSE(valid);
 
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -202,7 +213,7 @@ void test_session_valid_null_session(VALK_TEST_ARGS()) {
   valk_aio_handle_t *conn = calloc(1, sizeof(valk_aio_handle_t));
   bool valid = valk_aio_http_session_valid(conn, nullptr);
   ASSERT_FALSE(valid);
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -221,7 +232,7 @@ void test_connection_closing_established(VALK_TEST_ARGS()) {
   bool closing = valk_aio_http_connection_closing(conn);
   ASSERT_FALSE(closing);
 
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -233,7 +244,7 @@ void test_connection_closing_closing_state(VALK_TEST_ARGS()) {
   bool closing = valk_aio_http_connection_closing(conn);
   ASSERT_TRUE(closing);
 
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -245,7 +256,7 @@ void test_connection_closing_closed_state(VALK_TEST_ARGS()) {
   bool closing = valk_aio_http_connection_closing(conn);
   ASSERT_TRUE(closing);
 
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -266,7 +277,7 @@ void test_stream_reset_null_session(VALK_TEST_ARGS()) {
   int rv = valk_http2_stream_reset(conn, 1, NGHTTP2_CANCEL);
   ASSERT_EQ(rv, -1);
 
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -283,7 +294,7 @@ void test_stream_reset_with_session(VALK_TEST_ARGS()) {
 
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -302,7 +313,7 @@ void test_submit_goaway_null_session(VALK_TEST_ARGS()) {
   int rv = valk_http2_submit_goaway(conn, NGHTTP2_NO_ERROR);
   ASSERT_EQ(rv, -1);
 
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -319,7 +330,7 @@ void test_submit_goaway_with_session(VALK_TEST_ARGS()) {
 
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -336,7 +347,7 @@ void test_release_stream_arena_null_session(VALK_TEST_ARGS()) {
   valk_aio_handle_t *conn = calloc(1, sizeof(valk_aio_handle_t));
   conn->http.session = nullptr;
   valk_http2_release_stream_arena(conn, 1);
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -346,7 +357,7 @@ void test_release_stream_arena_null_server(VALK_TEST_ARGS()) {
   conn->http.session = (nghttp2_session *)0x1;
   conn->http.server = nullptr;
   valk_http2_release_stream_arena(conn, 1);
-  free(conn);
+  free_test_conn(conn);
   VALK_PASS();
 }
 
@@ -367,7 +378,7 @@ void test_release_stream_arena_no_stream_data(VALK_TEST_ARGS()) {
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
   free(srv);
-  free(conn);
+  free_test_conn(conn);
   free_test_system(sys);
   VALK_PASS();
 }
@@ -449,7 +460,7 @@ void test_release_stream_arena_with_valid_arena(VALK_TEST_ARGS()) {
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
   free(srv);
-  free(conn);
+  free_test_conn(conn);
   valk_slab_free(sys->httpStreamArenas);
   free_test_system(sys);
   VALK_PASS();
@@ -507,7 +518,7 @@ void test_remove_from_active_arenas_head(VALK_TEST_ARGS()) {
   valk_slab_release(sys->httpStreamArenas, item2);
   valk_slab_free(sys->httpStreamArenas);
   free(srv);
-  free(conn);
+  free_test_conn(conn);
   free_test_system(sys);
   VALK_PASS();
 }
@@ -574,7 +585,7 @@ void test_remove_from_active_arenas_middle(VALK_TEST_ARGS()) {
   valk_slab_release(sys->httpStreamArenas, item3);
   valk_slab_free(sys->httpStreamArenas);
   free(srv);
-  free(conn);
+  free_test_conn(conn);
   free_test_system(sys);
   VALK_PASS();
 }
@@ -723,9 +734,6 @@ void test_release_stream_arena_backpressure_exit(VALK_TEST_ARGS()) {
   srv->sys = sys;
   conn->http.server = srv;
 
-  SSL_CTX *ssl_ctx = SSL_CTX_new(TLS_server_method());
-  valk_aio_ssl_accept(&conn->http.io.ssl, ssl_ctx);
-
   nghttp2_session_callbacks *callbacks;
   nghttp2_session_callbacks_new(&callbacks);
   nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, valk_http2_on_begin_headers_callback);
@@ -778,10 +786,8 @@ void test_release_stream_arena_backpressure_exit(VALK_TEST_ARGS()) {
   nghttp2_hd_deflate_del(deflater);
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
-  valk_aio_ssl_free(&conn->http.io.ssl);
-  SSL_CTX_free(ssl_ctx);
   free(srv);
-  free(conn);
+  free_test_conn(conn);
   valk_slab_free(sys->httpStreamArenas);
   free_test_system(sys);
   VALK_PASS();
@@ -808,7 +814,7 @@ void test_on_frame_recv_goaway(VALK_TEST_ARGS()) {
 
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
-  free(conn);
+  free_test_conn(conn);
   free_test_system(sys);
   VALK_PASS();
 }
@@ -835,7 +841,7 @@ void test_on_frame_recv_rst_stream(VALK_TEST_ARGS()) {
 
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
-  free(conn);
+  free_test_conn(conn);
   free_test_system(sys);
   VALK_PASS();
 }
@@ -866,7 +872,7 @@ void test_on_frame_recv_headers_no_stream_data(VALK_TEST_ARGS()) {
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
   free(srv);
-  free(conn);
+  free_test_conn(conn);
   free_test_system(sys);
   VALK_PASS();
 }
@@ -931,7 +937,7 @@ void test_on_begin_headers_arena_exhausted(VALK_TEST_ARGS()) {
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
   free(srv);
-  free(conn);
+  free_test_conn(conn);
   valk_slab_free(sys->httpStreamArenas);
   free_test_system(sys);
   VALK_PASS();
@@ -958,7 +964,7 @@ void test_on_frame_recv_passthrough(VALK_TEST_ARGS()) {
 
   nghttp2_session_del(conn->http.session);
   nghttp2_session_callbacks_del(callbacks);
-  free(conn);
+  free_test_conn(conn);
   free_test_system(sys);
   VALK_PASS();
 }
@@ -1015,6 +1021,11 @@ int main(void) {
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
   valk_testsuite_free(suite);
+
+  if (test_ssl_ctx) {
+    SSL_CTX_free(test_ssl_ctx);
+    test_ssl_ctx = nullptr;
+  }
 
   return result;
 }
