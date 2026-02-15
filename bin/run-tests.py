@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 TAIL_LINES = 100
+MAX_REPORT_DIRS = 10
 EXCLUDE_BINARIES = {"test_demo_server"}
 
 SANITIZER_ENV = {
@@ -46,6 +47,21 @@ SANITIZER_ENV = {
         "VALK_TEST_NO_FORK": "1",
     },
 }
+
+
+def prune_old_runs(report_root, prefix, max_keep):
+    """Keep only the newest max_keep timestamped dirs matching prefix under report_root."""
+    root = Path(report_root)
+    if not root.is_dir():
+        return
+    dirs = sorted(
+        [d for d in root.iterdir() if d.is_dir() and d.name.startswith(prefix)],
+        key=lambda d: d.name,
+    )
+    while len(dirs) > max_keep:
+        old = dirs.pop(0)
+        import shutil
+        shutil.rmtree(old, ignore_errors=True)
 
 
 def discover_c_tests(build_dir):
@@ -596,6 +612,9 @@ def main():
         latest_link.symlink_to(Path(junit_dir).name)
     except OSError:
         pass
+
+    # Prune old report dirs, keep only the newest MAX_REPORT_DIRS
+    prune_old_runs(report_root, "junit-", MAX_REPORT_DIRS)
 
     jobs = args.jobs if args.jobs > 0 else os.cpu_count() or 4
     c_count = sum(1 for s in suites if s["kind"] == "c")

@@ -84,5 +84,6 @@ int pos_to_offset(const char *text, int line, int col);
 
 void analyze_document(lsp_document_t *doc);
 void lsp_set_workspace_root(const char *root);
+int lsp_find_sym_offset(const char *text, const char *sym, int search_start);
 
 

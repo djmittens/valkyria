@@ -2,13 +2,13 @@
 """Extract C builtin signatures for the LSP.
 
 Scans all valk_lenv_put_builtin() registrations in C source, then extracts
-arity, parameter names, and parameter types from the function bodies.
+arity, parameter names, parameter types, and return types from function bodies.
 
 .valk functions (prelude, user code) are handled dynamically by the LSP's
 load-graph resolver and analyze_document() at runtime — not here.
 
 Generates src/lsp/lsp_builtins_gen.h with:
-  - LSP_BUILTINS[] : name, min_arity, max_arity, signature, doc, is_special_form
+  - LSP_BUILTINS[] : name, arity, signature, param_types[], ret_type, is_special_form
 """
 
 import re
@@ -32,6 +32,7 @@ class Builtin:
   params: list[Param] = field(default_factory=list)
   doc: str = ""
   is_special_form: bool = False
+  ret_type: str = "BRET_ANY"
 
 LVAL_TYPE_NAMES = {
   "LVAL_NUM": "Num",
@@ -50,6 +51,123 @@ SPECIAL_FORMS = {
   "def", "=", "\\", "fun", "if", "do", "select", "case",
   "quote", "load", "eval", "read", "let",
   "aio/let", "aio/do", "<-",
+}
+
+# Return type for each builtin (derived from C source analysis).
+# Omitted builtins default to BRET_ANY.
+RETURN_TYPES: dict[str, str] = {
+  # Arithmetic -> Num
+  "+": "BRET_NUM", "-": "BRET_NUM", "*": "BRET_NUM", "/": "BRET_NUM",
+  ">": "BRET_NUM", "<": "BRET_NUM", ">=": "BRET_NUM", "<=": "BRET_NUM",
+  "==": "BRET_NUM", "!=": "BRET_NUM", "ord": "BRET_NUM",
+  "str->num": "BRET_NUM", "len": "BRET_NUM",
+  # Memory/system -> Num
+  "time-us": "BRET_NUM", "stack-depth": "BRET_NUM",
+  "mem/heap/usage": "BRET_NUM", "mem/heap/hard-limit": "BRET_NUM",
+  "mem/heap/set-hard-limit": "BRET_NUM",
+  "mem/gc/collect": "BRET_NUM", "mem/gc/threshold": "BRET_NUM",
+  "mem/gc/set-threshold": "BRET_NUM", "mem/gc/usage": "BRET_NUM",
+  "mem/gc/min-interval": "BRET_NUM", "mem/gc/set-min-interval": "BRET_NUM",
+  "mem/arena/usage": "BRET_NUM", "mem/arena/capacity": "BRET_NUM",
+  "mem/arena/high-water": "BRET_NUM",
+  "http2/server-port": "BRET_NUM",
+  "source-line": "BRET_NUM", "source-column": "BRET_NUM",
+  # Predicates -> Num (0/1)
+  "error?": "BRET_NUM", "list?": "BRET_NUM", "ref?": "BRET_NUM",
+  "aio/on-loop-thread?": "BRET_NUM",
+  # String operations -> Str
+  "str": "BRET_STR", "make-string": "BRET_STR",
+  "str/replace": "BRET_STR", "str/slice": "BRET_STR",
+  "read-file": "BRET_STR", "source-file": "BRET_STR",
+  "http2/response-body": "BRET_STR", "http2/response-status": "BRET_STR",
+  "aio/metrics-json": "BRET_STR", "aio/metrics-json-compact": "BRET_STR",
+  "aio/systems-json": "BRET_STR",
+  "aio/diagnostics-state-json": "BRET_STR",
+  "aio/diagnostics-state-json-compact": "BRET_STR",
+  "vm/metrics-json": "BRET_STR", "vm/metrics-json-compact": "BRET_STR",
+  "vm/metrics-prometheus": "BRET_STR",
+  "sys/log/set-level": "BRET_STR",
+  "metrics/delta-json": "BRET_STR", "metrics/prometheus": "BRET_STR",
+  "metrics/json": "BRET_STR", "metrics/registry-json": "BRET_STR",
+  # Nil-returning side effects
+  "def": "BRET_NIL", "=": "BRET_NIL",
+  "print": "BRET_NIL", "printf": "BRET_NIL", "println": "BRET_NIL",
+  "load": "BRET_NIL", "sleep": "BRET_NIL",
+  "aio/run": "BRET_NIL", "aio/stop": "BRET_NIL",
+  "mem/stats": "BRET_NIL", "mem/gc/stats": "BRET_NIL",
+  "http2/request-add-header": "BRET_NIL", "http2/server-handle": "BRET_NIL",
+  "http2/connect": "BRET_NIL",
+  "metrics/counter-inc": "BRET_NIL", "metrics/gauge-set": "BRET_NIL",
+  "metrics/gauge-inc": "BRET_NIL", "metrics/gauge-dec": "BRET_NIL",
+  "metrics/histogram-observe": "BRET_NIL",
+  "coverage-mark": "BRET_ANY", "coverage-record": "BRET_ANY",
+  "coverage-branch": "BRET_NUM",
+  # List-returning
+  "cons": "BRET_LIST", "list": "BRET_LIST",
+  "range": "BRET_LIST", "repeat": "BRET_LIST",
+  "str/split": "BRET_LIST",
+  "http2/response-headers": "BRET_LIST",
+  "penv": "BRET_LIST", "mem/checkpoint/stats": "BRET_LIST",
+  "tail": "BRET_LIST_OR_NIL", "init": "BRET_LIST_OR_NIL",
+  "join": "BRET_LIST_OR_NIL",
+  # Handle-returning (async)
+  "aio/start": "BRET_HANDLE",
+  "aio/schedule": "BRET_HANDLE", "aio/interval": "BRET_HANDLE",
+  "aio/sleep": "BRET_HANDLE", "aio/then": "BRET_HANDLE",
+  "aio/catch": "BRET_HANDLE", "aio/finally": "BRET_HANDLE",
+  "aio/all": "BRET_HANDLE", "aio/race": "BRET_HANDLE",
+  "aio/any": "BRET_HANDLE", "aio/all-settled": "BRET_HANDLE",
+  "aio/within": "BRET_HANDLE", "aio/retry": "BRET_HANDLE",
+  "aio/pure": "BRET_HANDLE", "aio/fail": "BRET_HANDLE",
+  "aio/never": "BRET_HANDLE", "aio/scope": "BRET_HANDLE",
+  "aio/bracket": "BRET_HANDLE", "aio/traverse": "BRET_HANDLE",
+  "aio/on-cancel": "BRET_HANDLE",
+  "aio/cancelled?": "BRET_NUM",
+  "http2/server-listen": "BRET_HANDLE", "http2/server-stop": "BRET_HANDLE",
+  "http2/client-request": "BRET_HANDLE",
+  "http2/client-request-with-headers": "BRET_HANDLE",
+  "stream/closed": "BRET_HANDLE",
+  # Ref-returning
+  "http2/request": "BRET_REF", "http2/mock-response": "BRET_REF",
+  "test/capture-start": "BRET_REF",
+  "metrics/counter": "BRET_REF", "metrics/gauge": "BRET_REF",
+  "metrics/histogram": "BRET_REF", "metrics/baseline": "BRET_REF",
+  "metrics/collect-delta": "BRET_REF",
+  "metrics/collect-delta-stateless": "BRET_REF",
+  # Error constructor
+  "error": "BRET_ERR",
+  # Lambda constructor
+  "\\": "BRET_FUN",
+  # Special forms with known return types
+  "quote": "BRET_LIST",
+}
+
+# Map from param type display strings to C enum values
+PARAM_TYPE_TO_ENUM: dict[str, str] = {
+  "Num": "BPTY_NUM",
+  "Str": "BPTY_STR",
+  "Sym": "BPTY_SYM",
+  "Fun": "BPTY_FUN",
+  "Nil": "BPTY_NIL",
+  "List": "BPTY_LIST",
+  "Ref": "BPTY_REF",
+  "Ref(aio)": "BPTY_REF",
+  "Handle": "BPTY_HANDLE",
+  "QExpr": "BPTY_LIST",
+}
+
+# Compound param type patterns
+COMPOUND_PARAM_TYPES: dict[tuple[str, ...], str] = {
+  ("List", "Nil"): "BPTY_LIST_OR_NIL",
+  ("Nil", "List"): "BPTY_LIST_OR_NIL",
+  ("List", "QExpr"): "BPTY_LIST_OR_QEXPR",
+  ("QExpr", "List"): "BPTY_LIST_OR_QEXPR",
+  ("List", "QExpr", "Nil"): "BPTY_LIST_OR_QEXPR_OR_NIL",
+  ("List", "Nil", "QExpr"): "BPTY_LIST_OR_QEXPR_OR_NIL",
+  ("QExpr", "List", "Nil"): "BPTY_LIST_OR_QEXPR_OR_NIL",
+  ("QExpr", "Nil", "List"): "BPTY_LIST_OR_QEXPR_OR_NIL",
+  ("Nil", "List", "QExpr"): "BPTY_LIST_OR_QEXPR_OR_NIL",
+  ("Nil", "QExpr", "List"): "BPTY_LIST_OR_QEXPR_OR_NIL",
 }
 
 
@@ -226,6 +344,10 @@ def build_params(builtin: Builtin, body: str) -> None:
   types = parse_param_types(body)
   names = parse_param_names(body)
 
+  if builtin.lisp_name in PARAM_TYPE_OVERRIDES:
+    for idx, tys in PARAM_TYPE_OVERRIDES[builtin.lisp_name].items():
+      types[idx] = tys
+
   if builtin.max_arity == 0:
     return
 
@@ -277,21 +399,48 @@ def find_delegated_body(body: str, c_files_text: dict[str, str]) -> str | None:
   return None
 
 
+# Manual param type overrides for builtins where the extraction heuristics
+# can't determine types (e.g., loop-based validation instead of per-arg asserts).
+# Format: {lisp_name: {param_index: [type_strings]}}
+PARAM_TYPE_OVERRIDES: dict[str, dict[int, list[str]]] = {
+  "+": {0: ["Num"]},
+  "-": {0: ["Num"]},
+  "*": {0: ["Num"]},
+  "/": {0: ["Num"]},
+  "==": {},
+  "!=": {},
+}
+
+def param_types_to_enum(types: list[str]) -> str:
+  """Convert a list of type display strings to a C param type enum."""
+  if not types:
+    return "BPTY_ANY"
+  if len(types) == 1:
+    return PARAM_TYPE_TO_ENUM.get(types[0], "BPTY_ANY")
+  key = tuple(types)
+  return COMPOUND_PARAM_TYPES.get(key, "BPTY_ANY")
+
 EVAL_INTRINSICS = [
   Builtin("if", min_arity=2, max_arity=3, is_special_form=True,
-          params=[Param("cond"), Param("then"), Param("else")]),
+          params=[Param("cond"), Param("then"), Param("else")],
+          ret_type="BRET_ANY"),
   Builtin("fun", min_arity=2, max_arity=-1, is_special_form=True,
           params=[Param("name-params", types=["QExpr"]),
-                  Param("body", variadic=True)]),
+                  Param("body", variadic=True)],
+          ret_type="BRET_FUN"),
   Builtin("case", min_arity=2, max_arity=-1, is_special_form=True,
-          params=[Param("val"), Param("clauses", variadic=True)]),
+          params=[Param("val"), Param("clauses", variadic=True)],
+          ret_type="BRET_ANY"),
   Builtin("let", min_arity=2, max_arity=-1, is_special_form=True,
           params=[Param("bindings", types=["QExpr"]),
-                  Param("body", variadic=True)]),
+                  Param("body", variadic=True)],
+          ret_type="BRET_ANY"),
   Builtin("quote", min_arity=1, max_arity=1, is_special_form=True,
-          params=[Param("expr")]),
+          params=[Param("expr")],
+          ret_type="BRET_LIST"),
   Builtin("<-", min_arity=1, max_arity=1, is_special_form=True,
-          params=[Param("handle")]),
+          params=[Param("handle")],
+          ret_type="BRET_ANY"),
 ]
 
 
@@ -308,6 +457,7 @@ def extract_all(project_root: Path) -> list[Builtin]:
   for lisp_name, (c_func, rel_file) in sorted(registrations.items()):
     b = Builtin(lisp_name=lisp_name, c_func=c_func, source_file=rel_file)
     b.is_special_form = lisp_name in SPECIAL_FORMS
+    b.ret_type = RETURN_TYPES.get(lisp_name, "BRET_ANY")
 
     body = None
     for path, text in c_files_text.items():
@@ -367,10 +517,11 @@ def generate_header(builtins: list[Builtin]) -> str:
     doc = c_escape(b.doc) if b.doc else ""
     name = c_escape(b.lisp_name)
     sf = 1 if b.is_special_form else 0
+
     lines.append(f'  {{"{name}", {b.min_arity}, {b.max_arity}, '
                  f'"{c_escape(sig)}", "{doc}", {sf}}},')
 
-  lines.append("  {0, 0, 0, 0, 0, 0}")
+  lines.append(f"  {{0, 0, 0, 0, 0, 0}}")
   lines.append("};")
   lines.append("")
 
@@ -391,11 +542,16 @@ def main():
 
   with_arity = [b for b in builtins if b.min_arity >= 0]
   with_params = [b for b in builtins if b.params]
+  with_ret = [b for b in builtins if b.ret_type != "BRET_ANY"]
+  with_pty = [b for b in builtins
+              if any(param_types_to_enum(p.types) != "BPTY_ANY" for p in b.params)]
 
   sys.stderr.write(f"Generated {out_path}:\n")
-  sys.stderr.write(f"  C builtins:    {len(builtins)}\n")
-  sys.stderr.write(f"  With arity:    {len(with_arity)}\n")
-  sys.stderr.write(f"  With params:   {len(with_params)}\n")
+  sys.stderr.write(f"  C builtins:      {len(builtins)}\n")
+  sys.stderr.write(f"  With arity:      {len(with_arity)}\n")
+  sys.stderr.write(f"  With params:     {len(with_params)}\n")
+  sys.stderr.write(f"  With ret type:   {len(with_ret)}\n")
+  sys.stderr.write(f"  With param types: {len(with_pty)}\n")
 
   return 0
 

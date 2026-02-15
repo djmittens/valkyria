@@ -1,5 +1,6 @@
 #include "lsp_doc.h"
 #include "lsp_builtins_gen.h"
+#include "lsp_types.h"
 
 #include <libgen.h>
 #include <limits.h>
@@ -384,7 +385,7 @@ static bool in_comment_or_string(const char *text, int pos) {
   return in_str;
 }
 
-static int find_sym_offset(const char *text, const char *sym, int search_start) {
+int lsp_find_sym_offset(const char *text, const char *sym, int search_start) {
   int slen = (int)strlen(sym);
   int tlen = (int)strlen(text);
   for (int i = search_start; i <= tlen - slen; i++) {
@@ -406,6 +407,8 @@ static int find_sym_offset(const char *text, const char *sym, int search_start) 
   }
   return -1;
 }
+
+#define find_sym_offset lsp_find_sym_offset
 
 static void check_expr(valk_lval_t *expr, lsp_symset_t *globals, lsp_scope_t *scope,
                         lsp_document_t *doc, const char *text, int *cursor) {
@@ -429,7 +432,7 @@ static void check_expr(valk_lval_t *expr, lsp_symset_t *globals, lsp_scope_t *sc
       lsp_pos_t p = offset_to_pos(text, off);
       char msg[256];
       snprintf(msg, sizeof(msg), "Symbol '%s' is not defined", expr->str);
-      doc_add_diag_full(doc, msg, p.line, p.col, (int)strlen(expr->str), 1);
+      doc_add_diag_full(doc, msg, p.line, p.col, (int)strlen(expr->str), 2);
     }
     return;
   }
@@ -881,6 +884,51 @@ static void generate_semantic_tokens(lsp_document_t *doc) {
 }
 
 // ---------------------------------------------------------------------------
+// Type checking pass
+// ---------------------------------------------------------------------------
+
+static void check_types(lsp_document_t *doc) {
+  type_arena_t arena;
+  type_arena_init(&arena);
+
+  typed_scope_t *top = typed_scope_push(&arena, nullptr);
+  lsp_builtin_schemes_init(&arena, top);
+
+  const char *text = doc->text;
+  int pos = 0;
+  int len = (int)doc->text_len;
+  int cursor = 0;
+
+  infer_ctx_t ctx = {
+    .arena = &arena,
+    .scope = top,
+    .doc = doc,
+    .text = text,
+    .cursor = &cursor,
+    .floor_var_id = arena.next_var_id,
+  };
+
+  while (pos < len) {
+    while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
+    if (pos >= len) break;
+
+    if (text[pos] == ';') {
+      while (pos < len && text[pos] != '\n') pos++;
+      continue;
+    }
+
+    cursor = pos;
+    valk_lval_t *expr = valk_lval_read(&pos, text);
+    if (LVAL_TYPE(expr) == LVAL_ERR) break;
+
+    infer_expr(&ctx, expr);
+  }
+
+  typed_scope_pop(top);
+  type_arena_free(&arena);
+}
+
+// ---------------------------------------------------------------------------
 // Document analysis: extract symbols, diagnostics, check undefined symbols
 // ---------------------------------------------------------------------------
 
@@ -972,5 +1020,6 @@ void analyze_document(lsp_document_t *doc) {
   }
 
   check_undefined_symbols(doc);
+  check_types(doc);
   generate_semantic_tokens(doc);
 }

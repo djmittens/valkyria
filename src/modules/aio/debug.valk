@@ -134,8 +134,10 @@
                 {(req/path req)}
                 {(plist/get req :path)}))
 
-    ; Extract query parameters if present
-    (= {query} nil)
+    ; Split path and query string (HTTP/2 :path includes query)
+    (= {path-parts} (str/split path "?"))
+    (= {path} (head path-parts))
+    (= {query} (if (> (len path-parts) 1) {(head (tail path-parts))} {nil}))
 
     ; Route to appropriate debug endpoint
     ; Handle both /debug and /debug/ for the dashboard

@@ -180,6 +180,8 @@ set(VALKYRIA_SOURCES
   src/event_loop_metrics.c
   src/lsp/lsp.c
   src/lsp/lsp_analysis.c
+  src/lsp/lsp_types.c
+  src/lsp/lsp_builtin_schemes.c
   src/lsp/lsp_io.c
   src/lsp/lsp_json.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/lsp/lsp_builtins_gen.h

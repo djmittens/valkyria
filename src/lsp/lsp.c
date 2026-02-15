@@ -1,6 +1,7 @@
 #include "lsp.h"
 #include "lsp_doc.h"
 #include "lsp_builtins_gen.h"
+#include "lsp_types.h"
 #include "lsp_io.h"
 #include "lsp_json.h"
 
@@ -420,7 +421,27 @@ static void handle_completion(int id, json_value_t *params) {
 
     if (sig && sig[0]) {
       char detail[280];
-      snprintf(detail, sizeof(detail), " %s", sig);
+      {
+        type_arena_t ta;
+        type_arena_init(&ta);
+        typed_scope_t *ts = typed_scope_push(&ta, nullptr);
+        lsp_builtin_schemes_init(&ta, ts);
+        type_scheme_t *sch = typed_scope_lookup(ts, bi->name);
+        if (sch) {
+          valk_type_t *fn = ty_resolve(scheme_instantiate(&ta, sch));
+          if (fn->kind == TY_FUN) {
+            char *ret_str = valk_type_display(fn->fun.ret);
+            snprintf(detail, sizeof(detail), " %s -> %s", sig, ret_str);
+            free(ret_str);
+          } else {
+            snprintf(detail, sizeof(detail), " %s", sig);
+          }
+        } else {
+          snprintf(detail, sizeof(detail), " %s", sig);
+        }
+        typed_scope_pop(ts);
+        type_arena_free(&ta);
+      }
       char *escaped_detail = json_escape_string(detail);
       p += snprintf(p, end_buf - p, ",\"labelDetails\":{\"detail\":%s}", escaped_detail);
       free(escaped_detail);
@@ -768,7 +789,25 @@ static void handle_hover(int id, json_value_t *params) {
       }
     }
     if (bi) {
-      p += snprintf(p, pe - p, "```valk\n%s\n```", bi->signature);
+      type_arena_t ta;
+      type_arena_init(&ta);
+      typed_scope_t *ts = typed_scope_push(&ta, nullptr);
+      lsp_builtin_schemes_init(&ta, ts);
+      type_scheme_t *sch = typed_scope_lookup(ts, bi->name);
+      if (sch) {
+        valk_type_t *fn = ty_resolve(scheme_instantiate(&ta, sch));
+        if (fn->kind == TY_FUN) {
+          char *ret_str = valk_type_display(fn->fun.ret);
+          p += snprintf(p, pe - p, "```valk\n%s -> %s\n```", bi->signature, ret_str);
+          free(ret_str);
+        } else {
+          p += snprintf(p, pe - p, "```valk\n%s\n```", bi->signature);
+        }
+      } else {
+        p += snprintf(p, pe - p, "```valk\n%s\n```", bi->signature);
+      }
+      typed_scope_pop(ts);
+      type_arena_free(&ta);
       const char *desc = builtin_doc(word);
       if (desc)
         p += snprintf(p, pe - p, "\n\n%s", desc);
