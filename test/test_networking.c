@@ -12,6 +12,7 @@
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
+#include "type_env.h"
 
 #define LISP_50MB_RESPONSE_SIZE 52428800
 
@@ -138,7 +139,6 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
               prelude_ast ? prelude_ast->str : "nullptr");
     return;
   }
-
   printf("[test] Creating env...\n");
   fflush(stdout);
   valk_lenv_t *env = valk_lenv_empty();
@@ -150,7 +150,9 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
 
   int expr_count = 0;
   while (valk_lval_list_count(prelude_ast)) {
-    valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(prelude_ast, 0));
+    valk_lval_t *x = valk_type_transform_expr(valk_lval_pop(prelude_ast, 0));
+    if (LVAL_TYPE(x) == LVAL_NIL) continue;
+    x = valk_lval_eval(env, x);
     expr_count++;
     if (expr_count % 50 == 0) {
       printf("[test] Evaluated %d expressions...\n", expr_count);
@@ -173,7 +175,9 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
 
   valk_lval_t *handler_fn = nullptr;
   while (valk_lval_list_count(handler_ast)) {
-    handler_fn = valk_lval_eval(env, valk_lval_pop(handler_ast, 0));
+    handler_fn = valk_type_transform_expr(valk_lval_pop(handler_ast, 0));
+    if (LVAL_TYPE(handler_fn) == LVAL_NIL) continue;
+    handler_fn = valk_lval_eval(env, handler_fn);
     if (LVAL_TYPE(handler_fn) == LVAL_ERR) {
       VALK_FAIL("Handler evaluation failed: %s", handler_fn->str);
       return;

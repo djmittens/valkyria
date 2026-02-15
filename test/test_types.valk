@@ -1,0 +1,193 @@
+; ADT type system integration tests
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; === Type declarations ===
+(type {Color} {Red} {Green} {Blue})
+
+(type {Person}
+  {:name Str :age Num :email Str})
+
+(type {Shape}
+  {Circle :radius Num}
+  {Rect :w Num :h Num})
+
+(type {Option a}
+  {None}
+  {Some :value a})
+
+(type {Result ok err}
+  {Ok :value ok}
+  {Err :error err})
+
+(test/run (list
+
+  ; === Enum tests ===
+  (test "enum-constructor-red"
+    {do
+      (= {c} (Red))
+      (test/assert (== (head c) (head {Red})) "Red should have tag Red")
+    })
+
+  (test "enum-constructor-blue"
+    {do
+      (= {c} (Blue))
+      (test/assert (== (head c) (head {Blue})) "Blue should have tag Blue")
+    })
+
+  (test "enum-match"
+    {do
+      (= {color-name} (\ {c} {
+        match c
+          {(Red)   "red"}
+          {(Green) "green"}
+          {(Blue)  "blue"}
+      }))
+      (test/assert (== (color-name (Red)) "red") "Red -> red")
+      (test/assert (== (color-name (Green)) "green") "Green -> green")
+      (test/assert (== (color-name (Blue)) "blue") "Blue -> blue")
+    })
+
+  ; === Product type tests ===
+  (test "product-keyword-construction"
+    {do
+      (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
+      (test/assert (== (head p) (head {Person})) "tag is Person")
+      (test/assert (== (nth 2 p) "Alice") "name is Alice")
+      (test/assert (== (nth 3 p) 30) "age is 30")
+      (test/assert (== (nth 4 p) "a@b.com") "email is a@b.com")
+    })
+
+  (test "product-positional-construction"
+    {do
+      (= {p} (Person "Bob" 25 "b@b.com"))
+      (test/assert (== (nth 2 p) "Bob") "name is Bob")
+      (test/assert (== (nth 3 p) 25) "age is 25")
+    })
+
+  (test "product-accessor"
+    {do
+      (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
+      (test/assert (== (Person:name p) "Alice") "Person:name works")
+      (test/assert (== (Person:age p) 30) "Person:age works")
+      (test/assert (== (Person:email p) "a@b.com") "Person:email works")
+    })
+
+  ; === Sum type tests ===
+  (test "sum-keyword-construction"
+    {do
+      (= {s1} (Circle :radius 5))
+      (= {s2} (Rect :w 10 :h 20))
+      (test/assert (== (head s1) (head {Circle})) "Circle tag")
+      (test/assert (== (nth 2 s1) 5) "Circle radius")
+      (test/assert (== (head s2) (head {Rect})) "Rect tag")
+      (test/assert (== (nth 2 s2) 10) "Rect width")
+    })
+
+  (test "sum-positional-construction"
+    {do
+      (= {s} (Circle 7))
+      (test/assert (== (Circle:radius s) 7) "positional Circle:radius")
+    })
+
+  (test "sum-accessor"
+    {do
+      (= {s} (Rect :w 10 :h 20))
+      (test/assert (== (Rect:w s) 10) "Rect:w works")
+      (test/assert (== (Rect:h s) 20) "Rect:h works")
+    })
+
+  (test "sum-match-named"
+    {do
+      (= {area} (\ {s} {
+        match s
+          {(Circle :radius r) (* 3 (* r r))}
+          {(Rect :w w :h h)   (* w h)}
+      }))
+      (test/assert (== (area (Circle 5)) 75) "Circle area")
+      (test/assert (== (area (Rect 10 20)) 200) "Rect area")
+    })
+
+  (test "sum-match-positional"
+    {do
+      (= {area2} (\ {s} {
+        match s
+          {(Circle r) (* 3 (* r r))}
+          {(Rect w h) (* w h)}
+      }))
+      (test/assert (== (area2 (Circle 4)) 48) "positional Circle area")
+      (test/assert (== (area2 (Rect 3 5)) 15) "positional Rect area")
+    })
+
+  ; === Option type tests ===
+  (test "option-some"
+    {do
+      (= {x} (Some :value 42))
+      (test/assert (== (head x) (head {Some})) "Some tag")
+      (test/assert (== (Some:value x) 42) "Some:value")
+    })
+
+  (test "option-none"
+    {do
+      (= {y} (None))
+      (test/assert (== (head y) (head {None})) "None tag")
+    })
+
+  (test "option-match"
+    {do
+      (= {unwrap-or} (\ {opt default} {
+        match opt
+          {(Some :value v) v}
+          {(None) default}
+      }))
+      (test/assert (== (unwrap-or (Some 42) 0) 42) "unwrap Some")
+      (test/assert (== (unwrap-or (None) 0) 0) "unwrap None")
+    })
+
+  (test "match-wildcard"
+    {do
+      (= {is-some} (\ {opt} {
+        match opt
+          {(Some :value v) 1}
+          {_ 0}
+      }))
+      (test/assert (== (is-some (Some 1)) 1) "wildcard Some")
+      (test/assert (== (is-some (None)) 0) "wildcard None")
+    })
+
+  ; === Result type tests ===
+  (test "result-ok"
+    {do
+      (= {r} (Ok :value 42))
+      (test/assert (== (Ok:value r) 42) "Ok:value")
+    })
+
+  (test "result-err"
+    {do
+      (= {r} (Err :error "oops"))
+      (test/assert (== (Err:error r) "oops") "Err:error")
+    })
+
+  (test "result-match"
+    {do
+      (= {result-or} (\ {r default} {
+        match r
+          {(Ok :value v) v}
+          {(Err :error e) default}
+      }))
+      (test/assert (== (result-or (Ok 10) 0) 10) "result-or Ok")
+      (test/assert (== (result-or (Err "bad") 0) 0) "result-or Err")
+    })
+
+  ; === Constructor in nested expressions ===
+  (test "nested-constructor"
+    {do
+      (= {x} (Some (Some 42)))
+      (test/assert (== (head x) (head {Some})) "outer Some tag")
+      (= {inner} (Some:value x))
+      (test/assert (== (head inner) (head {Some})) "inner Some tag")
+      (test/assert (== (Some:value inner) 42) "inner value")
+    })
+
+))

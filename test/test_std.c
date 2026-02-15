@@ -6,6 +6,7 @@
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
+#include "type_env.h"
 
 void test_parsing_prelude(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -220,7 +221,9 @@ int main(int argc, const char **argv) {
   // Evaluate prelude sequentially (program semantics)
   size_t expr_count = 0;
   while (valk_lval_list_count(ast)) {
-    valk_lval_t *x = valk_lval_eval(env, valk_lval_pop(ast, 0));
+    valk_lval_t *x = valk_type_transform_expr(valk_lval_pop(ast, 0));
+    if (LVAL_TYPE(x) == LVAL_NIL) continue;
+    x = valk_lval_eval(env, x);
     expr_count++;
     if (LVAL_TYPE(x) == LVAL_ERR) {
       // Stop early if prelude fails; tests will surface the error

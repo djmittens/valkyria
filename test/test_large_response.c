@@ -18,6 +18,7 @@
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
+#include "type_env.h"
 
 // Response size definitions (must match test_large_response_handler.valk)
 #define SIZE_1MB   1048576
@@ -70,14 +71,15 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
               prelude_ast ? prelude_ast->str : "nullptr");
     return false;
   }
-
   ctx->env = valk_lenv_empty();
   valk_lenv_builtins(ctx->env);
   valk_thread_ctx.root_env = ctx->env;
   valk_gc_set_root(valk_thread_ctx.heap, ctx->env);
 
   while (valk_lval_list_count(prelude_ast)) {
-    valk_lval_t *x = valk_lval_eval(ctx->env, valk_lval_pop(prelude_ast, 0));
+    valk_lval_t *x = valk_type_transform_expr(valk_lval_pop(prelude_ast, 0));
+    if (LVAL_TYPE(x) == LVAL_NIL) continue;
+    x = valk_lval_eval(ctx->env, x);
     if (LVAL_TYPE(x) == LVAL_ERR) {
       VALK_FAIL("Prelude evaluation failed: %s", x->str);
       return false;
@@ -96,7 +98,9 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
 
   ctx->handler_fn = nullptr;
   while (valk_lval_list_count(handler_ast)) {
-    ctx->handler_fn = valk_lval_eval(ctx->env, valk_lval_pop(handler_ast, 0));
+    ctx->handler_fn = valk_type_transform_expr(valk_lval_pop(handler_ast, 0));
+    if (LVAL_TYPE(ctx->handler_fn) == LVAL_NIL) continue;
+    ctx->handler_fn = valk_lval_eval(ctx->env, ctx->handler_fn);
     if (LVAL_TYPE(ctx->handler_fn) == LVAL_ERR) {
       VALK_FAIL("Handler evaluation failed: %s", ctx->handler_fn->str);
       return false;

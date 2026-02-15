@@ -31,22 +31,21 @@
     (= {js} (read-file "src/modules/aio/debug/script.js"))
     (test/assert (> (len js) 100) "script.js should have substantial content")
   })
-  (test "str-concat-files"
-    {do
-    (= {path} "src/modules/aio/debug/")
-    (= {head} (read-file (str path "head.html")))
-    (= {style} (read-file (str path "style.css")))
-    (= {body} (read-file (str path "body.html")))
-    (= {script} (read-file (str path "script.js")))
-    (= {footer} (read-file (str path "footer.html")))
-    (= {total} (str head style body script footer))
-    ; Total should be sum of all parts
-    (= {expected-len} (+ (len head) (len style) (len body) (len script) (len footer)))
-    (test/assert-eq expected-len (len total) "concatenated length should match sum of parts")
-  })
   (test "debug-module-loads"
     {do
     (load "src/modules/aio/debug.valk")
     (test/assert (> (len aio/debug-html-content) 1000) "debug HTML content should be loaded")
+  })
+  (test "str-concat-files"
+    {do
+    (= {fpath} "src/modules/aio/debug/")
+    (= {head-html} (read-file (str fpath "head.html")))
+    (= {style-css} (read-file (str fpath "style.css")))
+    (= {body-html} (read-file (str fpath "body.html")))
+    (= {script-js} (read-file (str fpath "script.js")))
+    (= {footer-html} (read-file (str fpath "footer.html")))
+    (= {total} (str head-html style-css body-html script-js footer-html))
+    (= {expected-len} (+ (len head-html) (len style-css) (len body-html) (len script-js) (len footer-html)))
+    (test/assert-eq expected-len (len total) "concatenated length should match sum of parts")
   }))
   {:suite-name "read-file Tests"})

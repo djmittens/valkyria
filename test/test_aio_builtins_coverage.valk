@@ -99,137 +99,137 @@
   (test "aio/pure creates completed handle with value"
     {do
     (= {h} (aio/pure 42))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/pure with nil value"
     {do
     (= {h} (aio/pure nil))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/pure with list value"
     {do
     (= {h} (aio/pure (list 1 2 3)))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/fail creates failed handle"
     {do
     (= {h} (aio/fail "test error"))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/fail with symbol error"
     {do
-    (= {h} (aio/fail (quote :error)))
-    (== (aio/status h) (quote :failed))
+    (= {h} (aio/fail :error))
+    (== (aio/status h) :failed)
   })
   (test "aio/status on completed handle"
     {do
     (= {h} (aio/pure 1))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/status on failed handle"
     {do
     (= {h} (aio/fail "err"))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/cancelled? on completed handle returns false"
     {do
     (= {h} (aio/pure 1))
-    (== (aio/cancelled? h) (quote :false))
+    (== (aio/cancelled? h) :false)
   })
   (test "aio/cancelled? on failed handle returns false"
     {do
     (= {h} (aio/fail "err"))
-    (== (aio/cancelled? h) (quote :false))
+    (== (aio/cancelled? h) :false)
   })
   (test "aio/cancel on completed handle returns false"
     {do
     (= {h} (aio/pure 1))
-    (== (aio/cancel h) (quote :false))
+    (== (aio/cancel h) :false)
   })
   (test "aio/cancel on failed handle returns false"
     {do
     (= {h} (aio/fail "err"))
-    (== (aio/cancel h) (quote :false))
+    (== (aio/cancel h) :false)
   })
   (test "aio/then on completed handle runs transform"
     {do
     (= {h} (aio/pure 10))
     (= {h2} (aio/then h (\ {x} {(aio/pure (* x 2))})))
-    (== (aio/status h2) (quote :completed))
+    (== (aio/status h2) :completed)
   })
   (test "aio/then on failed handle propagates failure"
     {do
     (= {h} (aio/fail "error"))
     (= {h2} (aio/then h (\ {x} {(aio/pure (* x 2))})))
-    (== (aio/status h2) (quote :failed))
+    (== (aio/status h2) :failed)
   })
   (test "aio/then transform that returns non-handle"
     {do
     (= {h} (aio/pure 5))
     (= {h2} (aio/then h (\ {x} {(* x 3)})))
-    (== (aio/status h2) (quote :completed))
+    (== (aio/status h2) :completed)
   })
   (test "aio/then transform that returns failed handle"
     {do
     (= {h} (aio/pure 5))
     (= {h2} (aio/then h (\ {x} {(aio/fail "transform failed")})))
-    (== (aio/status h2) (quote :failed))
+    (== (aio/status h2) :failed)
   })
   (test "aio/catch on completed handle passes through"
     {do
     (= {h} (aio/pure 42))
     (= {h2} (aio/catch h (\ {err} {(aio/pure 0)})))
-    (== (aio/status h2) (quote :completed))
+    (== (aio/status h2) :completed)
   })
   (test "aio/catch on failed handle runs recovery"
     {do
     (= {h} (aio/fail "error"))
     (= {h2} (aio/catch h (\ {err} {(aio/pure 99)})))
-    (== (aio/status h2) (quote :completed))
+    (== (aio/status h2) :completed)
   })
   (test "aio/catch recovery that returns failed handle propagates failure"
     {do
     (= {h} (aio/fail "error"))
     (= {h2} (aio/catch h (\ {err} {(aio/fail "recovery also failed")})))
-    (== (aio/status h2) (quote :failed))
+    (== (aio/status h2) :failed)
   })
   (test "aio/finally on completed handle"
     {do
     (= {h} (aio/pure 42))
     (= {cleanup-ran} false)
     (= {h2} (aio/finally h (\ {} {(= {cleanup-ran} true) nil})))
-    (== (aio/status h2) (quote :completed))
+    (== (aio/status h2) :completed)
   })
   (test "aio/finally on failed handle"
     {do
     (= {h} (aio/fail "error"))
     (= {h2} (aio/finally h (\ {} {nil})))
-    (== (aio/status h2) (quote :failed))
+    (== (aio/status h2) :failed)
   })
   (test "aio/all with empty list"
     {do
     (= {h} (aio/all ()))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/all with single completed handle"
     {do
     (= {h} (aio/all (list (aio/pure 1))))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/all with multiple completed handles"
     {do
     (= {h} (aio/all (list (aio/pure 1) (aio/pure 2) (aio/pure 3))))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/all with one failed handle fails"
     {do
     (= {h} (aio/all (list (aio/pure 1) (aio/fail "error") (aio/pure 3))))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/all with all failed handles"
     {do
     (= {h} (aio/all (list (aio/fail "e1") (aio/fail "e2"))))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/race with empty list returns error"
     {do
@@ -239,44 +239,44 @@
   (test "aio/race with single completed handle"
     {do
     (= {h} (aio/race (list (aio/pure 42))))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/race with multiple completed handles"
     {do
     (= {h} (aio/race (list (aio/pure 1) (aio/pure 2) (aio/pure 3))))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/race with first failed"
     {do
     (= {h} (aio/race (list (aio/fail "error") (aio/pure 2))))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/any with single completed handle"
     {do
     (= {h} (aio/any (list (aio/pure 42))))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/any with mixed handles (one success)"
     {do
     (= {h} (aio/any (list (aio/fail "e1") (aio/pure 42) (aio/fail "e2"))))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/any with all failed handles"
     {do
     (= {h} (aio/any (list (aio/fail "e1") (aio/fail "e2") (aio/fail "e3"))))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/on-cancel on completed handle"
     {do
     (= {h} (aio/pure 42))
     (= {h2} (aio/on-cancel h (\ {} {nil})))
-    (== (aio/status h2) (quote :completed))
+    (== (aio/status h2) :completed)
   })
   (test "aio/on-cancel on failed handle"
     {do
     (= {h} (aio/fail "error"))
     (= {h2} (aio/on-cancel h (\ {} {nil})))
-    (== (aio/status h2) (quote :failed))
+    (== (aio/status h2) :failed)
   })
   (test "aio/bracket with successful use"
     {do
@@ -284,7 +284,7 @@
       (aio/pure "resource")
       (\ {r} {(aio/pure nil)})
       (\ {r} {(aio/pure 42)})))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/bracket with failed use"
     {do
@@ -292,42 +292,42 @@
       (aio/pure "resource")
       (\ {r} {(aio/pure nil)})
       (\ {r} {(aio/fail "use failed")})))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/scope with immediate return fails"
     {do
     (= {h} (aio/scope (\ {} {42})))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/scope with pure handle fails without loop"
     {do
     (= {h} (aio/scope (\ {} {(aio/pure 99)})))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/scope with failed handle"
     {do
     (= {h} (aio/scope (\ {} {(aio/fail "scope failed")})))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
   (test "aio/let with single binding"
     {do
     (= {h} (aio/let ((x (aio/pure 10))) x))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/let with multiple bindings"
     {do
     (= {h} (aio/let ((a (aio/pure 1)) (b (aio/pure 2))) (+ a b)))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/let with then barrier"
     {do
-    (= {h} (aio/let ((x (aio/pure 10)) (quote :then) (y (aio/pure (* x 2)))) y))
-    (== (aio/status h) (quote :completed))
+    (= {h} (aio/let ((x (aio/pure 10)) :then (y (aio/pure (* x 2)))) y))
+    (== (aio/status h) :completed)
   })
   (test "aio/do with single expression"
     {do
     (= {h} (aio/do {(aio/pure 42)}))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/do with multiple expressions"
     {do
@@ -335,14 +335,14 @@
       (aio/pure 1)
       (aio/pure 2)
       (aio/pure 3)}))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/do with binding and expression"
     {do
     (= {h} (aio/do {
       (x <- (aio/pure 10))
       (aio/pure (* x 2))}))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "aio/do with failure returns completed"
     {do
@@ -350,7 +350,7 @@
       (aio/pure 1)
       (aio/fail "middle failed")
       (aio/pure 3)}))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
   (test "multiple then chains"
     {do
@@ -358,21 +358,21 @@
     (= {h2} (aio/then h (\ {x} {(aio/pure (+ x 1))})))
     (= {h3} (aio/then h2 (\ {x} {(aio/pure (+ x 1))})))
     (= {h4} (aio/then h3 (\ {x} {(aio/pure (+ x 1))})))
-    (== (aio/status h4) (quote :completed))
+    (== (aio/status h4) :completed)
   })
   (test "catch after then chain"
     {do
     (= {h} (aio/pure 1))
     (= {h2} (aio/then h (\ {x} {(aio/fail "mid-chain error")})))
     (= {h3} (aio/catch h2 (\ {e} {(aio/pure 0)})))
-    (== (aio/status h3) (quote :completed))
+    (== (aio/status h3) :completed)
   })
   (test "finally after catch"
     {do
     (= {h} (aio/fail "initial error"))
     (= {h2} (aio/catch h (\ {e} {(aio/pure "recovered")})))
     (= {h3} (aio/finally h2 (\ {} {nil})))
-    (== (aio/status h3) (quote :completed))
+    (== (aio/status h3) :completed)
   })
   (test "aio/pure with no args returns error"
     {do
@@ -472,7 +472,7 @@
   (test "aio/let with no bindings works"
     {do
     (= {result} (aio/let {} {42}))
-    (== (aio/status result) (quote :completed))
+    (== (aio/status result) :completed)
   })
   (test "aio/do with number returns error"
     {do
@@ -485,8 +485,8 @@
     (test/assert (not (== sys nil)) "aio/start should succeed")
     (= {h} (aio/sleep sys 1))
     (= {status} (aio/status h))
-    (= {__result} (or (or (== status (quote :pending)) (== status (quote :running)))
-        (or (== status (quote :completed)) (== status (quote :cancelled)))))
+    (= {__result} (or (or (== status :pending) (== status :running))
+        (or (== status :completed) (== status :cancelled))))
     (aio/await (aio/stop sys))
     __result
   })
@@ -524,32 +524,32 @@
     {do
     (= {h} (aio/pure 1))
     (= {h2} (aio/then h (\ {x} {nil})))
-    (== (aio/status h2) (quote :completed))
+    (== (aio/status h2) :completed)
   })
   (test "aio/catch that re-raises propagates failure"
     {do
     (= {h} (aio/fail "error1"))
     (= {h2} (aio/catch h (\ {e} {(aio/fail "error2")})))
-    (== (aio/status h2) (quote :failed))
+    (== (aio/status h2) :failed)
   })
   (test "nested aio/all"
     {do
     (= {inner1} (aio/all (list (aio/pure 1) (aio/pure 2))))
     (= {inner2} (aio/all (list (aio/pure 3) (aio/pure 4))))
     (= {outer} (aio/all (list inner1 inner2)))
-    (== (aio/status outer) (quote :completed))
+    (== (aio/status outer) :completed)
   })
   (test "nested aio/race"
     {do
     (= {inner1} (aio/race (list (aio/pure 1) (aio/pure 2))))
     (= {inner2} (aio/race (list (aio/pure 3) (aio/pure 4))))
     (= {outer} (aio/race (list inner1 inner2)))
-    (== (aio/status outer) (quote :completed))
+    (== (aio/status outer) :completed)
   })
    (test "aio/any with mix of success and failure"
      {do
      (= {h} (aio/any (list (aio/fail "e1") (aio/fail "e2") (aio/pure 42) (aio/fail "e3"))))
-     (== (aio/status h) (quote :completed))
+     (== (aio/status h) :completed)
    })
    (test "aio/never creates running handle that never completes"
      {do
@@ -557,7 +557,7 @@
      (test/assert (not (== sys nil)) "aio/start should succeed")
       (= {h} (aio/never sys))
       (= {status} (aio/status h))
-      (= {__result} (== status (quote :running)))
+      (= {__result} (== status :running))
       (aio/await (aio/stop sys))
       __result
     })
@@ -566,7 +566,7 @@
      (= {sys} (aio/await (aio/start)))
       (= {h} (aio/never sys))
       (= {cancelled} (aio/cancel h))
-      (= {__result} (== cancelled (quote :true)))
+      (= {__result} (== cancelled :true))
       (aio/await (aio/stop sys))
       __result
     })
@@ -600,7 +600,7 @@
       (= {never-handle} (aio/never sys))
       (= {immediate-handle} (aio/pure 42))
        (= {race-result} (aio/race (list never-handle immediate-handle)))
-       (= {__result} (== (aio/status race-result) (quote :completed)))
+       (= {__result} (== (aio/status race-result) :completed))
        (aio/await (aio/stop sys))
        __result
      })
@@ -612,7 +612,7 @@
       {do
       (= {h} (aio/pure 5))
       (= {h2} (aio/then h (\ {x} {(error "transform error")})))
-      (== (aio/status h2) (quote :failed))
+      (== (aio/status h2) :failed)
     })
 
     ; ============================================================================
@@ -622,13 +622,13 @@
       {do
       (= {h} (aio/fail "error"))
       (= {h2} (aio/catch h (\ {err} {42})))
-      (== (aio/status h2) (quote :completed))
+      (== (aio/status h2) :completed)
     })
     (test "aio/catch recovery returns error"
       {do
       (= {h} (aio/fail "error"))
       (= {h2} (aio/catch h (\ {err} {(error "recovery error")})))
-      (== (aio/status h2) (quote :failed))
+      (== (aio/status h2) :failed)
     })
 
     ; ============================================================================
@@ -676,8 +676,8 @@
     })
     (test "aio/error with symbol error"
       {do
-      (= {h} (aio/fail (quote :timeout)))
-      (== (aio/error h) (quote :timeout))
+      (= {h} (aio/fail :timeout))
+      (== (aio/error h) :timeout)
     })
     (test "aio/error with no args returns error"
       {do

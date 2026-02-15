@@ -189,14 +189,14 @@
   (test "quasiquote-nil-form"
     {do
     ; Pass nil directly to quasiquote
-    (= {result} (eval (list (quote quasiquote) nil)))
+    (= {result} (eval (list (head {quasiquote}) nil)))
     (test/assert (== result nil) "quasiquote of nil returns nil")
     true
   })
   (test "quasiquote-unquote-zero-args"
     {do
     ; Build (quasiquote (unquote)) - unquote with no args
-    (= {form} (list (quote quasiquote) (list (quote unquote))))
+    (= {form} (list (head {quasiquote}) (list (head {unquote}))))
     (= {result} (error? (eval form)))
     (test/assert result "unquote with zero args should error")
     true
@@ -204,7 +204,7 @@
   (test "quasiquote-unquote-multiple-args"
     {do
     ; Build (quasiquote (unquote 1 2)) - unquote with 2 args
-    (= {form} (list (quote quasiquote) (list (quote unquote) 1 2)))
+    (= {form} (list (head {quasiquote}) (list (head {unquote}) 1 2)))
     (= {result} (error? (eval form)))
     (test/assert result "unquote with multiple args should error")
     true
@@ -212,7 +212,7 @@
   (test "quasiquote-splice-top-level"
     {do
     ; Build (quasiquote (unquote-splicing (list 1 2 3)))
-    (= {form} (list (quote quasiquote) (list (quote unquote-splicing) (list (quote list) 1 2 3))))
+    (= {form} (list (head {quasiquote}) (list (head {unquote-splicing}) (list (head {list}) 1 2 3))))
     (= {result} (error? (eval form)))
     (test/assert result "unquote-splicing at top level should error")
     true
@@ -220,7 +220,7 @@
   (test "quasiquote-splice-zero-args"
     {do
     ; Build (quasiquote {a (unquote-splicing) b})
-    (= {form} (list (quote quasiquote) {a (unquote-splicing) b}))
+    (= {form} (list (head {quasiquote}) {a (unquote-splicing) b}))
     (= {result} (error? (eval form)))
     (test/assert result "unquote-splicing with zero args should error")
     true
@@ -229,7 +229,7 @@
     {do
     ; Build (quasiquote {a (unquote-splicing x y) b}) with x={1 2}, y={3 4}
     (= {x} {1 2})
-    (= {form} (list (quote quasiquote) (list (quote a) (list (quote unquote-splicing) (quote x) (quote y)) (quote b))))
+    (= {form} (list (head {quasiquote}) (list (head {a}) (list (head {unquote-splicing}) (head {x}) (head {y})) (head {b}))))
     (= {result} (error? (eval form)))
     (test/assert result "unquote-splicing with multiple args should error")
     true
@@ -255,7 +255,7 @@
     ; When quasiquoting a cons (non-qexpr) list, result should be cons
     (= {x} 2)
     ; Create an unquoted cons list by evaluating to one
-    (= {form} (list (quote quasiquote) (cons (quote a) (cons x (cons (quote c) nil)))))
+    (= {form} (list (head {quasiquote}) (cons (head {a}) (cons x (cons (head {c}) nil)))))
     (= {result} (eval form))
     (test/assert-eq 3 (len result) "cons quasiquote should have 3 elements")
     (test/assert-eq 2 (nth 2 result) "unquoted value should be evaluated")
@@ -327,14 +327,14 @@
   })
   (test "quasiquote-no-args-eval"
     {do
-    (= {form} (list (quote quasiquote)))
+    (= {form} (list (head {quasiquote})))
     (= {result} (error? (eval form)))
     (test/assert result "quasiquote with no args should error")
     true
   })
   (test "quasiquote-too-many-args-eval"
     {do
-    (= {form} (list (quote quasiquote) 1 2))
+    (= {form} (list (head {quasiquote}) 1 2))
     (= {result} (error? (eval form)))
     (test/assert result "quasiquote with too many args should error")
     true
@@ -546,7 +546,7 @@
   })
   (test "sym-predicate"
     {do
-    (test/assert (sym? (quote foo)) "sym? on symbol returns true")
+    (test/assert (sym? (head {foo})) "sym? on symbol returns true")
     (test/assert (not (sym? 42)) "sym? on number returns false")
     true
   })
@@ -583,7 +583,7 @@
     (test/assert-eq "Number" (type 42) "type of number")
     (test/assert-eq "String" (type "hello") "type of string")
     (test/assert-eq "Q-Expression" (type {1 2 3}) "type of qexpr")
-    (test/assert-eq "Symbol" (type (quote foo)) "type of symbol")
+    (test/assert-eq "Symbol" (type (head {foo})) "type of symbol")
     (test/assert-eq "Nil" (type nil) "type of nil")
     (test/assert-eq "Function" (type +) "type of builtin function")
     (test/assert-eq "Function" (type (\ {x} {x})) "type of lambda")
@@ -726,7 +726,7 @@
   (test "eval-symbol-lookup"
     {do
     (= {x} 42)
-    (= {result} (eval (quote x)))
+    (= {result} (eval (head {x})))
     (test/assert-eq 42 result "eval looks up symbol in env")
     true
   })
@@ -833,7 +833,7 @@
   })
   (test "join-list-with-symbol"
     {do
-    (= {result} (join {1 2} (quote xyz)))
+    (= {result} (join {1 2} (head {xyz})))
     (test/assert-eq 3 (len result) "join list with symbol wraps symbol")
     true
   })

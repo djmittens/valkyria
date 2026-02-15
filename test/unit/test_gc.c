@@ -1199,17 +1199,25 @@ void test_gc_heap_soft_limit_triggers_gc(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
 
   size_t hard_limit = 256 * 1024;
-  size_t soft_limit = hard_limit * 3 / 4;
   
   valk_gc_heap_t *heap = valk_gc_heap_create(hard_limit);
   
-  size_t allocs_needed = soft_limit / 128 + 10;
+  size_t allocs_needed = (hard_limit * 3 / 4) / 128 + 10;
   for (size_t i = 0; i < allocs_needed; i++) {
     valk_gc_heap_alloc(heap, 72);
   }
   
-  VALK_TEST_ASSERT(atomic_load(&heap->collections) >= 1, 
-                   "Exceeding soft limit should trigger at least one GC");
+  VALK_TEST_ASSERT(atomic_load(&heap->collections) == 0,
+                   "Allocation alone must NOT trigger GC (GC only at safe points)");
+  
+  VALK_TEST_ASSERT(valk_gc_should_collect(heap),
+                   "valk_gc_should_collect must return true when above threshold");
+  
+  size_t reclaimed = valk_gc_heap_collect(heap);
+  (void)reclaimed;
+  
+  VALK_TEST_ASSERT(atomic_load(&heap->collections) == 1,
+                   "Explicit collect should increment collection count");
   
   valk_gc_thread_unregister();
   valk_gc_heap_destroy(heap);
@@ -2155,25 +2163,30 @@ void test_gc_emergency_gc_trigger(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
 
   size_t hard_limit = 256 * 1024;
-  size_t soft_limit = hard_limit * 3 / 4;
   
   valk_gc_heap_t *heap = valk_gc_heap_create(hard_limit);
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
   
-  size_t allocs_to_trigger = soft_limit / 128 + 50;
+  size_t allocs_before_pressure = (hard_limit * 3 / 4) / 128;
   int successful = 0;
   
-  for (size_t i = 0; i < allocs_to_trigger; i++) {
+  for (size_t i = 0; i < allocs_before_pressure; i++) {
     void *p = valk_gc_heap_alloc(heap, 72);
     if (p) successful++;
   }
   
-  VALK_TEST_ASSERT(successful > 50, "Should have many successful allocations");
+  VALK_TEST_ASSERT(successful > 0, "Should have successful allocations");
+  VALK_TEST_ASSERT(atomic_load(&heap->collections) == 0,
+                   "No GC should fire during normal allocation (only at safe points)");
+
+  VALK_TEST_ASSERT(valk_gc_should_collect(heap),
+                   "Should indicate collection needed after exceeding threshold");
   
-  valk_gc_stats_t stats;
-  valk_gc_heap_get_stats(heap, &stats);
+  size_t reclaimed = valk_gc_heap_collect(heap);
+  (void)reclaimed;
   
-  VALK_TEST_ASSERT(stats.collections >= 1, "Allocation pressure near limit should trigger GC");
+  VALK_TEST_ASSERT(atomic_load(&heap->collections) == 1,
+                   "Explicit collection should have run");
   
   valk_gc_thread_unregister();
   valk_gc_heap_destroy(heap);
@@ -2188,6 +2201,7 @@ typedef struct {
   _Atomic bool *start_flag;
   _Atomic bool *stop_flag;
   _Atomic int *alloc_success;
+  _Atomic int *workers_started;
 } soft_limit_mt_args_t;
 
 static void *soft_limit_mt_worker(void *arg) {
@@ -2206,6 +2220,9 @@ static void *soft_limit_mt_worker(void *arg) {
     void *p = valk_gc_heap_alloc(args->heap, 72);
     if (p) {
       local_allocs++;
+      if (local_allocs == 1) {
+        atomic_fetch_add(args->workers_started, 1);
+      }
     }
     iterations++;
     if (iterations % 50 == 0) {
@@ -2222,7 +2239,7 @@ static void *soft_limit_mt_worker(void *arg) {
 void test_gc_soft_limit_multithread(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  size_t hard_limit = 256 * 1024;
+  size_t hard_limit = 4 * 1024 * 1024;
   valk_gc_heap_t *heap = valk_gc_heap_create(hard_limit);
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
   
@@ -2232,6 +2249,7 @@ void test_gc_soft_limit_multithread(VALK_TEST_ARGS()) {
   _Atomic bool start_flag = false;
   _Atomic bool stop_flag = false;
   _Atomic int alloc_success = 0;
+  _Atomic int workers_started = 0;
   
   const int num_workers = 2;
   pthread_t workers[2];
@@ -2244,6 +2262,7 @@ void test_gc_soft_limit_multithread(VALK_TEST_ARGS()) {
     args[i].start_flag = &start_flag;
     args[i].stop_flag = &stop_flag;
     args[i].alloc_success = &alloc_success;
+    args[i].workers_started = &workers_started;
     pthread_create(&workers[i], nullptr, soft_limit_mt_worker, &args[i]);
   }
   
@@ -2253,8 +2272,11 @@ void test_gc_soft_limit_multithread(VALK_TEST_ARGS()) {
   
   atomic_store(&start_flag, true);
   
-  size_t allocs_to_trigger = (hard_limit * 3 / 4) / 128 + 100;
-  for (size_t i = 0; i < allocs_to_trigger; i++) {
+  while (atomic_load(&workers_started) < num_workers) {
+    sched_yield();
+  }
+  
+  for (size_t i = 0; i < 200; i++) {
     void *p = valk_gc_heap_alloc(heap, 72);
     (void)p;
     if (i % 50 == 0) {
@@ -2268,11 +2290,17 @@ void test_gc_soft_limit_multithread(VALK_TEST_ARGS()) {
     pthread_join(workers[i], nullptr);
   }
   
-  valk_gc_stats_t stats;
-  valk_gc_heap_get_stats(heap, &stats);
+  int total_allocs = atomic_load(&alloc_success);
+  VALK_TEST_ASSERT(total_allocs > 0,
+                   "Worker threads should have successful allocations (got %d)", total_allocs);
   
-  (void)atomic_load(&alloc_success);
-  VALK_TEST_ASSERT(stats.collections >= 1, "Pressure should trigger GC");
+  VALK_TEST_ASSERT(atomic_load(&heap->collections) == 0,
+                   "Allocation alone must not trigger GC (collections=%llu)",
+                   (unsigned long long)atomic_load(&heap->collections));
+  
+  if (valk_gc_should_collect(heap)) {
+    valk_gc_heap_collect(heap);
+  }
   
   valk_gc_thread_unregister();
   valk_gc_heap_destroy(heap);
