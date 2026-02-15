@@ -1,0 +1,397 @@
+================
+Numbers
+================
+
+42 -5 0
+
+---
+
+(source_file
+  (number)
+  (number)
+  (number))
+
+================
+Strings
+================
+
+"hello" "world\n" ""
+
+---
+
+(source_file
+  (string)
+  (string)
+  (string))
+
+================
+Symbols
+================
+
+foo bar+ baz?
+
+---
+
+(source_file
+  (symbol)
+  (symbol)
+  (symbol))
+
+================
+Keywords
+================
+
+:name :status :ok
+
+---
+
+(source_file
+  (keyword)
+  (keyword)
+  (keyword))
+
+================
+Comments
+================
+
+; this is a comment
+42
+
+---
+
+(source_file
+  (comment)
+  (number))
+
+================
+S-expression
+================
+
+(+ 1 2)
+
+---
+
+(source_file
+  (sexpr
+    (symbol)
+    (number)
+    (number)))
+
+================
+Q-expression
+================
+
+{1 2 3}
+
+---
+
+(source_file
+  (qexpr
+    (number)
+    (number)
+    (number)))
+
+================
+Nested expressions
+================
+
+(def {x} 42)
+
+---
+
+(source_file
+  (def_form
+    (keyword_def)
+    (qexpr
+      (symbol))
+    (number)))
+
+================
+Quote
+================
+
+'(a b c)
+
+---
+
+(source_file
+  (quote
+    (sexpr
+      (symbol)
+      (symbol)
+      (symbol))))
+
+================
+Quasiquote and unquote
+================
+
+`{:status ,code :body ,body}
+
+---
+
+(source_file
+  (quasiquote
+    (qexpr
+      (keyword)
+      (unquote
+        (symbol))
+      (keyword)
+      (unquote
+        (symbol)))))
+
+================
+Unquote splicing
+================
+
+`{start ,@items end}
+
+---
+
+(source_file
+  (quasiquote
+    (qexpr
+      (symbol)
+      (unquote_splicing
+        (symbol))
+      (symbol))))
+
+================
+Function definition
+================
+
+(fun {add a b} {+ a b})
+
+---
+
+(source_file
+  (fun_form
+    (keyword_fun)
+    (qexpr
+      (symbol)
+      (symbol)
+      (symbol))
+    (qexpr
+      (symbol)
+      (symbol)
+      (symbol))))
+
+================
+Lambda
+================
+
+(\ {x y} {+ x y})
+
+---
+
+(source_file
+  (lambda_form
+    (keyword_lambda)
+    (qexpr
+      (symbol)
+      (symbol))
+    (qexpr
+      (symbol)
+      (symbol)
+      (symbol))))
+
+================
+If expression
+================
+
+(if (> x 0) {"positive"} {"negative"})
+
+---
+
+(source_file
+  (if_form
+    (keyword_if)
+    (sexpr
+      (symbol)
+      (symbol)
+      (number))
+    (qexpr
+      (string))
+    (qexpr
+      (string))))
+
+================
+Property list
+================
+
+{:name "Alice" :age 30}
+
+---
+
+(source_file
+  (qexpr
+    (keyword)
+    (string)
+    (keyword)
+    (number)))
+
+================
+Namespaced symbol
+================
+
+(aio/sleep sys 100)
+
+---
+
+(source_file
+  (sexpr
+    (symbol)
+    (symbol)
+    (number)))
+
+================
+Multiple top-level forms
+================
+
+(def {x} 1)
+(def {y} 2)
+(+ x y)
+
+---
+
+(source_file
+  (def_form
+    (keyword_def)
+    (qexpr
+      (symbol))
+    (number))
+  (def_form
+    (keyword_def)
+    (qexpr
+      (symbol))
+    (number))
+  (sexpr
+    (symbol)
+    (symbol)
+    (symbol)))
+
+================
+Empty expressions
+================
+
+()
+{}
+
+---
+
+(source_file
+  (sexpr)
+  (qexpr))
+
+================
+String escapes
+================
+
+"she said \"hi\""
+"tab\there"
+"newline\n"
+
+---
+
+(source_file
+  (string)
+  (string)
+  (string))
+
+================
+Boolean literals
+================
+
+true false
+
+---
+
+(source_file
+  (boolean)
+  (boolean))
+
+================
+Nil literal
+================
+
+nil
+
+---
+
+(source_file
+  (nil))
+
+================
+Do form
+================
+
+(do (print "a") (print "b"))
+
+---
+
+(source_file
+  (do_form
+    (keyword_do)
+    (sexpr
+      (symbol)
+      (string))
+    (sexpr
+      (symbol)
+      (string))))
+
+================
+Let form
+================
+
+(= {x} 42)
+
+---
+
+(source_file
+  (let_form
+    (keyword_let)
+    (qexpr
+      (symbol))
+    (number)))
+
+================
+Load form
+================
+
+(load "src/prelude.valk")
+
+---
+
+(source_file
+  (load_form
+    (keyword_load)
+    (string)))
+
+================
+Select form
+================
+
+(select
+  {(== x 1) "one"}
+  {(== x 2) "two"}
+  {otherwise "other"})
+
+---
+
+(source_file
+  (sexpr
+    (symbol)
+    (qexpr
+      (sexpr
+        (symbol)
+        (symbol)
+        (number))
+      (string))
+    (qexpr
+      (sexpr
+        (symbol)
+        (symbol)
+        (number))
+      (string))
+    (qexpr
+      (symbol)
+      (string))))

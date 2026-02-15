@@ -36,3 +36,10 @@ build/ralph-logs/
 # Session artifacts
 session-*.md
 states/
+
+# Node/tree-sitter
+node_modules/
+*.so
+
+# Editor/tool local config
+opencode.json

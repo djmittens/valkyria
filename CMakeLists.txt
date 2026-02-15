@@ -182,6 +182,20 @@ set(VALKYRIA_SOURCES
   src/lsp/lsp_analysis.c
   src/lsp/lsp_io.c
   src/lsp/lsp_json.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/lsp/lsp_builtins_gen.h
+)
+
+# Generate LSP builtins header from C source (arity, param names, types)
+file(GLOB_RECURSE BUILTIN_C_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+add_custom_command(
+  OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/src/lsp/lsp_builtins_gen.h
+  COMMAND ${CMAKE_COMMAND} -E env python3
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_lsp_builtins.py
+    ${CMAKE_CURRENT_SOURCE_DIR}
+  DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/gen_lsp_builtins.py
+    ${BUILTIN_C_SOURCES}
+  COMMENT "Generating LSP builtins from C source"
 )
 
 if(COVERAGE)

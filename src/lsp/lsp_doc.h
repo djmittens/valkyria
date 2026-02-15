@@ -11,6 +11,8 @@ typedef struct {
   lsp_pos_t pos;
   int arity;
   char *doc;
+  int src_start;
+  int src_end;
 } lsp_symbol_t;
 
 enum {
@@ -72,7 +74,8 @@ typedef struct {
 
 void doc_symbols_clear(lsp_document_t *doc);
 void doc_diag_clear(lsp_document_t *doc);
-void doc_add_symbol(lsp_document_t *doc, const char *name, int line, int col, int arity);
+void doc_add_symbol(lsp_document_t *doc, const char *name, int line, int col, int arity,
+                    int src_start, int src_end);
 void doc_add_diag(lsp_document_t *doc, const char *msg, int line, int col);
 void doc_add_diag_full(lsp_document_t *doc, const char *msg, int line, int col, int len, int severity);
 
@@ -82,4 +85,4 @@ int pos_to_offset(const char *text, int line, int col);
 void analyze_document(lsp_document_t *doc);
 void lsp_set_workspace_root(const char *root);
 
-extern const char *BUILTIN_NAMES[];
+

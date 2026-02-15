@@ -1,4 +1,5 @@
 #include "lsp_doc.h"
+#include "lsp_builtins_gen.h"
 
 #include <libgen.h>
 #include <limits.h>
@@ -17,91 +18,12 @@ void lsp_set_workspace_root(const char *root) {
     snprintf(g_workspace_root, sizeof(g_workspace_root), "%s", root);
 }
 
-const char *BUILTIN_NAMES[] = {
-  // Core special forms
-  "def", "=", "\\", "fun", "if", "do", "select", "quote",
-  // List operations
-  "list", "head", "tail", "join", "cons", "len", "init", "range", "repeat",
-  // Evaluation & I/O
-  "eval", "load", "read", "read-file", "error", "error?", "list?", "ref?",
-  "print", "println", "printf", "str", "make-string", "ord",
-  // String operations
-  "str/split", "str/replace", "str/slice", "str->num",
-  // Arithmetic & comparison
-  "+", "-", "*", "/", ">", "<", ">=", "<=", "==", "!=",
-  // System
-  "penv", "time-us", "sleep", "stack-depth", "exit", "shutdown",
-  "sys/log/set-level",
-  // Higher-order (prelude defines these, but treat as known)
-  "map", "filter", "foldl", "reverse", "sum", "product",
-  "nth", "fst", "snd", "trd", "last", "take", "drop", "split", "exists",
-  "not", "and", "or", "id", "flip", "comp", "curry", "uncurry", "pack", "unpack",
-  "nil?", "handle?", "as-handle",
-  "let", "case",
-  // Constants
-  "true", "false", "nil", "otherwise",
-  // Async combinators
-  "aio/start", "aio/run", "aio/stop", "aio/await", "aio/sleep",
-  "aio/then", "aio/catch", "aio/finally",
-  "aio/all", "aio/race", "aio/any", "aio/all-settled",
-  "aio/within", "aio/retry", "aio/bracket", "aio/scope",
-  "aio/pure", "aio/fail", "aio/never", "aio/cancel",
-  "aio/status", "aio/result", "aio/error", "aio/cancelled?",
-  "aio/on-cancel", "aio/schedule", "aio/interval",
-  "aio/let", "aio/do", "aio/traverse", "aio/on-loop-thread?",
-  "aio/map", "aio/try",
-  "aio/pool-stats", "aio/slab-buckets",
-  "aio/diagnostics-state-json", "aio/diagnostics-state-json-compact",
-  "aio/metrics-json", "aio/metrics-json-compact",
-  "aio/systems-json",
-  // HTTP/2
-  "http2/server-listen", "http2/server-port", "http2/server-stop", "http2/server-handle",
-  "http2/client-request", "http2/client-request-with-headers",
-  "http2/connect", "http2/request", "http2/request-add-header",
-  "http2/response-body", "http2/response-status", "http2/response-headers",
-  "http2/mock-response",
-  // Request accessors
-  "req/method", "req/path", "req/authority", "req/scheme",
-  "req/headers", "req/header", "req/body", "req/stream-id",
-  // Streams
-  "stream/open", "stream/write", "stream/close", "stream/writable?",
-  "stream/on-drain", "stream/on-close", "stream/cancel", "stream/closed",
-  "stream/id", "stream/set-max-session", "stream/set-timeout",
-  // SSE
-  "sse/open", "sse/send", "sse/event", "sse/close",
-  // Metrics
-  "metrics/counter", "metrics/counter-inc",
-  "metrics/gauge", "metrics/gauge-set", "metrics/gauge-inc", "metrics/gauge-dec",
-  "metrics/histogram", "metrics/histogram-observe",
-  "metrics/baseline", "metrics/collect-delta", "metrics/collect-delta-stateless",
-  "metrics/delta-json", "metrics/json", "metrics/prometheus", "metrics/registry-json",
-  // Context
-  "ctx/with-deadline", "ctx/with", "ctx/get", "ctx/deadline",
-  "ctx/deadline-exceeded?", "ctx/locals",
-  // Memory & GC
-  "mem/stats", "mem/gc/stats", "mem/gc/collect", "mem/gc/usage",
-  "mem/gc/threshold", "mem/gc/set-threshold",
-  "mem/gc/min-interval", "mem/gc/set-min-interval",
-  "mem/heap/usage", "mem/heap/hard-limit", "mem/heap/set-hard-limit",
-  "mem/arena/usage", "mem/arena/capacity", "mem/arena/high-water",
-  "mem/checkpoint/stats",
-  // Testing
-  "test", "test-async", "test/assert", "test/assert-eq",
-  "test/run", "test/run-async", "test/suite", "test/context-new",
-  "test/capture-start", "test/capture-stop",
-  // Property lists
-  "plist/get", "plist/set", "plist/has?", "plist/keys", "plist/vals",
-  // Coverage / source introspection
-  "coverage-mark", "coverage-branch", "coverage-record",
-  "source-file", "source-line", "source-column",
-  // Tracing
-  "trace/id", "trace/span", "trace/parent-span",
-  // VM metrics
-  "vm/metrics-json", "vm/metrics-json-compact", "vm/metrics-prometheus",
-  // Misc
-  "get",
-  nullptr
-};
+static const lsp_builtin_entry_t *find_builtin(const char *name) {
+  for (int i = 0; LSP_BUILTINS[i].name; i++)
+    if (strcmp(LSP_BUILTINS[i].name, name) == 0)
+      return &LSP_BUILTINS[i];
+  return nullptr;
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers (also used by lsp.c via lsp_doc.h)
@@ -121,7 +43,8 @@ void doc_diag_clear(lsp_document_t *doc) {
   doc->diag_count = 0;
 }
 
-void doc_add_symbol(lsp_document_t *doc, const char *name, int line, int col, int arity) {
+void doc_add_symbol(lsp_document_t *doc, const char *name, int line, int col, int arity,
+                    int src_start, int src_end) {
   if (doc->symbol_count >= doc->symbol_cap) {
     doc->symbol_cap = doc->symbol_cap == 0 ? 16 : doc->symbol_cap * 2;
     doc->symbols = realloc(doc->symbols, sizeof(lsp_symbol_t) * doc->symbol_cap);
@@ -131,6 +54,8 @@ void doc_add_symbol(lsp_document_t *doc, const char *name, int line, int col, in
   sym->pos = (lsp_pos_t){line, col};
   sym->arity = arity;
   sym->doc = nullptr;
+  sym->src_start = src_start;
+  sym->src_end = src_end;
 }
 
 void doc_add_diag_full(lsp_document_t *doc, const char *msg, int line, int col, int len, int severity) {
@@ -349,8 +274,8 @@ static void resolve_loads_from_text(const char *text, const char *base_dir,
 static void build_global_symset(lsp_document_t *doc, lsp_symset_t *globals) {
   symset_init(globals);
 
-  for (int i = 0; BUILTIN_NAMES[i]; i++)
-    symset_add(globals, BUILTIN_NAMES[i]);
+  for (int i = 0; LSP_BUILTINS[i].name; i++)
+    symset_add(globals, LSP_BUILTINS[i].name);
 
   for (size_t i = 0; i < doc->symbol_count; i++)
     symset_add(globals, doc->symbols[i].name);
@@ -404,6 +329,25 @@ static bool scope_has(lsp_scope_t *s, const char *name) {
 
 static void check_expr(valk_lval_t *expr, lsp_symset_t *globals, lsp_scope_t *scope,
                         lsp_document_t *doc, const char *text, int *cursor);
+
+static bool builtin_arity(const char *name, int *min_out, int *max_out) {
+  const lsp_builtin_entry_t *e = find_builtin(name);
+  if (e && e->min_arity >= 0) {
+    *min_out = e->min_arity;
+    *max_out = e->max_arity;
+    return true;
+  }
+  return false;
+}
+
+static int count_args(valk_lval_t *rest) {
+  int n = 0;
+  while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
+    n++;
+    rest = valk_lval_tail(rest);
+  }
+  return n;
+}
 
 static void extract_qexpr_syms(valk_lval_t *qexpr, lsp_scope_t *scope) {
   while (qexpr && LVAL_TYPE(qexpr) == LVAL_CONS) {
@@ -499,6 +443,61 @@ static void check_expr(valk_lval_t *expr, lsp_symset_t *globals, lsp_scope_t *sc
   if (!head) return;
 
   if (LVAL_TYPE(head) == LVAL_SYM) {
+    int nargs = count_args(rest);
+    int amin, amax;
+    if (builtin_arity(head->str, &amin, &amax)) {
+      if (nargs < amin || (amax >= 0 && nargs > amax)) {
+        int off = find_sym_offset(text, head->str, *cursor);
+        if (off >= 0) {
+          lsp_pos_t p = offset_to_pos(text, off);
+          char msg[256];
+          if (amin == amax)
+            snprintf(msg, sizeof(msg), "'%s' expects %d argument%s, got %d",
+                     head->str, amin, amin == 1 ? "" : "s", nargs);
+          else if (amax < 0)
+            snprintf(msg, sizeof(msg), "'%s' expects at least %d argument%s, got %d",
+                     head->str, amin, amin == 1 ? "" : "s", nargs);
+          else
+            snprintf(msg, sizeof(msg), "'%s' expects %d-%d arguments, got %d",
+                     head->str, amin, amax, nargs);
+          doc_add_diag_full(doc, msg, p.line, p.col, (int)strlen(head->str), 1);
+        }
+      }
+    } else {
+      for (size_t si = 0; si < doc->symbol_count; si++) {
+        if (doc->symbols[si].arity >= 0 &&
+            strcmp(doc->symbols[si].name, head->str) == 0) {
+          int expected = doc->symbols[si].arity;
+          bool variadic = false;
+          if (doc->symbols[si].doc) {
+            variadic = strstr(doc->symbols[si].doc, "& ") != nullptr ||
+                       strstr(doc->symbols[si].doc, "&}") != nullptr;
+          }
+          if ((!variadic && nargs != expected) ||
+              (variadic && nargs < expected - 1)) {
+            int off = find_sym_offset(text, head->str, *cursor);
+            if (off >= 0) {
+              lsp_pos_t p = offset_to_pos(text, off);
+              char msg[256];
+              if (variadic)
+                snprintf(msg, sizeof(msg),
+                         "'%s' expects at least %d argument%s, got %d",
+                         head->str, expected - 1,
+                         (expected - 1) == 1 ? "" : "s", nargs);
+              else
+                snprintf(msg, sizeof(msg),
+                         "'%s' expects %d argument%s, got %d",
+                         head->str, expected,
+                         expected == 1 ? "" : "s", nargs);
+              doc_add_diag_full(doc, msg, p.line, p.col,
+                                (int)strlen(head->str), 1);
+            }
+          }
+          break;
+        }
+      }
+    }
+
     if (strcmp(head->str, "quote") == 0) return;
 
     if (strcmp(head->str, "\\") == 0) {
@@ -627,21 +626,13 @@ static void check_undefined_symbols(lsp_document_t *doc) {
 // Semantic token generation
 // ---------------------------------------------------------------------------
 
-static const char *SPECIAL_FORMS[] = {
-  "def", "=", "fun", "\\", "if", "do", "select", "case", "quote", "load",
-  "eval", "read", "aio/let", "aio/do", "<-", nullptr
-};
-
 static bool is_special_form(const char *name) {
-  for (int i = 0; SPECIAL_FORMS[i]; i++)
-    if (strcmp(SPECIAL_FORMS[i], name) == 0) return true;
-  return false;
+  const lsp_builtin_entry_t *e = find_builtin(name);
+  return e && e->is_special_form;
 }
 
 static bool is_builtin(const char *name) {
-  for (int i = 0; BUILTIN_NAMES[i]; i++)
-    if (strcmp(BUILTIN_NAMES[i], name) == 0) return true;
-  return false;
+  return find_builtin(name) != nullptr;
 }
 
 static void sem_expr(valk_lval_t *expr, lsp_symset_t *globals, lsp_scope_t *scope,
@@ -956,7 +947,26 @@ void analyze_document(lsp_document_t *doc) {
 
       if (sym_name) {
         lsp_pos_t p = offset_to_pos(text, form_start);
-        doc_add_symbol(doc, sym_name, p.line, p.col, arity);
+        doc_add_symbol(doc, sym_name, p.line, p.col, arity, form_start, pos);
+        lsp_symbol_t *sym = &doc->symbols[doc->symbol_count - 1];
+        if (strcmp(head->str, "fun") == 0 && LVAL_TYPE(binding) == LVAL_CONS) {
+          char sig[512];
+          char *sp = sig;
+          char *se = sig + sizeof(sig) - 1;
+          sp += snprintf(sp, se - sp, "(fun (%s", sym_name);
+          valk_lval_t *param = valk_lval_tail(binding);
+          while (param && LVAL_TYPE(param) == LVAL_CONS && sp < se) {
+            valk_lval_t *ph = valk_lval_head(param);
+            if (ph && LVAL_TYPE(ph) == LVAL_SYM)
+              sp += snprintf(sp, se - sp, " %s", ph->str);
+            param = valk_lval_tail(param);
+          }
+          snprintf(sp, se - sp, ") ...)");
+          sym->doc = strdup(sig);
+        } else {
+          sym->doc = strdup(strcmp(head->str, "fun") == 0
+            ? "(fun ...)" : "(def ...)");
+        }
       }
     }
   }

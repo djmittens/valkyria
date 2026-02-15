@@ -1,0 +1,22 @@
+{
+  "name": "valk-lang",
+  "displayName": "Valk Language",
+  "description": "Syntax highlighting for the Valkyria Lisp language",
+  "version": "0.1.0",
+  "publisher": "valkyria",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [{
+      "id": "valk",
+      "aliases": ["Valk", "Valkyria"],
+      "extensions": [".valk"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "valk",
+      "scopeName": "source.valk",
+      "path": "./syntaxes/valk.tmLanguage.json"
+    }]
+  }
+}
