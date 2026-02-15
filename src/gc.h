@@ -328,6 +328,11 @@ typedef struct valk_system {
   _Atomic valk_gc_phase_e phase;
   _Atomic u64 threads_registered;
 
+  pthread_mutex_t thread_mutex;
+  u64 thread_free_list[VALK_SYSTEM_MAX_THREADS];
+  u64 thread_free_count;
+  u64 next_fresh_idx;
+
   valk_barrier_t barrier;
   bool barrier_initialized;
 

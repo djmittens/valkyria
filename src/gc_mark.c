@@ -123,13 +123,14 @@ static pthread_cond_t __gc_heap_term_cond = PTHREAD_COND_INITIALIZER;
 // LCOV_EXCL_START - OWST termination requires multi-threaded GC timing impossible to reliably test
 static bool valk_gc_heap_offer_termination(void) {
   u64 num_threads = atomic_load(&valk_sys->threads_registered);
+  u64 max_idx = valk_sys->next_fresh_idx;
 
   pthread_mutex_lock(&__gc_heap_term_lock);
   u64 offered = atomic_fetch_add(&__gc_heap_offered, 1) + 1;
 
   if (offered == num_threads) {
     bool all_empty = true;
-    for (u64 i = 0; i < num_threads; i++) {
+    for (u64 i = 0; i < max_idx; i++) {
       if (!valk_sys->threads[i].active) continue;
       if (!valk_gc_mark_queue_empty(&valk_sys->threads[i].mark_queue)) {
         all_empty = false;
@@ -211,10 +212,10 @@ void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
     }
 
     bool found_work = false;
-    u64 num_threads = atomic_load(&valk_sys->threads_registered);
+    u64 max_idx = valk_sys->next_fresh_idx;
 
-    for (u64 i = 1; i <= num_threads; i++) {
-      u64 victim = (my_id + i) % num_threads;
+    for (u64 i = 1; i < max_idx; i++) {
+      u64 victim = (my_id + i) % max_idx;
       if (!valk_sys->threads[victim].active) continue;
 
       obj = valk_gc_mark_queue_steal(&valk_sys->threads[victim].mark_queue);
@@ -237,8 +238,13 @@ void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap) {
   if (!heap) return;
   if (!valk_thread_ctx.gc_registered) return;
 
-  u64 my_id = valk_thread_ctx.gc_thread_id;
+  u64 raw_id = valk_thread_ctx.gc_thread_id;
   u64 num_threads = atomic_load(&valk_sys->threads_registered);
+
+  u64 my_rank = 0;
+  for (u64 i = 0; i < raw_id; i++) {
+    if (valk_sys->threads[i].active) my_rank++;
+  }
 
   for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     valk_gc_page_list_t *list = &heap->classes[c];
@@ -247,8 +253,8 @@ void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap) {
     if (num_pages == 0) continue;
 
     u64 pages_per_thread = (num_pages + num_threads - 1) / num_threads;
-    u64 my_start = my_id * pages_per_thread;
-    u64 my_end = (my_id + 1) * pages_per_thread;
+    u64 my_start = my_rank * pages_per_thread;
+    u64 my_end = (my_rank + 1) * pages_per_thread;
     if (my_end > num_pages) my_end = num_pages;
 
     valk_gc_page_t *page = list->all_pages;
@@ -267,7 +273,7 @@ void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap) {
     }
   }
 
-  if (my_id == 0) {
+  if (raw_id == 0) {
     valk_gc_sweep_large_objects(heap);
   }
 }
@@ -281,12 +287,18 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
 
   if (atomic_load(&valk_sys->shutting_down)) return false;
 
+  pthread_mutex_lock(&valk_sys->thread_mutex);
+
   u64 num_threads = atomic_load(&valk_sys->threads_registered);
-  if (num_threads == 0) return false;
+  if (num_threads == 0) {
+    pthread_mutex_unlock(&valk_sys->thread_mutex);
+    return false;
+  }
 
   valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
   if (!atomic_compare_exchange_strong(&valk_sys->phase, &expected,
                                        VALK_GC_PHASE_PREPARING)) {
+    pthread_mutex_unlock(&valk_sys->thread_mutex);
     return false;
   }
 
@@ -302,6 +314,8 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
   atomic_store_explicit(&valk_sys->phase,
                         VALK_GC_PHASE_STW_REQUESTED,
                         memory_order_release);
+
+  pthread_mutex_unlock(&valk_sys->thread_mutex);
 
   valk_system_wake_threads(valk_sys);
 
