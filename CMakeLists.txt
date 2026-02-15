@@ -180,6 +180,7 @@ set(VALKYRIA_SOURCES
   src/pool_metrics.c
   src/event_loop_metrics.c
   src/lsp/lsp.c
+  src/lsp/lsp_doc.c
   src/lsp/lsp_analysis.c
   src/lsp/lsp_types.c
   src/lsp/lsp_infer.c

@@ -217,87 +217,10 @@ const char *valk_type_name(const valk_type_t *ty) {
   return "?";
 }
 
-char *valk_type_display(const valk_type_t *ty) {
-  if (!ty) return strdup("?");
-  valk_type_t *r = ty_resolve((valk_type_t *)ty);
-
-  char buf[256] = {0};
-  int pos = 0;
-
-  switch (r->kind) {
-  case TY_NUM: case TY_STR: case TY_SYM: case TY_NIL:
-  case TY_ERR: case TY_ANY: case TY_NEVER:
-    return strdup(GROUND_NAMES[r->kind]);
-
-  case TY_LIST: {
-    char *elem = valk_type_display(r->list.elem);
-    snprintf(buf, sizeof(buf), "List(%s)", elem);
-    free(elem);
-    return strdup(buf);
-  }
-
-  case TY_HANDLE: {
-    char *inner = valk_type_display(r->handle.inner);
-    snprintf(buf, sizeof(buf), "Handle(%s)", inner);
-    free(inner);
-    return strdup(buf);
-  }
-
-  case TY_REF:
-    if (r->ref.tag)
-      snprintf(buf, sizeof(buf), "Ref(%s)", r->ref.tag);
-    else
-      snprintf(buf, sizeof(buf), "Ref");
-    return strdup(buf);
-
-  case TY_FUN: {
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "(");
-    for (int i = 0; i < r->fun.param_count && pos < 240; i++) {
-      if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
-      char *p = valk_type_display(r->fun.params[i]);
-      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", p);
-      free(p);
-    }
-    if (r->fun.variadic) pos += snprintf(buf + pos, sizeof(buf) - pos, "...");
-    char *ret = valk_type_display(r->fun.ret);
-    pos += snprintf(buf + pos, sizeof(buf) - pos, " -> %s)", ret);
-    free(ret);
-    return strdup(buf);
-  }
-
-  case TY_VAR:
-    snprintf(buf, sizeof(buf), "T%d", r->var.id);
-    return strdup(buf);
-
-  case TY_UNION:
-    for (int i = 0; i < r->onion.count && pos < 240; i++) {
-      if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, "|");
-      char *m = valk_type_display(r->onion.members[i]);
-      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", m);
-      free(m);
-    }
-    return strdup(buf);
-
-  case TY_NAMED:
-    if (r->named.param_count == 0)
-      return strdup(r->named.name);
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "%s(", r->named.name);
-    for (int i = 0; i < r->named.param_count && pos < 240; i++) {
-      if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
-      char *p = valk_type_display(r->named.params[i]);
-      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", p);
-      free(p);
-    }
-    pos += snprintf(buf + pos, sizeof(buf) - pos, ")");
-    return strdup(buf);
-
-  default:
-    return strdup("?");
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Pretty type display — normalizes type variable names to 'a, 'b, 'c, ...
+// Type display — unified implementation.
+// When var_map is NULL, shows raw var IDs (T0, T1).
+// When var_map is provided, shows pretty names (A, B, C).
 // ---------------------------------------------------------------------------
 
 typedef struct {
@@ -336,7 +259,7 @@ static void collect_vars(const valk_type_t *ty, var_map_t *m) {
   }
 }
 
-static char *type_display_pretty(const valk_type_t *ty, var_map_t *m) {
+static char *type_display_impl(const valk_type_t *ty, var_map_t *m) {
   if (!ty) return strdup("?");
   valk_type_t *r = ty_resolve((valk_type_t *)ty);
 
@@ -349,14 +272,14 @@ static char *type_display_pretty(const valk_type_t *ty, var_map_t *m) {
     return strdup(GROUND_NAMES[r->kind]);
 
   case TY_LIST: {
-    char *elem = type_display_pretty(r->list.elem, m);
+    char *elem = type_display_impl(r->list.elem, m);
     snprintf(buf, sizeof(buf), "List(%s)", elem);
     free(elem);
     return strdup(buf);
   }
 
   case TY_HANDLE: {
-    char *inner = type_display_pretty(r->handle.inner, m);
+    char *inner = type_display_impl(r->handle.inner, m);
     snprintf(buf, sizeof(buf), "Handle(%s)", inner);
     free(inner);
     return strdup(buf);
@@ -373,30 +296,33 @@ static char *type_display_pretty(const valk_type_t *ty, var_map_t *m) {
     pos += snprintf(buf + pos, sizeof(buf) - pos, "(");
     for (int i = 0; i < r->fun.param_count && pos < 240; i++) {
       if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
-      char *p = type_display_pretty(r->fun.params[i], m);
+      char *p = type_display_impl(r->fun.params[i], m);
       pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", p);
       free(p);
     }
     if (r->fun.variadic) pos += snprintf(buf + pos, sizeof(buf) - pos, "...");
-    char *ret = type_display_pretty(r->fun.ret, m);
+    char *ret = type_display_impl(r->fun.ret, m);
     pos += snprintf(buf + pos, sizeof(buf) - pos, " -> %s)", ret);
     free(ret);
     return strdup(buf);
   }
 
-  case TY_VAR: {
-    int idx = var_map_lookup(m, r->var.id);
-    if (idx < 26)
-      snprintf(buf, sizeof(buf), "%c", 'A' + idx);
-    else
-      snprintf(buf, sizeof(buf), "T%d", idx);
+  case TY_VAR:
+    if (m) {
+      int idx = var_map_lookup(m, r->var.id);
+      if (idx < 26)
+        snprintf(buf, sizeof(buf), "%c", 'A' + idx);
+      else
+        snprintf(buf, sizeof(buf), "T%d", idx);
+    } else {
+      snprintf(buf, sizeof(buf), "T%d", r->var.id);
+    }
     return strdup(buf);
-  }
 
   case TY_UNION:
     for (int i = 0; i < r->onion.count && pos < 240; i++) {
       if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, "|");
-      char *mem = type_display_pretty(r->onion.members[i], m);
+      char *mem = type_display_impl(r->onion.members[i], m);
       pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", mem);
       free(mem);
     }
@@ -408,7 +334,7 @@ static char *type_display_pretty(const valk_type_t *ty, var_map_t *m) {
     pos += snprintf(buf + pos, sizeof(buf) - pos, "%s(", r->named.name);
     for (int i = 0; i < r->named.param_count && pos < 240; i++) {
       if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
-      char *p = type_display_pretty(r->named.params[i], m);
+      char *p = type_display_impl(r->named.params[i], m);
       pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", p);
       free(p);
     }
@@ -420,10 +346,14 @@ static char *type_display_pretty(const valk_type_t *ty, var_map_t *m) {
   }
 }
 
+char *valk_type_display(const valk_type_t *ty) {
+  return type_display_impl(ty, nullptr);
+}
+
 char *valk_type_display_pretty(const valk_type_t *ty) {
   var_map_t m = {.count = 0};
   collect_vars(ty, &m);
-  return type_display_pretty(ty, &m);
+  return type_display_impl(ty, &m);
 }
 
 // ---------------------------------------------------------------------------

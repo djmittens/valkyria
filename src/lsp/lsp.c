@@ -11,86 +11,7 @@
 
 #include "../parser.h"
 
-// ---------------------------------------------------------------------------
-// Document store
-// ---------------------------------------------------------------------------
-
 static lsp_doc_store_t g_store = {0};
-
-static lsp_document_t *doc_find(const char *uri) {
-  for (size_t i = 0; i < g_store.count; i++)
-    if (strcmp(g_store.docs[i].uri, uri) == 0)
-      return &g_store.docs[i];
-  return nullptr;
-}
-
-static lsp_document_t *doc_open(const char *uri, const char *text, int version) {
-  lsp_document_t *existing = doc_find(uri);
-  if (existing) {
-    free(existing->text);
-    existing->text = strdup(text);
-    existing->text_len = strlen(text);
-    existing->version = version;
-    return existing;
-  }
-
-  if (g_store.count >= g_store.cap) {
-    g_store.cap = g_store.cap == 0 ? 8 : g_store.cap * 2;
-    g_store.docs = realloc(g_store.docs, sizeof(lsp_document_t) * g_store.cap);
-  }
-
-  lsp_document_t *doc = &g_store.docs[g_store.count++];
-  memset(doc, 0, sizeof(*doc));
-  doc->uri = strdup(uri);
-  doc->text = strdup(text);
-  doc->text_len = strlen(text);
-  doc->version = version;
-  return doc;
-}
-
-static void doc_close(const char *uri) {
-  for (size_t i = 0; i < g_store.count; i++) {
-    if (strcmp(g_store.docs[i].uri, uri) == 0) {
-      doc_symbols_clear(&g_store.docs[i]);
-      doc_diag_clear(&g_store.docs[i]);
-      free(g_store.docs[i].uri);
-      free(g_store.docs[i].text);
-      free(g_store.docs[i].symbols);
-      free(g_store.docs[i].diag_messages);
-      free(g_store.docs[i].diag_positions);
-      free(g_store.docs[i].diag_severities);
-      free(g_store.docs[i].diag_lengths);
-      free(g_store.docs[i].sem_tokens);
-      g_store.docs[i] = g_store.docs[--g_store.count];
-      return;
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Get word at a position (for hover/completion context)
-// ---------------------------------------------------------------------------
-
-static char *get_word_at(const char *text, int offset) {
-  if (!text || offset < 0) return nullptr;
-  int start = offset, end = offset;
-  int len = (int)strlen(text);
-
-  while (start > 0 && strchr("abcdefghijklmnopqrstuvwxyz"
-                              "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                              "0123456789_+-*/\\=<>!&?:/",
-                              text[start - 1]))
-    start--;
-
-  while (end < len && strchr("abcdefghijklmnopqrstuvwxyz"
-                             "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                             "0123456789_+-*/\\=<>!&?:/",
-                             text[end]))
-    end++;
-
-  if (start == end) return nullptr;
-  return strndup(text + start, end - start);
-}
 
 // ---------------------------------------------------------------------------
 // LSP method handlers
@@ -164,7 +85,7 @@ static void handle_did_open(json_value_t *params) {
   int version = json_get_int(td, "version");
   if (!uri || !text) return;
 
-  lsp_document_t *doc = doc_open(uri, text, version);
+  lsp_document_t *doc = doc_store_open(&g_store, uri, text, version);
   analyze_document(doc);
   publish_diagnostics(doc);
 }
@@ -183,7 +104,7 @@ static void handle_did_change(json_value_t *params) {
   const char *text = json_get_string(&changes->array.items[0], "text");
   if (!text) return;
 
-  lsp_document_t *doc = doc_open(uri, text, version);
+  lsp_document_t *doc = doc_store_open(&g_store, uri, text, version);
   analyze_document(doc);
   publish_diagnostics(doc);
 }
@@ -192,7 +113,7 @@ static void handle_did_close(json_value_t *params) {
   json_value_t *td = json_get(params, "textDocument");
   if (!td) return;
   const char *uri = json_get_string(td, "uri");
-  if (uri) doc_close(uri);
+  if (uri) doc_store_close(&g_store, uri);
 }
 
 static const char *builtin_doc(const char *name);
@@ -347,7 +268,7 @@ static void handle_completion(int id, json_value_t *params) {
   int line = json_get_int(pos, "line");
   int col = json_get_int(pos, "character");
 
-  lsp_document_t *doc = uri ? doc_find(uri) : nullptr;
+  lsp_document_t *doc = uri ? doc_store_find(&g_store, uri) : nullptr;
 
   size_t buf_size = 262144;
   char *buf = malloc(buf_size);
@@ -493,127 +414,129 @@ static void handle_completion(int id, json_value_t *params) {
   free(buf);
 }
 
+static const struct { const char *name; const char *doc; } BUILTIN_DOCS[] = {
+  {"!", "Logical NOT."},
+  {"!=", "Inequality test."},
+  {"*", "Multiplication."},
+  {"+", "Addition."},
+  {"-", "Subtraction (or negation with 1 arg)."},
+  {"/", "Integer division."},
+  {"<", "Less than."},
+  {"<-", "Bind async handle result in aio/do block."},
+  {"<=", "Less or equal."},
+  {"=", "Bind a local variable."},
+  {"==", "Equality test."},
+  {">", "Greater than."},
+  {">=", "Greater or equal."},
+  {"\\", "Create an anonymous function (lambda)."},
+  {"aio/all", "Wait for all handles to complete."},
+  {"aio/all-settled", "Wait for all handles to settle (complete or fail)."},
+  {"aio/any", "Resolve with first successful handle."},
+  {"aio/await", "Block until async handle completes, return result."},
+  {"aio/bracket", "Acquire/release resource pattern for async."},
+  {"aio/cancel", "Cancel an async operation."},
+  {"aio/cancelled?", "Check if handle was cancelled."},
+  {"aio/catch", "Handle errors: run f if handle fails."},
+  {"aio/do", "Sequential async block. Use <- to bind async results."},
+  {"aio/error", "Get error of failed handle."},
+  {"aio/fail", "Create an immediately-failed handle."},
+  {"aio/finally", "Run f when handle settles (success or failure)."},
+  {"aio/interval", "Schedule a repeating callback."},
+  {"aio/let", "Parallel async bindings with optional :then sequential phases."},
+  {"aio/never", "Create a handle that never completes."},
+  {"aio/on-cancel", "Register cancellation callback."},
+  {"aio/pure", "Wrap a value in an immediately-resolved handle."},
+  {"aio/race", "Resolve with first completed handle."},
+  {"aio/result", "Get result of completed handle."},
+  {"aio/retry", "Retry with exponential backoff."},
+  {"aio/run", "Run event loop (blocks until stopped)."},
+  {"aio/schedule", "Schedule a callback after delay."},
+  {"aio/scope", "Run async operation with automatic cleanup."},
+  {"aio/sleep", "Async sleep for ms milliseconds."},
+  {"aio/start", "Create async I/O system. Config is optional plist."},
+  {"aio/status", "Get handle status (:pending, :completed, :failed, :cancelled)."},
+  {"aio/stop", "Signal event loop to stop."},
+  {"aio/then", "Chain: run f with result when handle completes."},
+  {"aio/traverse", "Apply async function to each list element."},
+  {"aio/within", "Timeout: fail if handle doesn't complete in ms."},
+  {"case", "Case expression with value matching."},
+  {"cons", "Prepend a value to a Q-expression."},
+  {"def", "Define a global variable."},
+  {"do", "Evaluate expressions sequentially, return last."},
+  {"error", "Create an error value."},
+  {"error?", "Test if value is an error."},
+  {"eval", "Evaluate a Q-expression as code."},
+  {"exit", "Exit process with status code."},
+  {"false", "Boolean false constant."},
+  {"fun", "Define a named function."},
+  {"head", "Return first element of a Q-expression."},
+  {"if", "Conditional expression."},
+  {"init", "Return all elements except the last."},
+  {"join", "Concatenate Q-expressions."},
+  {"len", "Return length of a Q-expression or string."},
+  {"let", "Local bindings expression."},
+  {"list", "Create a Q-expression from arguments."},
+  {"list?", "Test if value is a Q-expression."},
+  {"load", "Load and evaluate a file."},
+  {"make-string", "Repeat pattern n times into a string."},
+  {"nil", "Empty list / null value."},
+  {"ord", "Compare two values by ordering."},
+  {"otherwise", "Wildcard pattern for select/case (always true)."},
+  {"penv", "Print the current environment."},
+  {"print", "Print a value without newline."},
+  {"printf", "Formatted print (C-style format string)."},
+  {"println", "Print a value followed by newline."},
+  {"range", "Generate a list of integers [start, end)."},
+  {"read", "Parse a string into a Q-expression."},
+  {"read-file", "Read entire file contents as string."},
+  {"ref?", "Test if value is an opaque reference."},
+  {"repeat", "Create a list with value repeated n times."},
+  {"select", "Pattern matching / cond expression."},
+  {"shutdown", "Alias for exit."},
+  {"sleep", "Sleep for ms milliseconds (blocking)."},
+  {"stack-depth", "Return current call stack depth."},
+  {"str", "Concatenate arguments as strings."},
+  {"str->num", "Parse string to number."},
+  {"str/replace", "Replace occurrences in string."},
+  {"str/slice", "Extract substring."},
+  {"str/split", "Split string by delimiter."},
+  {"sys/log/set-level", "Set log level (debug/info/warn/error)."},
+  {"tail", "Return all elements except the first."},
+  {"time-us", "Current time in microseconds."},
+  {"true", "Boolean true constant."},
+};
+
+static const struct { const char *prefix; const char *doc; } NAMESPACE_DOCS[] = {
+  {"aio/", "Async I/O builtin."},
+  {"coverage", "Coverage instrumentation builtin."},
+  {"ctx/", "Request context builtin."},
+  {"http2/", "HTTP/2 builtin."},
+  {"mem/", "Memory/GC introspection builtin."},
+  {"metrics/", "Metrics/observability builtin."},
+  {"req/", "Request accessor builtin."},
+  {"source-", "Source location introspection."},
+  {"sse/", "Server-Sent Events builtin."},
+  {"stream/", "Streaming response builtin."},
+  {"test", "Testing framework builtin."},
+  {"trace/", "Distributed tracing builtin."},
+  {"vm/", "VM metrics builtin."},
+};
+
 static const char *builtin_doc(const char *name) {
   if (!name) return nullptr;
 
-  // Core special forms
-  if (strcmp(name, "def") == 0) return "Define a global variable.";
-  if (strcmp(name, "=") == 0) return "Bind a local variable.";
-  if (strcmp(name, "\\") == 0) return "Create an anonymous function (lambda).";
-  if (strcmp(name, "fun") == 0) return "Define a named function.";
-  if (strcmp(name, "if") == 0) return "Conditional expression.";
-  if (strcmp(name, "do") == 0) return "Evaluate expressions sequentially, return last.";
-  if (strcmp(name, "select") == 0) return "Pattern matching / cond expression.";
-  if (strcmp(name, "case") == 0) return "Case expression with value matching.";
-  if (strcmp(name, "eval") == 0) return "Evaluate a Q-expression as code.";
-  if (strcmp(name, "load") == 0) return "Load and evaluate a file.";
-  if (strcmp(name, "read") == 0) return "Parse a string into a Q-expression.";
-  if (strcmp(name, "let") == 0) return "Local bindings expression.";
-  if (strcmp(name, "<-") == 0) return "Bind async handle result in aio/do block.";
+  int lo = 0, hi = (int)(sizeof(BUILTIN_DOCS) / sizeof(BUILTIN_DOCS[0])) - 1;
+  while (lo <= hi) {
+    int mid = (lo + hi) / 2;
+    int cmp = strcmp(name, BUILTIN_DOCS[mid].name);
+    if (cmp == 0) return BUILTIN_DOCS[mid].doc;
+    if (cmp < 0) hi = mid - 1;
+    else lo = mid + 1;
+  }
 
-  // List operations
-  if (strcmp(name, "list") == 0) return "Create a Q-expression from arguments.";
-  if (strcmp(name, "head") == 0) return "Return first element of a Q-expression.";
-  if (strcmp(name, "tail") == 0) return "Return all elements except the first.";
-  if (strcmp(name, "join") == 0) return "Concatenate Q-expressions.";
-  if (strcmp(name, "cons") == 0) return "Prepend a value to a Q-expression.";
-  if (strcmp(name, "len") == 0) return "Return length of a Q-expression or string.";
-  if (strcmp(name, "init") == 0) return "Return all elements except the last.";
-  if (strcmp(name, "range") == 0) return "Generate a list of integers [start, end).";
-  if (strcmp(name, "repeat") == 0) return "Create a list with value repeated n times.";
-
-  // I/O & strings
-  if (strcmp(name, "print") == 0) return "Print a value without newline.";
-  if (strcmp(name, "println") == 0) return "Print a value followed by newline.";
-  if (strcmp(name, "printf") == 0) return "Formatted print (C-style format string).";
-  if (strcmp(name, "str") == 0) return "Concatenate arguments as strings.";
-  if (strcmp(name, "make-string") == 0) return "Repeat pattern n times into a string.";
-  if (strcmp(name, "read-file") == 0) return "Read entire file contents as string.";
-  if (strcmp(name, "error") == 0) return "Create an error value.";
-  if (strcmp(name, "error?") == 0) return "Test if value is an error.";
-  if (strcmp(name, "list?") == 0) return "Test if value is a Q-expression.";
-  if (strcmp(name, "ref?") == 0) return "Test if value is an opaque reference.";
-
-  // String operations
-  if (strcmp(name, "str/split") == 0) return "Split string by delimiter.";
-  if (strcmp(name, "str/replace") == 0) return "Replace occurrences in string.";
-  if (strcmp(name, "str/slice") == 0) return "Extract substring.";
-  if (strcmp(name, "str->num") == 0) return "Parse string to number.";
-  if (strcmp(name, "ord") == 0) return "Compare two values by ordering.";
-
-  // Arithmetic & comparison
-  if (strcmp(name, "+") == 0) return "Addition.";
-  if (strcmp(name, "-") == 0) return "Subtraction (or negation with 1 arg).";
-  if (strcmp(name, "*") == 0) return "Multiplication.";
-  if (strcmp(name, "/") == 0) return "Integer division.";
-  if (strcmp(name, ">") == 0) return "Greater than.";
-  if (strcmp(name, "<") == 0) return "Less than.";
-  if (strcmp(name, ">=") == 0) return "Greater or equal.";
-  if (strcmp(name, "<=") == 0) return "Less or equal.";
-  if (strcmp(name, "==") == 0) return "Equality test.";
-  if (strcmp(name, "!=") == 0) return "Inequality test.";
-
-  // System
-  if (strcmp(name, "time-us") == 0) return "Current time in microseconds.";
-  if (strcmp(name, "sleep") == 0) return "Sleep for ms milliseconds (blocking).";
-  if (strcmp(name, "exit") == 0) return "Exit process with status code.";
-  if (strcmp(name, "shutdown") == 0) return "Alias for exit.";
-  if (strcmp(name, "penv") == 0) return "Print the current environment.";
-  if (strcmp(name, "stack-depth") == 0) return "Return current call stack depth.";
-  if (strcmp(name, "sys/log/set-level") == 0) return "Set log level (debug/info/warn/error).";
-
-  // Constants
-  if (strcmp(name, "true") == 0) return "Boolean true constant.";
-  if (strcmp(name, "false") == 0) return "Boolean false constant.";
-  if (strcmp(name, "nil") == 0) return "Empty list / null value.";
-  if (strcmp(name, "otherwise") == 0) return "Wildcard pattern for select/case (always true).";
-
-  // Async
-  if (strcmp(name, "aio/start") == 0) return "Create async I/O system. Config is optional plist.";
-  if (strcmp(name, "aio/run") == 0) return "Run event loop (blocks until stopped).";
-  if (strcmp(name, "aio/stop") == 0) return "Signal event loop to stop.";
-  if (strcmp(name, "aio/await") == 0) return "Block until async handle completes, return result.";
-  if (strcmp(name, "aio/sleep") == 0) return "Async sleep for ms milliseconds.";
-  if (strcmp(name, "aio/let") == 0) return "Parallel async bindings with optional :then sequential phases.";
-  if (strcmp(name, "aio/do") == 0) return "Sequential async block. Use <- to bind async results.";
-  if (strcmp(name, "aio/all") == 0) return "Wait for all handles to complete.";
-  if (strcmp(name, "aio/race") == 0) return "Resolve with first completed handle.";
-  if (strcmp(name, "aio/any") == 0) return "Resolve with first successful handle.";
-  if (strcmp(name, "aio/all-settled") == 0) return "Wait for all handles to settle (complete or fail).";
-  if (strcmp(name, "aio/within") == 0) return "Timeout: fail if handle doesn't complete in ms.";
-  if (strcmp(name, "aio/retry") == 0) return "Retry with exponential backoff.";
-  if (strcmp(name, "aio/then") == 0) return "Chain: run f with result when handle completes.";
-  if (strcmp(name, "aio/catch") == 0) return "Handle errors: run f if handle fails.";
-  if (strcmp(name, "aio/finally") == 0) return "Run f when handle settles (success or failure).";
-  if (strcmp(name, "aio/pure") == 0) return "Wrap a value in an immediately-resolved handle.";
-  if (strcmp(name, "aio/fail") == 0) return "Create an immediately-failed handle.";
-  if (strcmp(name, "aio/never") == 0) return "Create a handle that never completes.";
-  if (strcmp(name, "aio/cancel") == 0) return "Cancel an async operation.";
-  if (strcmp(name, "aio/status") == 0) return "Get handle status (:pending, :completed, :failed, :cancelled).";
-  if (strcmp(name, "aio/result") == 0) return "Get result of completed handle.";
-  if (strcmp(name, "aio/error") == 0) return "Get error of failed handle.";
-  if (strcmp(name, "aio/cancelled?") == 0) return "Check if handle was cancelled.";
-  if (strcmp(name, "aio/on-cancel") == 0) return "Register cancellation callback.";
-  if (strcmp(name, "aio/bracket") == 0) return "Acquire/release resource pattern for async.";
-  if (strcmp(name, "aio/scope") == 0) return "Run async operation with automatic cleanup.";
-  if (strcmp(name, "aio/schedule") == 0) return "Schedule a callback after delay.";
-  if (strcmp(name, "aio/interval") == 0) return "Schedule a repeating callback.";
-  if (strcmp(name, "aio/traverse") == 0) return "Apply async function to each list element.";
-
-  // Namespace-based fallbacks
-  if (strncmp(name, "aio/", 4) == 0) return "Async I/O builtin.";
-  if (strncmp(name, "http2/", 6) == 0) return "HTTP/2 builtin.";
-  if (strncmp(name, "req/", 4) == 0) return "Request accessor builtin.";
-  if (strncmp(name, "stream/", 7) == 0) return "Streaming response builtin.";
-  if (strncmp(name, "sse/", 4) == 0) return "Server-Sent Events builtin.";
-  if (strncmp(name, "metrics/", 8) == 0) return "Metrics/observability builtin.";
-  if (strncmp(name, "test", 4) == 0) return "Testing framework builtin.";
-  if (strncmp(name, "mem/", 4) == 0) return "Memory/GC introspection builtin.";
-  if (strncmp(name, "ctx/", 4) == 0) return "Request context builtin.";
-  if (strncmp(name, "vm/", 3) == 0) return "VM metrics builtin.";
-  if (strncmp(name, "trace/", 6) == 0) return "Distributed tracing builtin.";
-  if (strncmp(name, "coverage", 8) == 0) return "Coverage instrumentation builtin.";
-  if (strncmp(name, "source-", 7) == 0) return "Source location introspection.";
+  for (size_t i = 0; i < sizeof(NAMESPACE_DOCS) / sizeof(NAMESPACE_DOCS[0]); i++)
+    if (strncmp(name, NAMESPACE_DOCS[i].prefix, strlen(NAMESPACE_DOCS[i].prefix)) == 0)
+      return NAMESPACE_DOCS[i].doc;
 
   return nullptr;
 }
@@ -735,7 +658,7 @@ static void handle_hover(int id, json_value_t *params) {
   int line = json_get_int(pos, "line");
   int col = json_get_int(pos, "character");
 
-  lsp_document_t *doc = uri ? doc_find(uri) : nullptr;
+  lsp_document_t *doc = uri ? doc_store_find(&g_store, uri) : nullptr;
   if (!doc) { lsp_send_response(id, "null"); return; }
 
   int offset = pos_to_offset(doc->text, line, col);
@@ -851,7 +774,7 @@ static void handle_definition(int id, json_value_t *params) {
   int line = json_get_int(pos, "line");
   int col = json_get_int(pos, "character");
 
-  lsp_document_t *doc = uri ? doc_find(uri) : nullptr;
+  lsp_document_t *doc = uri ? doc_store_find(&g_store, uri) : nullptr;
   if (!doc) { lsp_send_response(id, "null"); return; }
 
   int offset = pos_to_offset(doc->text, line, col);
@@ -886,7 +809,7 @@ static void handle_document_symbol(int id, json_value_t *params) {
   if (!td) { lsp_send_response(id, "[]"); return; }
 
   const char *uri = json_get_string(td, "uri");
-  lsp_document_t *doc = uri ? doc_find(uri) : nullptr;
+  lsp_document_t *doc = uri ? doc_store_find(&g_store, uri) : nullptr;
   if (!doc) { lsp_send_response(id, "[]"); return; }
 
   char buf[65536];
@@ -922,7 +845,7 @@ static void handle_semantic_tokens(int id, json_value_t *params) {
   if (!td) { lsp_send_response(id, "{\"data\":[]}"); return; }
 
   const char *uri = json_get_string(td, "uri");
-  lsp_document_t *doc = uri ? doc_find(uri) : nullptr;
+  lsp_document_t *doc = uri ? doc_store_find(&g_store, uri) : nullptr;
   if (!doc || doc->sem_token_count == 0) {
     lsp_send_response(id, "{\"data\":[]}");
     return;
@@ -1009,7 +932,7 @@ int valk_lsp_main(int argc, char *argv[]) {
       if (params) {
         json_value_t *td = json_get(params, "textDocument");
         const char *uri = td ? json_get_string(td, "uri") : nullptr;
-        lsp_document_t *doc = uri ? doc_find(uri) : nullptr;
+        lsp_document_t *doc = uri ? doc_store_find(&g_store, uri) : nullptr;
         if (doc) {
           const char *text = json_get_string(params, "text");
           if (text) {
@@ -1047,19 +970,7 @@ int valk_lsp_main(int argc, char *argv[]) {
     lsp_message_free(&msg);
   }
 
-  for (size_t i = 0; i < g_store.count; i++) {
-    doc_symbols_clear(&g_store.docs[i]);
-    doc_diag_clear(&g_store.docs[i]);
-    free(g_store.docs[i].uri);
-    free(g_store.docs[i].text);
-    free(g_store.docs[i].symbols);
-    free(g_store.docs[i].diag_messages);
-    free(g_store.docs[i].diag_positions);
-    free(g_store.docs[i].diag_severities);
-    free(g_store.docs[i].diag_lengths);
-    free(g_store.docs[i].sem_tokens);
-  }
-  free(g_store.docs);
+  doc_store_free(&g_store);
 
   fprintf(stderr, "[valk-lsp] shutdown\n");
   return 0;
