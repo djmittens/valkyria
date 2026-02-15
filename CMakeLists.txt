@@ -178,6 +178,10 @@ set(VALKYRIA_SOURCES
   src/aio/aio_ctx_builtins.c
   src/pool_metrics.c
   src/event_loop_metrics.c
+  src/lsp/lsp.c
+  src/lsp/lsp_analysis.c
+  src/lsp/lsp_io.c
+  src/lsp/lsp_json.c
 )
 
 if(COVERAGE)
@@ -205,6 +209,7 @@ endif()
 
 target_include_directories(valkyria PRIVATE
   ${PROJECT_SOURCE_DIR}/src
+  ${PROJECT_SOURCE_DIR}/src/lsp
   ${PROJECT_SOURCE_DIR}/src/aio
   ${PROJECT_SOURCE_DIR}/src/aio/system
   ${PROJECT_SOURCE_DIR}/src/aio/http2

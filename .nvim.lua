@@ -63,6 +63,31 @@ vim.api.nvim_create_autocmd({'BufRead', 'BufNewFile'}, {
   end
 })
 
+-- Register .valk filetype and tree-sitter parser
+vim.filetype.add({
+  extension = {
+    valk = 'valk',
+  },
+})
+vim.treesitter.language.register('valk', 'valk')
+
+-- LSP client for valk-lsp (via build/valk --lsp)
+vim.api.nvim_create_autocmd('FileType', {
+  pattern = 'valk',
+  callback = function()
+    local root = vim.fs.root(0, { '.git', 'CMakeLists.txt' })
+    local valk_exe = (root or vim.fn.getcwd()) .. '/build/valk'
+    if vim.fn.executable(valk_exe) == 0 then return end
+
+    vim.lsp.start({
+      name = 'valk-lsp',
+      cmd = { valk_exe, '--lsp' },
+      root_dir = root,
+      capabilities = vim.lsp.protocol.make_client_capabilities(),
+    })
+  end,
+})
+
 -- Setup the build command
 vim.keymap.set('n', '<leader>b', ":mak build<CR>", {
   desc = 'Build project',

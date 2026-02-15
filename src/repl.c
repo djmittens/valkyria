@@ -9,6 +9,7 @@
 #include "coverage.h"
 #include "gc.h"
 #include "log.h"
+#include "lsp/lsp.h"
 #include "memory.h"
 #include "parser.h"
 
@@ -88,6 +89,9 @@ int main(int argc, char* argv[]) {
   bool force_repl = false;
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
+      if (strcmp(argv[i], "--lsp") == 0) {
+        return valk_lsp_main(argc, argv);
+      }
       if (strcmp(argv[i], "--script") == 0) {
         script_mode = true;
         continue;
