@@ -68,11 +68,10 @@ void lsp_builtin_schemes_init(type_arena_t *a, typed_scope_t *scope) {
     ADD_SCHEME("head", scheme_poly(a, ids, 1, fn));
   }
   {
-    // tail : forall a. List(a) -> List(a)|Nil
+    // tail : forall a. List(a) -> List(a)
     valk_type_t *v = ty_var(a);
     valk_type_t *ps[1] = {ty_list(a, v)};
-    valk_type_t *ret = ty_union2(a, ty_list(a, v), ty_nil(a));
-    valk_type_t *fn = ty_fun(a, ps, 1, ret, false);
+    valk_type_t *fn = ty_fun(a, ps, 1, ty_list(a, v), false);
     int ids[1] = {v->var.id};
     ADD_SCHEME("tail", scheme_poly(a, ids, 1, fn));
   }
@@ -82,20 +81,18 @@ void lsp_builtin_schemes_init(type_arena_t *a, typed_scope_t *scope) {
     ADD_MONO("cons", ty_fun(a, ps, 2, ty_list(a, ty_any(a)), false));
   }
   {
-    // init : forall a. List(a) -> List(a)|Nil
+    // init : forall a. List(a) -> List(a)
     valk_type_t *v = ty_var(a);
     valk_type_t *ps[1] = {ty_list(a, v)};
-    valk_type_t *ret = ty_union2(a, ty_list(a, v), ty_nil(a));
-    valk_type_t *fn = ty_fun(a, ps, 1, ret, false);
+    valk_type_t *fn = ty_fun(a, ps, 1, ty_list(a, v), false);
     int ids[1] = {v->var.id};
     ADD_SCHEME("init", scheme_poly(a, ids, 1, fn));
   }
   {
-    // join : forall a. List(a)|Nil... -> List(a)|Nil
+    // join : forall a. List(a)... -> List(a)
     valk_type_t *v = ty_var(a);
-    valk_type_t *elem = ty_union2(a, ty_list(a, v), ty_nil(a));
-    valk_type_t *ps[1] = {elem};
-    valk_type_t *fn = ty_fun(a, ps, 1, elem, true);
+    valk_type_t *ps[1] = {ty_list(a, v)};
+    valk_type_t *fn = ty_fun(a, ps, 1, ty_list(a, v), true);
     int ids[1] = {v->var.id};
     ADD_SCHEME("join", scheme_poly(a, ids, 1, fn));
   }

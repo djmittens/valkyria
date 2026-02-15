@@ -109,6 +109,16 @@ valk_type_t *ty_var(type_arena_t *a) {
   return ty;
 }
 
+valk_type_t *ty_named(type_arena_t *a, const char *name, valk_type_t **params, int n) {
+  valk_type_t *ty = type_arena_alloc(a);
+  ty->kind = TY_NAMED;
+  ty->named.name = type_arena_strdup(a, name);
+  ty->named.param_count = n < TY_MAX_PARAMS ? n : TY_MAX_PARAMS;
+  for (int i = 0; i < ty->named.param_count; i++)
+    ty->named.params[i] = params[i];
+  return ty;
+}
+
 // ---------------------------------------------------------------------------
 // Union types
 // ---------------------------------------------------------------------------
@@ -203,6 +213,7 @@ const char *valk_type_name(const valk_type_t *ty) {
   if (r->kind == TY_FUN) return "Fun";
   if (r->kind == TY_VAR) return "?";
   if (r->kind == TY_UNION) return "Union";
+  if (r->kind == TY_NAMED) return r->named.name;
   return "?";
 }
 
@@ -255,7 +266,7 @@ char *valk_type_display(const valk_type_t *ty) {
   }
 
   case TY_VAR:
-    snprintf(buf, sizeof(buf), "'t%d", r->var.id);
+    snprintf(buf, sizeof(buf), "T%d", r->var.id);
     return strdup(buf);
 
   case TY_UNION:
@@ -267,9 +278,152 @@ char *valk_type_display(const valk_type_t *ty) {
     }
     return strdup(buf);
 
+  case TY_NAMED:
+    if (r->named.param_count == 0)
+      return strdup(r->named.name);
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "%s(", r->named.name);
+    for (int i = 0; i < r->named.param_count && pos < 240; i++) {
+      if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
+      char *p = valk_type_display(r->named.params[i]);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", p);
+      free(p);
+    }
+    pos += snprintf(buf + pos, sizeof(buf) - pos, ")");
+    return strdup(buf);
+
   default:
     return strdup("?");
   }
+}
+
+// ---------------------------------------------------------------------------
+// Pretty type display — normalizes type variable names to 'a, 'b, 'c, ...
+// ---------------------------------------------------------------------------
+
+typedef struct {
+  int ids[64];
+  int count;
+} var_map_t;
+
+static int var_map_lookup(var_map_t *m, int id) {
+  for (int i = 0; i < m->count; i++)
+    if (m->ids[i] == id) return i;
+  if (m->count < 64) m->ids[m->count++] = id;
+  return m->count - 1;
+}
+
+static void collect_vars(const valk_type_t *ty, var_map_t *m) {
+  if (!ty) return;
+  valk_type_t *r = ty_resolve((valk_type_t *)ty);
+  switch (r->kind) {
+  case TY_VAR: var_map_lookup(m, r->var.id); break;
+  case TY_LIST: collect_vars(r->list.elem, m); break;
+  case TY_HANDLE: collect_vars(r->handle.inner, m); break;
+  case TY_FUN:
+    for (int i = 0; i < r->fun.param_count; i++)
+      collect_vars(r->fun.params[i], m);
+    collect_vars(r->fun.ret, m);
+    break;
+  case TY_UNION:
+    for (int i = 0; i < r->onion.count; i++)
+      collect_vars(r->onion.members[i], m);
+    break;
+  case TY_NAMED:
+    for (int i = 0; i < r->named.param_count; i++)
+      collect_vars(r->named.params[i], m);
+    break;
+  default: break;
+  }
+}
+
+static char *type_display_pretty(const valk_type_t *ty, var_map_t *m) {
+  if (!ty) return strdup("?");
+  valk_type_t *r = ty_resolve((valk_type_t *)ty);
+
+  char buf[256] = {0};
+  int pos = 0;
+
+  switch (r->kind) {
+  case TY_NUM: case TY_STR: case TY_SYM: case TY_NIL:
+  case TY_ERR: case TY_ANY: case TY_NEVER:
+    return strdup(GROUND_NAMES[r->kind]);
+
+  case TY_LIST: {
+    char *elem = type_display_pretty(r->list.elem, m);
+    snprintf(buf, sizeof(buf), "List(%s)", elem);
+    free(elem);
+    return strdup(buf);
+  }
+
+  case TY_HANDLE: {
+    char *inner = type_display_pretty(r->handle.inner, m);
+    snprintf(buf, sizeof(buf), "Handle(%s)", inner);
+    free(inner);
+    return strdup(buf);
+  }
+
+  case TY_REF:
+    if (r->ref.tag)
+      snprintf(buf, sizeof(buf), "Ref(%s)", r->ref.tag);
+    else
+      snprintf(buf, sizeof(buf), "Ref");
+    return strdup(buf);
+
+  case TY_FUN: {
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "(");
+    for (int i = 0; i < r->fun.param_count && pos < 240; i++) {
+      if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
+      char *p = type_display_pretty(r->fun.params[i], m);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", p);
+      free(p);
+    }
+    if (r->fun.variadic) pos += snprintf(buf + pos, sizeof(buf) - pos, "...");
+    char *ret = type_display_pretty(r->fun.ret, m);
+    pos += snprintf(buf + pos, sizeof(buf) - pos, " -> %s)", ret);
+    free(ret);
+    return strdup(buf);
+  }
+
+  case TY_VAR: {
+    int idx = var_map_lookup(m, r->var.id);
+    if (idx < 26)
+      snprintf(buf, sizeof(buf), "%c", 'A' + idx);
+    else
+      snprintf(buf, sizeof(buf), "T%d", idx);
+    return strdup(buf);
+  }
+
+  case TY_UNION:
+    for (int i = 0; i < r->onion.count && pos < 240; i++) {
+      if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, "|");
+      char *mem = type_display_pretty(r->onion.members[i], m);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", mem);
+      free(mem);
+    }
+    return strdup(buf);
+
+  case TY_NAMED:
+    if (r->named.param_count == 0)
+      return strdup(r->named.name);
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "%s(", r->named.name);
+    for (int i = 0; i < r->named.param_count && pos < 240; i++) {
+      if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
+      char *p = type_display_pretty(r->named.params[i], m);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", p);
+      free(p);
+    }
+    pos += snprintf(buf + pos, sizeof(buf) - pos, ")");
+    return strdup(buf);
+
+  default:
+    return strdup("?");
+  }
+}
+
+char *valk_type_display_pretty(const valk_type_t *ty) {
+  var_map_t m = {.count = 0};
+  collect_vars(ty, &m);
+  return type_display_pretty(ty, &m);
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +475,13 @@ bool ty_equal(const valk_type_t *a, const valk_type_t *b) {
     }
     return true;
 
+  case TY_NAMED:
+    if (strcmp(ra->named.name, rb->named.name) != 0) return false;
+    if (ra->named.param_count != rb->named.param_count) return false;
+    for (int i = 0; i < ra->named.param_count; i++)
+      if (!ty_equal(ra->named.params[i], rb->named.params[i])) return false;
+    return true;
+
   default:
     return false;
   }
@@ -344,6 +505,10 @@ bool ty_occurs(int var_id, valk_type_t *ty) {
   case TY_UNION:
     for (int i = 0; i < ty->onion.count; i++)
       if (ty_occurs(var_id, ty->onion.members[i])) return true;
+    return false;
+  case TY_NAMED:
+    for (int i = 0; i < ty->named.param_count; i++)
+      if (ty_occurs(var_id, ty->named.params[i])) return true;
     return false;
   default: return false;
   }
@@ -397,6 +562,15 @@ bool ty_unify(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
     for (int i = 0; i < n; i++)
       if (!ty_unify(a, t1->fun.params[i], t2->fun.params[i])) return false;
     return ty_unify(a, t1->fun.ret, t2->fun.ret);
+  }
+
+  case TY_NAMED: {
+    if (strcmp(t1->named.name, t2->named.name) != 0) return false;
+    int n = t1->named.param_count < t2->named.param_count ?
+            t1->named.param_count : t2->named.param_count;
+    for (int i = 0; i < n; i++)
+      if (!ty_unify(a, t1->named.params[i], t2->named.params[i])) return false;
+    return true;
   }
 
   default:
@@ -456,6 +630,15 @@ bool ty_compatible(const valk_type_t *expected, const valk_type_t *actual) {
     for (int i = 0; i < n; i++)
       if (!ty_compatible(re->fun.params[i], ra->fun.params[i])) return false;
     return ty_compatible(re->fun.ret, ra->fun.ret);
+  }
+
+  if (re->kind == TY_NAMED && ra->kind == TY_NAMED) {
+    if (strcmp(re->named.name, ra->named.name) != 0) return false;
+    int n = re->named.param_count < ra->named.param_count ?
+            re->named.param_count : ra->named.param_count;
+    for (int i = 0; i < n; i++)
+      if (!ty_compatible(re->named.params[i], ra->named.params[i])) return false;
+    return true;
   }
 
   return false;
@@ -547,6 +730,17 @@ static valk_type_t *instantiate_rec(type_arena_t *a, valk_type_t *ty,
     return r;
   }
 
+  case TY_NAMED: {
+    bool changed = false;
+    valk_type_t *params[TY_MAX_PARAMS];
+    for (int i = 0; i < ty->named.param_count; i++) {
+      params[i] = instantiate_rec(a, ty->named.params[i], old_ids, new_vars, n);
+      if (params[i] != ty->named.params[i]) changed = true;
+    }
+    if (!changed) return ty;
+    return ty_named(a, ty->named.name, params, ty->named.param_count);
+  }
+
   default:
     return ty;
   }
@@ -585,6 +779,10 @@ static void collect_free_vars(valk_type_t *ty, int floor,
     for (int i = 0; i < ty->onion.count; i++)
       collect_free_vars(ty->onion.members[i], floor, ids, count, max);
     return;
+  case TY_NAMED:
+    for (int i = 0; i < ty->named.param_count; i++)
+      collect_free_vars(ty->named.params[i], floor, ids, count, max);
+    return;
   default: return;
   }
 }
@@ -594,462 +792,15 @@ type_scheme_t *scheme_generalize(type_arena_t *a, valk_type_t *ty, int floor_var
   int count = 0;
   collect_free_vars(ty, floor_var_id, ids, &count, SCHEME_MAX_VARS);
   if (count == 0) return scheme_mono(a, ty);
-  return scheme_poly(a, ids, count, ty);
+
+  valk_type_t *fresh[SCHEME_MAX_VARS];
+  int fresh_ids[SCHEME_MAX_VARS];
+  for (int i = 0; i < count; i++) {
+    fresh[i] = ty_var(a);
+    fresh_ids[i] = fresh[i]->var.id;
+  }
+  valk_type_t *frozen = instantiate_rec(a, ty, ids, fresh, count);
+  return scheme_poly(a, fresh_ids, count, frozen);
 }
 
-// ---------------------------------------------------------------------------
-// Typed scope
-// ---------------------------------------------------------------------------
 
-typed_scope_t *typed_scope_push(type_arena_t *a, typed_scope_t *parent) {
-  (void)a;
-  typed_scope_t *s = calloc(1, sizeof(typed_scope_t));
-  s->parent = parent;
-  return s;
-}
-
-void typed_scope_pop(typed_scope_t *s) {
-  for (size_t i = 0; i < s->count; i++)
-    free(s->bindings[i].name);
-  free(s->bindings);
-  free(s);
-}
-
-void typed_scope_add(typed_scope_t *s, const char *name, type_scheme_t *scheme) {
-  for (size_t i = 0; i < s->count; i++) {
-    if (strcmp(s->bindings[i].name, name) == 0) {
-      s->bindings[i].scheme = scheme;
-      return;
-    }
-  }
-  if (s->count >= s->cap) {
-    s->cap = s->cap == 0 ? 16 : s->cap * 2;
-    s->bindings = realloc(s->bindings, sizeof(typed_binding_t) * s->cap);
-  }
-  s->bindings[s->count++] = (typed_binding_t){strdup(name), scheme};
-}
-
-void typed_scope_add_mono(typed_scope_t *s, const char *name, valk_type_t *ty) {
-  type_scheme_t tmp = {.var_count = 0, .body = ty};
-  type_scheme_t *mono = malloc(sizeof(type_scheme_t));
-  *mono = tmp;
-  typed_scope_add(s, name, mono);
-}
-
-type_scheme_t *typed_scope_lookup(typed_scope_t *s, const char *name) {
-  while (s) {
-    for (size_t i = 0; i < s->count; i++)
-      if (strcmp(s->bindings[i].name, name) == 0) return s->bindings[i].scheme;
-    s = s->parent;
-  }
-  return nullptr;
-}
-
-// ---------------------------------------------------------------------------
-// Inference helpers
-// ---------------------------------------------------------------------------
-
-static valk_type_t *infer_eval(infer_ctx_t *ctx, valk_lval_t *expr) {
-  if (!expr) return ty_nil(ctx->arena);
-  if (LVAL_TYPE(expr) == LVAL_CONS && (expr->flags & LVAL_FLAG_QUOTED)) {
-    uint32_t saved = expr->flags;
-    expr->flags &= ~LVAL_FLAG_QUOTED;
-    valk_type_t *r = infer_expr(ctx, expr);
-    expr->flags = saved;
-    return r;
-  }
-  return infer_expr(ctx, expr);
-}
-
-static valk_type_t *infer_body_last(infer_ctx_t *ctx, valk_lval_t *rest) {
-  valk_type_t *result = ty_nil(ctx->arena);
-  while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
-    result = infer_eval(ctx, valk_lval_head(rest));
-    rest = valk_lval_tail(rest);
-  }
-  return result;
-}
-
-static void infer_body(infer_ctx_t *ctx, valk_lval_t *rest) {
-  while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
-    infer_eval(ctx, valk_lval_head(rest));
-    rest = valk_lval_tail(rest);
-  }
-}
-
-static int count_list(valk_lval_t *rest) {
-  int n = 0;
-  while (rest && LVAL_TYPE(rest) == LVAL_CONS) { n++; rest = valk_lval_tail(rest); }
-  return n;
-}
-
-static void emit_type_error(infer_ctx_t *ctx, const char *name,
-                             int arg_idx, valk_type_t *expected, valk_type_t *actual) {
-  char msg[256];
-  char *exp_str = valk_type_display(expected);
-  char *act_str = valk_type_display(actual);
-  snprintf(msg, sizeof(msg), "'%s' argument %d: expected %s, got %s",
-           name, arg_idx + 1, exp_str, act_str);
-  free(exp_str);
-  free(act_str);
-  if (ctx->doc && ctx->text) {
-    int off = lsp_find_sym_offset(ctx->text, name, *ctx->cursor);
-    if (off >= 0) {
-      lsp_pos_t p = offset_to_pos(ctx->text, off);
-      doc_add_diag_full(ctx->doc, msg, p.line, p.col, (int)strlen(name), 1);
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Infer type of qexpr literal {e1 e2 ... en}
-// If all elements have the same type, return List(t). Otherwise List(Any).
-// ---------------------------------------------------------------------------
-
-static valk_type_t *infer_qexpr(infer_ctx_t *ctx, valk_lval_t *expr) {
-  valk_type_t *elem_ty = nullptr;
-  bool homogeneous = true;
-  int count = 0;
-  valk_lval_t *cur = expr;
-  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-    valk_type_t *et = infer_expr(ctx, valk_lval_head(cur));
-    et = ty_resolve(et);
-    if (!elem_ty) {
-      elem_ty = et;
-    } else if (homogeneous && !ty_equal(elem_ty, et)) {
-      homogeneous = false;
-    }
-    count++;
-    cur = valk_lval_tail(cur);
-  }
-  if (count == 0) return ty_nil(ctx->arena);
-  if (homogeneous && elem_ty)
-    return ty_list(ctx->arena, elem_ty);
-  return ty_list(ctx->arena, ty_any(ctx->arena));
-}
-
-// ---------------------------------------------------------------------------
-// Check if name is a type predicate and return the narrowed type.
-// e.g. "num?" → TY_NUM, "str?" → TY_STR, etc.
-// ---------------------------------------------------------------------------
-
-static valk_type_t *predicate_narrows_to(type_arena_t *a, const char *name) {
-  if (strcmp(name, "num?") == 0) return ty_num(a);
-  if (strcmp(name, "str?") == 0) return ty_str(a);
-  if (strcmp(name, "error?") == 0) return ty_err(a);
-  if (strcmp(name, "list?") == 0) return ty_list(a, ty_var(a));
-  if (strcmp(name, "ref?") == 0) return ty_ref(a, nullptr);
-  if (strcmp(name, "nil?") == 0) return ty_nil(a);
-  return nullptr;
-}
-
-// ---------------------------------------------------------------------------
-// Type inference — Algorithm W style
-// ---------------------------------------------------------------------------
-
-valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
-  if (!expr) return ty_nil(ctx->arena);
-
-  switch (LVAL_TYPE(expr)) {
-  case LVAL_NUM: return ty_num(ctx->arena);
-  case LVAL_STR: return ty_str(ctx->arena);
-  case LVAL_NIL: return ty_nil(ctx->arena);
-  case LVAL_ERR: return ty_err(ctx->arena);
-  case LVAL_HANDLE: return ty_handle(ctx->arena, ty_var(ctx->arena));
-  case LVAL_REF: return ty_ref(ctx->arena, nullptr);
-
-  case LVAL_SYM: {
-    if (expr->str[0] == ':') return ty_sym(ctx->arena);
-    if (strcmp(expr->str, "true") == 0 || strcmp(expr->str, "false") == 0)
-      return ty_num(ctx->arena);
-    if (strcmp(expr->str, "nil") == 0)
-      return ty_nil(ctx->arena);
-    if (strcmp(expr->str, "otherwise") == 0)
-      return ty_num(ctx->arena);
-
-    type_scheme_t *sch = typed_scope_lookup(ctx->scope, expr->str);
-    if (sch) return scheme_instantiate(ctx->arena, sch);
-
-    return ty_any(ctx->arena);
-  }
-
-  case LVAL_FUN: return ty_fun(ctx->arena, nullptr, 0, ty_var(ctx->arena), false);
-
-  case LVAL_CONS: break;
-  default: return ty_any(ctx->arena);
-  }
-
-  if (expr->flags & LVAL_FLAG_QUOTED)
-    return infer_qexpr(ctx, expr);
-
-  valk_lval_t *head = valk_lval_head(expr);
-  valk_lval_t *rest = valk_lval_tail(expr);
-  if (!head) return ty_nil(ctx->arena);
-
-  if (LVAL_TYPE(head) != LVAL_SYM) {
-    infer_expr(ctx, head);
-    infer_body(ctx, rest);
-    return ty_any(ctx->arena);
-  }
-
-  const char *name = head->str;
-
-  // --- Special forms ---
-
-  if (strcmp(name, "quote") == 0)
-    return ty_list(ctx->arena, ty_any(ctx->arena));
-
-  if (strcmp(name, "\\") == 0) {
-    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_fun(ctx->arena, nullptr, 0, ty_var(ctx->arena), false);
-    valk_lval_t *formals = valk_lval_head(rest);
-    valk_lval_t *body_rest = valk_lval_tail(rest);
-
-    typed_scope_t *inner = typed_scope_push(ctx->arena, ctx->scope);
-    valk_type_t *param_types[TY_MAX_PARAMS];
-    int param_count = 0;
-    bool variadic = false;
-
-    if (formals && LVAL_TYPE(formals) == LVAL_CONS) {
-      valk_lval_t *cur = formals;
-      while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-        valk_lval_t *h = valk_lval_head(cur);
-        if (h && LVAL_TYPE(h) == LVAL_SYM) {
-          if (h->str[0] == '&') {
-            variadic = true;
-          } else {
-            valk_type_t *pt = ty_var(ctx->arena);
-            if (param_count < TY_MAX_PARAMS)
-              param_types[param_count++] = pt;
-            typed_scope_add_mono(inner, h->str, pt);
-          }
-        }
-        cur = valk_lval_tail(cur);
-      }
-    }
-
-    typed_scope_t *saved = ctx->scope;
-    ctx->scope = inner;
-    valk_type_t *body_ty = infer_body_last(ctx, body_rest);
-    ctx->scope = saved;
-    typed_scope_pop(inner);
-
-    return ty_fun(ctx->arena, param_types, param_count, body_ty, variadic);
-  }
-
-  if (strcmp(name, "fun") == 0) {
-    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_fun(ctx->arena, nullptr, 0, ty_var(ctx->arena), false);
-    valk_lval_t *name_formals = valk_lval_head(rest);
-    valk_lval_t *body_rest = valk_lval_tail(rest);
-
-    if (name_formals && LVAL_TYPE(name_formals) == LVAL_CONS) {
-      valk_lval_t *fname = valk_lval_head(name_formals);
-      typed_scope_t *inner = typed_scope_push(ctx->arena, ctx->scope);
-
-      valk_type_t *param_types[TY_MAX_PARAMS];
-      int param_count = 0;
-      bool variadic = false;
-
-      valk_lval_t *params = valk_lval_tail(name_formals);
-      while (params && LVAL_TYPE(params) == LVAL_CONS) {
-        valk_lval_t *h = valk_lval_head(params);
-        if (h && LVAL_TYPE(h) == LVAL_SYM) {
-          if (h->str[0] == '&') {
-            variadic = true;
-          } else {
-            valk_type_t *pt = ty_var(ctx->arena);
-            if (param_count < TY_MAX_PARAMS)
-              param_types[param_count++] = pt;
-            typed_scope_add_mono(inner, h->str, pt);
-          }
-        }
-        params = valk_lval_tail(params);
-      }
-
-      typed_scope_t *saved = ctx->scope;
-      ctx->scope = inner;
-      valk_type_t *body_ty = infer_body_last(ctx, body_rest);
-      ctx->scope = saved;
-      typed_scope_pop(inner);
-
-      valk_type_t *fn_ty = ty_fun(ctx->arena, param_types, param_count, body_ty, variadic);
-      if (fname && LVAL_TYPE(fname) == LVAL_SYM) {
-        int floor = ctx->floor_var_id;
-        type_scheme_t *sch = scheme_generalize(ctx->arena, fn_ty, floor);
-        typed_scope_add(ctx->scope, fname->str, sch);
-      }
-      return fn_ty;
-    }
-    return ty_fun(ctx->arena, nullptr, 0, ty_var(ctx->arena), false);
-  }
-
-  if (strcmp(name, "def") == 0 || strcmp(name, "=") == 0) {
-    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_nil(ctx->arena);
-    valk_lval_t *binding = valk_lval_head(rest);
-    valk_lval_t *val_rest = valk_lval_tail(rest);
-
-    if (binding && LVAL_TYPE(binding) == LVAL_CONS && val_rest &&
-        LVAL_TYPE(val_rest) == LVAL_CONS) {
-      valk_lval_t *sym_cur = binding;
-      valk_lval_t *val_cur = val_rest;
-      while (sym_cur && LVAL_TYPE(sym_cur) == LVAL_CONS &&
-             val_cur && LVAL_TYPE(val_cur) == LVAL_CONS) {
-        valk_lval_t *s = valk_lval_head(sym_cur);
-        valk_lval_t *v = valk_lval_head(val_cur);
-        if (s && LVAL_TYPE(s) == LVAL_SYM) {
-          int floor = ctx->arena->next_var_id;
-          valk_type_t *vt = infer_expr(ctx, v);
-          type_scheme_t *sch = scheme_generalize(ctx->arena, vt, floor);
-          typed_scope_add(ctx->scope, s->str, sch);
-        }
-        sym_cur = valk_lval_tail(sym_cur);
-        val_cur = valk_lval_tail(val_cur);
-      }
-    } else if (binding && LVAL_TYPE(binding) == LVAL_SYM &&
-               val_rest && LVAL_TYPE(val_rest) == LVAL_CONS) {
-      int floor = ctx->arena->next_var_id;
-      valk_type_t *vt = infer_expr(ctx, valk_lval_head(val_rest));
-      type_scheme_t *sch = scheme_generalize(ctx->arena, vt, floor);
-      typed_scope_add(ctx->scope, binding->str, sch);
-    }
-    return ty_nil(ctx->arena);
-  }
-
-  if (strcmp(name, "let") == 0) {
-    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_any(ctx->arena);
-    valk_lval_t *body_rest = valk_lval_tail(rest);
-    typed_scope_t *inner = typed_scope_push(ctx->arena, ctx->scope);
-    typed_scope_t *saved = ctx->scope;
-    ctx->scope = inner;
-    valk_type_t *result = infer_body_last(ctx, body_rest);
-    ctx->scope = saved;
-    typed_scope_pop(inner);
-    return result;
-  }
-
-  if (strcmp(name, "if") == 0) {
-    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_any(ctx->arena);
-    valk_lval_t *cond_expr = valk_lval_head(rest);
-    infer_expr(ctx, cond_expr);
-
-    valk_lval_t *rest2 = valk_lval_tail(rest);
-    if (!rest2 || LVAL_TYPE(rest2) != LVAL_CONS) return ty_any(ctx->arena);
-
-    const char *narrowed_var = nullptr;
-    valk_type_t *narrowed_type = nullptr;
-
-    if (cond_expr && LVAL_TYPE(cond_expr) == LVAL_CONS) {
-      valk_lval_t *ch = valk_lval_head(cond_expr);
-      valk_lval_t *ct = valk_lval_tail(cond_expr);
-      if (ch && LVAL_TYPE(ch) == LVAL_SYM && ct && LVAL_TYPE(ct) == LVAL_CONS) {
-        valk_lval_t *arg = valk_lval_head(ct);
-        valk_type_t *nt = predicate_narrows_to(ctx->arena, ch->str);
-        if (nt && arg && LVAL_TYPE(arg) == LVAL_SYM)
-          narrowed_var = arg->str;
-        narrowed_type = nt;
-      }
-    }
-
-    valk_type_t *then_ty;
-    if (narrowed_var && narrowed_type) {
-      typed_scope_t *then_scope = typed_scope_push(ctx->arena, ctx->scope);
-      typed_scope_add_mono(then_scope, narrowed_var, narrowed_type);
-      typed_scope_t *saved = ctx->scope;
-      ctx->scope = then_scope;
-      then_ty = infer_expr(ctx, valk_lval_head(rest2));
-      ctx->scope = saved;
-      typed_scope_pop(then_scope);
-    } else {
-      then_ty = infer_expr(ctx, valk_lval_head(rest2));
-    }
-
-    valk_lval_t *rest3 = valk_lval_tail(rest2);
-    if (!rest3 || LVAL_TYPE(rest3) != LVAL_CONS) return then_ty;
-    valk_type_t *else_ty = infer_expr(ctx, valk_lval_head(rest3));
-    return ty_join(ctx->arena, then_ty, else_ty);
-  }
-
-  if (strcmp(name, "do") == 0)
-    return infer_body_last(ctx, rest);
-
-  if (strcmp(name, "select") == 0 || strcmp(name, "case") == 0) {
-    valk_type_t *result = ty_never(ctx->arena);
-    if (strcmp(name, "case") == 0 && rest && LVAL_TYPE(rest) == LVAL_CONS) {
-      infer_expr(ctx, valk_lval_head(rest));
-      rest = valk_lval_tail(rest);
-    }
-    while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
-      valk_lval_t *clause = valk_lval_head(rest);
-      if (clause && LVAL_TYPE(clause) == LVAL_CONS) {
-        valk_lval_t *cond = valk_lval_head(clause);
-        valk_lval_t *body = valk_lval_tail(clause);
-        infer_expr(ctx, cond);
-        if (body && LVAL_TYPE(body) == LVAL_CONS)
-          result = ty_join(ctx->arena, result, infer_expr(ctx, valk_lval_head(body)));
-      }
-      rest = valk_lval_tail(rest);
-    }
-    return result->kind == TY_NEVER ? ty_any(ctx->arena) : result;
-  }
-
-  if (strcmp(name, "eval") == 0 || strcmp(name, "read") == 0) {
-    infer_body(ctx, rest);
-    return ty_any(ctx->arena);
-  }
-
-  if (strcmp(name, "load") == 0) {
-    infer_body(ctx, rest);
-    return ty_nil(ctx->arena);
-  }
-
-  if (strcmp(name, "aio/let") == 0 || strcmp(name, "aio/do") == 0) {
-    infer_body(ctx, rest);
-    return ty_handle(ctx->arena, ty_var(ctx->arena));
-  }
-
-  if (strcmp(name, "<-") == 0) {
-    infer_body(ctx, rest);
-    return ty_any(ctx->arena);
-  }
-
-  // --- Function calls (builtins + user-defined) ---
-
-  type_scheme_t *fn_scheme = typed_scope_lookup(ctx->scope, name);
-  if (fn_scheme) {
-    valk_type_t *fn_ty = ty_resolve(scheme_instantiate(ctx->arena, fn_scheme));
-
-    if (fn_ty->kind == TY_FUN) {
-      int nargs = count_list(rest);
-      valk_lval_t *arg_cur = rest;
-      for (int i = 0; i < nargs && arg_cur && LVAL_TYPE(arg_cur) == LVAL_CONS; i++) {
-        valk_type_t *arg_ty = infer_expr(ctx, valk_lval_head(arg_cur));
-
-        int pi = i;
-        if (fn_ty->fun.variadic && i >= fn_ty->fun.param_count)
-          pi = fn_ty->fun.param_count - 1;
-        else if (i >= fn_ty->fun.param_count)
-          pi = -1;
-
-        if (pi >= 0 && pi < fn_ty->fun.param_count) {
-          valk_type_t *expected = ty_resolve(fn_ty->fun.params[pi]);
-          valk_type_t *actual = ty_resolve(arg_ty);
-
-          if (actual->kind != TY_ANY && expected->kind != TY_ANY &&
-              expected->kind != TY_VAR && actual->kind != TY_VAR) {
-            if (!ty_compatible(expected, actual))
-              emit_type_error(ctx, name, i, expected, actual);
-          }
-
-          ty_unify(ctx->arena, fn_ty->fun.params[pi], arg_ty);
-        }
-        arg_cur = valk_lval_tail(arg_cur);
-      }
-      return ty_resolve(fn_ty->fun.ret);
-    }
-
-    infer_body(ctx, rest);
-    return ty_any(ctx->arena);
-  }
-
-  infer_body(ctx, rest);
-  return ty_any(ctx->arena);
-}

@@ -198,6 +198,21 @@ static void extract_global_symbols_from_text(const char *text, lsp_symset_t *glo
         symset_add(globals, binding->str);
       }
     }
+
+    if (strcmp(head->str, "type") == 0) {
+      valk_lval_t *tail = valk_lval_tail(expr);
+      if (LVAL_TYPE(tail) == LVAL_CONS)
+        tail = valk_lval_tail(tail);
+      while (tail && LVAL_TYPE(tail) == LVAL_CONS) {
+        valk_lval_t *variant = valk_lval_head(tail);
+        if (variant && LVAL_TYPE(variant) == LVAL_CONS) {
+          valk_lval_t *ctor_name = valk_lval_head(variant);
+          if (ctor_name && LVAL_TYPE(ctor_name) == LVAL_SYM)
+            symset_add(globals, ctor_name->str);
+        }
+        tail = valk_lval_tail(tail);
+      }
+    }
   }
 }
 
@@ -501,8 +516,6 @@ static void check_expr(valk_lval_t *expr, lsp_symset_t *globals, lsp_scope_t *sc
       }
     }
 
-    if (strcmp(head->str, "quote") == 0) return;
-
     if (strcmp(head->str, "\\") == 0) {
       if (LVAL_TYPE(rest) != LVAL_CONS) return;
       valk_lval_t *formals = valk_lval_head(rest);
@@ -586,6 +599,49 @@ static void check_expr(valk_lval_t *expr, lsp_symset_t *globals, lsp_scope_t *sc
         strcmp(head->str, "aio/let") == 0 ||
         strcmp(head->str, "aio/do") == 0) {
       check_body_exprs(rest, globals, scope, doc, text, cursor);
+      return;
+    }
+
+    if (strcmp(head->str, "type") == 0) {
+      valk_lval_t *variants = rest;
+      if (LVAL_TYPE(variants) == LVAL_CONS)
+        variants = valk_lval_tail(variants);
+      while (variants && LVAL_TYPE(variants) == LVAL_CONS) {
+        valk_lval_t *variant = valk_lval_head(variants);
+        if (variant && LVAL_TYPE(variant) == LVAL_CONS) {
+          valk_lval_t *ctor_name = valk_lval_head(variant);
+          if (ctor_name && LVAL_TYPE(ctor_name) == LVAL_SYM)
+            symset_add(globals, ctor_name->str);
+        }
+        variants = valk_lval_tail(variants);
+      }
+      return;
+    }
+
+    if (strcmp(head->str, "match") == 0) {
+      if (LVAL_TYPE(rest) != LVAL_CONS) return;
+      check_expr(valk_lval_head(rest), globals, scope, doc, text, cursor);
+      valk_lval_t *clauses = valk_lval_tail(rest);
+      while (clauses && LVAL_TYPE(clauses) == LVAL_CONS) {
+        valk_lval_t *clause = valk_lval_head(clauses);
+        if (clause && LVAL_TYPE(clause) == LVAL_CONS) {
+          valk_lval_t *pattern = valk_lval_head(clause);
+          valk_lval_t *body = valk_lval_tail(clause);
+          lsp_scope_t *inner = scope_push(scope);
+          if (pattern && LVAL_TYPE(pattern) == LVAL_CONS) {
+            valk_lval_t *pat_args = valk_lval_tail(pattern);
+            while (pat_args && LVAL_TYPE(pat_args) == LVAL_CONS) {
+              valk_lval_t *pv = valk_lval_head(pat_args);
+              if (pv && LVAL_TYPE(pv) == LVAL_SYM && pv->str[0] != ':')
+                symset_add(&inner->locals, pv->str);
+              pat_args = valk_lval_tail(pat_args);
+            }
+          }
+          check_body_exprs(body, globals, inner, doc, text, cursor);
+          scope_pop(inner);
+        }
+        clauses = valk_lval_tail(clauses);
+      }
       return;
     }
   }
@@ -718,12 +774,6 @@ static void sem_expr(valk_lval_t *expr, lsp_symset_t *globals, lsp_scope_t *scop
   if (!head) return;
 
   if (LVAL_TYPE(head) == LVAL_SYM) {
-    if (strcmp(head->str, "quote") == 0) {
-      sem_emit_sym(head->str, doc, text, cursor, SEM_KEYWORD, 0);
-      sem_body(rest, globals, scope, doc, text, cursor, true);
-      return;
-    }
-
     if (is_special_form(head->str)) {
       sem_emit_sym(head->str, doc, text, cursor, SEM_KEYWORD, 0);
     } else if (is_builtin(head->str)) {
@@ -819,6 +869,81 @@ static void sem_expr(valk_lval_t *expr, lsp_symset_t *globals, lsp_scope_t *scop
       return;
     }
 
+    if (strcmp(head->str, "type") == 0 && LVAL_TYPE(rest) == LVAL_CONS) {
+      valk_lval_t *type_name_q = valk_lval_head(rest);
+      if (type_name_q && LVAL_TYPE(type_name_q) == LVAL_CONS) {
+        valk_lval_t *tname = valk_lval_head(type_name_q);
+        if (tname && LVAL_TYPE(tname) == LVAL_SYM)
+          sem_emit_sym(tname->str, doc, text, cursor, SEM_TYPE, SEM_MOD_DEFINITION);
+        valk_lval_t *tparams = valk_lval_tail(type_name_q);
+        while (tparams && LVAL_TYPE(tparams) == LVAL_CONS) {
+          valk_lval_t *tp = valk_lval_head(tparams);
+          if (tp && LVAL_TYPE(tp) == LVAL_SYM)
+            sem_emit_sym(tp->str, doc, text, cursor, SEM_TYPE_PARAM, 0);
+          tparams = valk_lval_tail(tparams);
+        }
+      }
+      valk_lval_t *variants = valk_lval_tail(rest);
+      while (variants && LVAL_TYPE(variants) == LVAL_CONS) {
+        valk_lval_t *variant = valk_lval_head(variants);
+        if (variant && LVAL_TYPE(variant) == LVAL_CONS) {
+          valk_lval_t *ctor = valk_lval_head(variant);
+          if (ctor && LVAL_TYPE(ctor) == LVAL_SYM)
+            sem_emit_sym(ctor->str, doc, text, cursor, SEM_ENUM_MEMBER, SEM_MOD_DEFINITION);
+          valk_lval_t *fields = valk_lval_tail(variant);
+          while (fields && LVAL_TYPE(fields) == LVAL_CONS) {
+            valk_lval_t *fld = valk_lval_head(fields);
+            if (fld && LVAL_TYPE(fld) == LVAL_SYM) {
+              if (fld->str[0] == ':')
+                sem_emit_sym(fld->str, doc, text, cursor, SEM_PROPERTY, 0);
+              else
+                sem_emit_sym(fld->str, doc, text, cursor, SEM_TYPE_PARAM, 0);
+            }
+            fields = valk_lval_tail(fields);
+          }
+        }
+        variants = valk_lval_tail(variants);
+      }
+      return;
+    }
+
+    if (strcmp(head->str, "match") == 0 && LVAL_TYPE(rest) == LVAL_CONS) {
+      sem_expr(valk_lval_head(rest), globals, scope, doc, text, cursor, false);
+      valk_lval_t *clauses = valk_lval_tail(rest);
+      while (clauses && LVAL_TYPE(clauses) == LVAL_CONS) {
+        valk_lval_t *clause = valk_lval_head(clauses);
+        if (clause && LVAL_TYPE(clause) == LVAL_CONS) {
+          valk_lval_t *pattern = valk_lval_head(clause);
+          valk_lval_t *body = valk_lval_tail(clause);
+          lsp_scope_t *inner = scope_push(scope);
+          if (pattern && LVAL_TYPE(pattern) == LVAL_CONS) {
+            valk_lval_t *pat_head = valk_lval_head(pattern);
+            if (pat_head && LVAL_TYPE(pat_head) == LVAL_SYM)
+              sem_emit_sym(pat_head->str, doc, text, cursor, SEM_ENUM_MEMBER, 0);
+            valk_lval_t *pat_args = valk_lval_tail(pattern);
+            while (pat_args && LVAL_TYPE(pat_args) == LVAL_CONS) {
+              valk_lval_t *pv = valk_lval_head(pat_args);
+              if (pv && LVAL_TYPE(pv) == LVAL_SYM) {
+                if (pv->str[0] == ':') {
+                  sem_emit_sym(pv->str, doc, text, cursor, SEM_PROPERTY, 0);
+                } else {
+                  symset_add(&inner->locals, pv->str);
+                  sem_emit_sym(pv->str, doc, text, cursor, SEM_PARAMETER, SEM_MOD_DEFINITION);
+                }
+              }
+              pat_args = valk_lval_tail(pat_args);
+            }
+          } else if (pattern && LVAL_TYPE(pattern) == LVAL_SYM) {
+            sem_emit_sym(pattern->str, doc, text, cursor, SEM_VARIABLE, 0);
+          }
+          sem_body(body, globals, inner, doc, text, cursor, false);
+          scope_pop(inner);
+        }
+        clauses = valk_lval_tail(clauses);
+      }
+      return;
+    }
+
     sem_body(rest, globals, scope, doc, text, cursor, in_qexpr);
     return;
   }
@@ -906,6 +1031,8 @@ static void check_types(lsp_document_t *doc) {
     .text = text,
     .cursor = &cursor,
     .floor_var_id = arena.next_var_id,
+    .hover_offset = -1,
+    .hover_result = nullptr,
   };
 
   while (pos < len) {
@@ -926,6 +1053,58 @@ static void check_types(lsp_document_t *doc) {
 
   typed_scope_pop(top);
   type_arena_free(&arena);
+}
+
+// ---------------------------------------------------------------------------
+// Type-at-position query for hover
+// ---------------------------------------------------------------------------
+
+char *lsp_type_at_pos(lsp_document_t *doc, int offset) {
+  type_arena_t arena;
+  type_arena_init(&arena);
+
+  typed_scope_t *top = typed_scope_push(&arena, nullptr);
+  lsp_builtin_schemes_init(&arena, top);
+
+  const char *text = doc->text;
+  int pos = 0;
+  int len = (int)doc->text_len;
+  int cursor = 0;
+
+  infer_ctx_t ctx = {
+    .arena = &arena,
+    .scope = top,
+    .doc = doc,
+    .text = text,
+    .cursor = &cursor,
+    .floor_var_id = arena.next_var_id,
+    .hover_offset = offset,
+    .hover_result = nullptr,
+  };
+
+  while (pos < len) {
+    while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
+    if (pos >= len) break;
+
+    if (text[pos] == ';') {
+      while (pos < len && text[pos] != '\n') pos++;
+      continue;
+    }
+
+    cursor = pos;
+    valk_lval_t *expr = valk_lval_read(&pos, text);
+    if (LVAL_TYPE(expr) == LVAL_ERR) break;
+
+    infer_expr(&ctx, expr);
+  }
+
+  char *result = nullptr;
+  if (ctx.hover_result)
+    result = valk_type_display_pretty(ctx.hover_result);
+
+  typed_scope_pop(top);
+  type_arena_free(&arena);
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -1015,6 +1194,49 @@ void analyze_document(lsp_document_t *doc) {
           sym->doc = strdup(strcmp(head->str, "fun") == 0
             ? "(fun ...)" : "(def ...)");
         }
+      }
+    }
+
+    if (strcmp(head->str, "type") == 0) {
+      valk_lval_t *tail = valk_lval_tail(expr);
+      if (LVAL_TYPE(tail) != LVAL_CONS) continue;
+      valk_lval_t *type_name_q = valk_lval_head(tail);
+      const char *type_name = nullptr;
+      if (type_name_q && LVAL_TYPE(type_name_q) == LVAL_CONS) {
+        valk_lval_t *tn = valk_lval_head(type_name_q);
+        if (tn && LVAL_TYPE(tn) == LVAL_SYM)
+          type_name = tn->str;
+      }
+
+      valk_lval_t *variants = valk_lval_tail(tail);
+      while (variants && LVAL_TYPE(variants) == LVAL_CONS) {
+        valk_lval_t *variant = valk_lval_head(variants);
+        if (variant && LVAL_TYPE(variant) == LVAL_CONS) {
+          valk_lval_t *ctor = valk_lval_head(variant);
+          if (ctor && LVAL_TYPE(ctor) == LVAL_SYM) {
+            int field_count = -1;
+            valk_lval_t *fc = valk_lval_tail(variant);
+            valk_lval_t *first_field = (fc && LVAL_TYPE(fc) == LVAL_CONS) ? valk_lval_head(fc) : nullptr;
+            bool keyword_style = first_field && LVAL_TYPE(first_field) == LVAL_SYM && first_field->str[0] == ':';
+            if (!keyword_style) {
+              field_count = 0;
+              while (fc && LVAL_TYPE(fc) == LVAL_CONS) {
+                field_count++;
+                fc = valk_lval_tail(fc);
+              }
+            }
+            lsp_pos_t p = offset_to_pos(text, form_start);
+            doc_add_symbol(doc, ctor->str, p.line, p.col, field_count, form_start, pos);
+            lsp_symbol_t *sym = &doc->symbols[doc->symbol_count - 1];
+            char sig[256];
+            if (type_name)
+              snprintf(sig, sizeof(sig), "(type %s) constructor", type_name);
+            else
+              snprintf(sig, sizeof(sig), "constructor");
+            sym->doc = strdup(sig);
+          }
+        }
+        variants = valk_lval_tail(variants);
       }
     }
   }

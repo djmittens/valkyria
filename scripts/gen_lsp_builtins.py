@@ -51,6 +51,7 @@ SPECIAL_FORMS = {
   "def", "=", "\\", "fun", "if", "do", "select", "case",
   "quote", "load", "eval", "read", "let",
   "aio/let", "aio/do", "<-",
+  "type", "match",
 }
 
 # Return type for each builtin (derived from C source analysis).
@@ -440,6 +441,13 @@ EVAL_INTRINSICS = [
           ret_type="BRET_LIST"),
   Builtin("<-", min_arity=1, max_arity=1, is_special_form=True,
           params=[Param("handle")],
+          ret_type="BRET_ANY"),
+  Builtin("type", min_arity=2, max_arity=-1, is_special_form=True,
+          params=[Param("name-params", types=["QExpr"]),
+                  Param("variants", types=["QExpr"], variadic=True)],
+          ret_type="BRET_NIL"),
+  Builtin("match", min_arity=2, max_arity=-1, is_special_form=True,
+          params=[Param("val"), Param("clauses", variadic=True)],
           ret_type="BRET_ANY"),
 ]
 

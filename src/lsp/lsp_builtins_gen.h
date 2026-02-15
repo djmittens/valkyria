@@ -12,6 +12,7 @@ typedef struct {
 
 static const lsp_builtin_entry_t LSP_BUILTINS[] = {
   {"!=", 2, 2, "(!= arg0 arg1)", "", 0},
+  {"%", 2, 2, "(% arg0:Num arg1:Num)", "", 0},
   {"*", 0, -1, "(* arg0:Num...)", "", 0},
   {"+", 0, -1, "(+ arg0:Num...)", "", 0},
   {"-", 0, -1, "(- arg0:Num...)", "", 0},
@@ -101,6 +102,7 @@ static const lsp_builtin_entry_t LSP_BUILTINS[] = {
   {"list?", 1, 1, "(list? arg0)", "", 0},
   {"load", 1, 1, "(load arg0:Str)", "", 1},
   {"make-string", 2, 2, "(make-string count pattern)", "", 0},
+  {"match", 2, -1, "(match val clauses...)", "", 1},
   {"mem/arena/capacity", 0, 0, "(mem/arena/capacity)", "", 0},
   {"mem/arena/high-water", 0, 0, "(mem/arena/high-water)", "", 0},
   {"mem/arena/usage", 0, 0, "(mem/arena/usage)", "", 0},
@@ -137,6 +139,8 @@ static const lsp_builtin_entry_t LSP_BUILTINS[] = {
   {"printf", 1, -1, "(printf arg0:Str...)", "", 0},
   {"println", 0, -1, "(println)", "", 0},
   {"quote", 1, 1, "(quote expr)", "", 1},
+  {"rand", 0, -1, "(rand arg0:Num arg1:Num...)", "", 0},
+  {"rand-seed", 1, 1, "(rand-seed arg0:Num)", "", 0},
   {"range", 2, 2, "(range arg0:Num arg1:Num)", "", 0},
   {"read", 1, 1, "(read arg0:Str)", "", 1},
   {"read-file", 1, 1, "(read-file arg0:Str)", "", 0},
@@ -181,6 +185,7 @@ static const lsp_builtin_entry_t LSP_BUILTINS[] = {
   {"trace/id", 0, 0, "(trace/id)", "", 0},
   {"trace/parent-span", 0, 0, "(trace/parent-span)", "", 0},
   {"trace/span", 0, 0, "(trace/span)", "", 0},
+  {"type", 2, -1, "(type name-params:QExpr variants:QExpr...)", "", 1},
   {"vm/metrics-json", 0, -1, "(vm/metrics-json)", "", 0},
   {"vm/metrics-json-compact", 0, -1, "(vm/metrics-json-compact)", "", 0},
   {"vm/metrics-prometheus", 0, -1, "(vm/metrics-prometheus)", "", 0},

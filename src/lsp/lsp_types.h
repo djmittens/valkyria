@@ -26,6 +26,7 @@ typedef enum {
   TY_ANY,
   TY_UNION,
   TY_NEVER,
+  TY_NAMED,
   TY__COUNT,
 } valk_type_kind_e;
 
@@ -59,6 +60,12 @@ struct valk_type {
       valk_type_t *members[TY_MAX_UNION];
       int count;
     } onion;
+
+    struct {
+      const char *name;
+      valk_type_t *params[TY_MAX_PARAMS];
+      int param_count;
+    } named;
   };
 };
 
@@ -103,6 +110,8 @@ valk_type_t *ty_ref(type_arena_t *a, const char *tag);
 valk_type_t *ty_fun(type_arena_t *a, valk_type_t **params, int n, valk_type_t *ret, bool variadic);
 valk_type_t *ty_var(type_arena_t *a);
 
+valk_type_t *ty_named(type_arena_t *a, const char *name, valk_type_t **params, int n);
+
 valk_type_t *ty_union2(type_arena_t *a, valk_type_t *t1, valk_type_t *t2);
 valk_type_t *ty_union3(type_arena_t *a, valk_type_t *t1, valk_type_t *t2, valk_type_t *t3);
 valk_type_t *ty_join(type_arena_t *a, const valk_type_t *t1, const valk_type_t *t2);
@@ -119,6 +128,7 @@ bool ty_occurs(int var_id, valk_type_t *ty);
 
 const char *valk_type_name(const valk_type_t *ty);
 char *valk_type_display(const valk_type_t *ty);
+char *valk_type_display_pretty(const valk_type_t *ty);
 
 // ---------------------------------------------------------------------------
 // Type schemes — polymorphic types with bound variables.
@@ -173,6 +183,8 @@ typedef struct {
   const char *text;
   int *cursor;
   int floor_var_id;
+  int hover_offset;
+  valk_type_t *hover_result;
 } infer_ctx_t;
 
 // ---------------------------------------------------------------------------

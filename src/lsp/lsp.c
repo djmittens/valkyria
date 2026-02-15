@@ -117,7 +117,8 @@ static void handle_initialize(int id) {
           "\"legend\":{"
             "\"tokenTypes\":[\"keyword\",\"function\",\"variable\","
               "\"parameter\",\"string\",\"number\",\"operator\","
-              "\"comment\",\"type\",\"macro\",\"property\"],"
+              "\"comment\",\"type\",\"macro\",\"property\","
+              "\"enumMember\",\"typeParameter\"],"
             "\"tokenModifiers\":[\"definition\",\"readonly\","
               "\"defaultLibrary\",\"declaration\"]"
           "},"
@@ -213,7 +214,6 @@ static bool special_form_snippet(const char *name, char *out, size_t sz,
   else if (strcmp(name, "load") == 0)  body = "load \"${1:path}\"";
   else if (strcmp(name, "eval") == 0)  body = "eval ${1:expr}";
   else if (strcmp(name, "read") == 0)  body = "read ${1:string}";
-  else if (strcmp(name, "quote") == 0) body = "quote ${1:expr}";
   else if (strcmp(name, "aio/let") == 0) body = "aio/let {${1:bindings}} ${2:body}";
   else if (strcmp(name, "aio/do") == 0)  body = "aio/do $0";
   else if (strcmp(name, "<-") == 0)    body = "<- ${1:handle}";
@@ -430,7 +430,7 @@ static void handle_completion(int id, json_value_t *params) {
         if (sch) {
           valk_type_t *fn = ty_resolve(scheme_instantiate(&ta, sch));
           if (fn->kind == TY_FUN) {
-            char *ret_str = valk_type_display(fn->fun.ret);
+            char *ret_str = valk_type_display_pretty(fn->fun.ret);
             snprintf(detail, sizeof(detail), " %s -> %s", sig, ret_str);
             free(ret_str);
           } else {
@@ -505,7 +505,6 @@ static const char *builtin_doc(const char *name) {
   if (strcmp(name, "do") == 0) return "Evaluate expressions sequentially, return last.";
   if (strcmp(name, "select") == 0) return "Pattern matching / cond expression.";
   if (strcmp(name, "case") == 0) return "Case expression with value matching.";
-  if (strcmp(name, "quote") == 0) return "Return expression unevaluated (Q-expression).";
   if (strcmp(name, "eval") == 0) return "Evaluate a Q-expression as code.";
   if (strcmp(name, "load") == 0) return "Load and evaluate a file.";
   if (strcmp(name, "read") == 0) return "Parse a string into a Q-expression.";
@@ -765,6 +764,13 @@ static void handle_hover(int id, json_value_t *params) {
       }
       p += snprintf(p, pe - p, "```valk\n%s\n```", snippet);
 
+      int sym_off = lsp_find_sym_offset(g_store.docs[d].text, sym->name, sym->src_start);
+      char *type_str = sym_off >= 0 ? lsp_type_at_pos(&g_store.docs[d], sym_off) : nullptr;
+      if (type_str) {
+        p += snprintf(p, pe - p, "\n\n**Type:** `%s`", type_str);
+        free(type_str);
+      }
+
       const char *doc_comment = extract_doc_comment(
         g_store.docs[d].text, sym->pos.line);
       if (doc_comment)
@@ -797,7 +803,7 @@ static void handle_hover(int id, json_value_t *params) {
       if (sch) {
         valk_type_t *fn = ty_resolve(scheme_instantiate(&ta, sch));
         if (fn->kind == TY_FUN) {
-          char *ret_str = valk_type_display(fn->fun.ret);
+          char *ret_str = valk_type_display_pretty(fn->fun.ret);
           p += snprintf(p, pe - p, "```valk\n%s -> %s\n```", bi->signature, ret_str);
           free(ret_str);
         } else {
@@ -811,6 +817,15 @@ static void handle_hover(int id, json_value_t *params) {
       const char *desc = builtin_doc(word);
       if (desc)
         p += snprintf(p, pe - p, "\n\n%s", desc);
+      found = true;
+    }
+  }
+
+  if (!found) {
+    char *type_str = lsp_type_at_pos(doc, offset);
+    if (type_str) {
+      p += snprintf(p, pe - p, "```valk\n%s :: %s\n```", word, type_str);
+      free(type_str);
       found = true;
     }
   }

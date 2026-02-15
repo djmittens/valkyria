@@ -27,6 +27,8 @@ enum {
   SEM_TYPE,
   SEM_MACRO,
   SEM_PROPERTY,
+  SEM_ENUM_MEMBER,
+  SEM_TYPE_PARAM,
   SEM__COUNT,
 };
 
@@ -85,5 +87,6 @@ int pos_to_offset(const char *text, int line, int col);
 void analyze_document(lsp_document_t *doc);
 void lsp_set_workspace_root(const char *root);
 int lsp_find_sym_offset(const char *text, const char *sym, int search_start);
+char *lsp_type_at_pos(lsp_document_t *doc, int offset);
 
 
