@@ -12,6 +12,7 @@
 #include "lsp/lsp.h"
 #include "memory.h"
 #include "parser.h"
+#include "type_env.h"
 
 // Global pointers for signal handler (Phase 8: Telemetry)
 static valk_mem_arena_t* g_scratch_for_signal = nullptr;
@@ -103,15 +104,24 @@ int main(int argc, char* argv[]) {
       script_mode = true;  // Any file argument implies script mode
       valk_lval_t* res;
       // Parse into GC heap (persistent - AST must survive checkpoints)
-      VALK_WITH_ALLOC((void*)gc_heap) { res = valk_parse_file(argv[i]); }
+      VALK_WITH_ALLOC((void*)gc_heap) {
+        res = valk_parse_file(argv[i]);
+      }
       if (LVAL_TYPE(res) == LVAL_ERR) {
         valk_lval_println(res);
       } else {
         while (valk_lval_list_count(res) > 0) {
-          // Evaluate in scratch arena - checkpoint will evacuate survivors
           valk_lval_t* x;
+          VALK_WITH_ALLOC((void*)gc_heap) {
+            x = valk_type_transform_expr(valk_lval_pop(res, 0));
+          }
+          if (LVAL_TYPE(x) == LVAL_NIL) continue;
+          if (LVAL_TYPE(x) == LVAL_ERR) {
+            valk_lval_println(x);
+            break;
+          }
           VALK_WITH_ALLOC((void*)scratch) {
-            x = valk_lval_eval(env, valk_lval_pop(res, 0));
+            x = valk_lval_eval(env, x);
           }
 
           if (LVAL_TYPE(x) == LVAL_ERR) {
@@ -164,6 +174,13 @@ int main(int argc, char* argv[]) {
         if (input[pos] == '\0') break;
 
         valk_lval_t* expr = valk_lval_read(&pos, input);
+        if (LVAL_TYPE(expr) == LVAL_ERR) {
+          result = expr;
+          break;
+        }
+
+        expr = valk_type_transform_expr(expr);
+        if (LVAL_TYPE(expr) == LVAL_NIL) continue;
         if (LVAL_TYPE(expr) == LVAL_ERR) {
           result = expr;
           break;

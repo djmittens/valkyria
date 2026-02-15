@@ -408,16 +408,6 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
         
         valk_lval_t* first = expr->cons.head;
         if (LVAL_TYPE(first) == LVAL_SYM) {
-          if (strcmp(first->str, "quote") == 0) {
-            if (count != 2) {
-              value = valk_lval_err("quote expects exactly 1 argument, got %zu", count - 1);
-            } else {
-              value = valk_lval_list_nth(expr, 1);
-            }
-            expr = NULL;
-            goto apply_cont;
-          }
-          
           if (strcmp(first->str, "quasiquote") == 0) {
             if (count != 2) {
               value = valk_lval_err("quasiquote expects exactly 1 argument, got %zu", count - 1);

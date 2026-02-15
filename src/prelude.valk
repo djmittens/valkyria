@@ -15,7 +15,199 @@
 
 ; Check if value is nil (empty list)
 (fun {nil? x} {== x nil})
+
+; === Standard Types ===
+
+(type {Option a}
+  {None}
+  {Some :value a})
+
+(type {Result ok err}
+  {Ok :value ok}
+  {Err :error err})
+
+(type {Pair a b}
+  {:fst a :snd b})
+
+(type {Order}
+  {LT}
+  {EQ}
+  {GT})
  
+; === Option utilities ===
+
+(fun {some? x} {
+  if (not (list? x)) {false}
+    {match x {(Some :value _) true} {_ false}}
+})
+
+(fun {none? x} {
+  if (not (list? x)) {false}
+    {match x {(None) true} {_ false}}
+})
+
+(fun {option/unwrap-or opt default} {
+  match opt
+    {(Some :value v) v}
+    {(None) default}
+})
+
+(fun {option/map opt f} {
+  match opt
+    {(Some :value v) (Some (f v))}
+    {(None) (None)}
+})
+
+(fun {option/flat-map opt f} {
+  match opt
+    {(Some :value v) (f v)}
+    {(None) (None)}
+})
+
+(fun {option/filter opt pred} {
+  match opt
+    {(Some :value v) (if (pred v) {(Some v)} {(None)})}
+    {(None) (None)}
+})
+
+(fun {option/or a b} {
+  match a
+    {(Some :value v) (Some v)}
+    {(None) b}
+})
+
+(fun {option/from-nullable val} {
+  if (== val nil) {(None)} {(Some val)}
+})
+
+; traverse: apply f (returning Option) to each element, collect into Option of list
+; If any f returns None, the whole result is None
+(fun {option/traverse l f} {
+  if (== l nil)
+    {(Some nil)}
+    {do
+      (= {hd} (f (head l)))
+      (match hd
+        {(None) (None)}
+        {(Some :value v)
+          (match (option/traverse (tail l) f)
+            {(None) (None)}
+            {(Some :value rest) (Some (join (list v) rest))})})}
+})
+
+; sequence: turn a list of Options into an Option of list
+(fun {option/sequence l} {
+  (option/traverse l id)
+})
+
+; Applicative: apply a wrapped function to a wrapped value
+(fun {option/ap of ov} {
+  match of
+    {(Some :value f) (option/map ov f)}
+    {(None) (None)}
+})
+
+; === Result utilities ===
+
+(fun {ok? x} {
+  if (not (list? x)) {false}
+    {match x {(Ok :value _) true} {_ false}}
+})
+(fun {err? x} {
+  if (not (list? x)) {false}
+    {match x {(Err :error _) true} {_ false}}
+})
+
+(fun {result/unwrap-or res default} {
+  match res
+    {(Ok :value v) v}
+    {(Err :error e) default}
+})
+
+(fun {result/map res f} {
+  match res
+    {(Ok :value v) (Ok (f v))}
+    {(Err :error e) (Err e)}
+})
+
+(fun {result/map-err res f} {
+  match res
+    {(Ok :value v) (Ok v)}
+    {(Err :error e) (Err (f e))}
+})
+
+(fun {result/flat-map res f} {
+  match res
+    {(Ok :value v) (f v)}
+    {(Err :error e) (Err e)}
+})
+
+(fun {result/ap rf rv} {
+  match rf
+    {(Ok :value f) (result/map rv f)}
+    {(Err :error e) (Err e)}
+})
+
+; traverse: apply f (returning Result) to each element, collect into Result of list
+; If any f returns Err, the whole result is that Err
+(fun {result/traverse l f} {
+  if (== l nil)
+    {(Ok nil)}
+    {do
+      (= {hd} (f (head l)))
+      (match hd
+        {(Err :error e) (Err e)}
+        {(Ok :value v)
+          (match (result/traverse (tail l) f)
+            {(Err :error e) (Err e)}
+            {(Ok :value rest) (Ok (join (list v) rest))})})}
+})
+
+; sequence: turn a list of Results into a Result of list
+(fun {result/sequence l} {
+  (result/traverse l id)
+})
+
+(fun {result/or a b} {
+  match a
+    {(Ok :value v) (Ok v)}
+    {(Err :error e) b}
+})
+
+(fun {result/to-option res} {
+  match res
+    {(Ok :value v) (Some v)}
+    {(Err :error e) (None)}
+})
+
+(fun {option/to-result opt err} {
+  match opt
+    {(Some :value v) (Ok v)}
+    {(None) (Err err)}
+})
+
+; === Pair utilities ===
+
+(fun {pair a b} {(Pair :fst a :snd b)})
+
+(fun {pair/map-fst p f} {
+  (Pair :fst (f (Pair:fst p)) :snd (Pair:snd p))
+})
+
+(fun {pair/map-snd p f} {
+  (Pair :fst (Pair:fst p) :snd (f (Pair:snd p)))
+})
+
+(fun {pair/bimap p f g} {
+  (Pair :fst (f (Pair:fst p)) :snd (g (Pair:snd p)))
+})
+
+; === Order utilities ===
+
+(fun {compare a b} {
+  if (< a b) {(LT)} {if (== a b) {(EQ)} {(GT)}}
+})
+
 ; unpack list for a function
 
 (fun {unpack f l} {
@@ -131,6 +323,20 @@
      if (== l nil)
       {z}
       {foldl f (f z (head l)) (tail  l)}
+})
+
+; flat-map for lists (concatMap): applies f to each element, f returns a list, concat results
+(fun {list/flat-map l f} {
+  if (== l nil)
+    {nil}
+    {join (f (head l)) (list/flat-map (tail l) f)}
+})
+
+; Applicative for lists: apply each function in fs to each value in xs
+(fun {list/ap fs xs} {
+  if (== fs nil)
+    {nil}
+    {join (map (head fs) xs) (list/ap (tail fs) xs)}
 })
 
 ; Reverse a list

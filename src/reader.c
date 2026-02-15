@@ -22,6 +22,7 @@ static char* lval_str_unescapable = "abfnrtv\\\'\"";
 
 static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
   valk_lval_t* res;
+  int start = *i;
   char next;
   int end = *i;
   for (; (next = s[end]); ++end) {
@@ -57,6 +58,7 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
     } else {
       res = valk_lval_sym(sym);
     }
+    res->src_pos = start;
     *i += len;
     free(sym);
     return res;
@@ -66,6 +68,7 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
 }
 
 static valk_lval_t* valk_lval_read_str(int* i, const char* s) {
+  int start = *i;
   char next;
   int count = 1;
 
@@ -103,7 +106,9 @@ static valk_lval_t* valk_lval_read_str(int* i, const char* s) {
   }
 
   *i = end + 1;
-  return valk_lval_str(tmp);
+  valk_lval_t *result = valk_lval_str(tmp);
+  result->src_pos = start;
+  return result;
 }
 
 valk_lval_t* valk_lval_read(int* i, const char* s) {
@@ -122,6 +127,8 @@ valk_lval_t* valk_lval_read(int* i, const char* s) {
   if (s[*i] == '\0') {
     return valk_lval_err("Unexpected  end of input");
   }
+
+  int form_start = *i;
 
   if (s[*i] == '\'') {
     (*i)++;
@@ -168,6 +175,8 @@ valk_lval_t* valk_lval_read(int* i, const char* s) {
     ++(*i);
   }
 
+  if (res->src_pos < 0) res->src_pos = form_start;
+
   while (strchr(" ;\t\v\r\n", s[*i]) && s[*i] != '\0') {
     if (s[*i] == ';') {
       while (s[*i] != '\n' && s[*i] != '\0') {
@@ -181,6 +190,7 @@ valk_lval_t* valk_lval_read(int* i, const char* s) {
 }
 
 valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
+  int expr_start = *i;
   char end;
   bool is_quoted = false;
   if (s[(*i)++] == '{') {
@@ -227,6 +237,7 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
     }
   }
 
+  result->src_pos = expr_start;
   return result;
 }
 

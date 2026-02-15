@@ -109,6 +109,7 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   res->flags =
       LVAL_REF | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   u64 tlen = strlen(type);
   if (tlen > 100) tlen = 100;
@@ -126,6 +127,7 @@ valk_lval_t* valk_lval_num(long x) {
   res->flags =
       LVAL_NUM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   res->num = x;
   return res;
@@ -137,6 +139,7 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
   res->flags =
       LVAL_ERR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   va_list va, va2;
   va_start(va, fmt);
@@ -159,6 +162,7 @@ valk_lval_t* valk_lval_sym(const char* sym) {
   res->flags =
       LVAL_SYM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   u64 slen = strlen(sym);
   if (slen > 200) slen = 200;
@@ -174,6 +178,7 @@ valk_lval_t* valk_lval_str(const char* str) {
   res->flags =
       LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   u64 slen = strlen(str);
   res->str = valk_mem_alloc(slen + 1);
@@ -187,6 +192,7 @@ valk_lval_t* valk_lval_str_n(const char* bytes, u64 n) {
   res->flags =
       LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   res->str = valk_mem_alloc(n + 1);
   if (n) memcpy(res->str, bytes, n);
@@ -255,6 +261,7 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   res->flags =
       LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, body);
 
@@ -298,6 +305,7 @@ valk_lval_t* valk_lval_nil(void) {
   res->flags =
       LVAL_NIL | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
@@ -309,6 +317,7 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   res->flags =
       LVAL_CONS | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, head);
   res->cons.head = valk_region_ensure_safe_ref(res, head);
@@ -321,6 +330,7 @@ valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
   res->flags =
       LVAL_CONS | LVAL_FLAG_QUOTED | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, head);
   res->cons.head = valk_region_ensure_safe_ref(res, head);
@@ -447,6 +457,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   res->flags = (lval->flags & (LVAL_TYPE_MASK | LVAL_FLAG_QUOTED)) |
                valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = lval->src_pos;
 
 #ifdef VALK_COVERAGE
   res->cov_file_id = lval->cov_file_id;

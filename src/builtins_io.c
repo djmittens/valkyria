@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "gc.h"
+#include "type_env.h"
 
 static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -18,7 +19,13 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
   }
   valk_lval_t* last = nullptr;
   while (valk_lval_list_count(expr)) {
-    valk_lval_t* x = valk_lval_eval(e, valk_lval_pop(expr, 0));
+    valk_lval_t* x = valk_type_transform_expr(valk_lval_pop(expr, 0));
+    if (LVAL_TYPE(x) == LVAL_NIL) continue;
+    if (LVAL_TYPE(x) == LVAL_ERR) {
+      valk_lval_println(x);
+      return x;
+    }
+    x = valk_lval_eval(e, x);
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
     } else {

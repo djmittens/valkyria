@@ -221,33 +221,24 @@
 
 ; === Error Handling ===
 
-; async/try: Try async operation, wrap result in tagged tuple
-; Type: Async a -> Async (Result a)
-; where Result a = ("ok", a) | ("error", Error)
+; async/try: Try async operation, wrap result in Result type
+; Type: Async a -> Async (Result a e)
 (fun {async/try async-op} {
   (\ {k} {
     (async-op (\ {result} {
-      (k (list "ok" result))
+      (k (Ok result))
     }))
   })
 })
 
-; async/try-result: Normalize result to tagged tuple format
-; Type: Async a -> Async (Result a)
+; async/try-result: Normalize result to Result type
+; Type: Async a -> Async (Result a e)
 (fun {async/try-result async-op} {
   (\ {k} {
     (async-op (\ {result} {
-      ; If result is a list with "ok" or "error" tag, pass through
-      ; Otherwise wrap in "ok"
-      (if (list? result)
-        {(if (== (len result) 2)
-          {do
-           (= {tag} (head result))
-           (if (or (== tag "ok") (== tag "error"))
-             {(k result)}
-             {(k (list "ok" result))})}
-          {(k (list "ok" result))})}
-        {(k (list "ok" result))})
+      (if (and (list? result) (or (ok? result) (err? result)))
+        {(k result)}
+        {(k (Ok result))})
     }))
   })
 })
@@ -259,11 +250,9 @@
     do
     (= {try-result} (async/try-result async-op))
     (try-result (\ {result} {
-      do
-      (= {tag} (head result))
-      (if (== tag "ok")
-        {(k (nth 2 result))}
-        {(fallback-async k)})
+      match result
+        {(Ok :value v) (k v)}
+        {(Err :error e) (fallback-async k)}
     }))
   })
 })

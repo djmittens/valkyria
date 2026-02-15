@@ -106,6 +106,7 @@ struct valk_lval_t {
   _Atomic u64 flags;
   void *origin_allocator;  // Always track where this value was allocated
   struct valk_lval_t *gc_next;  // Linked list for GC heap tracking
+  int src_pos;
 #ifdef VALK_COVERAGE
   u16 cov_file_id;
   u16 cov_line;

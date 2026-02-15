@@ -262,10 +262,6 @@ static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
     if (!valk_gc_heap_try_emergency_gc(heap, alloc_size)) {
       valk_gc_oom_abort(heap, bytes);
     }
-  } else if (current + alloc_size > heap->soft_limit) {
-    if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
-      valk_gc_heap_collect(heap);
-    }
   }
 
   void *data = mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE,
@@ -320,10 +316,6 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
   if (current + alloc_size > heap->hard_limit) {
     if (!valk_gc_heap_try_emergency_gc(heap, alloc_size)) {
       valk_gc_oom_abort(heap, bytes);
-    }
-  } else if (current + alloc_size > heap->soft_limit) {
-    if (!heap->in_emergency_gc && !atomic_load(&heap->gc_in_progress)) {
-      valk_gc_heap_collect(heap);
     }
   }
 

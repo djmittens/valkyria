@@ -89,6 +89,7 @@ set(VALKYRIA_SOURCES
   src/eval.c
   src/lenv.c
   src/reader.c
+  src/type_env.c
   src/builtins_math.c
   src/builtins_list.c
   src/builtins_string.c
@@ -181,6 +182,7 @@ set(VALKYRIA_SOURCES
   src/lsp/lsp.c
   src/lsp/lsp_analysis.c
   src/lsp/lsp_types.c
+  src/lsp/lsp_infer.c
   src/lsp/lsp_builtin_schemes.c
   src/lsp/lsp_io.c
   src/lsp/lsp_json.c

@@ -410,6 +410,7 @@ valk_lval_t *valk_lval_handle(valk_async_handle_t *handle) {
   res->flags = LVAL_HANDLE | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   res->origin_allocator = valk_thread_ctx.allocator;
   res->gc_next = nullptr;
+  res->src_pos = -1;
   res->async.handle = handle;
   return res;
 }
