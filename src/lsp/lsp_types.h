@@ -176,6 +176,23 @@ type_scheme_t *typed_scope_lookup(typed_scope_t *s, const char *name);
 
 #include "lsp_doc.h"
 
+// ---------------------------------------------------------------------------
+// Inlay hints — type annotations shown inline by the editor.
+// ---------------------------------------------------------------------------
+
+typedef enum {
+  INLAY_TYPE = 1,
+  INLAY_PARAM = 2,
+} inlay_hint_kind_e;
+
+typedef struct {
+  int offset;
+  inlay_hint_kind_e kind;
+  char *label;
+  valk_type_t *type;
+  bool is_return;
+} lsp_inlay_hint_t;
+
 typedef struct {
   type_arena_t *arena;
   typed_scope_t *scope;
@@ -185,7 +202,14 @@ typedef struct {
   int floor_var_id;
   int hover_offset;
   valk_type_t *hover_result;
+  lsp_inlay_hint_t *hints;
+  size_t hint_count;
+  size_t hint_cap;
+  bool collect_hints;
 } infer_ctx_t;
+
+void infer_ctx_add_hint(infer_ctx_t *ctx, int offset, inlay_hint_kind_e kind,
+                        const char *label);
 
 // ---------------------------------------------------------------------------
 // Type inference entry point
@@ -199,3 +223,12 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr);
 // ---------------------------------------------------------------------------
 
 void lsp_builtin_schemes_init(type_arena_t *a, typed_scope_t *scope);
+
+// Cross-file type inference (lsp_loads.c)
+#include "lsp_doc.h"
+void init_typed_scope_with_loads(type_arena_t *arena, typed_scope_t *scope,
+                                lsp_document_t *doc);
+
+// Inlay hint collection (lsp_analysis.c)
+void lsp_collect_inlay_hints(lsp_document_t *doc,
+                             lsp_inlay_hint_t **out_hints, size_t *out_count);

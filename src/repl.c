@@ -93,6 +93,10 @@ int main(int argc, char* argv[]) {
       if (strcmp(argv[i], "--lsp") == 0) {
         return valk_lsp_main(argc, argv);
       }
+      if (strcmp(argv[i], "--quality-snapshot") == 0) {
+        const char *dir = (i + 1 < argc) ? argv[++i] : ".";
+        return valk_quality_snapshot(dir);
+      }
       if (strcmp(argv[i], "--script") == 0) {
         script_mode = true;
         continue;

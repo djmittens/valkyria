@@ -55,6 +55,38 @@ type_scheme_t *typed_scope_lookup(typed_scope_t *s, const char *name) {
 }
 
 // ---------------------------------------------------------------------------
+// Inlay hint collection
+// ---------------------------------------------------------------------------
+
+static void add_hint(infer_ctx_t *ctx, int offset, inlay_hint_kind_e kind,
+                     valk_type_t *ty, bool is_return) {
+  if (!ctx->collect_hints || offset < 0 || !ty) return;
+  if (ctx->hint_count >= ctx->hint_cap) {
+    ctx->hint_cap = ctx->hint_cap == 0 ? 32 : ctx->hint_cap * 2;
+    ctx->hints = realloc(ctx->hints, sizeof(lsp_inlay_hint_t) * ctx->hint_cap);
+  }
+  ctx->hints[ctx->hint_count++] = (lsp_inlay_hint_t){
+    .offset = offset,
+    .kind = kind,
+    .label = nullptr,
+    .type = ty,
+    .is_return = is_return,
+  };
+}
+
+static void emit_type_hint(infer_ctx_t *ctx, valk_lval_t *node, valk_type_t *ty) {
+  if (!ctx->collect_hints || !node || !ty) return;
+  int pos = node->src_pos;
+  if (pos < 0) return;
+  int end = pos + (int)strlen(node->str);
+  add_hint(ctx, end, INLAY_TYPE, ty, false);
+}
+
+static void emit_return_hint(infer_ctx_t *ctx, int offset, valk_type_t *ty) {
+  add_hint(ctx, offset, INLAY_TYPE, ty, true);
+}
+
+// ---------------------------------------------------------------------------
 // Inference helpers
 // ---------------------------------------------------------------------------
 
@@ -153,6 +185,149 @@ static valk_type_t *predicate_narrows_to(type_arena_t *a, const char *name) {
 }
 
 // ---------------------------------------------------------------------------
+// Type annotation parsing — converts AST type expressions to valk_type_t
+// ---------------------------------------------------------------------------
+
+#define ANN_MAX_VARS 16
+
+typedef struct {
+  char *names[ANN_MAX_VARS];
+  valk_type_t *vars[ANN_MAX_VARS];
+  int count;
+  type_arena_t *arena;
+} ann_var_map_t;
+
+static valk_type_t *ann_var(ann_var_map_t *m, const char *name) {
+  for (int i = 0; i < m->count; i++)
+    if (strcmp(m->names[i], name) == 0) return m->vars[i];
+  if (m->count >= ANN_MAX_VARS) return ty_var(m->arena);
+  m->names[m->count] = (char *)name;
+  m->vars[m->count] = ty_var(m->arena);
+  return m->vars[m->count++];
+}
+
+static valk_type_t *parse_type_ann(ann_var_map_t *m, valk_lval_t *node) {
+  if (!node) return ty_any(m->arena);
+  type_arena_t *a = m->arena;
+
+  if (LVAL_TYPE(node) == LVAL_SYM) {
+    const char *s = node->str;
+    if (strcmp(s, "Num") == 0) return ty_num(a);
+    if (strcmp(s, "Str") == 0) return ty_str(a);
+    if (strcmp(s, "Sym") == 0) return ty_sym(a);
+    if (strcmp(s, "Nil") == 0) return ty_nil(a);
+    if (strcmp(s, "Err") == 0) return ty_err(a);
+    if (strcmp(s, "Any") == 0) return ty_any(a);
+    return ann_var(m, s);
+  }
+
+  if (LVAL_TYPE(node) == LVAL_CONS) {
+    valk_lval_t *h = valk_lval_head(node);
+    if (!h || LVAL_TYPE(h) != LVAL_SYM) return ty_any(a);
+    const char *name = h->str;
+    valk_lval_t *args = valk_lval_tail(node);
+
+    if (strcmp(name, "->") == 0) {
+      valk_type_t *pts[TY_MAX_PARAMS];
+      int pc = 0;
+      valk_lval_t *cur = args;
+      while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+        if (pc < TY_MAX_PARAMS)
+          pts[pc++] = parse_type_ann(m, valk_lval_head(cur));
+        cur = valk_lval_tail(cur);
+      }
+      if (pc == 0) return ty_any(a);
+      valk_type_t *ret = pts[pc - 1];
+      return ty_fun(a, pts, pc - 1, ret, false);
+    }
+
+    if (strcmp(name, "List") == 0) {
+      valk_lval_t *elem = args && LVAL_TYPE(args) == LVAL_CONS
+        ? valk_lval_head(args) : nullptr;
+      return ty_list(a, elem ? parse_type_ann(m, elem) : ty_var(a));
+    }
+
+    if (strcmp(name, "Handle") == 0) {
+      valk_lval_t *inner = args && LVAL_TYPE(args) == LVAL_CONS
+        ? valk_lval_head(args) : nullptr;
+      return ty_handle(a, inner ? parse_type_ann(m, inner) : ty_var(a));
+    }
+
+    valk_type_t *tps[TY_MAX_PARAMS];
+    int tc = 0;
+    valk_lval_t *cur = args;
+    while (cur && LVAL_TYPE(cur) == LVAL_CONS && tc < TY_MAX_PARAMS) {
+      tps[tc++] = parse_type_ann(m, valk_lval_head(cur));
+      cur = valk_lval_tail(cur);
+    }
+    return ty_named(a, name, tps, tc);
+  }
+
+  return ty_any(a);
+}
+
+static bool is_ann_sym(valk_lval_t *node, const char *s) {
+  return node && LVAL_TYPE(node) == LVAL_SYM && strcmp(node->str, s) == 0;
+}
+
+typedef struct {
+  valk_type_t *param_types[TY_MAX_PARAMS];
+  valk_lval_t *param_nodes[TY_MAX_PARAMS];
+  int param_count;
+  bool variadic;
+  valk_type_t *ret_ann;
+} parsed_formals_t;
+
+static void parse_formals(infer_ctx_t *ctx, valk_lval_t *formals,
+                          typed_scope_t *inner, parsed_formals_t *out) {
+  out->param_count = 0;
+  out->variadic = false;
+  out->ret_ann = nullptr;
+
+  ann_var_map_t avm = {.count = 0, .arena = ctx->arena};
+  valk_lval_t *cur = formals;
+
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+    valk_lval_t *h = valk_lval_head(cur);
+
+    if (is_ann_sym(h, "->")) {
+      cur = valk_lval_tail(cur);
+      if (cur && LVAL_TYPE(cur) == LVAL_CONS)  {
+        out->ret_ann = parse_type_ann(&avm, valk_lval_head(cur));
+        cur = valk_lval_tail(cur);
+      }
+      continue;
+    }
+
+    if (is_ann_sym(h, "::")) {
+      cur = valk_lval_tail(cur);
+      if (cur && LVAL_TYPE(cur) == LVAL_CONS && out->param_count > 0) {
+        valk_type_t *ann = parse_type_ann(&avm, valk_lval_head(cur));
+        ty_unify(ctx->arena, out->param_types[out->param_count - 1], ann);
+        cur = valk_lval_tail(cur);
+      }
+      continue;
+    }
+
+    if (h && LVAL_TYPE(h) == LVAL_SYM) {
+      if (h->str[0] == '&') {
+        out->variadic = true;
+      } else {
+        valk_type_t *pt = ty_var(ctx->arena);
+        if (out->param_count < TY_MAX_PARAMS) {
+          out->param_types[out->param_count] = pt;
+          out->param_nodes[out->param_count] = h;
+          out->param_count++;
+        }
+        typed_scope_add_mono(inner, h->str, pt);
+      }
+    }
+
+    cur = valk_lval_tail(cur);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Type inference — Algorithm W style
 // ---------------------------------------------------------------------------
 
@@ -218,51 +393,33 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
     valk_lval_t *body_rest = valk_lval_tail(rest);
 
     typed_scope_t *inner = typed_scope_push(ctx->arena, ctx->scope);
-    valk_type_t *param_types[TY_MAX_PARAMS];
-    int param_count = 0;
-    bool variadic = false;
+    parsed_formals_t pf;
 
-    if (formals && LVAL_TYPE(formals) == LVAL_CONS) {
-      valk_lval_t *cur = formals;
-      while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-        valk_lval_t *h = valk_lval_head(cur);
-        if (h && LVAL_TYPE(h) == LVAL_SYM) {
-          if (h->str[0] == '&') {
-            variadic = true;
-          } else {
-            valk_type_t *pt = ty_var(ctx->arena);
-            if (param_count < TY_MAX_PARAMS)
-              param_types[param_count++] = pt;
-            typed_scope_add_mono(inner, h->str, pt);
-          }
-        }
-        cur = valk_lval_tail(cur);
-      }
-    }
+    if (formals && LVAL_TYPE(formals) == LVAL_CONS)
+      parse_formals(ctx, formals, inner, &pf);
+    else
+      pf = (parsed_formals_t){.param_count = 0, .variadic = false, .ret_ann = nullptr};
 
     typed_scope_t *saved = ctx->scope;
     ctx->scope = inner;
     valk_type_t *body_ty = infer_body_last(ctx, body_rest);
     ctx->scope = saved;
 
-    if (ctx->hover_offset >= 0 && formals && LVAL_TYPE(formals) == LVAL_CONS) {
-      valk_lval_t *cur = formals;
-      int pi = 0;
-      while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-        valk_lval_t *h = valk_lval_head(cur);
-        if (h && LVAL_TYPE(h) == LVAL_SYM && h->str[0] != '&' &&
-            h->src_pos >= 0 && h->src_pos <= ctx->hover_offset &&
-            ctx->hover_offset < h->src_pos + (int)strlen(h->str) &&
-            pi < param_count)
-          ctx->hover_result = ty_resolve(param_types[pi]);
-        if (h && LVAL_TYPE(h) == LVAL_SYM && h->str[0] != '&') pi++;
-        cur = valk_lval_tail(cur);
-      }
+    if (pf.ret_ann)
+      ty_unify(ctx->arena, body_ty, pf.ret_ann);
+
+    for (int i = 0; i < pf.param_count; i++) {
+      valk_lval_t *h = pf.param_nodes[i];
+      if (ctx->hover_offset >= 0 && h->src_pos >= 0 &&
+          h->src_pos <= ctx->hover_offset &&
+          ctx->hover_offset < h->src_pos + (int)strlen(h->str))
+        ctx->hover_result = ty_resolve(pf.param_types[i]);
+      emit_type_hint(ctx, h, pf.param_types[i]);
     }
 
     typed_scope_pop(inner);
 
-    return ty_fun(ctx->arena, param_types, param_count, body_ty, variadic);
+    return ty_fun(ctx->arena, pf.param_types, pf.param_count, body_ty, pf.variadic);
   }
 
   if (strcmp(name, "fun") == 0) {
@@ -273,50 +430,34 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
     if (name_formals && LVAL_TYPE(name_formals) == LVAL_CONS) {
       valk_lval_t *fname = valk_lval_head(name_formals);
       typed_scope_t *inner = typed_scope_push(ctx->arena, ctx->scope);
-
-      valk_type_t *param_types[TY_MAX_PARAMS];
-      int param_count = 0;
-      bool variadic = false;
+      parsed_formals_t pf;
 
       valk_lval_t *params = valk_lval_tail(name_formals);
-      while (params && LVAL_TYPE(params) == LVAL_CONS) {
-        valk_lval_t *h = valk_lval_head(params);
-        if (h && LVAL_TYPE(h) == LVAL_SYM) {
-          if (h->str[0] == '&') {
-            variadic = true;
-          } else {
-            valk_type_t *pt = ty_var(ctx->arena);
-            if (param_count < TY_MAX_PARAMS)
-              param_types[param_count++] = pt;
-            typed_scope_add_mono(inner, h->str, pt);
-          }
-        }
-        params = valk_lval_tail(params);
-      }
+      if (params && LVAL_TYPE(params) == LVAL_CONS)
+        parse_formals(ctx, params, inner, &pf);
+      else
+        pf = (parsed_formals_t){.param_count = 0, .variadic = false, .ret_ann = nullptr};
 
       typed_scope_t *saved = ctx->scope;
       ctx->scope = inner;
       valk_type_t *body_ty = infer_body_last(ctx, body_rest);
       ctx->scope = saved;
 
-      if (ctx->hover_offset >= 0) {
-        valk_lval_t *pc = valk_lval_tail(name_formals);
-        int pi = 0;
-        while (pc && LVAL_TYPE(pc) == LVAL_CONS) {
-          valk_lval_t *h = valk_lval_head(pc);
-          if (h && LVAL_TYPE(h) == LVAL_SYM && h->str[0] != '&' &&
-              h->src_pos >= 0 && h->src_pos <= ctx->hover_offset &&
-              ctx->hover_offset < h->src_pos + (int)strlen(h->str) &&
-              pi < param_count)
-            ctx->hover_result = ty_resolve(param_types[pi]);
-          if (h && LVAL_TYPE(h) == LVAL_SYM && h->str[0] != '&') pi++;
-          pc = valk_lval_tail(pc);
-        }
+      if (pf.ret_ann)
+        ty_unify(ctx->arena, body_ty, pf.ret_ann);
+
+      for (int i = 0; i < pf.param_count; i++) {
+        valk_lval_t *h = pf.param_nodes[i];
+        if (ctx->hover_offset >= 0 && h->src_pos >= 0 &&
+            h->src_pos <= ctx->hover_offset &&
+            ctx->hover_offset < h->src_pos + (int)strlen(h->str))
+          ctx->hover_result = ty_resolve(pf.param_types[i]);
+        emit_type_hint(ctx, h, pf.param_types[i]);
       }
 
       typed_scope_pop(inner);
 
-      valk_type_t *fn_ty = ty_fun(ctx->arena, param_types, param_count, body_ty, variadic);
+      valk_type_t *fn_ty = ty_fun(ctx->arena, pf.param_types, pf.param_count, body_ty, pf.variadic);
       if (fname && LVAL_TYPE(fname) == LVAL_SYM) {
         int floor = ctx->floor_var_id;
         type_scheme_t *sch = scheme_generalize(ctx->arena, fn_ty, floor);
@@ -325,6 +466,7 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
             fname->src_pos <= ctx->hover_offset &&
             ctx->hover_offset < fname->src_pos + (int)strlen(fname->str))
           ctx->hover_result = ty_resolve(fn_ty);
+        emit_return_hint(ctx, fname->src_pos + (int)strlen(fname->str), body_ty);
       }
       return fn_ty;
     }
@@ -353,6 +495,7 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
               s->src_pos <= ctx->hover_offset &&
               ctx->hover_offset < s->src_pos + (int)strlen(s->str))
             ctx->hover_result = ty_resolve(vt);
+          emit_type_hint(ctx, s, vt);
         }
         sym_cur = valk_lval_tail(sym_cur);
         val_cur = valk_lval_tail(val_cur);
@@ -367,17 +510,18 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
           binding->src_pos <= ctx->hover_offset &&
           ctx->hover_offset < binding->src_pos + (int)strlen(binding->str))
         ctx->hover_result = ty_resolve(vt);
+      emit_type_hint(ctx, binding, vt);
     }
     return ty_nil(ctx->arena);
   }
 
   if (strcmp(name, "let") == 0) {
     if (LVAL_TYPE(rest) != LVAL_CONS) return ty_any(ctx->arena);
-    valk_lval_t *body_rest = valk_lval_tail(rest);
+    valk_lval_t *body = valk_lval_head(rest);
     typed_scope_t *inner = typed_scope_push(ctx->arena, ctx->scope);
     typed_scope_t *saved = ctx->scope;
     ctx->scope = inner;
-    valk_type_t *result = infer_body_last(ctx, body_rest);
+    valk_type_t *result = infer_eval(ctx, body);
     ctx->scope = saved;
     typed_scope_pop(inner);
     return result;
@@ -458,9 +602,125 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
     return ty_nil(ctx->arena);
   }
 
-  if (strcmp(name, "aio/let") == 0 || strcmp(name, "aio/do") == 0) {
-    infer_body(ctx, rest);
-    return ty_handle(ctx->arena, ty_var(ctx->arena));
+  if (strcmp(name, "aio/let") == 0) {
+    if (LVAL_TYPE(rest) != LVAL_CONS)
+      return ty_handle(ctx->arena, ty_var(ctx->arena));
+    valk_lval_t *bindings = valk_lval_head(rest);
+    valk_lval_t *body_rest = valk_lval_tail(rest);
+
+    typed_scope_t *inner = typed_scope_push(ctx->arena, ctx->scope);
+    typed_scope_t *saved = ctx->scope;
+    ctx->scope = inner;
+
+    if (bindings && LVAL_TYPE(bindings) == LVAL_CONS) {
+      valk_lval_t *bc = bindings;
+      if (bc->flags & LVAL_FLAG_QUOTED) {
+        uint32_t sf = bc->flags;
+        bc->flags &= ~LVAL_FLAG_QUOTED;
+        valk_lval_t *inner_bc = bc;
+        while (inner_bc && LVAL_TYPE(inner_bc) == LVAL_CONS) {
+          valk_lval_t *pair = valk_lval_head(inner_bc);
+          if (pair && LVAL_TYPE(pair) == LVAL_CONS) {
+            valk_lval_t *bname = valk_lval_head(pair);
+            valk_lval_t *bexpr_rest = valk_lval_tail(pair);
+            if (bname && LVAL_TYPE(bname) == LVAL_SYM &&
+                bexpr_rest && LVAL_TYPE(bexpr_rest) == LVAL_CONS) {
+              valk_type_t *ht = infer_expr(ctx, valk_lval_head(bexpr_rest));
+              ht = ty_resolve(ht);
+              valk_type_t *val_ty = (ht->kind == TY_HANDLE)
+                ? ht->handle.inner : ty_var(ctx->arena);
+              typed_scope_add_mono(inner, bname->str, val_ty);
+              emit_type_hint(ctx, bname, val_ty);
+            }
+          } else if (pair && LVAL_TYPE(pair) == LVAL_SYM &&
+                     strcmp(pair->str, ":then") == 0) {
+          }
+          inner_bc = valk_lval_tail(inner_bc);
+        }
+        bc->flags = sf;
+      } else {
+        while (bc && LVAL_TYPE(bc) == LVAL_CONS) {
+          valk_lval_t *pair = valk_lval_head(bc);
+          if (pair && LVAL_TYPE(pair) == LVAL_CONS) {
+            valk_lval_t *bname = valk_lval_head(pair);
+            valk_lval_t *bexpr_rest = valk_lval_tail(pair);
+            if (bname && LVAL_TYPE(bname) == LVAL_SYM &&
+                bexpr_rest && LVAL_TYPE(bexpr_rest) == LVAL_CONS) {
+              valk_type_t *ht = infer_expr(ctx, valk_lval_head(bexpr_rest));
+              ht = ty_resolve(ht);
+              valk_type_t *val_ty = (ht->kind == TY_HANDLE)
+                ? ht->handle.inner : ty_var(ctx->arena);
+              typed_scope_add_mono(inner, bname->str, val_ty);
+              emit_type_hint(ctx, bname, val_ty);
+            }
+          } else if (pair && LVAL_TYPE(pair) == LVAL_SYM &&
+                     strcmp(pair->str, ":then") == 0) {
+          }
+          bc = valk_lval_tail(bc);
+        }
+      }
+    }
+
+    valk_type_t *body_ty = infer_body_last(ctx, body_rest);
+    ctx->scope = saved;
+    typed_scope_pop(inner);
+    return ty_handle(ctx->arena, body_ty);
+  }
+
+  if (strcmp(name, "aio/do") == 0) {
+    if (LVAL_TYPE(rest) != LVAL_CONS)
+      return ty_handle(ctx->arena, ty_var(ctx->arena));
+    valk_lval_t *body = valk_lval_head(rest);
+    if (!body || LVAL_TYPE(body) != LVAL_CONS)
+      return ty_handle(ctx->arena, ty_var(ctx->arena));
+
+    typed_scope_t *inner = typed_scope_push(ctx->arena, ctx->scope);
+    typed_scope_t *saved = ctx->scope;
+    ctx->scope = inner;
+
+    uint32_t sf = body->flags;
+    if (body->flags & LVAL_FLAG_QUOTED)
+      body->flags &= ~LVAL_FLAG_QUOTED;
+
+    valk_type_t *last_ty = ty_nil(ctx->arena);
+    valk_lval_t *cur = body;
+    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+      valk_lval_t *stmt = valk_lval_head(cur);
+      if (stmt && LVAL_TYPE(stmt) == LVAL_CONS) {
+        valk_lval_t *sh = valk_lval_head(stmt);
+        valk_lval_t *st = valk_lval_tail(stmt);
+        if (sh && LVAL_TYPE(sh) == LVAL_SYM &&
+            st && LVAL_TYPE(st) == LVAL_CONS) {
+          valk_lval_t *arrow = valk_lval_head(st);
+          if (arrow && LVAL_TYPE(arrow) == LVAL_SYM &&
+              strcmp(arrow->str, "<-") == 0) {
+            valk_lval_t *expr_rest = valk_lval_tail(st);
+            if (expr_rest && LVAL_TYPE(expr_rest) == LVAL_CONS) {
+              valk_type_t *ht = infer_expr(ctx, valk_lval_head(expr_rest));
+              ht = ty_resolve(ht);
+              valk_type_t *val_ty = (ht->kind == TY_HANDLE)
+                ? ht->handle.inner : ty_var(ctx->arena);
+              typed_scope_add_mono(inner, sh->str, val_ty);
+              emit_type_hint(ctx, sh, val_ty);
+              last_ty = ht;
+              cur = valk_lval_tail(cur);
+              continue;
+            }
+          }
+        }
+      }
+      last_ty = infer_expr(ctx, stmt);
+      cur = valk_lval_tail(cur);
+    }
+
+    body->flags = sf;
+    ctx->scope = saved;
+    typed_scope_pop(inner);
+
+    last_ty = ty_resolve(last_ty);
+    valk_type_t *inner_ty = (last_ty->kind == TY_HANDLE)
+      ? last_ty->handle.inner : last_ty;
+    return ty_handle(ctx->arena, inner_ty);
   }
 
   if (strcmp(name, "<-") == 0) {
@@ -493,6 +753,37 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
         param_count++;
       }
       p = valk_lval_tail(p);
+    }
+
+    // Auto-discover type params from constructor fields
+    // (type {Option} {Some :value a} {None}) — 'a' is implicit param
+    valk_lval_t *vt = valk_lval_tail(rest);
+    while (vt && LVAL_TYPE(vt) == LVAL_CONS && param_count < TY_MAX_PARAMS) {
+      valk_lval_t *variant = valk_lval_head(vt);
+      if (variant && LVAL_TYPE(variant) == LVAL_CONS) {
+        valk_lval_t *fields = valk_lval_tail(variant);
+        valk_lval_t *first_fld = (fields && LVAL_TYPE(fields) == LVAL_CONS)
+          ? valk_lval_head(fields) : nullptr;
+        bool kw = first_fld && LVAL_TYPE(first_fld) == LVAL_SYM
+          && first_fld->str[0] == ':';
+        valk_lval_t *fc = fields;
+        while (fc && LVAL_TYPE(fc) == LVAL_CONS && param_count < TY_MAX_PARAMS) {
+          if (kw) { fc = valk_lval_tail(fc); if (!fc || LVAL_TYPE(fc) != LVAL_CONS) break; }
+          valk_lval_t *ts = valk_lval_head(fc);
+          fc = valk_lval_tail(fc);
+          if (ts && LVAL_TYPE(ts) == LVAL_SYM && ts->str[0] != ':') {
+            bool found = false;
+            for (int i = 0; i < param_count; i++)
+              if (strcmp(param_names[i], ts->str) == 0) { found = true; break; }
+            if (!found) {
+              param_vars[param_count] = ty_var(ctx->arena);
+              param_names[param_count] = ts->str;
+              param_count++;
+            }
+          }
+        }
+      }
+      vt = valk_lval_tail(vt);
     }
 
     valk_type_t *result_ty = ty_named(ctx->arena, type_name,
@@ -637,6 +928,7 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
                       var->src_pos <= ctx->hover_offset &&
                       ctx->hover_offset < var->src_pos + (int)strlen(var->str))
                     ctx->hover_result = var_ty;
+                  emit_type_hint(ctx, var, var_ty);
                 }
                 field_idx++;
               }
@@ -657,6 +949,7 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
                       var->src_pos <= ctx->hover_offset &&
                       ctx->hover_offset < var->src_pos + (int)strlen(var->str))
                     ctx->hover_result = var_ty;
+                  emit_type_hint(ctx, var, var_ty);
                 }
                 field_idx++;
               }
@@ -709,6 +1002,21 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
         arg_cur = valk_lval_tail(arg_cur);
       }
       return ty_resolve(fn_ty->fun.ret);
+    }
+
+    if (fn_ty->kind == TY_VAR && rest && LVAL_TYPE(rest) == LVAL_CONS) {
+      int nargs = count_list(rest);
+      int n = nargs < TY_MAX_PARAMS ? nargs : TY_MAX_PARAMS;
+      valk_type_t *arg_tys[TY_MAX_PARAMS];
+      valk_lval_t *arg_cur = rest;
+      for (int i = 0; i < n; i++) {
+        arg_tys[i] = infer_expr(ctx, valk_lval_head(arg_cur));
+        arg_cur = valk_lval_tail(arg_cur);
+      }
+      valk_type_t *ret_ty = ty_var(ctx->arena);
+      valk_type_t *synth = ty_fun(ctx->arena, arg_tys, n, ret_ty, false);
+      ty_unify(ctx->arena, fn_ty, synth);
+      return ty_resolve(ret_ty);
     }
 
     if (!rest || LVAL_TYPE(rest) != LVAL_CONS)

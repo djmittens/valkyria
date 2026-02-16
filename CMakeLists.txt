@@ -181,12 +181,23 @@ set(VALKYRIA_SOURCES
   src/event_loop_metrics.c
   src/lsp/lsp.c
   src/lsp/lsp_doc.c
+  src/lsp/lsp_loads.c
+  src/lsp/lsp_walk.c
+  src/lsp/lsp_hover.c
+  src/lsp/lsp_completion.c
+  src/lsp/lsp_references.c
+  src/lsp/lsp_workspace.c
   src/lsp/lsp_analysis.c
   src/lsp/lsp_types.c
   src/lsp/lsp_infer.c
   src/lsp/lsp_builtin_schemes.c
   src/lsp/lsp_io.c
   src/lsp/lsp_json.c
+  src/lsp/lsp_db.c
+  src/lsp/lsp_db_stats.c
+  src/lsp/lsp_db_sync.c
+  src/lsp/lsp_quality.c
+  vendor/sqlite3/sqlite3.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/lsp/lsp_builtins_gen.h
 )
 
@@ -210,6 +221,11 @@ else()
 endif()
 
 
+
+# SQLite amalgamation: disable strict warnings (third-party code)
+set_source_files_properties(vendor/sqlite3/sqlite3.c PROPERTIES
+  COMPILE_FLAGS "-w"
+)
 
 if(VALK_COVERAGE)
   add_compile_definitions(VALK_COVERAGE)
@@ -238,6 +254,7 @@ target_include_directories(valkyria PRIVATE
 target_include_directories(valkyria SYSTEM PRIVATE
   ${LIBUV_INCLUDE_DIRS}
   ${PROJECT_SOURCE_DIR}/vendor
+  ${PROJECT_SOURCE_DIR}/vendor/sqlite3
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -249,7 +266,9 @@ target_link_libraries(valkyria PRIVATE
   ${LIBUV_LIBRARIES}
   OpenSSL::SSL
   OpenSSL::Crypto
-  m)
+  m
+  dl
+  pthread)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BACKTRACE_LIBRARIES)
   target_link_libraries(valkyria PRIVATE ${BACKTRACE_LIBRARIES})
@@ -402,6 +421,10 @@ include_directories(test_metrics_builtins src/)
 add_executable(test_log test/unit/test_log.c test/testing.c)
 target_link_libraries(test_log PRIVATE "-lc" valkyria)
 include_directories(test_log src/)
+
+add_executable(test_symdb_unit test/unit/test_symdb.c test/testing.c)
+target_link_libraries(test_symdb_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_symdb_unit src/)
 
 add_executable(test_aio_alloc_unit test/unit/test_aio_alloc.c test/testing.c)
 target_link_libraries(test_aio_alloc_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})

@@ -57,6 +57,7 @@ typedef struct {
   char *text;
   size_t text_len;
   int version;
+  bool is_background;
 
   lsp_symbol_t *symbols;
   size_t symbol_count;
@@ -130,5 +131,43 @@ int lsp_find_sym_offset(const char *text, const char *sym, int search_start);
 
 // Analysis entry points
 void analyze_document(lsp_document_t *doc);
+void analyze_document_light(lsp_document_t *doc);
 void lsp_set_workspace_root(const char *root);
 char *lsp_type_at_pos(lsp_document_t *doc, int offset);
+
+// Load graph (lsp_loads.c)
+void uri_to_path(const char *uri, char *path, size_t path_size);
+void build_global_symset(lsp_document_t *doc, lsp_symset_t *globals);
+
+// AST walker (lsp_walk.c)
+void check_and_sem_pass(lsp_document_t *doc, bool emit_sem);
+
+// Hover helpers (lsp_hover.c)
+void handle_hover(int id, void *params, void *store);
+void handle_definition(int id, void *params, void *store);
+const char *builtin_doc(const char *name);
+void extract_source_snippet(const char *text, int start, int end,
+                            char *out, size_t out_size);
+
+// Completion (lsp_completion.c)
+void handle_completion(int id, void *params, void *store);
+
+// References, rename & workspace symbol (lsp_references.c)
+void handle_references(int id, void *params, void *store);
+void handle_prepare_rename(int id, void *params, void *store);
+void handle_rename(int id, void *params, void *store);
+void handle_workspace_symbol(int id, void *params, void *store);
+
+// Workspace (lsp_workspace.c)
+const char *lsp_workspace_root(void);
+void lsp_workspace_set_root(const char *root);
+char *lsp_workspace_discover_root(const char *file_path);
+void lsp_workspace_scan(lsp_doc_store_t *store);
+
+// Symbol database (lsp_db_sync.c)
+void lsp_db_init(const char *workspace_root);
+void lsp_db_shutdown(void);
+void lsp_db_sync_document(lsp_document_t *doc);
+
+typedef struct valk_symdb valk_symdb_t;
+valk_symdb_t *lsp_db_get(void);

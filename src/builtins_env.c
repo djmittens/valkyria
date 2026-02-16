@@ -80,6 +80,39 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_nil();
 }
 
+static bool is_ann_marker(valk_lval_t *v) {
+  return v && LVAL_TYPE(v) == LVAL_SYM &&
+    (strcmp(v->str, "::") == 0 || strcmp(v->str, "->") == 0);
+}
+
+static valk_lval_t *strip_type_annotations(valk_lval_t *formals) {
+  if (!formals || LVAL_TYPE(formals) != LVAL_CONS) return formals;
+
+  bool has_ann = false;
+  valk_lval_t *cur = formals;
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+    if (is_ann_marker(valk_lval_head(cur))) { has_ann = true; break; }
+    cur = valk_lval_tail(cur);
+  }
+  if (!has_ann) return formals;
+
+  valk_lval_t *params[64];
+  int count = 0;
+  cur = formals;
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS && count < 64) {
+    valk_lval_t *h = valk_lval_head(cur);
+    if (is_ann_marker(h)) {
+      cur = valk_lval_tail(cur);
+      if (cur && LVAL_TYPE(cur) == LVAL_CONS)
+        cur = valk_lval_tail(cur);
+      continue;
+    }
+    params[count++] = h;
+    cur = valk_lval_tail(cur);
+  }
+  return valk_lval_qlist(params, (u64)count);
+}
+
 static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
 
@@ -89,14 +122,16 @@ static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, formals, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
   LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
 
+  formals = valk_lval_pop(a, 0);
+  body = valk_lval_pop(a, 0);
+
+  formals = strip_type_annotations(formals);
+
   for (u64 i = 0; i < valk_lval_list_count(formals); i++) { // LCOV_EXCL_BR_LINE
     LVAL_ASSERT(a, LVAL_TYPE(valk_lval_list_nth(formals, i)) == LVAL_SYM,
                 "Cannot use a non symbol[%s] for bind",
                 valk_ltype_name(LVAL_TYPE(valk_lval_list_nth(formals, i))));
   }
-
-  formals = valk_lval_pop(a, 0);
-  body = valk_lval_pop(a, 0);
 
   valk_lval_t* func = valk_lval_lambda(e, formals, body);
 

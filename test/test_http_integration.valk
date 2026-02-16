@@ -240,8 +240,8 @@ World	withspecial chars: <>\"'&")
   (test "response with large body"
     {do
     ; Build a 10KB body
-    (def {chunk} "0123456789ABCDEF")  ; 16 bytes
-    (def {body-1k} (str chunk chunk chunk chunk chunk chunk chunk chunk
+    (= {chunk} "0123456789ABCDEF")  ; 16 bytes
+    (= {body-1k} (str chunk chunk chunk chunk chunk chunk chunk chunk
                         chunk chunk chunk chunk chunk chunk chunk chunk
                         chunk chunk chunk chunk chunk chunk chunk chunk
                         chunk chunk chunk chunk chunk chunk chunk chunk
@@ -249,9 +249,9 @@ World	withspecial chars: <>\"'&")
                         chunk chunk chunk chunk chunk chunk chunk chunk
                         chunk chunk chunk chunk chunk chunk chunk chunk
                         chunk chunk chunk chunk chunk chunk chunk chunk))
-    (def {body-10k} (str body-1k body-1k body-1k body-1k body-1k
+    (= {body-10k} (str body-1k body-1k body-1k body-1k body-1k
                          body-1k body-1k body-1k body-1k body-1k))
-    (def {resp} (http2/mock-response "200" body-10k))
+    (= {resp} (http2/mock-response "200" body-10k))
     (== (len (http2/response-body resp)) (len body-10k))
   })
   (test "http2/validate-status 201 matches 201"
