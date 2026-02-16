@@ -148,13 +148,16 @@ valk_lval_t *valk_type_env_register(valk_type_env_t *env, valk_lval_t *type_form
       if (LVAL_TYPE(ctor_head) != LVAL_SYM) {
         continue;
       }
-      char *ctor_name = ctor_head->str;
+      char *ctor_name_raw = ctor_head->str;
 
-      if (valk_type_env_find_constructor(env, ctor_name)) {
-        return valk_lval_err("constructor '%s' already declared", ctor_name);
+      char qualified[256];
+      snprintf(qualified, sizeof(qualified), "%s::%s", type_name, ctor_name_raw);
+
+      if (valk_type_env_find_constructor(env, qualified)) {
+        return valk_lval_err("constructor '%s' already declared", qualified);
       }
 
-      valk_constructor_t *ctor = parse_constructor(ctor_name, type_name, variant->cons.tail);
+      valk_constructor_t *ctor = parse_constructor(qualified, type_name, variant->cons.tail);
       decl->constructors[decl->constructor_count++] = ctor;
       env->constructors[env->constructor_count++] = ctor;
     }
@@ -179,7 +182,9 @@ static bool is_match_form(valk_lval_t *expr) {
 static bool is_accessor(const char *sym) {
   if (!sym || sym[0] < 'A' || sym[0] > 'Z') return false;
   const char *colon = strchr(sym, ':');
-  return colon != NULL && colon != sym && colon[1] != '\0';
+  if (!colon || colon == sym || colon[1] == '\0') return false;
+  if (colon[1] == ':') return false;
+  return true;
 }
 
 static valk_lval_t *transform_expr(valk_type_env_t *env, valk_lval_t *expr);
@@ -236,6 +241,16 @@ static valk_lval_t *transform_constructor_call(valk_type_env_t *env, valk_constr
   return result;
 }
 
+static valk_constructor_t *find_constructor_by_short_name(valk_type_env_t *env, const char *short_name) {
+  for (u64 i = 0; i < env->constructor_count; i++) {
+    const char *full = env->constructors[i]->name;
+    const char *sep = strstr(full, "::");
+    if (sep && strcmp(sep + 2, short_name) == 0)
+      return env->constructors[i];
+  }
+  return NULL;
+}
+
 static valk_lval_t *transform_accessor(valk_type_env_t *env, const char *sym, valk_lval_t *arg) {
   char *colon = strchr(sym, ':');
   u64 ctor_len = colon - sym;
@@ -245,6 +260,7 @@ static valk_lval_t *transform_accessor(valk_type_env_t *env, const char *sym, va
   const char *field_name_raw = colon;
 
   valk_constructor_t *ctor = valk_type_env_find_constructor(env, ctor_name);
+  if (!ctor) ctor = find_constructor_by_short_name(env, ctor_name);
   if (!ctor) {
     return valk_lval_err("unknown constructor '%s' in accessor '%s'", ctor_name, sym);
   }
@@ -300,15 +316,15 @@ static valk_lval_t *transform_match(valk_type_env_t *env, valk_lval_t *match_for
     valk_lval_t *pat_head = pattern->cons.head;
     if (LVAL_TYPE(pat_head) != LVAL_SYM) continue;
 
-    char *ctor_name = pat_head->str;
-    valk_constructor_t *ctor = valk_type_env_find_constructor(env, ctor_name);
+    valk_constructor_t *ctor = valk_type_env_find_constructor(env, pat_head->str);
+    if (!ctor) ctor = find_constructor_by_short_name(env, pat_head->str);
     if (!ctor) continue;
 
     valk_lval_t *cond = valk_lval_cons(valk_lval_sym("=="),
       valk_lval_cons(
         valk_lval_cons(valk_lval_sym("head"), valk_lval_cons(valk_lval_sym("__match_val"), valk_lval_nil())),
         valk_lval_cons(
-          valk_lval_cons(valk_lval_sym("head"), valk_lval_cons(valk_lval_qcons(valk_lval_sym(ctor_name), valk_lval_nil()), valk_lval_nil())),
+          valk_lval_cons(valk_lval_sym("head"), valk_lval_cons(valk_lval_qcons(valk_lval_sym(ctor->name), valk_lval_nil()), valk_lval_nil())),
           valk_lval_nil())));
 
     valk_lval_t *pat_args = pattern->cons.tail;
@@ -456,6 +472,7 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_lval_t *expr) {
     }
 
     valk_constructor_t *ctor = valk_type_env_find_constructor(env, head->str);
+    if (!ctor) ctor = find_constructor_by_short_name(env, head->str);
     if (ctor) {
       return transform_constructor_call(env, ctor, expr->cons.tail);
     }

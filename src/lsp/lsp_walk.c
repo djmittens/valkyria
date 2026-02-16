@@ -126,6 +126,14 @@ static void walk_sym(walk_ctx_t *w, valk_lval_t *expr) {
     return;
   }
 
+  if (name[0] >= 'A' && name[0] <= 'Z') {
+    const char *colon = strchr(name, ':');
+    if (colon && colon != name && colon[1] != '\0' && colon[1] != ':') {
+      emit_sym(w, name, SEM_VARIABLE, 0);
+      return;
+    }
+  }
+
   if (w->emit_diag) {
     char msg[256];
     snprintf(msg, sizeof(msg), "Symbol '%s' is not defined", name);
@@ -319,11 +327,14 @@ static void walk_binding(walk_ctx_t *w, const char *form, valk_lval_t *rest) {
 static void walk_type(walk_ctx_t *w, valk_lval_t *rest) {
   if (LVAL_TYPE(rest) != LVAL_CONS) return;
   valk_lval_t *type_name_q = valk_lval_head(rest);
+  const char *tname_str = NULL;
 
   if (type_name_q && LVAL_TYPE(type_name_q) == LVAL_CONS) {
     valk_lval_t *tname = valk_lval_head(type_name_q);
-    if (tname && LVAL_TYPE(tname) == LVAL_SYM)
+    if (tname && LVAL_TYPE(tname) == LVAL_SYM) {
+      tname_str = tname->str;
       emit_sym(w, tname->str, SEM_TYPE, SEM_MOD_DEFINITION);
+    }
     valk_lval_t *tparams = valk_lval_tail(type_name_q);
     while (tparams && LVAL_TYPE(tparams) == LVAL_CONS) {
       valk_lval_t *tp = valk_lval_head(tparams);
@@ -333,6 +344,13 @@ static void walk_type(walk_ctx_t *w, valk_lval_t *rest) {
     }
   }
 
+  valk_lval_t *first_variant = valk_lval_head(valk_lval_tail(rest));
+  bool is_product = first_variant && LVAL_TYPE(first_variant) == LVAL_CONS &&
+    valk_lval_head(first_variant) && LVAL_TYPE(valk_lval_head(first_variant)) == LVAL_SYM &&
+    valk_lval_head(first_variant)->str[0] == ':';
+  if (is_product && tname_str)
+    symset_add(w->globals, tname_str);
+
   valk_lval_t *variants = valk_lval_tail(rest);
   while (variants && LVAL_TYPE(variants) == LVAL_CONS) {
     valk_lval_t *variant = valk_lval_head(variants);
@@ -340,6 +358,11 @@ static void walk_type(walk_ctx_t *w, valk_lval_t *rest) {
       valk_lval_t *ctor = valk_lval_head(variant);
       if (ctor && LVAL_TYPE(ctor) == LVAL_SYM) {
         symset_add(w->globals, ctor->str);
+        if (tname_str && ctor->str[0] != ':') {
+          char qname[256];
+          snprintf(qname, sizeof(qname), "%s::%s", tname_str, ctor->str);
+          symset_add(w->globals, qname);
+        }
         emit_sym(w, ctor->str, SEM_ENUM_MEMBER, SEM_MOD_DEFINITION);
       }
       valk_lval_t *fields = valk_lval_tail(variant);

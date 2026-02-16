@@ -204,13 +204,16 @@ static void handle_inlay_hint_impl(int id, json_value_t *params) {
     if (i > 0) *p++ = ',';
     lsp_pos_t pos = offset_to_pos(doc->text, hints[i].offset);
     char *escaped = json_escape_string(hints[i].label);
+    bool is_param = hints[i].kind == INLAY_PARAM;
     p += snprintf(p, end - p,
       "{\"position\":{\"line\":%d,\"character\":%d},"
       "\"label\":%s,"
       "\"kind\":%d,"
-      "\"paddingLeft\":true,"
-      "\"paddingRight\":false}",
-      pos.line, pos.col, escaped, hints[i].kind);
+      "\"paddingLeft\":%s,"
+      "\"paddingRight\":%s}",
+      pos.line, pos.col, escaped, hints[i].kind,
+      is_param ? "false" : "true",
+      is_param ? "true" : "false");
     free(escaped);
   }
   *p++ = ']';

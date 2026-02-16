@@ -138,6 +138,10 @@ char *lsp_type_at_pos(lsp_document_t *doc, int offset);
 // Load graph (lsp_loads.c)
 void uri_to_path(const char *uri, char *path, size_t path_size);
 void build_global_symset(lsp_document_t *doc, lsp_symset_t *globals);
+typedef void (*lsp_load_callback_fn)(const char *contents, const char *real_path,
+                                     void *ctx);
+void lsp_for_each_load(const char *text, const char *base_dir,
+                       lsp_symset_t *visited, lsp_load_callback_fn cb, void *ctx);
 
 // AST walker (lsp_walk.c)
 void check_and_sem_pass(lsp_document_t *doc, bool emit_sem);

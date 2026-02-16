@@ -86,6 +86,24 @@ static void emit_return_hint(infer_ctx_t *ctx, int offset, valk_type_t *ty) {
   add_hint(ctx, offset, INLAY_TYPE, ty, true);
 }
 
+static void emit_param_hint(infer_ctx_t *ctx, valk_lval_t *arg_node,
+                            const char *param_name) {
+  if (!ctx->collect_hints || !arg_node || !param_name) return;
+  int pos = arg_node->src_pos;
+  if (pos < 0) return;
+  if (ctx->hint_count >= ctx->hint_cap) {
+    ctx->hint_cap = ctx->hint_cap == 0 ? 32 : ctx->hint_cap * 2;
+    ctx->hints = realloc(ctx->hints, sizeof(lsp_inlay_hint_t) * ctx->hint_cap);
+  }
+  ctx->hints[ctx->hint_count++] = (lsp_inlay_hint_t){
+    .offset = pos,
+    .kind = INLAY_PARAM,
+    .label = strdup(param_name),
+    .type = nullptr,
+    .is_return = false,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Inference helpers
 // ---------------------------------------------------------------------------
@@ -181,25 +199,56 @@ static valk_type_t *infer_qexpr(infer_ctx_t *ctx, valk_lval_t *expr) {
       vals[n] = infer_expr(ctx, val);
       n++;
     }
+
+    for (int ri = 0; ri < ctx->plist_type_count; ri++) {
+      plist_type_reg_t *reg = &ctx->plist_types[ri];
+      if (reg->key_count > n) continue;
+      bool match = true;
+      for (int ki = 0; ki < reg->key_count && match; ki++) {
+        bool found = false;
+        for (int pi = 0; pi < n; pi++)
+          if (strcmp(reg->keys[ki], keys[pi]) == 0) { found = true; break; }
+        if (!found) match = false;
+      }
+      if (match) {
+        valk_type_t *fn = ty_resolve(scheme_instantiate(ctx->arena, reg->ctor_scheme));
+        if (fn->kind == TY_FUN) {
+          for (int ki = 0; ki < reg->key_count; ki++) {
+            for (int pi = 0; pi < n; pi++) {
+              if (strcmp(reg->keys[ki], keys[pi]) == 0 &&
+                  ki < fn->fun.param_count) {
+                ty_unify(ctx->arena, fn->fun.params[ki], vals[pi]);
+                break;
+              }
+            }
+          }
+          return ty_resolve(fn->fun.ret);
+        }
+        if (fn->kind == TY_NAMED) return fn;
+      }
+    }
+
     return ty_plist(ctx->arena, keys, vals, n);
   }
 
-  valk_type_t *elem_ty = nullptr;
+  valk_type_t *elem_types[TY_MAX_PARAMS];
+  int elem_count = 0;
   bool homogeneous = true;
   cur = expr;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
     valk_type_t *et = infer_expr(ctx, valk_lval_head(cur));
     et = ty_resolve(et);
-    if (!elem_ty) {
-      elem_ty = et;
-    } else if (homogeneous && !ty_equal(elem_ty, et)) {
+    if (elem_count < TY_MAX_PARAMS)
+      elem_types[elem_count] = et;
+    if (elem_count > 0 && homogeneous && !ty_equal(elem_types[0], et))
       homogeneous = false;
-    }
+    elem_count++;
     cur = valk_lval_tail(cur);
   }
-  if (homogeneous && elem_ty)
-    return ty_list(ctx->arena, elem_ty);
-  return ty_list(ctx->arena, ty_any(ctx->arena));
+  if (homogeneous && elem_count > 0)
+    return ty_list(ctx->arena, elem_types[0]);
+  int n = elem_count < TY_MAX_PARAMS ? elem_count : TY_MAX_PARAMS;
+  return ty_tuple(ctx->arena, elem_types, n);
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +364,10 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
 
     typed_scope_pop(inner);
 
-    return ty_fun(ctx->arena, pf.param_types, pf.param_count, body_ty, pf.variadic);
+    valk_type_t *fn = ty_fun(ctx->arena, pf.param_types, pf.param_count, body_ty, pf.variadic);
+    for (int i = 0; i < pf.param_count; i++)
+      fn->fun.param_names[i] = pf.param_nodes[i] ? pf.param_nodes[i]->str : nullptr;
+    return fn;
   }
 
   if (strcmp(name, "fun") == 0) {
@@ -354,14 +406,19 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
       typed_scope_pop(inner);
 
       valk_type_t *fn_ty = ty_fun(ctx->arena, pf.param_types, pf.param_count, body_ty, pf.variadic);
+      for (int i = 0; i < pf.param_count; i++)
+        fn_ty->fun.param_names[i] = pf.param_nodes[i] ? pf.param_nodes[i]->str : nullptr;
       if (fname && LVAL_TYPE(fname) == LVAL_SYM) {
         int floor = ctx->floor_var_id;
         type_scheme_t *sch = scheme_generalize(ctx->arena, fn_ty, floor);
-        typed_scope_add(ctx->scope, fname->str, sch);
+        bool has_failure = ty_has_inference_failure(ty_resolve(fn_ty));
+        type_scheme_t *existing = has_failure ? typed_scope_lookup(ctx->scope, fname->str) : nullptr;
+        if (!existing)
+          typed_scope_add(ctx->scope, fname->str, sch);
         if (ctx->hover_offset >= 0 && fname->src_pos >= 0 &&
             fname->src_pos <= ctx->hover_offset &&
             ctx->hover_offset < fname->src_pos + (int)strlen(fname->str))
-          ctx->hover_result = ty_resolve(fn_ty);
+          ctx->hover_result = ty_resolve(existing ? scheme_instantiate(ctx->arena, existing) : fn_ty);
         emit_return_hint(ctx, fname->src_pos + (int)strlen(fname->str), body_ty);
       }
       return fn_ty;
@@ -384,7 +441,34 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
         valk_lval_t *v = valk_lval_head(val_cur);
         if (s && LVAL_TYPE(s) == LVAL_SYM) {
           int floor = ctx->arena->next_var_id;
+          bool is_lambda = v && LVAL_TYPE(v) == LVAL_CONS && !(v->flags & LVAL_FLAG_QUOTED) &&
+            valk_lval_head(v) && LVAL_TYPE(valk_lval_head(v)) == LVAL_SYM &&
+            strcmp(valk_lval_head(v)->str, "\\") == 0;
+          valk_type_t *self_ret = nullptr;
+          if (is_lambda) {
+            valk_lval_t *lam_rest = valk_lval_tail(v);
+            valk_lval_t *formals_node = lam_rest ? valk_lval_head(lam_rest) : nullptr;
+            int arity = 0;
+            if (formals_node && LVAL_TYPE(formals_node) == LVAL_CONS) {
+              valk_lval_t *fc = formals_node;
+              while (fc && LVAL_TYPE(fc) == LVAL_CONS) {
+                valk_lval_t *p = valk_lval_head(fc);
+                if (p && LVAL_TYPE(p) == LVAL_SYM && strcmp(p->str, "&") == 0) break;
+                arity++;
+                fc = valk_lval_tail(fc);
+              }
+            }
+            valk_type_t *param_vars[TY_MAX_PARAMS];
+            for (int j = 0; j < arity && j < TY_MAX_PARAMS; j++)
+              param_vars[j] = ty_var(ctx->arena);
+            self_ret = ty_var(ctx->arena);
+            valk_type_t *self_fn = ty_fun(ctx->arena, param_vars,
+              arity < TY_MAX_PARAMS ? arity : TY_MAX_PARAMS, self_ret, false);
+            typed_scope_add_mono(ctx->scope, s->str, self_fn);
+          }
           valk_type_t *vt = infer_expr(ctx, v);
+          if (self_ret)
+            ty_unify(ctx->arena, self_ret, ty_resolve(vt)->kind == TY_FUN ? ty_resolve(vt)->fun.ret : vt);
           type_scheme_t *sch = scheme_generalize(ctx->arena, vt, floor);
           typed_scope_add(ctx->scope, s->str, sch);
           if (ctx->hover_offset >= 0 && s->src_pos >= 0 &&
@@ -493,6 +577,25 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
     return ty_any(ctx->arena);
   }
 
+  if (strcmp(name, "quasiquote") == 0) {
+    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_any(ctx->arena);
+    valk_lval_t *body = valk_lval_head(rest);
+    if (!body) return ty_any(ctx->arena);
+    if (LVAL_TYPE(body) == LVAL_CONS)
+      return infer_qexpr(ctx, body);
+    return infer_expr(ctx, body);
+  }
+
+  if (strcmp(name, "unquote") == 0) {
+    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_any(ctx->arena);
+    return infer_expr(ctx, valk_lval_head(rest));
+  }
+
+  if (strcmp(name, "unquote-splicing") == 0) {
+    infer_body(ctx, rest);
+    return ty_any(ctx->arena);
+  }
+
   if (strcmp(name, "load") == 0) {
     infer_body(ctx, rest);
     return ty_nil(ctx->arena);
@@ -557,7 +660,11 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
       }
     }
 
-    valk_type_t *body_ty = infer_body_last(ctx, body_rest);
+    valk_type_t *body_ty = ty_nil(ctx->arena);
+    while (body_rest && LVAL_TYPE(body_rest) == LVAL_CONS) {
+      body_ty = infer_expr(ctx, valk_lval_head(body_rest));
+      body_rest = valk_lval_tail(body_rest);
+    }
     ctx->scope = saved;
     typed_scope_pop(inner);
     return ty_handle(ctx->arena, body_ty);
@@ -654,11 +761,14 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
 
     // Auto-discover type params from constructor fields
     // (type {Option} {Some :value a} {None}) — 'a' is implicit param
+    // (type {Pair} {:fst a :snd b}) — nameless keyword variant
     valk_lval_t *vt = valk_lval_tail(rest);
     while (vt && LVAL_TYPE(vt) == LVAL_CONS && param_count < TY_MAX_PARAMS) {
       valk_lval_t *variant = valk_lval_head(vt);
       if (variant && LVAL_TYPE(variant) == LVAL_CONS) {
-        valk_lval_t *fields = valk_lval_tail(variant);
+        valk_lval_t *fe = valk_lval_head(variant);
+        bool nameless = fe && LVAL_TYPE(fe) == LVAL_SYM && fe->str[0] == ':';
+        valk_lval_t *fields = nameless ? variant : valk_lval_tail(variant);
         valk_lval_t *first_fld = (fields && LVAL_TYPE(fields) == LVAL_CONS)
           ? valk_lval_head(fields) : nullptr;
         bool kw = first_fld && LVAL_TYPE(first_fld) == LVAL_SYM
@@ -668,7 +778,8 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
           if (kw) { fc = valk_lval_tail(fc); if (!fc || LVAL_TYPE(fc) != LVAL_CONS) break; }
           valk_lval_t *ts = valk_lval_head(fc);
           fc = valk_lval_tail(fc);
-          if (ts && LVAL_TYPE(ts) == LVAL_SYM && ts->str[0] != ':') {
+          if (ts && LVAL_TYPE(ts) == LVAL_SYM && ts->str[0] != ':' &&
+              ts->str[0] >= 'a' && ts->str[0] <= 'z') {
             bool found = false;
             for (int i = 0; i < param_count; i++)
               if (strcmp(param_names[i], ts->str) == 0) { found = true; break; }
@@ -691,9 +802,17 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
       valk_lval_t *variant = valk_lval_head(variants);
       if (variant && LVAL_TYPE(variant) == LVAL_CONS &&
           (variant->flags & LVAL_FLAG_QUOTED)) {
-        valk_lval_t *ctor_name_v = valk_lval_head(variant);
-        if (ctor_name_v && LVAL_TYPE(ctor_name_v) == LVAL_SYM) {
-          valk_lval_t *fields = valk_lval_tail(variant);
+        valk_lval_t *first_elem = valk_lval_head(variant);
+        bool nameless_kw = first_elem && LVAL_TYPE(first_elem) == LVAL_SYM
+          && first_elem->str[0] == ':';
+
+        const char *ctor_name = nameless_kw ? type_name : nullptr;
+        valk_lval_t *fields = nameless_kw ? variant : valk_lval_tail(variant);
+
+        if (!nameless_kw && first_elem && LVAL_TYPE(first_elem) == LVAL_SYM)
+          ctor_name = first_elem->str;
+
+        if (ctor_name) {
           int field_count = 0;
           valk_type_t *field_types[TY_MAX_PARAMS];
 
@@ -702,7 +821,26 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
           bool keyword_style = first_field && LVAL_TYPE(first_field) == LVAL_SYM
             && first_field->str[0] == ':';
 
+          const char *field_keys[TY_MAX_PARAMS];
           valk_lval_t *fc = fields;
+
+#define RESOLVE_FIELD_TYPE(sym_str) ({                          \
+  valk_type_t *_ft = NULL;                                     \
+  for (int _i = 0; _i < param_count; _i++) {                  \
+    if (strcmp((sym_str), param_names[_i]) == 0)                \
+      { _ft = param_vars[_i]; break; }                         \
+  }                                                            \
+  if (!_ft) {                                                  \
+    if (strcmp((sym_str), "Num") == 0) _ft = ty_num(ctx->arena);\
+    else if (strcmp((sym_str), "Str") == 0) _ft = ty_str(ctx->arena);\
+    else if (strcmp((sym_str), "Sym") == 0) _ft = ty_sym(ctx->arena);\
+    else if (strcmp((sym_str), "Nil") == 0) _ft = ty_nil(ctx->arena);\
+    else if (strcmp((sym_str), "Err") == 0) _ft = ty_err(ctx->arena);\
+    else _ft = ty_var(ctx->arena);                             \
+  }                                                            \
+  _ft;                                                         \
+})
+
           if (keyword_style) {
             while (fc && LVAL_TYPE(fc) == LVAL_CONS && field_count < TY_MAX_PARAMS) {
               valk_lval_t *key = valk_lval_head(fc);
@@ -712,32 +850,21 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
               fc = valk_lval_tail(fc);
               if (key && LVAL_TYPE(key) == LVAL_SYM && key->str[0] == ':' &&
                   type_sym && LVAL_TYPE(type_sym) == LVAL_SYM) {
-                valk_type_t *ft = ty_any(ctx->arena);
-                for (int i = 0; i < param_count; i++) {
-                  if (strcmp(type_sym->str, param_names[i]) == 0) {
-                    ft = param_vars[i];
-                    break;
-                  }
-                }
-                field_types[field_count++] = ft;
+                field_keys[field_count] = key->str + 1;
+                field_types[field_count++] = RESOLVE_FIELD_TYPE(type_sym->str);
               }
             }
           } else {
             while (fc && LVAL_TYPE(fc) == LVAL_CONS && field_count < TY_MAX_PARAMS) {
               valk_lval_t *type_sym = valk_lval_head(fc);
               fc = valk_lval_tail(fc);
-              valk_type_t *ft = ty_any(ctx->arena);
-              if (type_sym && LVAL_TYPE(type_sym) == LVAL_SYM) {
-                for (int i = 0; i < param_count; i++) {
-                  if (strcmp(type_sym->str, param_names[i]) == 0) {
-                    ft = param_vars[i];
-                    break;
-                  }
-                }
-              }
-              field_types[field_count++] = ft;
+              if (type_sym && LVAL_TYPE(type_sym) == LVAL_SYM)
+                field_types[field_count++] = RESOLVE_FIELD_TYPE(type_sym->str);
+              else
+                field_types[field_count++] = ty_var(ctx->arena);
             }
           }
+#undef RESOLVE_FIELD_TYPE
 
           valk_type_t *ctor_ty;
           if (field_count == 0)
@@ -746,7 +873,38 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
             ctor_ty = ty_fun(ctx->arena, field_types, field_count,
                              result_ty, false);
           type_scheme_t *sch = scheme_generalize(ctx->arena, ctor_ty, type_floor);
-          typed_scope_add(ctx->scope, ctor_name_v->str, sch);
+          typed_scope_add(ctx->scope, ctor_name, sch);
+
+          if (!nameless_kw) {
+            char qname[256];
+            snprintf(qname, sizeof(qname), "%s::%s", type_name, ctor_name);
+            typed_scope_add(ctx->scope, qname, sch);
+          }
+
+          if (keyword_style && field_count > 0) {
+            if (ctx->plist_type_count < MAX_PLIST_TYPES) {
+              plist_type_reg_t *reg = &ctx->plist_types[ctx->plist_type_count++];
+              reg->name = ctor_name;
+              reg->key_count = field_count;
+              reg->ctor_scheme = sch;
+              for (int i = 0; i < field_count; i++)
+                reg->keys[i] = field_keys[i];
+            }
+            for (int fi = 0; fi < field_count; fi++) {
+              valk_type_t *acc_param = result_ty;
+              valk_type_t *acc_fn = ty_fun(ctx->arena, &acc_param, 1,
+                                           field_types[fi], false);
+              type_scheme_t *acc_sch = scheme_generalize(ctx->arena, acc_fn, type_floor);
+              char acc_name[256];
+              snprintf(acc_name, sizeof(acc_name), "%s:%s", ctor_name, field_keys[fi]);
+              typed_scope_add(ctx->scope, acc_name, acc_sch);
+              if (!nameless_kw) {
+                char qacc[256];
+                snprintf(qacc, sizeof(qacc), "%s::%s:%s", type_name, ctor_name, field_keys[fi]);
+                typed_scope_add(ctx->scope, qacc, acc_sch);
+              }
+            }
+          }
         }
       }
       variants = valk_lval_tail(variants);
@@ -899,10 +1057,36 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
     valk_type_t *fn_ty = ty_resolve(scheme_instantiate(ctx->arena, fn_scheme));
 
     if (fn_ty->kind == TY_FUN) {
+      valk_lval_t *first_arg = (rest && LVAL_TYPE(rest) == LVAL_CONS)
+        ? valk_lval_head(rest) : NULL;
+      bool kw_call = first_arg && LVAL_TYPE(first_arg) == LVAL_SYM &&
+        first_arg->str[0] == ':' && fn_ty->fun.param_count > 0;
+      if (kw_call) {
+        valk_lval_t *kc = rest;
+        while (kc && LVAL_TYPE(kc) == LVAL_CONS) {
+          valk_lval_t *key = valk_lval_head(kc);
+          kc = valk_lval_tail(kc);
+          if (!kc || LVAL_TYPE(kc) != LVAL_CONS) break;
+          valk_lval_t *val = valk_lval_head(kc);
+          kc = valk_lval_tail(kc);
+          valk_type_t *val_ty = infer_expr(ctx, val);
+          if (key && LVAL_TYPE(key) == LVAL_SYM && key->str[0] == ':') {
+            for (int pi = 0; pi < fn_ty->fun.param_count; pi++) {
+              const char *pn = fn_ty->fun.param_names[pi];
+              if (pn && strcmp(key->str + 1, pn) == 0) {
+                ty_unify(ctx->arena, fn_ty->fun.params[pi], val_ty);
+                break;
+              }
+            }
+          }
+        }
+        return ty_resolve(fn_ty->fun.ret);
+      }
       int nargs = infer_count_list(rest);
       valk_lval_t *arg_cur = rest;
       for (int i = 0; i < nargs && arg_cur && LVAL_TYPE(arg_cur) == LVAL_CONS; i++) {
-        valk_type_t *arg_ty = infer_expr(ctx, valk_lval_head(arg_cur));
+        valk_lval_t *arg_node = valk_lval_head(arg_cur);
+        valk_type_t *arg_ty = infer_expr(ctx, arg_node);
 
         int pi = i;
         if (fn_ty->fun.variadic && i >= fn_ty->fun.param_count)
@@ -911,11 +1095,16 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
           pi = -1;
 
         if (pi >= 0 && pi < fn_ty->fun.param_count) {
+          const char *pn = fn_ty->fun.param_names[pi];
+          if (pn && !(arg_node && LVAL_TYPE(arg_node) == LVAL_SYM &&
+                      strcmp(arg_node->str, pn) == 0))
+            emit_param_hint(ctx, arg_node, pn);
           valk_type_t *expected = ty_resolve(fn_ty->fun.params[pi]);
           valk_type_t *actual = ty_resolve(arg_ty);
 
           if (actual->kind != TY_ANY && expected->kind != TY_ANY &&
-              expected->kind != TY_VAR && actual->kind != TY_VAR) {
+              expected->kind != TY_VAR && actual->kind != TY_VAR &&
+              !ty_has_unresolved_var(expected) && !ty_has_unresolved_var(actual)) {
             if (!ty_compatible(expected, actual))
               emit_type_error(ctx, name, i, expected, actual);
           }
@@ -927,7 +1116,7 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
       return ty_resolve(fn_ty->fun.ret);
     }
 
-    if (fn_ty->kind == TY_VAR && rest && LVAL_TYPE(rest) == LVAL_CONS) {
+    if (fn_ty->kind == TY_VAR) {
       int nargs = infer_count_list(rest);
       int n = nargs < TY_MAX_PARAMS ? nargs : TY_MAX_PARAMS;
       valk_type_t *arg_tys[TY_MAX_PARAMS];

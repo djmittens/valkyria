@@ -101,6 +101,15 @@ valk_type_t *ty_fun(type_arena_t *a, valk_type_t **params, int n, valk_type_t *r
   return ty;
 }
 
+valk_type_t *ty_fun_named(type_arena_t *a, valk_type_t **params,
+                          const char **names, int n,
+                          valk_type_t *ret, bool variadic) {
+  valk_type_t *ty = ty_fun(a, params, n, ret, variadic);
+  for (int i = 0; i < ty->fun.param_count; i++)
+    ty->fun.param_names[i] = names ? names[i] : nullptr;
+  return ty;
+}
+
 valk_type_t *ty_var(type_arena_t *a) {
   valk_type_t *ty = type_arena_alloc(a);
   ty->kind = TY_VAR;
@@ -130,6 +139,15 @@ valk_type_t *ty_plist(type_arena_t *a, const char **keys, valk_type_t **vals, in
   return ty;
 }
 
+valk_type_t *ty_tuple(type_arena_t *a, valk_type_t **elems, int n) {
+  valk_type_t *ty = type_arena_alloc(a);
+  ty->kind = TY_TUPLE;
+  ty->tuple.count = n < TY_MAX_PARAMS ? n : TY_MAX_PARAMS;
+  for (int i = 0; i < ty->tuple.count; i++)
+    ty->tuple.elems[i] = elems[i];
+  return ty;
+}
+
 valk_type_t *ty_plist_get(const valk_type_t *ty, const char *key) {
   if (!ty || ty->kind != TY_PLIST) return nullptr;
   for (int i = 0; i < ty->plist.count; i++)
@@ -150,6 +168,13 @@ static bool union_contains(const valk_type_t *u, const valk_type_t *t) {
   return ty_equal(u, t);
 }
 
+static bool union_member_subsumed(const valk_type_t *existing, const valk_type_t *candidate) {
+  const valk_type_t *e = ty_resolve((valk_type_t *)existing);
+  const valk_type_t *c = ty_resolve((valk_type_t *)candidate);
+  if (e->kind == TY_HANDLE && ty_equal(e->handle.inner, c)) return true;
+  return false;
+}
+
 valk_type_t *ty_union2(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
   t1 = ty_resolve(t1);
   t2 = ty_resolve(t2);
@@ -157,6 +182,9 @@ valk_type_t *ty_union2(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
   if (t1->kind == TY_ANY || t2->kind == TY_ANY) return ty_any(a);
   if (t1->kind == TY_NEVER) return t2;
   if (t2->kind == TY_NEVER) return t1;
+
+  if (t1->kind == TY_HANDLE && ty_equal(t1->handle.inner, t2)) return t1;
+  if (t2->kind == TY_HANDLE && ty_equal(t2->handle.inner, t1)) return t2;
 
   valk_type_t *ty = type_arena_alloc(a);
   ty->kind = TY_UNION;
@@ -171,11 +199,36 @@ valk_type_t *ty_union2(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
 
   if (t2->kind == TY_UNION) {
     for (int i = 0; i < t2->onion.count; i++) {
-      if (!union_contains(ty, t2->onion.members[i]) && ty->onion.count < TY_MAX_UNION)
-        ty->onion.members[ty->onion.count++] = t2->onion.members[i];
+      valk_type_t *m = ty_resolve(t2->onion.members[i]);
+      bool skip = union_contains(ty, m);
+      if (!skip) {
+        for (int j = 0; j < ty->onion.count; j++) {
+          if (union_member_subsumed(ty->onion.members[j], m) ||
+              union_member_subsumed(m, ty->onion.members[j])) {
+            if (m->kind == TY_HANDLE)
+              ty->onion.members[j] = m;
+            skip = true;
+            break;
+          }
+        }
+      }
+      if (!skip && ty->onion.count < TY_MAX_UNION)
+        ty->onion.members[ty->onion.count++] = m;
     }
   } else {
-    if (!union_contains(ty, t2) && ty->onion.count < TY_MAX_UNION)
+    bool skip = union_contains(ty, t2);
+    if (!skip) {
+      for (int j = 0; j < ty->onion.count; j++) {
+        if (union_member_subsumed(ty->onion.members[j], t2) ||
+            union_member_subsumed(t2, ty->onion.members[j])) {
+          if (t2->kind == TY_HANDLE)
+            ty->onion.members[j] = t2;
+          skip = true;
+          break;
+        }
+      }
+    }
+    if (!skip && ty->onion.count < TY_MAX_UNION)
       ty->onion.members[ty->onion.count++] = t2;
   }
 
@@ -233,6 +286,7 @@ const char *valk_type_name(const valk_type_t *ty) {
   if (r->kind == TY_UNION) return "Union";
   if (r->kind == TY_NAMED) return r->named.name;
   if (r->kind == TY_PLIST) return "PList";
+  if (r->kind == TY_TUPLE) return "Tuple";
   return "?";
 }
 
@@ -277,6 +331,10 @@ static void collect_vars(const valk_type_t *ty, var_map_t *m) {
   case TY_PLIST:
     for (int i = 0; i < r->plist.count; i++)
       collect_vars(r->plist.vals[i], m);
+    break;
+  case TY_TUPLE:
+    for (int i = 0; i < r->tuple.count; i++)
+      collect_vars(r->tuple.elems[i], m);
     break;
   default: break;
   }
@@ -375,6 +433,17 @@ static char *type_display_impl(const valk_type_t *ty, var_map_t *m) {
     pos += snprintf(buf + pos, sizeof(buf) - pos, ")");
     return strdup(buf);
 
+  case TY_TUPLE:
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "(");
+    for (int i = 0; i < r->tuple.count && pos < 240; i++) {
+      if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
+      char *e = type_display_impl(r->tuple.elems[i], m);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s", e);
+      free(e);
+    }
+    pos += snprintf(buf + pos, sizeof(buf) - pos, ")");
+    return strdup(buf);
+
   default:
     return strdup("?");
   }
@@ -454,6 +523,12 @@ bool ty_equal(const valk_type_t *a, const valk_type_t *b) {
     }
     return true;
 
+  case TY_TUPLE:
+    if (ra->tuple.count != rb->tuple.count) return false;
+    for (int i = 0; i < ra->tuple.count; i++)
+      if (!ty_equal(ra->tuple.elems[i], rb->tuple.elems[i])) return false;
+    return true;
+
   default:
     return false;
   }
@@ -486,6 +561,10 @@ bool ty_occurs(int var_id, valk_type_t *ty) {
     for (int i = 0; i < ty->plist.count; i++)
       if (ty_occurs(var_id, ty->plist.vals[i])) return true;
     return false;
+  case TY_TUPLE:
+    for (int i = 0; i < ty->tuple.count; i++)
+      if (ty_occurs(var_id, ty->tuple.elems[i])) return true;
+    return false;
   default: return false;
   }
 }
@@ -517,6 +596,8 @@ bool ty_unify(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
   if (t1->kind == TY_LIST && t2->kind == TY_NIL) return true;
   if (t1->kind == TY_PLIST && t2->kind == TY_LIST) return true;
   if (t1->kind == TY_LIST && t2->kind == TY_PLIST) return true;
+  if (t1->kind == TY_TUPLE && t2->kind == TY_LIST) return true;
+  if (t1->kind == TY_LIST && t2->kind == TY_TUPLE) return true;
 
   if (t1->kind != t2->kind) return false;
 
@@ -560,8 +641,123 @@ bool ty_unify(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
     return true;
   }
 
+  case TY_TUPLE: {
+    if (t1->tuple.count != t2->tuple.count) return false;
+    for (int i = 0; i < t1->tuple.count; i++)
+      if (!ty_unify(a, t1->tuple.elems[i], t2->tuple.elems[i])) return false;
+    return true;
+  }
+
   default:
     return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Check if a type contains any unresolved type variables (deeply).
+// Used to suppress false-positive type errors when types are incomplete.
+// ---------------------------------------------------------------------------
+
+bool ty_has_unresolved_var(const valk_type_t *ty) {
+  if (!ty) return false;
+  valk_type_t *t = ty_resolve((valk_type_t *)ty);
+  switch (t->kind) {
+  case TY_VAR: return true;
+  case TY_LIST: return ty_has_unresolved_var(t->list.elem);
+  case TY_HANDLE: return ty_has_unresolved_var(t->handle.inner);
+  case TY_FUN:
+    for (int i = 0; i < t->fun.param_count; i++)
+      if (ty_has_unresolved_var(t->fun.params[i])) return true;
+    return ty_has_unresolved_var(t->fun.ret);
+  case TY_UNION:
+    for (int i = 0; i < t->onion.count; i++)
+      if (ty_has_unresolved_var(t->onion.members[i])) return true;
+    return false;
+  case TY_NAMED:
+    for (int i = 0; i < t->named.param_count; i++)
+      if (ty_has_unresolved_var(t->named.params[i])) return true;
+    return false;
+  case TY_PLIST:
+    for (int i = 0; i < t->plist.count; i++)
+      if (ty_has_unresolved_var(t->plist.vals[i])) return true;
+    return false;
+  case TY_TUPLE:
+    for (int i = 0; i < t->tuple.count; i++)
+      if (ty_has_unresolved_var(t->tuple.elems[i])) return true;
+    return false;
+  default: return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Check if a type contains TY_ANY anywhere (deeply).
+// Used to flag bindings like (A -> ??) where ?? is hidden inside.
+// ---------------------------------------------------------------------------
+
+bool ty_contains_any(const valk_type_t *ty) {
+  if (!ty) return false;
+  valk_type_t *t = ty_resolve((valk_type_t *)ty);
+  switch (t->kind) {
+  case TY_ANY: return true;
+  case TY_LIST: return ty_contains_any(t->list.elem);
+  case TY_HANDLE: return ty_contains_any(t->handle.inner);
+  case TY_FUN:
+    for (int i = 0; i < t->fun.param_count; i++)
+      if (ty_contains_any(t->fun.params[i])) return true;
+    return ty_contains_any(t->fun.ret);
+  case TY_UNION:
+    for (int i = 0; i < t->onion.count; i++)
+      if (ty_contains_any(t->onion.members[i])) return true;
+    return false;
+  case TY_NAMED:
+    for (int i = 0; i < t->named.param_count; i++)
+      if (ty_contains_any(t->named.params[i])) return true;
+    return false;
+  case TY_PLIST:
+    for (int i = 0; i < t->plist.count; i++)
+      if (ty_contains_any(t->plist.vals[i])) return true;
+    return false;
+  case TY_TUPLE:
+    for (int i = 0; i < t->tuple.count; i++)
+      if (ty_contains_any(t->tuple.elems[i])) return true;
+    return false;
+  default: return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Check if a type contains TY_ANY inside data wrapper types but NOT inside
+// functions. Catches Handle(??), List(??), Named(??), PList(key: ??),
+// (Num, ??) but not (?? -> ??) which is legitimate polymorphism in lambdas.
+// Stops recursion at TY_FUN boundaries entirely.
+// ---------------------------------------------------------------------------
+
+bool ty_has_inference_failure(const valk_type_t *ty) {
+  if (!ty) return false;
+  valk_type_t *t = ty_resolve((valk_type_t *)ty);
+  switch (t->kind) {
+  case TY_ANY: return true;
+  case TY_LIST: return ty_has_inference_failure(t->list.elem);
+  case TY_HANDLE: return ty_has_inference_failure(t->handle.inner);
+  case TY_FUN:
+    return ty_has_inference_failure(t->fun.ret);
+  case TY_UNION:
+    for (int i = 0; i < t->onion.count; i++)
+      if (ty_has_inference_failure(t->onion.members[i])) return true;
+    return false;
+  case TY_NAMED:
+    for (int i = 0; i < t->named.param_count; i++)
+      if (ty_has_inference_failure(t->named.params[i])) return true;
+    return false;
+  case TY_PLIST:
+    for (int i = 0; i < t->plist.count; i++)
+      if (ty_has_inference_failure(t->plist.vals[i])) return true;
+    return false;
+  case TY_TUPLE:
+    for (int i = 0; i < t->tuple.count; i++)
+      if (ty_has_inference_failure(t->tuple.elems[i])) return true;
+    return false;
+  default: return false;
   }
 }
 
@@ -584,6 +780,8 @@ bool ty_compatible(const valk_type_t *expected, const valk_type_t *actual) {
   if (re->kind == TY_NIL && ra->kind == TY_LIST) return true;
   if (re->kind == TY_LIST && ra->kind == TY_PLIST) return true;
   if (re->kind == TY_PLIST && ra->kind == TY_LIST) return true;
+  if (re->kind == TY_LIST && ra->kind == TY_TUPLE) return true;
+  if (re->kind == TY_TUPLE && ra->kind == TY_LIST) return true;
 
   if (re->kind == TY_REF && ra->kind == TY_REF) {
     if (!re->ref.tag || !ra->ref.tag) return true;
@@ -636,6 +834,13 @@ bool ty_compatible(const valk_type_t *expected, const valk_type_t *actual) {
       if (strcmp(re->plist.keys[i], ra->plist.keys[i]) != 0) return false;
       if (!ty_compatible(re->plist.vals[i], ra->plist.vals[i])) return false;
     }
+    return true;
+  }
+
+  if (re->kind == TY_TUPLE && ra->kind == TY_TUPLE) {
+    if (re->tuple.count != ra->tuple.count) return false;
+    for (int i = 0; i < re->tuple.count; i++)
+      if (!ty_compatible(re->tuple.elems[i], ra->tuple.elems[i])) return false;
     return true;
   }
 
@@ -711,7 +916,10 @@ static valk_type_t *instantiate_rec(type_arena_t *a, valk_type_t *ty,
     valk_type_t *ret = instantiate_rec(a, ty->fun.ret, old_ids, new_vars, n);
     if (ret != ty->fun.ret) changed = true;
     if (!changed) return ty;
-    return ty_fun(a, params, ty->fun.param_count, ret, ty->fun.variadic);
+    valk_type_t *f = ty_fun(a, params, ty->fun.param_count, ret, ty->fun.variadic);
+    for (int i = 0; i < f->fun.param_count; i++)
+      f->fun.param_names[i] = ty->fun.param_names[i];
+    return f;
   }
 
   case TY_UNION: {
@@ -748,6 +956,17 @@ static valk_type_t *instantiate_rec(type_arena_t *a, valk_type_t *ty,
     }
     if (!changed) return ty;
     return ty_plist(a, (const char **)ty->plist.keys, vals, ty->plist.count);
+  }
+
+  case TY_TUPLE: {
+    bool changed = false;
+    valk_type_t *elems[TY_MAX_PARAMS];
+    for (int i = 0; i < ty->tuple.count; i++) {
+      elems[i] = instantiate_rec(a, ty->tuple.elems[i], old_ids, new_vars, n);
+      if (elems[i] != ty->tuple.elems[i]) changed = true;
+    }
+    if (!changed) return ty;
+    return ty_tuple(a, elems, ty->tuple.count);
   }
 
   default:
@@ -795,6 +1014,10 @@ static void collect_free_vars(valk_type_t *ty, int floor,
   case TY_PLIST:
     for (int i = 0; i < ty->plist.count; i++)
       collect_free_vars(ty->plist.vals[i], floor, ids, count, max);
+    return;
+  case TY_TUPLE:
+    for (int i = 0; i < ty->tuple.count; i++)
+      collect_free_vars(ty->tuple.elems[i], floor, ids, count, max);
     return;
   default: return;
   }

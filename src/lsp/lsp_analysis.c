@@ -17,7 +17,9 @@ static void check_types(lsp_document_t *doc) {
   type_arena_init(&arena);
 
   typed_scope_t *top = typed_scope_push(&arena, nullptr);
-  init_typed_scope_with_loads(&arena, top, doc);
+  plist_type_reg_t plist_regs[MAX_PLIST_TYPES];
+  int plist_count = 0;
+  init_typed_scope_with_plist_reg(&arena, top, doc, plist_regs, &plist_count);
 
   const char *text = doc->text;
   int pos = 0;
@@ -37,7 +39,9 @@ static void check_types(lsp_document_t *doc) {
     .hint_count = 0,
     .hint_cap = 0,
     .collect_hints = true,
+    .plist_type_count = plist_count,
   };
+  memcpy(ctx.plist_types, plist_regs, plist_count * sizeof(plist_type_reg_t));
 
   while (pos < len) {
     while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
@@ -56,8 +60,9 @@ static void check_types(lsp_document_t *doc) {
   }
 
   for (size_t i = 0; i < ctx.hint_count; i++) {
-    valk_type_t *ty = ty_resolve(ctx.hints[i].type);
-    if (ty->kind != TY_ANY || ctx.hints[i].is_return) continue;
+    if (ctx.hints[i].kind == INLAY_PARAM) { free(ctx.hints[i].label); continue; }
+    valk_type_t *ty = ctx.hints[i].type ? ty_resolve(ctx.hints[i].type) : nullptr;
+    if (!ty || !ty_has_inference_failure(ty) || ctx.hints[i].is_return) continue;
     int end = ctx.hints[i].offset;
     int start = end - 1;
     while (start > 0 && text[start - 1] != ' ' && text[start - 1] != '('
@@ -86,7 +91,9 @@ void lsp_collect_inlay_hints(lsp_document_t *doc,
   type_arena_init(&arena);
 
   typed_scope_t *top = typed_scope_push(&arena, nullptr);
-  init_typed_scope_with_loads(&arena, top, doc);
+  plist_type_reg_t plist_regs2[MAX_PLIST_TYPES];
+  int plist_count2 = 0;
+  init_typed_scope_with_plist_reg(&arena, top, doc, plist_regs2, &plist_count2);
 
   const char *text = doc->text;
   int pos = 0;
@@ -106,7 +113,9 @@ void lsp_collect_inlay_hints(lsp_document_t *doc,
     .hint_count = 0,
     .hint_cap = 0,
     .collect_hints = true,
+    .plist_type_count = plist_count2,
   };
+  memcpy(ctx.plist_types, plist_regs2, plist_count2 * sizeof(plist_type_reg_t));
 
   while (pos < len) {
     while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
@@ -126,8 +135,18 @@ void lsp_collect_inlay_hints(lsp_document_t *doc,
 
   size_t out_n = 0;
   for (size_t i = 0; i < ctx.hint_count; i++) {
-    valk_type_t *ty = ty_resolve(ctx.hints[i].type);
-    if (ty->kind == TY_VAR || ty->kind == TY_ANY) continue;
+    if (ctx.hints[i].kind == INLAY_PARAM) {
+      if (!ctx.hints[i].label) continue;
+      char buf[128];
+      snprintf(buf, sizeof(buf), "%s:", ctx.hints[i].label);
+      free(ctx.hints[i].label);
+      ctx.hints[out_n] = ctx.hints[i];
+      ctx.hints[out_n].label = strdup(buf);
+      out_n++;
+      continue;
+    }
+    valk_type_t *ty = ctx.hints[i].type ? ty_resolve(ctx.hints[i].type) : nullptr;
+    if (!ty || ty->kind == TY_VAR || ty->kind == TY_ANY) continue;
     char *display = valk_type_display_pretty(ty);
     char buf[256];
     snprintf(buf, sizeof(buf), "%s %s", ctx.hints[i].is_return ? "->" : "::", display);
@@ -152,7 +171,9 @@ char *lsp_type_at_pos(lsp_document_t *doc, int offset) {
   type_arena_init(&arena);
 
   typed_scope_t *top = typed_scope_push(&arena, nullptr);
-  init_typed_scope_with_loads(&arena, top, doc);
+  plist_type_reg_t plist_regs3[MAX_PLIST_TYPES];
+  int plist_count3 = 0;
+  init_typed_scope_with_plist_reg(&arena, top, doc, plist_regs3, &plist_count3);
 
   const char *text = doc->text;
   int pos = 0;
@@ -168,7 +189,9 @@ char *lsp_type_at_pos(lsp_document_t *doc, int offset) {
     .floor_var_id = arena.next_var_id,
     .hover_offset = offset,
     .hover_result = nullptr,
+    .plist_type_count = plist_count3,
   };
+  memcpy(ctx.plist_types, plist_regs3, plist_count3 * sizeof(plist_type_reg_t));
 
   while (pos < len) {
     while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
@@ -310,14 +333,23 @@ static void extract_symbols_visitor(valk_lval_t *expr, lsp_document_t *doc,
             }
           }
           lsp_pos_t p = offset_to_pos(text, form_start);
-          doc_add_symbol(doc, ctor->str, p.line, p.col, field_count, form_start, pos_end);
-          lsp_symbol_t *sym = &doc->symbols[doc->symbol_count - 1];
           char sig[256];
-          if (type_name)
+          if (type_name && ctor->str[0] != ':') {
+            char qname[256];
+            snprintf(qname, sizeof(qname), "%s::%s", type_name, ctor->str);
+            doc_add_symbol(doc, qname, p.line, p.col, field_count, form_start, pos_end);
             snprintf(sig, sizeof(sig), "(type %s) constructor", type_name);
-          else
-            snprintf(sig, sizeof(sig), "constructor");
-          sym->doc = strdup(sig);
+            doc->symbols[doc->symbol_count - 1].doc = strdup(sig);
+            doc_add_symbol(doc, ctor->str, p.line, p.col, field_count, form_start, pos_end);
+            doc->symbols[doc->symbol_count - 1].doc = strdup(sig);
+          } else {
+            doc_add_symbol(doc, ctor->str, p.line, p.col, field_count, form_start, pos_end);
+            if (type_name)
+              snprintf(sig, sizeof(sig), "(type %s) constructor", type_name);
+            else
+              snprintf(sig, sizeof(sig), "constructor");
+            doc->symbols[doc->symbol_count - 1].doc = strdup(sig);
+          }
         }
       }
       variants = valk_lval_tail(variants);

@@ -28,6 +28,7 @@ typedef enum {
   TY_NEVER,
   TY_NAMED,
   TY_PLIST,
+  TY_TUPLE,
   TY__COUNT,
 } valk_type_kind_e;
 
@@ -47,6 +48,7 @@ struct valk_type {
 
     struct {
       valk_type_t *params[TY_MAX_PARAMS];
+      const char *param_names[TY_MAX_PARAMS];
       int param_count;
       valk_type_t *ret;
       bool variadic;
@@ -73,6 +75,11 @@ struct valk_type {
       valk_type_t *vals[TY_MAX_PARAMS];
       int count;
     } plist;
+
+    struct {
+      valk_type_t *elems[TY_MAX_PARAMS];
+      int count;
+    } tuple;
   };
 };
 
@@ -115,12 +122,15 @@ valk_type_t *ty_list(type_arena_t *a, valk_type_t *elem);
 valk_type_t *ty_handle(type_arena_t *a, valk_type_t *inner);
 valk_type_t *ty_ref(type_arena_t *a, const char *tag);
 valk_type_t *ty_fun(type_arena_t *a, valk_type_t **params, int n, valk_type_t *ret, bool variadic);
+valk_type_t *ty_fun_named(type_arena_t *a, valk_type_t **params, const char **names, int n, valk_type_t *ret, bool variadic);
 valk_type_t *ty_var(type_arena_t *a);
 
 valk_type_t *ty_named(type_arena_t *a, const char *name, valk_type_t **params, int n);
 
 valk_type_t *ty_plist(type_arena_t *a, const char **keys, valk_type_t **vals, int n);
 valk_type_t *ty_plist_get(const valk_type_t *plist, const char *key);
+
+valk_type_t *ty_tuple(type_arena_t *a, valk_type_t **elems, int n);
 
 valk_type_t *ty_union2(type_arena_t *a, valk_type_t *t1, valk_type_t *t2);
 valk_type_t *ty_union3(type_arena_t *a, valk_type_t *t1, valk_type_t *t2, valk_type_t *t3);
@@ -135,6 +145,9 @@ bool ty_equal(const valk_type_t *a, const valk_type_t *b);
 bool ty_compatible(const valk_type_t *expected, const valk_type_t *actual);
 bool ty_unify(type_arena_t *a, valk_type_t *t1, valk_type_t *t2);
 bool ty_occurs(int var_id, valk_type_t *ty);
+bool ty_has_unresolved_var(const valk_type_t *ty);
+bool ty_contains_any(const valk_type_t *ty);
+bool ty_has_inference_failure(const valk_type_t *ty);
 
 const char *valk_type_name(const valk_type_t *ty);
 char *valk_type_display(const valk_type_t *ty);
@@ -203,6 +216,15 @@ typedef struct {
   bool is_return;
 } lsp_inlay_hint_t;
 
+#define MAX_PLIST_TYPES 32
+
+typedef struct {
+  const char *name;
+  const char *keys[TY_MAX_PARAMS];
+  int key_count;
+  type_scheme_t *ctor_scheme;
+} plist_type_reg_t;
+
 typedef struct {
   type_arena_t *arena;
   typed_scope_t *scope;
@@ -216,6 +238,8 @@ typedef struct {
   size_t hint_count;
   size_t hint_cap;
   bool collect_hints;
+  plist_type_reg_t plist_types[MAX_PLIST_TYPES];
+  int plist_type_count;
 } infer_ctx_t;
 
 void infer_ctx_add_hint(infer_ctx_t *ctx, int offset, inlay_hint_kind_e kind,
@@ -278,6 +302,9 @@ void lsp_builtin_schemes_init(type_arena_t *a, typed_scope_t *scope);
 #include "lsp_doc.h"
 void init_typed_scope_with_loads(type_arena_t *arena, typed_scope_t *scope,
                                 lsp_document_t *doc);
+void init_typed_scope_with_plist_reg(type_arena_t *arena, typed_scope_t *scope,
+                                    lsp_document_t *doc,
+                                    plist_type_reg_t *out_regs, int *out_count);
 
 // Inlay hint collection (lsp_analysis.c)
 void lsp_collect_inlay_hints(lsp_document_t *doc,

@@ -33,6 +33,9 @@
   {LT}
   {EQ}
   {GT})
+
+(type {Response}
+  {:status Str :content-type Str :body Str})
  
 ; === Option utilities ===
 

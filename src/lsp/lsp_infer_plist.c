@@ -52,7 +52,7 @@ valk_type_t *infer_plist_get(infer_ctx_t *ctx, valk_lval_t *rest) {
       val_union = ty_join(ctx->arena, val_union, pl_ty->plist.vals[i]);
     return val_union->kind == TY_NEVER ? ty_any(ctx->arena) : val_union;
   }
-  return ty_any(ctx->arena);
+  return ty_var(ctx->arena);
 }
 
 valk_type_t *infer_plist_set(infer_ctx_t *ctx, valk_lval_t *rest) {

@@ -22,6 +22,7 @@ struct valk_symdb {
   sqlite3_stmt *stmt_invalidate_scopes;
   sqlite3_stmt *stmt_type_display;
   sqlite3_stmt *stmt_type_kind;
+  sqlite3_stmt *stmt_find_symbol_any;
 };
 
 // ---------------------------------------------------------------------------
@@ -130,6 +131,9 @@ static const char *SCHEMA_SQL =
 #define SQL_FIND_SYMBOL \
   "SELECT id FROM symbols WHERE name=?1 AND file_id=?2 LIMIT 1"
 
+#define SQL_FIND_SYMBOL_ANY \
+  "SELECT id FROM symbols WHERE name=?1 AND exported=1 LIMIT 1"
+
 #define SQL_INSERT_REF \
   "INSERT INTO refs (symbol_id, file_id, line, col, kind)" \
   " VALUES (?1, ?2, ?3, ?4, ?5)"
@@ -153,6 +157,14 @@ static const char *SCHEMA_SQL =
 
 #define SQL_TYPE_KIND \
   "SELECT kind FROM types WHERE id=?1"
+
+// ---------------------------------------------------------------------------
+// Raw DB access (for stats module)
+// ---------------------------------------------------------------------------
+
+sqlite3 *valk_symdb_get_raw_db(valk_symdb_t *sdb) {
+  return sdb ? sdb->db : NULL;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -215,6 +227,7 @@ valk_symdb_t *valk_symdb_open(const char *db_path) {
   sdb->stmt_invalidate_scopes = prepare(db, SQL_INVALIDATE_SCOPES);
   sdb->stmt_type_display    = prepare(db, SQL_TYPE_DISPLAY);
   sdb->stmt_type_kind       = prepare(db, SQL_TYPE_KIND);
+  sdb->stmt_find_symbol_any = prepare(db, SQL_FIND_SYMBOL_ANY);
 
   return sdb;
 }
@@ -240,6 +253,7 @@ void valk_symdb_close(valk_symdb_t *db) {
   finalize_stmt(&db->stmt_invalidate_scopes);
   finalize_stmt(&db->stmt_type_display);
   finalize_stmt(&db->stmt_type_kind);
+  finalize_stmt(&db->stmt_find_symbol_any);
   sqlite3_close(db->db);
   free(db);
 }
@@ -587,6 +601,17 @@ symdb_sym_id valk_symdb_find_symbol(valk_symdb_t *db, const char *name,
   sqlite3_reset(s);
   sqlite3_bind_text(s, 1, name, -1, SQLITE_TRANSIENT);
   sqlite3_bind_int64(s, 2, file_id);
+  symdb_sym_id result = -1;
+  if (sqlite3_step(s) == SQLITE_ROW)
+    result = sqlite3_column_int64(s, 0);
+  sqlite3_reset(s);
+  return result;
+}
+
+symdb_sym_id valk_symdb_find_symbol_any(valk_symdb_t *db, const char *name) {
+  sqlite3_stmt *s = db->stmt_find_symbol_any;
+  sqlite3_reset(s);
+  sqlite3_bind_text(s, 1, name, -1, SQLITE_TRANSIENT);
   symdb_sym_id result = -1;
   if (sqlite3_step(s) == SQLITE_ROW)
     result = sqlite3_column_int64(s, 0);

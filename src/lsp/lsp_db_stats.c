@@ -4,10 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Access the opaque struct's sqlite3 handle
-struct valk_symdb { sqlite3 *db; };
+sqlite3 *valk_symdb_get_raw_db(valk_symdb_t *db);
 
-static sqlite3 *get_db(valk_symdb_t *sdb) { return sdb->db; }
+static sqlite3 *get_db(valk_symdb_t *sdb) { return valk_symdb_get_raw_db(sdb); }
 
 // ---------------------------------------------------------------------------
 // Result helpers

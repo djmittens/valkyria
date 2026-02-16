@@ -142,6 +142,7 @@
 (printf "  ✓ Generated %d bytes for /stress/100mb\n" (len stress-100mb))
 (println "")
 
+
 ; Valkyria favicon - a stylized V with wings (SVG)
 (def {favicon-svg}
   (str "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\">"

@@ -97,6 +97,13 @@ int main(int argc, char* argv[]) {
         const char *dir = (i + 1 < argc) ? argv[++i] : ".";
         return valk_quality_snapshot(dir);
       }
+      if (strcmp(argv[i], "--lsp-check") == 0) {
+        if (i + 1 >= argc) {
+          fprintf(stderr, "Usage: valk --lsp-check <file.valk>\n");
+          return 1;
+        }
+        return valk_lsp_check(argv[++i]);
+      }
       if (strcmp(argv[i], "--script") == 0) {
         script_mode = true;
         continue;

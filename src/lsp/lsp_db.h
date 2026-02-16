@@ -87,7 +87,8 @@ symdb_sym_id valk_symdb_add_symbol(valk_symdb_t *db, const char *name,
                                    bool exported);
 
 symdb_sym_id valk_symdb_find_symbol(valk_symdb_t *db, const char *name,
-                                    symdb_file_id file_id);
+                                     symdb_file_id file_id);
+symdb_sym_id valk_symdb_find_symbol_any(valk_symdb_t *db, const char *name);
 
 // ---------------------------------------------------------------------------
 // References — uses of symbols

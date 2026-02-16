@@ -1,6 +1,7 @@
 #include "lsp_doc.h"
 #include "lsp_db.h"
 
+#include <libgen.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -308,6 +309,66 @@ static void emit_snapshot(valk_symdb_t *db, lsp_doc_store_t *store,
   symdb_stat_result_free(&fanout);
   symdb_coupling_result_free(&coupling);
   file_metrics_free(&fm);
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point — called from repl.c via --lsp-check
+// Headless diagnostic check: analyze a file and print all diagnostics.
+// ---------------------------------------------------------------------------
+
+int valk_lsp_check(const char *file_path) {
+  char resolved[PATH_MAX];
+  if (!realpath(file_path, resolved)) {
+    fprintf(stderr, "lsp-check: cannot resolve path: %s\n", file_path);
+    return 1;
+  }
+
+  char *dir_copy = strdup(resolved);
+  (void)dirname(dir_copy);
+  lsp_workspace_discover_root(resolved);
+
+  FILE *f = fopen(resolved, "rb");
+  if (!f) {
+    fprintf(stderr, "lsp-check: cannot open: %s\n", resolved);
+    free(dir_copy);
+    return 1;
+  }
+  fseek(f, 0, SEEK_END);
+  long flen = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  char *text = calloc(flen + 1, 1);
+  fread(text, 1, flen, f);
+  fclose(f);
+
+  char uri[PATH_MAX + 8];
+  snprintf(uri, sizeof(uri), "file://%s", resolved);
+
+  lsp_doc_store_t store = {0};
+  lsp_document_t *doc = doc_store_open(&store, uri, text, 0);
+
+  analyze_document(doc);
+
+  int errors = 0, warnings = 0, infos = 0;
+  for (size_t i = 0; i < doc->diag_count; i++) {
+    int sev = doc->diag_severities[i];
+    const char *sev_str = sev == 1 ? "error" : sev == 2 ? "warning" : "info";
+    if (sev == 1) errors++;
+    else if (sev == 2) warnings++;
+    else infos++;
+    fprintf(stdout, "%s:%d:%d: %s: %s\n",
+            file_path,
+            doc->diag_positions[i].line + 1,
+            doc->diag_positions[i].col + 1,
+            sev_str, doc->diag_messages[i]);
+  }
+
+  fprintf(stdout, "\n%zu diagnostics (%d errors, %d warnings, %d info)\n",
+          doc->diag_count, errors, warnings, infos);
+
+  free(text);
+  free(dir_copy);
+  doc_store_free(&store);
+  return errors > 0 ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------

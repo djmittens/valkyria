@@ -94,8 +94,9 @@ void lsp_db_sync_document(lsp_document_t *doc) {
   type_arena_init(&arena);
 
   typed_scope_t *top = typed_scope_push(&arena, NULL);
-  lsp_builtin_schemes_init(&arena, top);
-  init_typed_scope_with_loads(&arena, top, doc);
+  plist_type_reg_t plist_regs_db[MAX_PLIST_TYPES];
+  int plist_count_db = 0;
+  init_typed_scope_with_plist_reg(&arena, top, doc, plist_regs_db, &plist_count_db);
 
   const char *text = doc->text;
   int pos = 0;
@@ -196,16 +197,15 @@ static void collect_refs_recursive(valk_symdb_t *db, symdb_file_id file_id,
         strcmp(name, "nil") == 0 || strcmp(name, "otherwise") == 0)
       return;
 
-    for (size_t i = 0; i < doc->symbol_count; i++) {
-      if (strcmp(doc->symbols[i].name, name) != 0) continue;
-      symdb_sym_id sym_id = valk_symdb_find_symbol(db, name, file_id);
-      if (sym_id < 0) break;
+    symdb_sym_id sym_id = valk_symdb_find_symbol(db, name, file_id);
+    if (sym_id < 0)
+      sym_id = valk_symdb_find_symbol_any(db, name);
+    if (sym_id >= 0) {
       int src = expr->src_pos;
       if (src >= 0) {
         lsp_pos_t p = offset_to_pos(text, src);
         valk_symdb_add_ref(db, sym_id, file_id, p.line, p.col, REF_CALL);
       }
-      break;
     }
     return;
   }

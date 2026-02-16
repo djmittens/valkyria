@@ -27,13 +27,13 @@
   (test "enum-constructor-red"
     {do
       (= {c} (Red))
-      (test/assert (== (head c) (head {Red})) "Red should have tag Red")
+      (test/assert (== (head c) (head {Color::Red})) "Red should have tag Color::Red")
     })
 
   (test "enum-constructor-blue"
     {do
       (= {c} (Blue))
-      (test/assert (== (head c) (head {Blue})) "Blue should have tag Blue")
+      (test/assert (== (head c) (head {Color::Blue})) "Blue should have tag Color::Blue")
     })
 
   (test "enum-match"
@@ -79,9 +79,9 @@
     {do
       (= {s1} (Circle :radius 5))
       (= {s2} (Rect :w 10 :h 20))
-      (test/assert (== (head s1) (head {Circle})) "Circle tag")
+      (test/assert (== (head s1) (head {Shape::Circle})) "Circle tag")
       (test/assert (== (nth 2 s1) 5) "Circle radius")
-      (test/assert (== (head s2) (head {Rect})) "Rect tag")
+      (test/assert (== (head s2) (head {Shape::Rect})) "Rect tag")
       (test/assert (== (nth 2 s2) 10) "Rect width")
     })
 
@@ -124,14 +124,14 @@
   (test "option-some"
     {do
       (= {x} (Some :value 42))
-      (test/assert (== (head x) (head {Some})) "Some tag")
+      (test/assert (== (head x) (head {Option::Some})) "Some tag")
       (test/assert (== (Some:value x) 42) "Some:value")
     })
 
   (test "option-none"
     {do
       (= {y} (None))
-      (test/assert (== (head y) (head {None})) "None tag")
+      (test/assert (== (head y) (head {Option::None})) "None tag")
     })
 
   (test "option-match"
@@ -184,9 +184,9 @@
   (test "nested-constructor"
     {do
       (= {x} (Some (Some 42)))
-      (test/assert (== (head x) (head {Some})) "outer Some tag")
+      (test/assert (== (head x) (head {Option::Some})) "outer Some tag")
       (= {inner} (Some:value x))
-      (test/assert (== (head inner) (head {Some})) "inner Some tag")
+      (test/assert (== (head inner) (head {Option::Some})) "inner Some tag")
       (test/assert (== (Some:value inner) 42) "inner value")
     })
 

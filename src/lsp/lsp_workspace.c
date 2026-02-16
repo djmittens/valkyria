@@ -128,7 +128,7 @@ static void scan_dir_recursive(const char *dir_path, file_list_t *out) {
 }
 
 // ---------------------------------------------------------------------------
-// Read file from disk into doc store
+// Read file from disk
 // ---------------------------------------------------------------------------
 
 static char *read_file(const char *path) {
@@ -146,72 +146,23 @@ static char *read_file(const char *path) {
 
 // ---------------------------------------------------------------------------
 // Load files transitively referenced by (load ...) from a document
+// Uses lsp_for_each_load from lsp_loads.c for shared load-directive parsing.
 // ---------------------------------------------------------------------------
 
-static void load_transitive_files(lsp_doc_store_t *store, const char *text,
-                                  const char *base_dir, lsp_symset_t *visited);
-
-#include "../parser.h"
-
-static char *resolve_load_path(const char *path, const char *base_dir,
-                               char *real_out) {
-  char resolved[PATH_MAX];
-  if (path[0] == '/') {
-    snprintf(resolved, sizeof(resolved), "%s", path);
-    if (!realpath(resolved, real_out)) return nullptr;
-  } else {
-    snprintf(resolved, sizeof(resolved), "%s/%s", base_dir, path);
-    if (!realpath(resolved, real_out)) {
-      const char *root = lsp_workspace_root();
-      if (!root) return nullptr;
-      snprintf(resolved, sizeof(resolved), "%s/%s", root, path);
-      if (!realpath(resolved, real_out)) return nullptr;
-    }
-  }
-  return real_out;
+static void load_into_store_cb(const char *contents, const char *real_path,
+                               void *ctx) {
+  lsp_doc_store_t *store = ctx;
+  char uri[PATH_MAX + 8];
+  snprintf(uri, sizeof(uri), "file://%s", real_path);
+  if (doc_store_find(store, uri)) return;
+  lsp_document_t *doc = doc_store_open(store, uri, contents, 0);
+  doc->is_background = true;
+  analyze_document_light(doc);
 }
 
 static void load_transitive_files(lsp_doc_store_t *store, const char *text,
                                   const char *base_dir, lsp_symset_t *visited) {
-  int pos = 0, len = (int)strlen(text);
-  while (pos < len) {
-    while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
-    if (pos >= len) break;
-    if (text[pos] == ';') { while (pos < len && text[pos] != '\n') pos++; continue; }
-    valk_lval_t *expr = valk_lval_read(&pos, text);
-    if (LVAL_TYPE(expr) == LVAL_ERR) break;
-    if (LVAL_TYPE(expr) != LVAL_CONS) continue;
-
-    valk_lval_t *head = valk_lval_head(expr);
-    if (!head || LVAL_TYPE(head) != LVAL_SYM || strcmp(head->str, "load") != 0)
-      continue;
-    valk_lval_t *tail = valk_lval_tail(expr);
-    if (LVAL_TYPE(tail) != LVAL_CONS) continue;
-    valk_lval_t *arg = valk_lval_head(tail);
-    if (!arg || LVAL_TYPE(arg) != LVAL_STR) continue;
-
-    char real[PATH_MAX];
-    if (!resolve_load_path(arg->str, base_dir, real)) continue;
-    if (symset_contains(visited, real)) continue;
-    symset_add(visited, real);
-
-    char uri[PATH_MAX + 8];
-    snprintf(uri, sizeof(uri), "file://%s", real);
-    if (doc_store_find(store, uri)) continue;
-
-    char *contents = read_file(real);
-    if (!contents) continue;
-
-    char *dir_copy = strdup(real);
-    char *dir = dirname(dir_copy);
-    load_transitive_files(store, contents, dir, visited);
-    free(dir_copy);
-
-    lsp_document_t *doc = doc_store_open(store, uri, contents, 0);
-    doc->is_background = true;
-    analyze_document_light(doc);
-    free(contents);
-  }
+  lsp_for_each_load(text, base_dir, visited, load_into_store_cb, store);
 }
 
 // ---------------------------------------------------------------------------
