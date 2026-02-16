@@ -270,9 +270,13 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
   if (!head) return ty_nil(ctx->arena);
 
   if (LVAL_TYPE(head) != LVAL_SYM) {
-    infer_expr(ctx, head);
-    infer_body(ctx, rest);
-    return ty_any(ctx->arena);
+    valk_type_t *last = infer_expr(ctx, head);
+    valk_lval_t *cur = rest;
+    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+      last = infer_eval(ctx, valk_lval_head(cur));
+      cur = valk_lval_tail(cur);
+    }
+    return last;
   }
 
   const char *name = head->str;

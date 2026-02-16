@@ -42,10 +42,15 @@ valk_type_t *infer_plist_get(infer_ctx_t *ctx, valk_lval_t *rest) {
   valk_lval_t *key_node = valk_lval_head(valk_lval_tail(rest));
   valk_type_t *pl_ty = ty_resolve(infer_expr(ctx, pl_expr));
   infer_expr(ctx, key_node);
-  if (pl_ty->kind == TY_PLIST && key_node &&
-      LVAL_TYPE(key_node) == LVAL_SYM && key_node->str[0] == ':') {
-    valk_type_t *field = ty_plist_get(pl_ty, key_node->str + 1);
-    return field ? field : ty_nil(ctx->arena);
+  if (pl_ty->kind == TY_PLIST) {
+    if (key_node && LVAL_TYPE(key_node) == LVAL_SYM && key_node->str[0] == ':') {
+      valk_type_t *field = ty_plist_get(pl_ty, key_node->str + 1);
+      return field ? field : ty_nil(ctx->arena);
+    }
+    valk_type_t *val_union = ty_never(ctx->arena);
+    for (int i = 0; i < pl_ty->plist.count; i++)
+      val_union = ty_join(ctx->arena, val_union, pl_ty->plist.vals[i]);
+    return val_union->kind == TY_NEVER ? ty_any(ctx->arena) : val_union;
   }
   return ty_any(ctx->arena);
 }
