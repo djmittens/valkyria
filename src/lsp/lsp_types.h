@@ -27,6 +27,7 @@ typedef enum {
   TY_UNION,
   TY_NEVER,
   TY_NAMED,
+  TY_PLIST,
   TY__COUNT,
 } valk_type_kind_e;
 
@@ -66,6 +67,12 @@ struct valk_type {
       valk_type_t *params[TY_MAX_PARAMS];
       int param_count;
     } named;
+
+    struct {
+      const char *keys[TY_MAX_PARAMS];
+      valk_type_t *vals[TY_MAX_PARAMS];
+      int count;
+    } plist;
   };
 };
 
@@ -111,6 +118,9 @@ valk_type_t *ty_fun(type_arena_t *a, valk_type_t **params, int n, valk_type_t *r
 valk_type_t *ty_var(type_arena_t *a);
 
 valk_type_t *ty_named(type_arena_t *a, const char *name, valk_type_t **params, int n);
+
+valk_type_t *ty_plist(type_arena_t *a, const char **keys, valk_type_t **vals, int n);
+valk_type_t *ty_plist_get(const valk_type_t *plist, const char *key);
 
 valk_type_t *ty_union2(type_arena_t *a, valk_type_t *t1, valk_type_t *t2);
 valk_type_t *ty_union3(type_arena_t *a, valk_type_t *t1, valk_type_t *t2, valk_type_t *t3);
@@ -212,10 +222,50 @@ void infer_ctx_add_hint(infer_ctx_t *ctx, int offset, inlay_hint_kind_e kind,
                         const char *label);
 
 // ---------------------------------------------------------------------------
+// Annotation parsing (lsp_infer_ann.c)
+// ---------------------------------------------------------------------------
+
+#define ANN_MAX_VARS 16
+
+typedef struct {
+  char *names[ANN_MAX_VARS];
+  valk_type_t *vars[ANN_MAX_VARS];
+  int count;
+  type_arena_t *arena;
+} ann_var_map_t;
+
+typedef struct valk_lval_t valk_lval_t;
+
+valk_type_t *ann_var(ann_var_map_t *m, const char *name);
+valk_type_t *parse_type_ann(ann_var_map_t *m, valk_lval_t *node);
+bool is_ann_sym(valk_lval_t *node, const char *s);
+
+typedef struct {
+  valk_type_t *param_types[TY_MAX_PARAMS];
+  valk_lval_t *param_nodes[TY_MAX_PARAMS];
+  int param_count;
+  bool variadic;
+  valk_type_t *ret_ann;
+} parsed_formals_t;
+
+void parse_formals(infer_ctx_t *ctx, valk_lval_t *formals,
+                   typed_scope_t *inner, parsed_formals_t *out);
+
+// ---------------------------------------------------------------------------
+// PList inference (lsp_infer_plist.c)
+// ---------------------------------------------------------------------------
+
+valk_type_t *infer_plist_from_list_call(infer_ctx_t *ctx, valk_lval_t *rest);
+valk_type_t *infer_plist_get(infer_ctx_t *ctx, valk_lval_t *rest);
+valk_type_t *infer_plist_set(infer_ctx_t *ctx, valk_lval_t *rest);
+valk_type_t *infer_plist_has(infer_ctx_t *ctx, valk_lval_t *rest);
+valk_type_t *infer_plist_keys_vals(infer_ctx_t *ctx, const char *name, valk_lval_t *rest);
+
+// ---------------------------------------------------------------------------
 // Type inference entry point
 // ---------------------------------------------------------------------------
 
-typedef struct valk_lval_t valk_lval_t;
+int infer_count_list(valk_lval_t *rest);
 valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr);
 
 // ---------------------------------------------------------------------------

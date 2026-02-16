@@ -119,6 +119,24 @@ valk_type_t *ty_named(type_arena_t *a, const char *name, valk_type_t **params, i
   return ty;
 }
 
+valk_type_t *ty_plist(type_arena_t *a, const char **keys, valk_type_t **vals, int n) {
+  valk_type_t *ty = type_arena_alloc(a);
+  ty->kind = TY_PLIST;
+  ty->plist.count = n < TY_MAX_PARAMS ? n : TY_MAX_PARAMS;
+  for (int i = 0; i < ty->plist.count; i++) {
+    ty->plist.keys[i] = type_arena_strdup(a, keys[i]);
+    ty->plist.vals[i] = vals[i];
+  }
+  return ty;
+}
+
+valk_type_t *ty_plist_get(const valk_type_t *ty, const char *key) {
+  if (!ty || ty->kind != TY_PLIST) return nullptr;
+  for (int i = 0; i < ty->plist.count; i++)
+    if (strcmp(ty->plist.keys[i], key) == 0) return ty->plist.vals[i];
+  return nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // Union types
 // ---------------------------------------------------------------------------
@@ -197,7 +215,7 @@ static const char *GROUND_NAMES[] = {
   [TY_SYM]    = "Sym",
   [TY_NIL]    = "Nil",
   [TY_ERR]    = "Err",
-  [TY_ANY]    = "Any",
+  [TY_ANY]    = "??",
   [TY_NEVER]  = "Never",
 };
 
@@ -205,7 +223,7 @@ const char *valk_type_name(const valk_type_t *ty) {
   if (!ty) return "?";
   valk_type_t *r = ty_resolve((valk_type_t *)ty);
   if (r->kind < TY_LIST && r->kind != TY_VAR) return GROUND_NAMES[r->kind];
-  if (r->kind == TY_ANY) return "Any";
+  if (r->kind == TY_ANY) return "??";
   if (r->kind == TY_NEVER) return "Never";
   if (r->kind == TY_LIST) return "List";
   if (r->kind == TY_HANDLE) return "Handle";
@@ -214,6 +232,7 @@ const char *valk_type_name(const valk_type_t *ty) {
   if (r->kind == TY_VAR) return "?";
   if (r->kind == TY_UNION) return "Union";
   if (r->kind == TY_NAMED) return r->named.name;
+  if (r->kind == TY_PLIST) return "PList";
   return "?";
 }
 
@@ -254,6 +273,10 @@ static void collect_vars(const valk_type_t *ty, var_map_t *m) {
   case TY_NAMED:
     for (int i = 0; i < r->named.param_count; i++)
       collect_vars(r->named.params[i], m);
+    break;
+  case TY_PLIST:
+    for (int i = 0; i < r->plist.count; i++)
+      collect_vars(r->plist.vals[i], m);
     break;
   default: break;
   }
@@ -341,6 +364,17 @@ static char *type_display_impl(const valk_type_t *ty, var_map_t *m) {
     pos += snprintf(buf + pos, sizeof(buf) - pos, ")");
     return strdup(buf);
 
+  case TY_PLIST:
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "PList(");
+    for (int i = 0; i < r->plist.count && pos < 240; i++) {
+      if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - pos, ", ");
+      char *v = type_display_impl(r->plist.vals[i], m);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s: %s", r->plist.keys[i], v);
+      free(v);
+    }
+    pos += snprintf(buf + pos, sizeof(buf) - pos, ")");
+    return strdup(buf);
+
   default:
     return strdup("?");
   }
@@ -412,6 +446,14 @@ bool ty_equal(const valk_type_t *a, const valk_type_t *b) {
       if (!ty_equal(ra->named.params[i], rb->named.params[i])) return false;
     return true;
 
+  case TY_PLIST:
+    if (ra->plist.count != rb->plist.count) return false;
+    for (int i = 0; i < ra->plist.count; i++) {
+      if (strcmp(ra->plist.keys[i], rb->plist.keys[i]) != 0) return false;
+      if (!ty_equal(ra->plist.vals[i], rb->plist.vals[i])) return false;
+    }
+    return true;
+
   default:
     return false;
   }
@@ -439,6 +481,10 @@ bool ty_occurs(int var_id, valk_type_t *ty) {
   case TY_NAMED:
     for (int i = 0; i < ty->named.param_count; i++)
       if (ty_occurs(var_id, ty->named.params[i])) return true;
+    return false;
+  case TY_PLIST:
+    for (int i = 0; i < ty->plist.count; i++)
+      if (ty_occurs(var_id, ty->plist.vals[i])) return true;
     return false;
   default: return false;
   }
@@ -469,6 +515,8 @@ bool ty_unify(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
 
   if (t1->kind == TY_NIL && t2->kind == TY_LIST) return true;
   if (t1->kind == TY_LIST && t2->kind == TY_NIL) return true;
+  if (t1->kind == TY_PLIST && t2->kind == TY_LIST) return true;
+  if (t1->kind == TY_LIST && t2->kind == TY_PLIST) return true;
 
   if (t1->kind != t2->kind) return false;
 
@@ -503,6 +551,15 @@ bool ty_unify(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
     return true;
   }
 
+  case TY_PLIST: {
+    if (t1->plist.count != t2->plist.count) return false;
+    for (int i = 0; i < t1->plist.count; i++) {
+      if (strcmp(t1->plist.keys[i], t2->plist.keys[i]) != 0) return false;
+      if (!ty_unify(a, t1->plist.vals[i], t2->plist.vals[i])) return false;
+    }
+    return true;
+  }
+
   default:
     return false;
   }
@@ -525,6 +582,8 @@ bool ty_compatible(const valk_type_t *expected, const valk_type_t *actual) {
 
   if (re->kind == TY_LIST && ra->kind == TY_NIL) return true;
   if (re->kind == TY_NIL && ra->kind == TY_LIST) return true;
+  if (re->kind == TY_LIST && ra->kind == TY_PLIST) return true;
+  if (re->kind == TY_PLIST && ra->kind == TY_LIST) return true;
 
   if (re->kind == TY_REF && ra->kind == TY_REF) {
     if (!re->ref.tag || !ra->ref.tag) return true;
@@ -568,6 +627,15 @@ bool ty_compatible(const valk_type_t *expected, const valk_type_t *actual) {
             re->named.param_count : ra->named.param_count;
     for (int i = 0; i < n; i++)
       if (!ty_compatible(re->named.params[i], ra->named.params[i])) return false;
+    return true;
+  }
+
+  if (re->kind == TY_PLIST && ra->kind == TY_PLIST) {
+    if (re->plist.count != ra->plist.count) return false;
+    for (int i = 0; i < re->plist.count; i++) {
+      if (strcmp(re->plist.keys[i], ra->plist.keys[i]) != 0) return false;
+      if (!ty_compatible(re->plist.vals[i], ra->plist.vals[i])) return false;
+    }
     return true;
   }
 
@@ -671,6 +739,17 @@ static valk_type_t *instantiate_rec(type_arena_t *a, valk_type_t *ty,
     return ty_named(a, ty->named.name, params, ty->named.param_count);
   }
 
+  case TY_PLIST: {
+    bool changed = false;
+    valk_type_t *vals[TY_MAX_PARAMS];
+    for (int i = 0; i < ty->plist.count; i++) {
+      vals[i] = instantiate_rec(a, ty->plist.vals[i], old_ids, new_vars, n);
+      if (vals[i] != ty->plist.vals[i]) changed = true;
+    }
+    if (!changed) return ty;
+    return ty_plist(a, (const char **)ty->plist.keys, vals, ty->plist.count);
+  }
+
   default:
     return ty;
   }
@@ -712,6 +791,10 @@ static void collect_free_vars(valk_type_t *ty, int floor,
   case TY_NAMED:
     for (int i = 0; i < ty->named.param_count; i++)
       collect_free_vars(ty->named.params[i], floor, ids, count, max);
+    return;
+  case TY_PLIST:
+    for (int i = 0; i < ty->plist.count; i++)
+      collect_free_vars(ty->plist.vals[i], floor, ids, count, max);
     return;
   default: return;
   }

@@ -242,9 +242,12 @@ void lsp_builtin_schemes_init(type_arena_t *a, typed_scope_t *scope) {
     ADD_MONO("aio/start", ty_fun(a, nullptr, 0, ret, false));
   }
   {
-    // aio/await : Any -> Any
-    valk_type_t *ps[1] = {ty_any(a)};
-    ADD_MONO("aio/await", ty_fun(a, ps, 1, ty_any(a), false));
+    // aio/await : Handle(A) -> A  (polymorphic)
+    int floor = a->next_var_id;
+    valk_type_t *inner = ty_var(a);
+    valk_type_t *ps[1] = {ty_handle(a, inner)};
+    valk_type_t *fn = ty_fun(a, ps, 1, inner, false);
+    typed_scope_add(scope, "aio/await", scheme_generalize(a, fn, floor));
   }
   {
     // aio/run : Ref(aio) -> Nil

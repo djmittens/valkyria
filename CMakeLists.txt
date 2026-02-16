@@ -190,6 +190,8 @@ set(VALKYRIA_SOURCES
   src/lsp/lsp_analysis.c
   src/lsp/lsp_types.c
   src/lsp/lsp_infer.c
+  src/lsp/lsp_infer_ann.c
+  src/lsp/lsp_infer_plist.c
   src/lsp/lsp_builtin_schemes.c
   src/lsp/lsp_io.c
   src/lsp/lsp_json.c

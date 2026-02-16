@@ -33,6 +33,10 @@ static void check_types(lsp_document_t *doc) {
     .floor_var_id = arena.next_var_id,
     .hover_offset = -1,
     .hover_result = nullptr,
+    .hints = nullptr,
+    .hint_count = 0,
+    .hint_cap = 0,
+    .collect_hints = true,
   };
 
   while (pos < len) {
@@ -51,6 +55,23 @@ static void check_types(lsp_document_t *doc) {
     infer_expr(&ctx, expr);
   }
 
+  for (size_t i = 0; i < ctx.hint_count; i++) {
+    valk_type_t *ty = ty_resolve(ctx.hints[i].type);
+    if (ty->kind != TY_ANY || ctx.hints[i].is_return) continue;
+    int end = ctx.hints[i].offset;
+    int start = end - 1;
+    while (start > 0 && text[start - 1] != ' ' && text[start - 1] != '('
+           && text[start - 1] != '{' && text[start - 1] != '\t'
+           && text[start - 1] != '\n' && text[start - 1] != '\r')
+      start--;
+    int sym_len = end - start;
+    if (sym_len > 0 && sym_len < 128) {
+      lsp_pos_t p = offset_to_pos(text, start);
+      doc_add_diag_full(doc, "Type resolves to ??", p.line, p.col, sym_len, 1);
+    }
+  }
+
+  free(ctx.hints);
   typed_scope_pop(top);
   type_arena_free(&arena);
 }

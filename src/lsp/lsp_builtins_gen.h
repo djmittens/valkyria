@@ -18,7 +18,7 @@ static const lsp_builtin_entry_t LSP_BUILTINS[] = {
   {"-", 0, -1, "(- arg0:Num...)", "", 0},
   {"/", 0, -1, "(/ arg0:Num...)", "", 0},
   {"<", 2, 2, "(< arg0:Num arg1:Num)", "", 0},
-  {"<-", 1, 1, "(<- handle)", "", 1},
+  {"<-", 1, 2, "(<- handle)", "", 1},
   {"<=", 2, 2, "(<= arg0:Num arg1:Num)", "", 0},
   {"=", 2, -1, "(= syms:List|QExpr|Nil arg1...)", "", 1},
   {"==", 2, 2, "(== arg0 arg1)", "", 0},

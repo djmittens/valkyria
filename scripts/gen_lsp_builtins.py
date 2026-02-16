@@ -439,7 +439,7 @@ EVAL_INTRINSICS = [
   Builtin("quote", min_arity=1, max_arity=1, is_special_form=True,
           params=[Param("expr")],
           ret_type="BRET_LIST"),
-  Builtin("<-", min_arity=1, max_arity=1, is_special_form=True,
+  Builtin("<-", min_arity=1, max_arity=2, is_special_form=True,
           params=[Param("handle")],
           ret_type="BRET_ANY"),
   Builtin("type", min_arity=2, max_arity=-1, is_special_form=True,

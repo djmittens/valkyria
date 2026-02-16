@@ -105,7 +105,8 @@ static void walk_sym(walk_ctx_t *w, valk_lval_t *expr) {
   }
 
   if (strcmp(name, "true") == 0 || strcmp(name, "false") == 0 ||
-      strcmp(name, "nil") == 0 || strcmp(name, "otherwise") == 0) {
+      strcmp(name, "nil") == 0 || strcmp(name, "otherwise") == 0 ||
+      strcmp(name, "_") == 0) {
     emit_sym(w, name, SEM_MACRO, SEM_MOD_READONLY);
     return;
   }
@@ -189,8 +190,11 @@ static void walk_type_ann(walk_ctx_t *w, valk_lval_t *node) {
     if (s[0] >= 'A' && s[0] <= 'Z') {
       bool is_ground = strcmp(s, "Num") == 0 || strcmp(s, "Str") == 0 ||
         strcmp(s, "Sym") == 0 || strcmp(s, "Nil") == 0 ||
-        strcmp(s, "Err") == 0 || strcmp(s, "Any") == 0;
+        strcmp(s, "Err") == 0 || strcmp(s, "Any") == 0 ||
+        strcmp(s, "PList") == 0;
       emit_sym(w, s, is_ground ? SEM_TYPE : SEM_TYPE_PARAM, 0);
+    } else if (strcmp(s, "??") == 0) {
+      emit_sym(w, s, SEM_TYPE, 0);
     } else if (strcmp(s, "->") == 0) {
       emit_sym(w, s, SEM_OPERATOR, 0);
     }
@@ -354,6 +358,51 @@ static void walk_type(walk_ctx_t *w, valk_lval_t *rest) {
   }
 }
 
+static void walk_aio_do(walk_ctx_t *w, valk_lval_t *rest) {
+  if (LVAL_TYPE(rest) != LVAL_CONS) return;
+  valk_lval_t *body = valk_lval_head(rest);
+  if (!body || LVAL_TYPE(body) != LVAL_CONS) return;
+
+  lsp_scope_t *inner = scope_push(w->scope);
+  lsp_scope_t *saved = w->scope;
+  w->scope = inner;
+
+  uint32_t sf = body->flags;
+  if (body->flags & LVAL_FLAG_QUOTED)
+    body->flags &= ~LVAL_FLAG_QUOTED;
+
+  valk_lval_t *cur = body;
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+    valk_lval_t *stmt = valk_lval_head(cur);
+    if (stmt && LVAL_TYPE(stmt) == LVAL_CONS) {
+      valk_lval_t *sh = valk_lval_head(stmt);
+      if (sh && LVAL_TYPE(sh) == LVAL_SYM && strcmp(sh->str, "<-") == 0) {
+        valk_lval_t *bind_rest = valk_lval_tail(stmt);
+        if (bind_rest && LVAL_TYPE(bind_rest) == LVAL_CONS) {
+          valk_lval_t *var = valk_lval_head(bind_rest);
+          valk_lval_t *expr_rest = valk_lval_tail(bind_rest);
+          emit_sym(w, "<-", SEM_KEYWORD, 0);
+          if (var && LVAL_TYPE(var) == LVAL_SYM && strcmp(var->str, "_") != 0) {
+            symset_add(&inner->locals, var->str);
+            emit_sym(w, var->str, SEM_VARIABLE, SEM_MOD_DEFINITION);
+          } else if (var) {
+            walk_expr(w, var);
+          }
+          walk_body(w, expr_rest);
+          cur = valk_lval_tail(cur);
+          continue;
+        }
+      }
+    }
+    walk_expr(w, stmt);
+    cur = valk_lval_tail(cur);
+  }
+
+  body->flags = sf;
+  w->scope = saved;
+  scope_pop(inner);
+}
+
 static void walk_match(walk_ctx_t *w, valk_lval_t *rest) {
   if (LVAL_TYPE(rest) != LVAL_CONS) return;
   walk_expr(w, valk_lval_head(rest));
@@ -464,6 +513,7 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   if (strcmp(name, "=") == 0)        { walk_binding(w, "=", rest); return; }
   if (strcmp(name, "type") == 0)     { walk_type(w, rest); return; }
   if (strcmp(name, "match") == 0)    { walk_match(w, rest); return; }
+  if (strcmp(name, "aio/do") == 0)   { walk_aio_do(w, rest); return; }
 
   walk_body(w, rest);
 }
