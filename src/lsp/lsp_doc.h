@@ -149,7 +149,6 @@ void check_and_sem_pass(lsp_document_t *doc, bool emit_sem);
 // Hover helpers (lsp_hover.c)
 void handle_hover(int id, void *params, void *store);
 void handle_definition(int id, void *params, void *store);
-const char *builtin_doc(const char *name);
 void extract_source_snippet(const char *text, int start, int end,
                             char *out, size_t out_size);
 

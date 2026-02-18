@@ -273,8 +273,25 @@ static void extract_symbols_visitor(valk_lval_t *expr, lsp_document_t *doc,
     if (!sym_name) return;
 
     lsp_pos_t p = offset_to_pos(text, form_start);
-    doc_add_symbol(doc, sym_name, p.line, p.col, arity, form_start, pos_end);
-    lsp_symbol_t *sym = &doc->symbols[doc->symbol_count - 1];
+
+    lsp_symbol_t *sym = nullptr;
+    for (size_t i = 0; i < doc->symbol_count; i++) {
+      if (strcmp(doc->symbols[i].name, sym_name) == 0 &&
+          doc->symbols[i].doc && strncmp(doc->symbols[i].doc, "(sig ", 5) == 0) {
+        sym = &doc->symbols[i];
+        sym->pos = p;
+        sym->arity = arity;
+        sym->src_start = form_start;
+        sym->src_end = pos_end;
+        free(sym->doc);
+        sym->doc = nullptr;
+        break;
+      }
+    }
+    if (!sym) {
+      doc_add_symbol(doc, sym_name, p.line, p.col, arity, form_start, pos_end);
+      sym = &doc->symbols[doc->symbol_count - 1];
+    }
 
     if (strcmp(head->str, "fun") == 0 && LVAL_TYPE(binding) == LVAL_CONS) {
       char sig[512];
@@ -300,6 +317,24 @@ static void extract_symbols_visitor(valk_lval_t *expr, lsp_document_t *doc,
     } else {
       sym->doc = strdup(strcmp(head->str, "fun") == 0 ? "(fun ...)" : "(def ...)");
     }
+    return;
+  }
+
+  if (strcmp(head->str, "sig") == 0) {
+    valk_lval_t *tail = valk_lval_tail(expr);
+    if (LVAL_TYPE(tail) != LVAL_CONS) return;
+    valk_lval_t *name_node = valk_lval_head(tail);
+    if (!name_node || LVAL_TYPE(name_node) != LVAL_SYM) return;
+
+    lsp_pos_t p = offset_to_pos(text, form_start);
+    doc_add_symbol(doc, name_node->str, p.line, p.col, -1, form_start, pos_end);
+    lsp_symbol_t *sym = &doc->symbols[doc->symbol_count - 1];
+    int sig_len = pos_end - form_start;
+    if (sig_len > 511) sig_len = 511;
+    char sig_str[512];
+    memcpy(sig_str, text + form_start, sig_len);
+    sig_str[sig_len] = '\0';
+    sym->doc = strdup(sig_str);
     return;
   }
 

@@ -1,6 +1,5 @@
 #include "lsp_doc.h"
 #include "lsp_builtins_gen.h"
-#include "lsp_types.h"
 #include "lsp_io.h"
 #include "lsp_json.h"
 
@@ -239,33 +238,12 @@ void handle_completion(int id, void *params_raw, void *store_raw) {
     int kind = is_const ? 21 : 3;
     p += snprintf(p, end_buf - p, "{\"label\":%s,\"kind\":%d", escaped, kind);
     free(escaped);
-    const char *bdoc = builtin_doc(bi->name);
     const char *sig = bi->signature;
     bool has_snippet = false;
 
     if (sig && sig[0]) {
       char detail[280];
-      {
-        type_arena_t ta;
-        type_arena_init(&ta);
-        typed_scope_t *ts = typed_scope_push(&ta, nullptr);
-        lsp_builtin_schemes_init(&ta, ts);
-        type_scheme_t *sch = typed_scope_lookup(ts, bi->name);
-        if (sch) {
-          valk_type_t *fn = ty_resolve(scheme_instantiate(&ta, sch));
-          if (fn->kind == TY_FUN) {
-            char *ret_str = valk_type_display_pretty(fn->fun.ret);
-            snprintf(detail, sizeof(detail), " %s -> %s", sig, ret_str);
-            free(ret_str);
-          } else {
-            snprintf(detail, sizeof(detail), " %s", sig);
-          }
-        } else {
-          snprintf(detail, sizeof(detail), " %s", sig);
-        }
-        typed_scope_pop(ts);
-        type_arena_free(&ta);
-      }
+      snprintf(detail, sizeof(detail), " %s", sig);
       char *escaped_detail = json_escape_string(detail);
       p += snprintf(p, end_buf - p, ",\"labelDetails\":{\"detail\":%s}", escaped_detail);
       free(escaped_detail);
@@ -282,23 +260,13 @@ void handle_completion(int id, void *params_raw, void *store_raw) {
       }
     }
 
-    if (bdoc) {
-      const char *nl = strstr(bdoc, "\n\n");
-      if (nl) {
-        char md[2048];
-        snprintf(md, sizeof(md), "```valk\n%s\n```\n\n%s", sig, nl + 2);
-        char *escaped_doc = json_escape_string(md);
-        p += snprintf(p, end_buf - p,
-          ",\"documentation\":{\"kind\":\"markdown\",\"value\":%s}", escaped_doc);
-        free(escaped_doc);
-      } else {
-        char md[2048];
-        snprintf(md, sizeof(md), "```valk\n%s\n```\n\n%s", sig, bdoc);
-        char *escaped_doc = json_escape_string(md);
-        p += snprintf(p, end_buf - p,
-          ",\"documentation\":{\"kind\":\"markdown\",\"value\":%s}", escaped_doc);
-        free(escaped_doc);
-      }
+    if (sig && sig[0]) {
+      char md[2048];
+      snprintf(md, sizeof(md), "```valk\n%s\n```", sig);
+      char *escaped_doc = json_escape_string(md);
+      p += snprintf(p, end_buf - p,
+        ",\"documentation\":{\"kind\":\"markdown\",\"value\":%s}", escaped_doc);
+      free(escaped_doc);
     }
 
     if (!has_snippet && !is_const && !in_parens) {

@@ -181,6 +181,7 @@ def find_registrations(src_dir: Path) -> dict[str, tuple[str, str]]:
     text = f.read_text()
     for m in reg_re.finditer(text):
       lisp_name, c_func = m.group(1), m.group(2)
+      lisp_name = lisp_name.replace('\\\\', '\\')
       result[lisp_name] = (c_func, str(f.relative_to(src_dir.parent)))
   return result
 
@@ -449,6 +450,19 @@ EVAL_INTRINSICS = [
   Builtin("match", min_arity=2, max_arity=-1, is_special_form=True,
           params=[Param("val"), Param("clauses", variadic=True)],
           ret_type="BRET_ANY"),
+  Builtin("ctx/with-deadline", min_arity=2, max_arity=-1, is_special_form=True,
+          params=[Param("timeout-ms", types=["Num"]),
+                  Param("body", variadic=True)],
+          ret_type="BRET_ANY"),
+  Builtin("ctx/with", min_arity=3, max_arity=-1, is_special_form=True,
+          params=[Param("key", types=["Sym"]),
+                  Param("value"),
+                  Param("body", variadic=True)],
+          ret_type="BRET_ANY"),
+  Builtin("sig", min_arity=2, max_arity=2, is_special_form=True,
+          params=[Param("name", types=["Sym"]),
+                  Param("type-expr")],
+          ret_type="BRET_NIL"),
 ]
 
 

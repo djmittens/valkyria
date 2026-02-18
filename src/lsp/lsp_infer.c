@@ -394,13 +394,27 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
       if (pf.ret_ann)
         ty_unify(ctx->arena, body_ty, pf.ret_ann);
 
+      type_scheme_t *builtin_sch = fname && LVAL_TYPE(fname) == LVAL_SYM
+        ? typed_scope_lookup(ctx->scope, fname->str) : nullptr;
+      valk_type_t *builtin_fn = nullptr;
+      if (builtin_sch) {
+        builtin_fn = ty_resolve(scheme_instantiate(ctx->arena, builtin_sch));
+        if (!builtin_fn || builtin_fn->kind != TY_FUN)
+          builtin_fn = nullptr;
+      }
+
       for (int i = 0; i < pf.param_count; i++) {
         valk_lval_t *h = pf.param_nodes[i];
+        valk_type_t *local_ty = ty_resolve(pf.param_types[i]);
+        valk_type_t *hint_ty = pf.param_types[i];
+        if (local_ty->kind == TY_VAR && builtin_fn &&
+            i < builtin_fn->fun.param_count)
+          hint_ty = builtin_fn->fun.params[i];
         if (ctx->hover_offset >= 0 && h->src_pos >= 0 &&
             h->src_pos <= ctx->hover_offset &&
             ctx->hover_offset < h->src_pos + (int)strlen(h->str))
-          ctx->hover_result = ty_resolve(pf.param_types[i]);
-        emit_type_hint(ctx, h, pf.param_types[i]);
+          ctx->hover_result = ty_resolve(hint_ty);
+        emit_type_hint(ctx, h, hint_ty);
       }
 
       typed_scope_pop(inner);
@@ -572,6 +586,45 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
     return result->kind == TY_NEVER ? ty_any(ctx->arena) : result;
   }
 
+  if (strcmp(name, "ctx/with-deadline") == 0) {
+    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_nil(ctx->arena);
+    infer_expr(ctx, valk_lval_head(rest));
+    valk_lval_t *body = valk_lval_tail(rest);
+    valk_type_t *result = ty_nil(ctx->arena);
+    while (body && LVAL_TYPE(body) == LVAL_CONS) {
+      result = infer_expr(ctx, valk_lval_head(body));
+      body = valk_lval_tail(body);
+    }
+    return result;
+  }
+
+  if (strcmp(name, "ctx/with") == 0) {
+    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_nil(ctx->arena);
+    infer_expr(ctx, valk_lval_head(rest));
+    rest = valk_lval_tail(rest);
+    if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
+      infer_expr(ctx, valk_lval_head(rest));
+      rest = valk_lval_tail(rest);
+    }
+    valk_type_t *result = ty_nil(ctx->arena);
+    while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
+      result = infer_expr(ctx, valk_lval_head(rest));
+      rest = valk_lval_tail(rest);
+    }
+    return result;
+  }
+
+  if (strcmp(name, "list") == 0) {
+    valk_type_t *elem = ty_never(ctx->arena);
+    while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
+      valk_type_t *t = infer_expr(ctx, valk_lval_head(rest));
+      elem = ty_join(ctx->arena, elem, t);
+      rest = valk_lval_tail(rest);
+    }
+    if (elem->kind == TY_NEVER) elem = ty_var(ctx->arena);
+    return ty_list(ctx->arena, elem);
+  }
+
   if (strcmp(name, "eval") == 0 || strcmp(name, "read") == 0) {
     infer_body(ctx, rest);
     return ty_any(ctx->arena);
@@ -598,6 +651,29 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
 
   if (strcmp(name, "load") == 0) {
     infer_body(ctx, rest);
+    return ty_nil(ctx->arena);
+  }
+
+  if (strcmp(name, "sig") == 0) {
+    if (LVAL_TYPE(rest) != LVAL_CONS) return ty_nil(ctx->arena);
+    valk_lval_t *sig_name = valk_lval_head(rest);
+    valk_lval_t *type_rest = valk_lval_tail(rest);
+    if (!sig_name || LVAL_TYPE(sig_name) != LVAL_SYM) return ty_nil(ctx->arena);
+    if (LVAL_TYPE(type_rest) != LVAL_CONS) return ty_nil(ctx->arena);
+    valk_lval_t *type_expr = valk_lval_head(type_rest);
+
+    ann_var_map_t avm = {.count = 0, .arena = ctx->arena};
+    valk_type_t *ty = parse_type_ann(&avm, type_expr);
+
+    int var_ids[SCHEME_MAX_VARS];
+    int vc = avm.count < SCHEME_MAX_VARS ? avm.count : SCHEME_MAX_VARS;
+    for (int i = 0; i < vc; i++)
+      var_ids[i] = avm.vars[i]->var.id;
+
+    type_scheme_t *sch = vc > 0
+      ? scheme_poly(ctx->arena, var_ids, vc, ty)
+      : scheme_mono(ctx->arena, ty);
+    typed_scope_add(ctx->scope, sig_name->str, sch);
     return ty_nil(ctx->arena);
   }
 

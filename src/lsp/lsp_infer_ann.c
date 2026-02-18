@@ -25,6 +25,7 @@ valk_type_t *parse_type_ann(ann_var_map_t *m, valk_lval_t *node) {
     if (strcmp(s, "Nil") == 0) return ty_nil(a);
     if (strcmp(s, "Err") == 0) return ty_err(a);
     if (strcmp(s, "Any") == 0 || strcmp(s, "??") == 0) return ty_any(a);
+    if (strcmp(s, "Never") == 0) return ty_never(a);
     return ann_var(m, s);
   }
 
@@ -37,15 +38,22 @@ valk_type_t *parse_type_ann(ann_var_map_t *m, valk_lval_t *node) {
     if (strcmp(name, "->") == 0) {
       valk_type_t *pts[TY_MAX_PARAMS];
       int pc = 0;
+      bool variadic = false;
       valk_lval_t *cur = args;
       while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+        valk_lval_t *elem = valk_lval_head(cur);
+        if (is_ann_sym(elem, "&")) {
+          variadic = true;
+          cur = valk_lval_tail(cur);
+          continue;
+        }
         if (pc < TY_MAX_PARAMS)
-          pts[pc++] = parse_type_ann(m, valk_lval_head(cur));
+          pts[pc++] = parse_type_ann(m, elem);
         cur = valk_lval_tail(cur);
       }
       if (pc == 0) return ty_any(a);
       valk_type_t *ret = pts[pc - 1];
-      return ty_fun(a, pts, pc - 1, ret, false);
+      return ty_fun(a, pts, pc - 1, ret, variadic);
     }
 
     if (strcmp(name, "List") == 0) {
@@ -81,6 +89,14 @@ valk_type_t *parse_type_ann(ann_var_map_t *m, valk_lval_t *node) {
       valk_lval_t *inner = args && LVAL_TYPE(args) == LVAL_CONS
         ? valk_lval_head(args) : nullptr;
       return ty_handle(a, inner ? parse_type_ann(m, inner) : ty_var(a));
+    }
+
+    if (strcmp(name, "Ref") == 0) {
+      valk_lval_t *tag = args && LVAL_TYPE(args) == LVAL_CONS
+        ? valk_lval_head(args) : nullptr;
+      const char *tag_str = (tag && LVAL_TYPE(tag) == LVAL_SYM)
+        ? type_arena_strdup(a, tag->str) : nullptr;
+      return ty_ref(a, tag_str);
     }
 
     valk_type_t *tps[TY_MAX_PARAMS];

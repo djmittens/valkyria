@@ -137,7 +137,7 @@ static void walk_sym(walk_ctx_t *w, valk_lval_t *expr) {
   if (w->emit_diag) {
     char msg[256];
     snprintf(msg, sizeof(msg), "Symbol '%s' is not defined", name);
-    diag_at_sym(w, name, msg, 2);
+    diag_at_sym(w, name, msg, 1);
   }
   advance_cursor(w, name);
 }
@@ -399,22 +399,22 @@ static void walk_aio_do(walk_ctx_t *w, valk_lval_t *rest) {
     valk_lval_t *stmt = valk_lval_head(cur);
     if (stmt && LVAL_TYPE(stmt) == LVAL_CONS) {
       valk_lval_t *sh = valk_lval_head(stmt);
-      if (sh && LVAL_TYPE(sh) == LVAL_SYM && strcmp(sh->str, "<-") == 0) {
-        valk_lval_t *bind_rest = valk_lval_tail(stmt);
-        if (bind_rest && LVAL_TYPE(bind_rest) == LVAL_CONS) {
-          valk_lval_t *var = valk_lval_head(bind_rest);
-          valk_lval_t *expr_rest = valk_lval_tail(bind_rest);
-          emit_sym(w, "<-", SEM_KEYWORD, 0);
-          if (var && LVAL_TYPE(var) == LVAL_SYM && strcmp(var->str, "_") != 0) {
-            symset_add(&inner->locals, var->str);
-            emit_sym(w, var->str, SEM_VARIABLE, SEM_MOD_DEFINITION);
-          } else if (var) {
-            walk_expr(w, var);
-          }
-          walk_body(w, expr_rest);
-          cur = valk_lval_tail(cur);
-          continue;
+      valk_lval_t *sh_rest = valk_lval_tail(stmt);
+      valk_lval_t *arrow = sh_rest ? valk_lval_head(sh_rest) : nullptr;
+      if (sh && LVAL_TYPE(sh) == LVAL_SYM &&
+          arrow && LVAL_TYPE(arrow) == LVAL_SYM &&
+          strcmp(arrow->str, "<-") == 0) {
+        valk_lval_t *expr_rest = valk_lval_tail(sh_rest);
+        if (sh->str[0] != '_' || sh->str[1] != '\0') {
+          symset_add(&inner->locals, sh->str);
+          emit_sym(w, sh->str, SEM_VARIABLE, SEM_MOD_DEFINITION);
+        } else {
+          emit_sym(w, sh->str, SEM_VARIABLE, 0);
         }
+        emit_sym(w, "<-", SEM_KEYWORD, 0);
+        walk_body(w, expr_rest);
+        cur = valk_lval_tail(cur);
+        continue;
       }
     }
     walk_expr(w, stmt);
@@ -528,6 +528,20 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
       emit_sym(w, name, SEM_FUNCTION, 0);
   }
 
+  if (w->emit_diag && !is_special_form(name) && !is_builtin(name) &&
+      !scope_has(w->scope, name) && !symset_contains(w->globals, name)) {
+    bool is_accessor = (name[0] >= 'A' && name[0] <= 'Z');
+    if (is_accessor) {
+      const char *colon = strchr(name, ':');
+      is_accessor = colon && colon != name && colon[1] != '\0' && colon[1] != ':';
+    }
+    if (!is_accessor) {
+      char msg[256];
+      snprintf(msg, sizeof(msg), "Function '%s' is not defined", name);
+      diag_at_sym(w, name, msg, 1);
+    }
+  }
+
   check_arity(w, name, count_args(rest));
 
   if (strcmp(name, "\\") == 0)       { walk_lambda(w, rest); return; }
@@ -535,6 +549,7 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   if (strcmp(name, "def") == 0)      { walk_binding(w, "def", rest); return; }
   if (strcmp(name, "=") == 0)        { walk_binding(w, "=", rest); return; }
   if (strcmp(name, "type") == 0)     { walk_type(w, rest); return; }
+  if (strcmp(name, "sig") == 0)      { return; }
   if (strcmp(name, "match") == 0)    { walk_match(w, rest); return; }
   if (strcmp(name, "aio/do") == 0)   { walk_aio_do(w, rest); return; }
 

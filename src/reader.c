@@ -267,7 +267,8 @@ valk_lval_t* valk_parse_file(const char* filename) {
   }
 
   char* input = calloc(length + 1, sizeof(char));
-  fread(input, 1, length, f);
+  u64 nread = fread(input, 1, length, f);
+  (void)nread;
   fclose(f);
 
   struct tmp_arr {

@@ -171,6 +171,37 @@ static void load_symbols_cb(const char *contents, const char *real_path,
   extract_global_symbols_from_text(contents, ctx);
 }
 
+// ---------------------------------------------------------------------------
+// Load builtins.valk for LSP (not loaded at runtime)
+// ---------------------------------------------------------------------------
+
+static void lsp_load_builtins_valk(lsp_symset_t *visited,
+                                   lsp_load_callback_fn cb, void *ctx) {
+  const char *ws_root = lsp_workspace_root();
+  if (!ws_root) return;
+
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "%s/src/builtins.valk", ws_root);
+
+  char real[PATH_MAX];
+  if (!realpath(path, real)) return;
+  if (symset_contains(visited, real)) return;
+
+  FILE *f = fopen(real, "rb");
+  if (!f) return;
+  fseek(f, 0, SEEK_END);
+  long flen = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  if (flen <= 0 || flen > 10 * 1024 * 1024) { fclose(f); return; }
+  char *contents = calloc(flen + 1, 1);
+  fread(contents, 1, flen, f);
+  fclose(f);
+
+  symset_add(visited, real);
+  cb(contents, real, ctx);
+  free(contents);
+}
+
 void build_global_symset(lsp_document_t *doc, lsp_symset_t *globals) {
   symset_init(globals);
 
@@ -190,6 +221,7 @@ void build_global_symset(lsp_document_t *doc, lsp_symset_t *globals) {
   if (realpath(file_path, real))
     symset_add(&visited, real);
 
+  lsp_load_builtins_valk(&visited, load_symbols_cb, globals);
   lsp_for_each_load(doc->text, dir, &visited, load_symbols_cb, globals);
   symset_free(&visited);
   free(dir_copy);
@@ -265,6 +297,7 @@ void init_typed_scope_with_loads(type_arena_t *arena, typed_scope_t *scope,
   int plist_count = 0;
   load_types_ctx_t lt = {.arena = arena, .scope = scope,
                          .plist_types = plist_regs, .plist_type_count = &plist_count};
+  lsp_load_builtins_valk(&visited, load_types_cb, &lt);
   lsp_for_each_load(doc->text, dir, &visited, load_types_cb, &lt);
   symset_free(&visited);
   free(dir_copy);
@@ -290,6 +323,7 @@ void init_typed_scope_with_plist_reg(type_arena_t *arena, typed_scope_t *scope,
   int plist_count = 0;
   load_types_ctx_t lt = {.arena = arena, .scope = scope,
                          .plist_types = plist_regs, .plist_type_count = &plist_count};
+  lsp_load_builtins_valk(&visited, load_types_cb, &lt);
   lsp_for_each_load(doc->text, dir, &visited, load_types_cb, &lt);
   symset_free(&visited);
   free(dir_copy);

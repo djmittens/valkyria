@@ -173,6 +173,12 @@ static bool is_type_form(valk_lval_t *expr) {
   return LVAL_TYPE(head) == LVAL_SYM && strcmp(head->str, "type") == 0;
 }
 
+static bool is_sig_form(valk_lval_t *expr) {
+  if (LVAL_TYPE(expr) != LVAL_CONS || (expr->flags & LVAL_FLAG_QUOTED)) return false;
+  valk_lval_t *head = expr->cons.head;
+  return LVAL_TYPE(head) == LVAL_SYM && strcmp(head->str, "sig") == 0;
+}
+
 static bool is_match_form(valk_lval_t *expr) {
   if (LVAL_TYPE(expr) != LVAL_CONS || (expr->flags & LVAL_FLAG_QUOTED)) return false;
   valk_lval_t *head = expr->cons.head;
@@ -252,7 +258,7 @@ static valk_constructor_t *find_constructor_by_short_name(valk_type_env_t *env, 
 }
 
 static valk_lval_t *transform_accessor(valk_type_env_t *env, const char *sym, valk_lval_t *arg) {
-  char *colon = strchr(sym, ':');
+  const char *colon = strchr(sym, ':');
   u64 ctor_len = colon - sym;
   char ctor_name[ctor_len + 1];
   memcpy(ctor_name, sym, ctor_len);
@@ -464,6 +470,10 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_lval_t *expr) {
     return valk_lval_nil();
   }
 
+  if (is_sig_form(expr)) {
+    return valk_lval_nil();
+  }
+
   valk_lval_t *head = expr->cons.head;
 
   if (LVAL_TYPE(head) == LVAL_SYM) {
@@ -509,6 +519,10 @@ valk_lval_t *valk_type_transform_expr(valk_lval_t *expr) {
     return valk_lval_nil();
   }
 
+  if (is_sig_form(expr)) {
+    return valk_lval_nil();
+  }
+
   if (env->type_count == 0) return expr;
 
   return transform_expr(env, expr);
@@ -540,7 +554,7 @@ valk_lval_t *valk_type_transform(valk_lval_t *exprs) {
   for (u64 i = count; i > 0; i--) {
     valk_lval_t *expr = valk_lval_list_nth(exprs, i - 1);
     valk_lval_t *transformed = transform_expr(env, expr);
-    if (LVAL_TYPE(transformed) != LVAL_NIL || !is_type_form(expr)) {
+    if (LVAL_TYPE(transformed) != LVAL_NIL || (!is_type_form(expr) && !is_sig_form(expr))) {
       result = valk_lval_cons(transformed, result);
     }
   }
