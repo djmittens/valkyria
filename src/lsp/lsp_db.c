@@ -375,6 +375,8 @@ static void type_hash_str(const valk_type_t *ty, type_var_norm_t *norm,
   case TY_SYM:   snprintf(buf, buf_size, "Y"); return;
   case TY_NIL:   snprintf(buf, buf_size, "0"); return;
   case TY_ERR:   snprintf(buf, buf_size, "E"); return;
+  case TY_QEXPR: snprintf(buf, buf_size, "Q"); return;
+  case TY_KW:    snprintf(buf, buf_size, "K:%s", r->kw.tag ? r->kw.tag : ""); return;
   case TY_ANY:   snprintf(buf, buf_size, "*"); return;
   case TY_NEVER: snprintf(buf, buf_size, "!"); return;
 

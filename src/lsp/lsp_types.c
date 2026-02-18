@@ -66,6 +66,15 @@ valk_type_t *ty_str(type_arena_t *a) { return ty_ground(a, TY_STR); }
 valk_type_t *ty_sym(type_arena_t *a) { return ty_ground(a, TY_SYM); }
 valk_type_t *ty_nil(type_arena_t *a) { return ty_ground(a, TY_NIL); }
 valk_type_t *ty_err(type_arena_t *a) { return ty_ground(a, TY_ERR); }
+valk_type_t *ty_qexpr(type_arena_t *a) { return ty_ground(a, TY_QEXPR); }
+
+valk_type_t *ty_kw(type_arena_t *a, const char *tag) {
+  valk_type_t *ty = type_arena_alloc(a);
+  ty->kind = TY_KW;
+  ty->kw.tag = tag ? type_arena_strdup(a, tag) : nullptr;
+  return ty;
+}
+
 valk_type_t *ty_any(type_arena_t *a) { return ty_ground(a, TY_ANY); }
 valk_type_t *ty_never(type_arena_t *a) { return ty_ground(a, TY_NEVER); }
 
@@ -179,7 +188,8 @@ valk_type_t *ty_union2(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
   t1 = ty_resolve(t1);
   t2 = ty_resolve(t2);
   if (ty_equal(t1, t2)) return t1;
-  if (t1->kind == TY_ANY || t2->kind == TY_ANY) return ty_any(a);
+  if (t1->kind == TY_ANY) return t2;
+  if (t2->kind == TY_ANY) return t1;
   if (t1->kind == TY_NEVER) return t2;
   if (t2->kind == TY_NEVER) return t1;
 
@@ -268,6 +278,7 @@ static const char *GROUND_NAMES[] = {
   [TY_SYM]    = "Sym",
   [TY_NIL]    = "Nil",
   [TY_ERR]    = "Err",
+  [TY_QEXPR]  = "QExpr",
   [TY_ANY]    = "??",
   [TY_NEVER]  = "Never",
 };
@@ -275,7 +286,8 @@ static const char *GROUND_NAMES[] = {
 const char *valk_type_name(const valk_type_t *ty) {
   if (!ty) return "?";
   valk_type_t *r = ty_resolve((valk_type_t *)ty);
-  if (r->kind < TY_LIST && r->kind != TY_VAR) return GROUND_NAMES[r->kind];
+  if (r->kind < TY_KW && r->kind != TY_VAR) return GROUND_NAMES[r->kind];
+  if (r->kind == TY_KW) return r->kw.tag ? r->kw.tag : "Kw";
   if (r->kind == TY_ANY) return "??";
   if (r->kind == TY_NEVER) return "Never";
   if (r->kind == TY_LIST) return "List";
@@ -349,8 +361,15 @@ static char *type_display_impl(const valk_type_t *ty, var_map_t *m) {
 
   switch (r->kind) {
   case TY_NUM: case TY_STR: case TY_SYM: case TY_NIL:
-  case TY_ERR: case TY_ANY: case TY_NEVER:
+  case TY_ERR: case TY_QEXPR: case TY_ANY: case TY_NEVER:
     return strdup(GROUND_NAMES[r->kind]);
+
+  case TY_KW:
+    if (r->kw.tag)
+      snprintf(buf, sizeof(buf), ":%s", r->kw.tag);
+    else
+      snprintf(buf, sizeof(buf), "Kw");
+    return strdup(buf);
 
   case TY_LIST: {
     char *elem = type_display_impl(r->list.elem, m);
@@ -474,8 +493,13 @@ bool ty_equal(const valk_type_t *a, const valk_type_t *b) {
 
   switch (ra->kind) {
   case TY_NUM: case TY_STR: case TY_SYM: case TY_NIL:
-  case TY_ERR: case TY_ANY: case TY_NEVER:
+  case TY_ERR: case TY_QEXPR: case TY_ANY: case TY_NEVER:
     return true;
+
+  case TY_KW:
+    if (!ra->kw.tag && !rb->kw.tag) return true;
+    if (!ra->kw.tag || !rb->kw.tag) return false;
+    return strcmp(ra->kw.tag, rb->kw.tag) == 0;
 
   case TY_LIST:
     return ty_equal(ra->list.elem, rb->list.elem);
@@ -579,7 +603,7 @@ bool ty_unify(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
   t2 = ty_resolve(t2);
   if (t1 == t2) return true;
 
-  if (t1->kind == TY_ANY || t2->kind == TY_ANY) return true;
+  if (t1->kind == TY_ANY || t2->kind == TY_ANY) return false;
 
   if (t1->kind == TY_VAR) {
     if (ty_occurs(t1->var.id, t2)) return false;
@@ -598,12 +622,21 @@ bool ty_unify(type_arena_t *a, valk_type_t *t1, valk_type_t *t2) {
   if (t1->kind == TY_LIST && t2->kind == TY_PLIST) return true;
   if (t1->kind == TY_TUPLE && t2->kind == TY_LIST) return true;
   if (t1->kind == TY_LIST && t2->kind == TY_TUPLE) return true;
+  if (t1->kind == TY_QEXPR && t2->kind == TY_LIST) return true;
+  if (t1->kind == TY_LIST && t2->kind == TY_QEXPR) return true;
+  if (t1->kind == TY_KW && t2->kind == TY_SYM) return true;
+  if (t1->kind == TY_SYM && t2->kind == TY_KW) return true;
 
   if (t1->kind != t2->kind) return false;
 
   switch (t1->kind) {
   case TY_NUM: case TY_STR: case TY_SYM: case TY_NIL: case TY_ERR:
+  case TY_QEXPR:
     return true;
+
+  case TY_KW:
+    if (!t1->kw.tag || !t2->kw.tag) return true;
+    return strcmp(t1->kw.tag, t2->kw.tag) == 0;
 
   case TY_LIST:
     return ty_unify(a, t1->list.elem, t2->list.elem);
@@ -771,10 +804,17 @@ bool ty_compatible(const valk_type_t *expected, const valk_type_t *actual) {
   valk_type_t *re = ty_resolve((valk_type_t *)expected);
   valk_type_t *ra = ty_resolve((valk_type_t *)actual);
   if (re == ra) return true;
-  if (re->kind == TY_ANY || ra->kind == TY_ANY) return true;
+  if (re->kind == TY_ANY || ra->kind == TY_ANY) return false;
   if (ra->kind == TY_NEVER || re->kind == TY_NEVER) return true;
   if (re->kind == TY_VAR || ra->kind == TY_VAR) return true;
   if (ty_equal(re, ra)) return true;
+
+  if (re->kind == TY_SYM && ra->kind == TY_KW) return true;
+  if (re->kind == TY_KW && ra->kind == TY_SYM) return true;
+  if (re->kind == TY_KW && ra->kind == TY_KW) {
+    if (!re->kw.tag || !ra->kw.tag) return true;
+    return strcmp(re->kw.tag, ra->kw.tag) == 0;
+  }
 
   if (re->kind == TY_LIST && ra->kind == TY_NIL) return true;
   if (re->kind == TY_NIL && ra->kind == TY_LIST) return true;

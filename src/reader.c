@@ -28,7 +28,7 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
   for (; (next = s[end]); ++end) {
     if (strchr("abcdefghijklmnopqrstuvwxyz"
                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-               "0123456789_+-*\\/=<>!&?:",
+               "0123456789_+-*\\/=<>!&?:|",
                next) &&
         s[end] != '\0') {
       continue;
@@ -164,9 +164,9 @@ valk_lval_t* valk_lval_read(int* i, const char* s) {
     res = valk_lval_read_expr(i, s);
   }
   else if (strchr("abcdefghijklmnopqrstuvwxyz"
-                  "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                  "0123456789_+-*\\/=<>!&?:",
-                  s[*i])) {
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                   "0123456789_+-*\\/=<>!&?:|",
+                   s[*i])) {
     res = valk_lval_read_sym(i, s);
   } else if (s[*i] == '"') {
     res = valk_lval_read_str(i, s);
@@ -411,7 +411,7 @@ static valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx) {
   } else if (strchr("({", ctx->source[ctx->pos])) {
     res = valk_lval_read_expr_ctx(ctx);
     LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
-  } else if (strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-*\\/=<>!&?:", ctx->source[ctx->pos])) {
+  } else if (strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-*\\/=<>!&?:|", ctx->source[ctx->pos])) {
     res = valk_lval_read_sym_ctx(ctx);
   } else if (ctx->source[ctx->pos] == '"') {
     res = valk_lval_read_str_ctx(ctx);

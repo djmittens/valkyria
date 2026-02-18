@@ -14,26 +14,38 @@ valk_type_t *ann_var(ann_var_map_t *m, const char *name) {
 }
 
 valk_type_t *parse_type_ann(ann_var_map_t *m, valk_lval_t *node) {
-  if (!node) return ty_any(m->arena);
+  if (!node) return ty_var(m->arena);
   type_arena_t *a = m->arena;
 
   if (LVAL_TYPE(node) == LVAL_SYM) {
     const char *s = node->str;
+    if (s[0] == ':' && s[1] != '\0') return ty_kw(a, s + 1);
     if (strcmp(s, "Num") == 0) return ty_num(a);
     if (strcmp(s, "Str") == 0) return ty_str(a);
     if (strcmp(s, "Sym") == 0) return ty_sym(a);
     if (strcmp(s, "Nil") == 0) return ty_nil(a);
     if (strcmp(s, "Err") == 0) return ty_err(a);
-    if (strcmp(s, "Any") == 0 || strcmp(s, "??") == 0) return ty_any(a);
+    if (strcmp(s, "QExpr") == 0) return ty_qexpr(a);
     if (strcmp(s, "Never") == 0) return ty_never(a);
     return ann_var(m, s);
   }
 
   if (LVAL_TYPE(node) == LVAL_CONS) {
     valk_lval_t *h = valk_lval_head(node);
-    if (!h || LVAL_TYPE(h) != LVAL_SYM) return ty_any(a);
+    if (!h || LVAL_TYPE(h) != LVAL_SYM) return ty_var(a);
     const char *name = h->str;
     valk_lval_t *args = valk_lval_tail(node);
+
+    if (strcmp(name, "|") == 0) {
+      valk_type_t *result = ty_never(a);
+      valk_lval_t *cur = args;
+      while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+        valk_type_t *member = parse_type_ann(m, valk_lval_head(cur));
+        result = ty_union2(a, result, member);
+        cur = valk_lval_tail(cur);
+      }
+      return result;
+    }
 
     if (strcmp(name, "->") == 0) {
       valk_type_t *pts[TY_MAX_PARAMS];
@@ -51,7 +63,7 @@ valk_type_t *parse_type_ann(ann_var_map_t *m, valk_lval_t *node) {
           pts[pc++] = parse_type_ann(m, elem);
         cur = valk_lval_tail(cur);
       }
-      if (pc == 0) return ty_any(a);
+      if (pc == 0) return ty_var(a);
       valk_type_t *ret = pts[pc - 1];
       return ty_fun(a, pts, pc - 1, ret, variadic);
     }
@@ -109,7 +121,7 @@ valk_type_t *parse_type_ann(ann_var_map_t *m, valk_lval_t *node) {
     return ty_named(a, name, tps, tc);
   }
 
-  return ty_any(a);
+  return ty_var(a);
 }
 
 bool is_ann_sym(valk_lval_t *node, const char *s) {

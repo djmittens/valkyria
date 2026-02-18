@@ -24,33 +24,51 @@
 ; Greater or equal.
 (sig >= (-> Num Num Num))
 ; Equality test.
-(sig == (-> Any Any Num))
+(sig == (-> A B Num))
 ; Inequality test.
-(sig != (-> Any Any Num))
+(sig != (-> A B Num))
 
 ; === Ordering ===
 
 ; Compare two values by ordering.
-(sig ord (-> Any Any Num))
+(sig ord (-> A A Num))
 
 ; === Special forms ===
 
-; Define a global variable.
-(sig def (-> Sym & Any Nil))
-; Bind a local variable.
-(sig = (-> Sym & Any Nil))
-; Create an anonymous function (lambda).
-(sig \ (-> (List Sym) Any (-> & Any Any)))
+; Lambda: formals and body.
+(sig \ (-> QExpr QExpr A))
+; Named function definition.
+(sig fun (-> QExpr QExpr A))
+; Global variable binding.
+(sig def (-> QExpr & A Nil))
+; Local variable binding.
+(sig = (-> QExpr & A Nil))
+; Lexical scope.
+(sig let (-> QExpr A))
 ; Conditional expression.
-(sig if (-> Num Any Any Any))
-; Create a Q-expression from arguments.
-(sig list (-> & Any (List Any)))
-; Load and evaluate a file.
-(sig load (-> Str Any))
-; Parse a string into a Q-expression.
-(sig read (-> Str Any))
+(sig if (-> Num QExpr QExpr A))
 ; Multi-branch conditional.
-(sig select (-> & Any Any))
+(sig select (-> & QExpr A))
+; Case dispatch on a value.
+(sig case (-> A & QExpr B))
+; Pattern matching.
+(sig match (-> A & QExpr B))
+; Algebraic type definition.
+(sig type (-> & QExpr Nil))
+; Quote an expression.
+(sig quote (-> A QExpr))
+; Quasiquote template.
+(sig quasiquote (-> QExpr QExpr))
+; Unquote inside quasiquote.
+(sig unquote (-> A A))
+; Splice-unquote inside quasiquote.
+(sig unquote-splicing (-> A A))
+; Create a Q-expression from arguments.
+(sig list (-> & A (List A)))
+; Load and evaluate a file. Returns nil.
+(sig load (-> Str Nil))
+; Parse a string into a Q-expression.
+(sig read (-> Str QExpr))
 
 ; === List operations ===
 
@@ -74,7 +92,7 @@
 ; === Dynamic eval and apply ===
 
 ; Evaluate a Q-expression as code.
-(sig eval (-> A A))
+(sig eval (-> QExpr A))
 ; Evaluate expressions sequentially, return last.
 (sig do (-> & A A))
 
@@ -98,11 +116,11 @@
 ; === I/O ===
 
 ; Print values without newline.
-(sig print (-> & Any Nil))
+(sig print (-> & A Nil))
 ; Print values followed by newline.
-(sig println (-> & Any Nil))
+(sig println (-> & A Nil))
 ; Formatted print (C-style format string).
-(sig printf (-> Str & Any Nil))
+(sig printf (-> Str & A Nil))
 ; Create an error value.
 (sig error (-> Str Err))
 
@@ -117,9 +135,9 @@
 ; Parse string to number.
 (sig str->num (-> Str Num))
 ; Concatenate arguments as strings.
-(sig str (-> & Any Str))
+(sig str (-> & A Str))
 ; Repeat pattern n times into a string.
-(sig make-string (-> Any Any Str))
+(sig make-string (-> A Num Str))
 
 ; === File I/O ===
 
@@ -147,17 +165,17 @@
 ; Wrap a value in an immediately-resolved handle.
 (sig aio/pure (-> A (Handle A)))
 ; Create an immediately-failed handle.
-(sig aio/fail (-> Any (Handle A)))
+(sig aio/fail (-> B (Handle A)))
 ; Get result of completed handle.
 (sig aio/result (-> (Handle A) A))
 ; Get error of failed handle.
 (sig aio/error (-> (Handle A) Err))
-; Cancel an async operation.
-(sig aio/cancel (-> (Handle A) Sym))
+; Cancel an async operation. Returns :true if cancelled, :false otherwise.
+(sig aio/cancel (-> (Handle A) (| :true :false)))
 ; Check if handle was cancelled.
 (sig aio/cancelled? (-> (Handle A) Num))
-; Get handle status (:pending, :completed, :failed, :cancelled).
-(sig aio/status (-> (Handle A) Sym))
+; Get handle status.
+(sig aio/status (-> (Handle A) (| :pending :running :completed :failed :cancelled :unknown)))
 
 ; === Async combinators ===
 
@@ -173,8 +191,8 @@
 (sig aio/within (-> (Handle A) Num (Handle A)))
 ; Register cancellation callback.
 (sig aio/on-cancel (-> (Handle A) (-> Nil) (Handle A)))
-; Run async operation with scoped cleanup.
-(sig aio/scope (-> (-> (Ref aio) (Handle A)) (Handle A)))
+; Run async operation with scoped cleanup. Callback receives the scope handle.
+(sig aio/scope (-> (-> (Handle A) A) (Handle A)))
 ; Acquire/release resource pattern for async.
 (sig aio/bracket (-> (Handle A) (-> A Nil) (-> A B) (Handle B)))
 ; Apply async function to each list element, collect results.
@@ -183,18 +201,18 @@
 ; === Async syntax ===
 
 ; Sequential async block. Use <- to bind async results.
-(sig aio/do (-> & Any (Handle Any)))
+(sig aio/do (-> & A (Handle A)))
 ; Parallel async bindings with optional :then sequential phases.
-(sig aio/let (-> (List Any) & Any (Handle Any)))
+(sig aio/let (-> QExpr & A (Handle A)))
 ; Bind async handle result in aio/do block.
 (sig <- (-> (Handle A) A))
 
 ; === Context ===
 
 ; Run body with a deadline (timeout in ms).
-(sig ctx/with-deadline (-> Num & Any Any))
+(sig ctx/with-deadline (-> Num & A A))
 ; Run body with a context key-value binding.
-(sig ctx/with (-> Sym Any & Any Any))
+(sig ctx/with (-> Sym A & B B))
 
 ; === Async scheduling ===
 
@@ -203,7 +221,7 @@
 ; Schedule a repeating callback at interval in ms.
 (sig aio/interval (-> (Ref aio) Num (-> A) (Handle A)))
 ; Retry with exponential backoff delays.
-(sig aio/retry (-> (Ref aio) (-> (Handle A)) (List Any) (Handle A)))
+(sig aio/retry (-> (Ref aio) (-> (Handle A)) (List Num) (Handle A)))
 ; Create a handle that never completes.
 (sig aio/never (-> (Ref aio) (Handle Never)))
 
@@ -247,11 +265,11 @@
 ; Add a header to a request object.
 (sig http2/request-add-header (-> (Ref http_request) Str Str Nil))
 ; Create a mock response for testing.
-(sig http2/mock-response (-> Str Str & Any (Ref http_response)))
+(sig http2/mock-response (-> Str Str & A (Ref http_response)))
 ; Connect to an HTTP/2 server and invoke handler on each request.
 (sig http2/connect (-> (Ref aio) Str Num (-> (Ref http_request) Nil) Nil))
 ; Start an HTTP/2 server listening on port.
-(sig http2/server-listen (-> (Ref aio) Num (-> (Ref http_request) Any) & Any (Handle (Ref http_server))))
+(sig http2/server-listen (-> (Ref aio) Num (-> (Ref http_request) A) & B (Handle (Ref http_server))))
 ; Set request handler for an existing server.
 (sig http2/server-handle (-> (Ref http_server) (-> (Ref http_request) Nil) Nil))
 ; Get the port number of a running server.
@@ -281,13 +299,13 @@
 ; === Streaming ===
 
 ; Open a response stream on a request.
-(sig stream/open (-> (Ref http_request) & Any (Ref stream)))
+(sig stream/open (-> (Ref http_request) & A (Ref stream)))
 ; Close a stream gracefully.
-(sig stream/close (-> (Ref stream) (Handle Sym)))
+(sig stream/close (-> (Ref stream) (Handle :closed)))
 ; Cancel a stream.
-(sig stream/cancel (-> (Ref stream) (Handle Sym)))
+(sig stream/cancel (-> (Ref stream) (Handle :closed)))
 ; Wait for a stream to be closed.
-(sig stream/closed (-> (Ref stream) (Handle Sym)))
+(sig stream/closed (-> (Ref stream) (Handle :closed)))
 ; Get stream ID.
 (sig stream/id (-> (Ref stream) Num))
 ; Check if stream is writable.
@@ -382,8 +400,8 @@
 (sig time-us (-> Num))
 ; Current call stack depth.
 (sig stack-depth (-> Num))
-; Print the current environment.
-(sig penv (-> (List Str)))
+; Print the current environment as list of (symbol value) pairs.
+(sig penv (-> (List A)))
 ; Exit process with status code.
 (sig exit (-> Num Num))
 ; Alias for exit.
@@ -416,9 +434,9 @@
 ; Check if request deadline has been exceeded.
 (sig ctx/deadline-exceeded? (-> Num))
 ; Get all context-local bindings.
-(sig ctx/locals (-> (List Any)))
+(sig ctx/locals (-> QExpr))
 ; Get a context value by key.
-(sig ctx/get (-> Sym Any))
+(sig ctx/get (-> Sym A))
 
 ; === Tracing ===
 
@@ -432,11 +450,11 @@
 ; === VM ===
 
 ; VM metrics as JSON string.
-(sig vm/metrics-json (-> & Any Str))
+(sig vm/metrics-json (-> & A Str))
 ; VM metrics as compact JSON.
-(sig vm/metrics-json-compact (-> & Any Str))
+(sig vm/metrics-json-compact (-> & A Str))
 ; VM metrics in Prometheus format.
-(sig vm/metrics-prometheus (-> & Any Str))
+(sig vm/metrics-prometheus (-> & A Str))
 
 ; === Test ===
 

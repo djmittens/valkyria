@@ -213,12 +213,12 @@ static void load_symbols_cb(const char *contents, const char *real_path,
 // Read builtins.valk from workspace root
 // ---------------------------------------------------------------------------
 
-static char *read_builtins_valk(char *real_out) {
+static char *read_workspace_file(const char *rel_path, char *real_out) {
   const char *ws_root = lsp_workspace_root();
   if (!ws_root) return nullptr;
 
   char path[PATH_MAX];
-  snprintf(path, sizeof(path), "%s/src/builtins.valk", ws_root);
+  snprintf(path, sizeof(path), "%s/%s", ws_root, rel_path);
   if (!realpath(path, real_out)) return nullptr;
 
   FILE *f = fopen(real_out, "rb");
@@ -233,6 +233,10 @@ static char *read_builtins_valk(char *real_out) {
   return contents;
 }
 
+static char *read_builtins_valk(char *real_out) {
+  return read_workspace_file("src/builtins.valk", real_out);
+}
+
 static void lsp_load_builtins_valk(lsp_symset_t *visited,
                                    lsp_load_callback_fn cb, void *ctx) {
   char real[PATH_MAX];
@@ -240,6 +244,23 @@ static void lsp_load_builtins_valk(lsp_symset_t *visited,
   if (!contents) return;
   if (symset_contains(visited, real)) { free(contents); return; }
   symset_add(visited, real);
+  cb(contents, real, ctx);
+  free(contents);
+}
+
+static void lsp_load_prelude_valk(lsp_symset_t *visited,
+                                  lsp_load_callback_fn cb, void *ctx) {
+  char real[PATH_MAX];
+  char *contents = read_workspace_file("src/prelude.valk", real);
+  if (!contents) return;
+  if (symset_contains(visited, real)) { free(contents); return; }
+  symset_add(visited, real);
+
+  char *dir_copy = strdup(real);
+  char *dir = dirname(dir_copy);
+  lsp_for_each_load(contents, dir, visited, cb, ctx);
+  free(dir_copy);
+
   cb(contents, real, ctx);
   free(contents);
 }
@@ -294,6 +315,7 @@ void build_global_symset(lsp_document_t *doc, lsp_symset_t *globals) {
     symset_add(&visited, real);
 
   lsp_load_builtins_valk(&visited, load_symbols_cb, globals);
+  lsp_load_prelude_valk(&visited, load_symbols_cb, globals);
   lsp_for_each_load(doc->text, dir, &visited, load_symbols_cb, globals);
   symset_free(&visited);
   free(dir_copy);
@@ -370,14 +392,15 @@ void init_typed_scope_with_loads(type_arena_t *arena, typed_scope_t *scope,
   load_types_ctx_t lt = {.arena = arena, .scope = scope,
                          .plist_types = plist_regs, .plist_type_count = &plist_count};
   lsp_load_builtins_valk(&visited, load_types_cb, &lt);
+  lsp_load_prelude_valk(&visited, load_types_cb, &lt);
   lsp_for_each_load(doc->text, dir, &visited, load_types_cb, &lt);
   symset_free(&visited);
   free(dir_copy);
 }
 
 void init_typed_scope_with_plist_reg(type_arena_t *arena, typed_scope_t *scope,
-                                    lsp_document_t *doc,
-                                    plist_type_reg_t *out_regs, int *out_count) {
+                                     lsp_document_t *doc,
+                                     plist_type_reg_t *out_regs, int *out_count) {
   lsp_builtin_schemes_init(arena, scope);
 
   char file_path[PATH_MAX];
@@ -396,6 +419,7 @@ void init_typed_scope_with_plist_reg(type_arena_t *arena, typed_scope_t *scope,
   load_types_ctx_t lt = {.arena = arena, .scope = scope,
                          .plist_types = plist_regs, .plist_type_count = &plist_count};
   lsp_load_builtins_valk(&visited, load_types_cb, &lt);
+  lsp_load_prelude_valk(&visited, load_types_cb, &lt);
   lsp_for_each_load(doc->text, dir, &visited, load_types_cb, &lt);
   symset_free(&visited);
   free(dir_copy);

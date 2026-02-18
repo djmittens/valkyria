@@ -150,15 +150,20 @@ static void walk_type_ann(walk_ctx_t *w, valk_lval_t *node) {
   if (!node) return;
   if (LVAL_TYPE(node) == LVAL_SYM) {
     const char *s = node->str;
-    if (s[0] >= 'A' && s[0] <= 'Z') {
+    if (s[0] == ':') {
+      emit_sym(w, s, SEM_TYPE, 0);
+    } else if (s[0] >= 'A' && s[0] <= 'Z') {
       bool is_ground = strcmp(s, "Num") == 0 || strcmp(s, "Str") == 0 ||
         strcmp(s, "Sym") == 0 || strcmp(s, "Nil") == 0 ||
         strcmp(s, "Err") == 0 || strcmp(s, "Any") == 0 ||
-        strcmp(s, "PList") == 0;
+        strcmp(s, "Never") == 0 || strcmp(s, "QExpr") == 0 ||
+        strcmp(s, "PList") == 0 || strcmp(s, "List") == 0 ||
+        strcmp(s, "Handle") == 0 || strcmp(s, "Ref") == 0;
       emit_sym(w, s, is_ground ? SEM_TYPE : SEM_TYPE_PARAM, 0);
     } else if (strcmp(s, "??") == 0) {
       emit_sym(w, s, SEM_TYPE, 0);
-    } else if (strcmp(s, "->") == 0) {
+    } else if (strcmp(s, "->") == 0 || strcmp(s, "|") == 0 ||
+               strcmp(s, "&") == 0) {
       emit_sym(w, s, SEM_OPERATOR, 0);
     }
   } else if (LVAL_TYPE(node) == LVAL_CONS) {
@@ -336,6 +341,47 @@ static void walk_type(walk_ctx_t *w, valk_lval_t *rest) {
   }
 }
 
+static void walk_aio_let(walk_ctx_t *w, valk_lval_t *rest) {
+  if (LVAL_TYPE(rest) != LVAL_CONS) return;
+  valk_lval_t *bindings = valk_lval_head(rest);
+  valk_lval_t *body_rest = valk_lval_tail(rest);
+  if (!bindings || LVAL_TYPE(bindings) != LVAL_CONS) return;
+
+  lsp_scope_t *inner = scope_push(w->scope);
+  lsp_scope_t *saved = w->scope;
+  w->scope = inner;
+
+  uint32_t sf = bindings->flags;
+  if (bindings->flags & LVAL_FLAG_QUOTED)
+    bindings->flags &= ~LVAL_FLAG_QUOTED;
+
+  valk_lval_t *cur = bindings;
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+    valk_lval_t *item = valk_lval_head(cur);
+    if (item && LVAL_TYPE(item) == LVAL_SYM && item->str[0] == ':') {
+      emit_sym(w, item->str, SEM_KEYWORD, 0);
+      cur = valk_lval_tail(cur);
+      continue;
+    }
+    if (item && LVAL_TYPE(item) == LVAL_CONS) {
+      valk_lval_t *var = valk_lval_head(item);
+      valk_lval_t *val_rest = valk_lval_tail(item);
+      if (var && LVAL_TYPE(var) == LVAL_SYM) {
+        symset_add(&inner->locals, var->str);
+        emit_sym(w, var->str, SEM_VARIABLE, SEM_MOD_DEFINITION);
+      }
+      walk_body(w, val_rest);
+    }
+    cur = valk_lval_tail(cur);
+  }
+
+  bindings->flags = sf;
+  walk_body(w, body_rest);
+
+  w->scope = saved;
+  scope_pop(inner);
+}
+
 static void walk_aio_do(walk_ctx_t *w, valk_lval_t *rest) {
   if (LVAL_TYPE(rest) != LVAL_CONS) return;
   valk_lval_t *body = valk_lval_head(rest);
@@ -461,7 +507,6 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
         (!is_special_form(head->str) && !is_builtin(head->str) &&
          !symset_contains(w->globals, head->str) &&
          !scope_has(w->scope, head->str))) {
-      walk_body(w, expr);
       return;
     }
   }
@@ -504,9 +549,20 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   if (strcmp(name, "def") == 0)      { walk_binding(w, "def", rest); return; }
   if (strcmp(name, "=") == 0)        { walk_binding(w, "=", rest); return; }
   if (strcmp(name, "type") == 0)     { walk_type(w, rest); return; }
-  if (strcmp(name, "sig") == 0)      { return; }
+  if (strcmp(name, "sig") == 0) {
+    if (LVAL_TYPE(rest) != LVAL_CONS) return;
+    valk_lval_t *sig_name = valk_lval_head(rest);
+    if (sig_name && LVAL_TYPE(sig_name) == LVAL_SYM)
+      emit_sym(w, sig_name->str, SEM_FUNCTION, SEM_MOD_DECLARATION);
+    valk_lval_t *sig_type = valk_lval_tail(rest);
+    if (sig_type && LVAL_TYPE(sig_type) == LVAL_CONS)
+      walk_type_ann(w, valk_lval_head(sig_type));
+    return;
+  }
+  if (strcmp(name, "quote") == 0)    { return; }
   if (strcmp(name, "match") == 0)    { walk_match(w, rest); return; }
   if (strcmp(name, "aio/do") == 0)   { walk_aio_do(w, rest); return; }
+  if (strcmp(name, "aio/let") == 0)  { walk_aio_let(w, rest); return; }
 
   walk_body(w, rest);
 }

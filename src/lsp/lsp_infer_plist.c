@@ -50,7 +50,7 @@ valk_type_t *infer_plist_get(infer_ctx_t *ctx, valk_lval_t *rest) {
     valk_type_t *val_union = ty_never(ctx->arena);
     for (int i = 0; i < pl_ty->plist.count; i++)
       val_union = ty_join(ctx->arena, val_union, pl_ty->plist.vals[i]);
-    return val_union->kind == TY_NEVER ? ty_any(ctx->arena) : val_union;
+    return val_union->kind == TY_NEVER ? ty_var(ctx->arena) : val_union;
   }
   return ty_var(ctx->arena);
 }
@@ -89,7 +89,7 @@ valk_type_t *infer_plist_set(infer_ctx_t *ctx, valk_lval_t *rest) {
     }
     return ty_plist(ctx->arena, keys, vals, n);
   }
-  return ty_any(ctx->arena);
+  return ty_var(ctx->arena);
 }
 
 valk_type_t *infer_plist_has(infer_ctx_t *ctx, valk_lval_t *rest) {

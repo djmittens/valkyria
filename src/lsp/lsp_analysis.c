@@ -145,7 +145,7 @@ void lsp_collect_inlay_hints(lsp_document_t *doc,
       continue;
     }
     valk_type_t *ty = ctx.hints[i].type ? ty_resolve(ctx.hints[i].type) : nullptr;
-    if (!ty || ty->kind == TY_VAR || ty->kind == TY_ANY) continue;
+    if (!ty) continue;
     char *display = valk_type_display_pretty(ty);
     char buf[256];
     snprintf(buf, sizeof(buf), "%s %s", ctx.hints[i].is_return ? "->" : "::", display);

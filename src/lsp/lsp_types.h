@@ -18,6 +18,8 @@ typedef enum {
   TY_SYM,
   TY_NIL,
   TY_ERR,
+  TY_QEXPR,
+  TY_KW,
   TY_LIST,
   TY_HANDLE,
   TY_REF,
@@ -45,6 +47,8 @@ struct valk_type {
     struct { valk_type_t *inner; } handle;
 
     struct { const char *tag; } ref;
+
+    struct { const char *tag; } kw;
 
     struct {
       valk_type_t *params[TY_MAX_PARAMS];
@@ -114,6 +118,8 @@ valk_type_t *ty_str(type_arena_t *a);
 valk_type_t *ty_sym(type_arena_t *a);
 valk_type_t *ty_nil(type_arena_t *a);
 valk_type_t *ty_err(type_arena_t *a);
+valk_type_t *ty_qexpr(type_arena_t *a);
+valk_type_t *ty_kw(type_arena_t *a, const char *tag);
 valk_type_t *ty_any(type_arena_t *a);
 valk_type_t *ty_never(type_arena_t *a);
 
