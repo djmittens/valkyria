@@ -304,6 +304,7 @@ int valk_lsp_main(int argc, char *argv[]) {
       handle_initialize(id);
       initialized = true;
     } else if (strcmp(method, "initialized") == 0) {
+      lsp_load_builtins_into_store(&g_store);
       lsp_workspace_scan(&g_store);
     } else if (strcmp(method, "shutdown") == 0) {
       lsp_send_response(id, "null");

@@ -1,5 +1,4 @@
 #include "lsp_doc.h"
-#include "lsp_builtins_gen.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,35 +6,8 @@
 
 #include "../parser.h"
 
-// ---------------------------------------------------------------------------
-// Builtin lookup
-// ---------------------------------------------------------------------------
-
-static const lsp_builtin_entry_t *find_builtin(const char *name) {
-  for (int i = 0; LSP_BUILTINS[i].name; i++)
-    if (strcmp(LSP_BUILTINS[i].name, name) == 0)
-      return &LSP_BUILTINS[i];
-  return nullptr;
-}
-
-static bool is_special_form(const char *name) {
-  const lsp_builtin_entry_t *e = find_builtin(name);
-  return e && e->is_special_form;
-}
-
-static bool is_builtin(const char *name) {
-  return find_builtin(name) != nullptr;
-}
-
-static bool builtin_arity(const char *name, int *min_out, int *max_out) {
-  const lsp_builtin_entry_t *e = find_builtin(name);
-  if (e && e->min_arity >= 0) {
-    *min_out = e->min_arity;
-    *max_out = e->max_arity;
-    return true;
-  }
-  return false;
-}
+#define is_special_form lsp_is_special_form
+#define is_builtin lsp_is_builtin
 
 // ---------------------------------------------------------------------------
 // AST walker context + helpers
@@ -148,23 +120,6 @@ static void walk_sym(walk_ctx_t *w, valk_lval_t *expr) {
 
 static void check_arity(walk_ctx_t *w, const char *name, int nargs) {
   if (!w->emit_diag) return;
-
-  int amin, amax;
-  if (builtin_arity(name, &amin, &amax)) {
-    if (nargs >= amin && (amax < 0 || nargs <= amax)) return;
-    char msg[256];
-    if (amin == amax)
-      snprintf(msg, sizeof(msg), "'%s' expects %d argument%s, got %d",
-               name, amin, amin == 1 ? "" : "s", nargs);
-    else if (amax < 0)
-      snprintf(msg, sizeof(msg), "'%s' expects at least %d argument%s, got %d",
-               name, amin, amin == 1 ? "" : "s", nargs);
-    else
-      snprintf(msg, sizeof(msg), "'%s' expects %d-%d arguments, got %d",
-               name, amin, amax, nargs);
-    diag_at_sym(w, name, msg, 1);
-    return;
-  }
 
   for (size_t si = 0; si < w->doc->symbol_count; si++) {
     if (w->doc->symbols[si].arity < 0 ||

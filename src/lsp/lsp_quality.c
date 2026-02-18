@@ -344,6 +344,7 @@ int valk_lsp_check(const char *file_path) {
   snprintf(uri, sizeof(uri), "file://%s", resolved);
 
   lsp_doc_store_t store = {0};
+  lsp_load_builtins_into_store(&store);
   lsp_document_t *doc = doc_store_open(&store, uri, text, 0);
 
   analyze_document(doc);
@@ -393,6 +394,7 @@ int valk_quality_snapshot(const char *dir) {
   }
 
   lsp_doc_store_t store = {0};
+  lsp_load_builtins_into_store(&store);
   lsp_workspace_scan(&store);
 
   sync_all_documents(&store);

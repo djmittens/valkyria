@@ -33,6 +33,25 @@
 ; Compare two values by ordering.
 (sig ord (-> Any Any Num))
 
+; === Special forms ===
+
+; Define a global variable.
+(sig def (-> Sym & Any Nil))
+; Bind a local variable.
+(sig = (-> Sym & Any Nil))
+; Create an anonymous function (lambda).
+(sig \ (-> (List Sym) Any (-> & Any Any)))
+; Conditional expression.
+(sig if (-> Num Any Any Any))
+; Create a Q-expression from arguments.
+(sig list (-> & Any (List Any)))
+; Load and evaluate a file.
+(sig load (-> Str Any))
+; Parse a string into a Q-expression.
+(sig read (-> Str Any))
+; Multi-branch conditional.
+(sig select (-> & Any Any))
+
 ; === List operations ===
 
 ; Return first element of a Q-expression.
@@ -160,6 +179,22 @@
 (sig aio/bracket (-> (Handle A) (-> A Nil) (-> A B) (Handle B)))
 ; Apply async function to each list element, collect results.
 (sig aio/traverse (-> (List A) (-> A (Handle B)) (Handle (List B))))
+
+; === Async syntax ===
+
+; Sequential async block. Use <- to bind async results.
+(sig aio/do (-> & Any (Handle Any)))
+; Parallel async bindings with optional :then sequential phases.
+(sig aio/let (-> (List Any) & Any (Handle Any)))
+; Bind async handle result in aio/do block.
+(sig <- (-> (Handle A) A))
+
+; === Context ===
+
+; Run body with a deadline (timeout in ms).
+(sig ctx/with-deadline (-> Num & Any Any))
+; Run body with a context key-value binding.
+(sig ctx/with (-> Sym Any & Any Any))
 
 ; === Async scheduling ===
 

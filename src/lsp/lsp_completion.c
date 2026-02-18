@@ -1,5 +1,4 @@
 #include "lsp_doc.h"
-#include "lsp_builtins_gen.h"
 #include "lsp_io.h"
 #include "lsp_json.h"
 
@@ -210,72 +209,52 @@ void handle_completion(int id, void *params_raw, void *store_raw) {
   for (size_t d = 0; d < store->count && p < end_buf - 8192; d++) {
     if (doc && &store->docs[d] == doc) continue;
     for (size_t i = 0; i < store->docs[d].symbol_count; i++) {
-      if (prefix && strncmp(store->docs[d].symbols[i].name, prefix, strlen(prefix)) != 0)
+      const char *sym_name = store->docs[d].symbols[i].name;
+      if (prefix && strncmp(sym_name, prefix, strlen(prefix)) != 0)
         continue;
       if (count > 0) *p++ = ',';
-      char *escaped = json_escape_string(store->docs[d].symbols[i].name);
-      int kind = store->docs[d].symbols[i].arity >= 0 ? 3 : 6;
+
+      bool is_bi = lsp_is_builtin(sym_name);
+      bool is_const = strcmp(sym_name, "true") == 0 ||
+                      strcmp(sym_name, "false") == 0 ||
+                      strcmp(sym_name, "nil") == 0 ||
+                      strcmp(sym_name, "otherwise") == 0;
+      int kind = is_const ? 21 : (store->docs[d].symbols[i].arity >= 0 ? 3 : 6);
+
+      char *escaped = json_escape_string(sym_name);
       p += snprintf(p, end_buf - p, "{\"label\":%s,\"kind\":%d", escaped, kind);
       free(escaped);
-      completion_add_sym_doc(&p, end_buf, &store->docs[d],
-                             &store->docs[d].symbols[i], in_parens,
-                             line, edit_start, edit_end);
-      *p++ = '}';
-      count++;
-    }
-  }
 
-  for (int i = 0; LSP_BUILTINS[i].name && p < end_buf - 8192; i++) {
-    const lsp_builtin_entry_t *bi = &LSP_BUILTINS[i];
-    if (prefix && strncmp(bi->name, prefix, strlen(prefix)) != 0)
-      continue;
-    if (count > 0) *p++ = ',';
-    char *escaped = json_escape_string(bi->name);
-    bool is_const = strcmp(bi->name, "true") == 0 ||
-                    strcmp(bi->name, "false") == 0 ||
-                    strcmp(bi->name, "nil") == 0 ||
-                    strcmp(bi->name, "otherwise") == 0;
-    int kind = is_const ? 21 : 3;
-    p += snprintf(p, end_buf - p, "{\"label\":%s,\"kind\":%d", escaped, kind);
-    free(escaped);
-    const char *sig = bi->signature;
-    bool has_snippet = false;
-
-    if (sig && sig[0]) {
-      char detail[280];
-      snprintf(detail, sizeof(detail), " %s", sig);
-      char *escaped_detail = json_escape_string(detail);
-      p += snprintf(p, end_buf - p, ",\"labelDetails\":{\"detail\":%s}", escaped_detail);
-      free(escaped_detail);
-
-      char snip[512];
-      if (special_form_snippet(bi->name, snip, sizeof(snip), !in_parens)) {
-        emit_text_edit(&p, end_buf, line, edit_start, edit_end, snip);
-        has_snippet = true;
-      } else if (!is_const) {
-        if (generate_snippet_from_sig(bi->name, sig, snip, sizeof(snip), !in_parens)) {
+      if (is_bi) {
+        bool has_snippet = false;
+        char snip[512];
+        if (special_form_snippet(sym_name, snip, sizeof(snip), !in_parens)) {
           emit_text_edit(&p, end_buf, line, edit_start, edit_end, snip);
           has_snippet = true;
         }
+
+        const char *sig_doc = store->docs[d].symbols[i].doc;
+        if (sig_doc && strncmp(sig_doc, "(sig ", 5) == 0) {
+          char detail[280];
+          snprintf(detail, sizeof(detail), " %s", sig_doc);
+          char *escaped_detail = json_escape_string(detail);
+          p += snprintf(p, end_buf - p, ",\"labelDetails\":{\"detail\":%s}",
+                        escaped_detail);
+          free(escaped_detail);
+        }
+
+        if (!has_snippet && !is_const && !in_parens) {
+          snprintf(snip, sizeof(snip), "(%s $0)", sym_name);
+          emit_text_edit(&p, end_buf, line, edit_start, edit_end, snip);
+        }
+      } else {
+        completion_add_sym_doc(&p, end_buf, &store->docs[d],
+                               &store->docs[d].symbols[i], in_parens,
+                               line, edit_start, edit_end);
       }
+      *p++ = '}';
+      count++;
     }
-
-    if (sig && sig[0]) {
-      char md[2048];
-      snprintf(md, sizeof(md), "```valk\n%s\n```", sig);
-      char *escaped_doc = json_escape_string(md);
-      p += snprintf(p, end_buf - p,
-        ",\"documentation\":{\"kind\":\"markdown\",\"value\":%s}", escaped_doc);
-      free(escaped_doc);
-    }
-
-    if (!has_snippet && !is_const && !in_parens) {
-      char snip[256];
-      snprintf(snip, sizeof(snip), "(%s$0)", bi->name);
-      emit_text_edit(&p, end_buf, line, edit_start, edit_end, snip);
-    }
-    *p++ = '}';
-    count++;
   }
 
   free(prefix);

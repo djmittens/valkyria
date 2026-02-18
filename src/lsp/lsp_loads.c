@@ -1,5 +1,4 @@
 #include "lsp_doc.h"
-#include "lsp_builtins_gen.h"
 #include "lsp_types.h"
 
 #include <libgen.h>
@@ -10,6 +9,36 @@
 #include <string.h>
 
 #include "../parser.h"
+
+// ---------------------------------------------------------------------------
+// Special forms — language constructs that don't evaluate args normally.
+// This is a small fixed set; changes only when the language adds syntax.
+// ---------------------------------------------------------------------------
+
+static const char *SPECIAL_FORMS[] = {
+  "=", "\\", "def", "fun", "if", "do", "select", "case", "quote",
+  "load", "eval", "read", "let", "aio/let", "aio/do", "<-",
+  "type", "match", "sig", "ctx/with", "ctx/with-deadline",
+  nullptr
+};
+
+bool lsp_is_special_form(const char *name) {
+  for (const char **p = SPECIAL_FORMS; *p; p++)
+    if (strcmp(*p, name) == 0) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Global builtin name set — populated from builtins.valk sig forms
+// ---------------------------------------------------------------------------
+
+static lsp_symset_t s_builtin_names;
+static bool s_builtins_inited = false;
+
+bool lsp_is_builtin(const char *name) {
+  if (!s_builtins_inited) return lsp_is_special_form(name);
+  return symset_contains(&s_builtin_names, name);
+}
 
 void lsp_set_workspace_root(const char *root) {
   lsp_workspace_set_root(root);
@@ -161,6 +190,11 @@ static void extract_global_symbols_from_text(const char *text,
     extract_def_or_fun(head, tail, globals);
     if (strcmp(head->str, "type") == 0)
       extract_type_ctors(tail, globals);
+    if (strcmp(head->str, "sig") == 0 && LVAL_TYPE(tail) == LVAL_CONS) {
+      valk_lval_t *sig_name = valk_lval_head(tail);
+      if (sig_name && LVAL_TYPE(sig_name) == LVAL_SYM)
+        symset_add(globals, sig_name->str);
+    }
   }
 }
 
@@ -175,38 +209,76 @@ static void load_symbols_cb(const char *contents, const char *real_path,
 // Load builtins.valk for LSP (not loaded at runtime)
 // ---------------------------------------------------------------------------
 
-static void lsp_load_builtins_valk(lsp_symset_t *visited,
-                                   lsp_load_callback_fn cb, void *ctx) {
+// ---------------------------------------------------------------------------
+// Read builtins.valk from workspace root
+// ---------------------------------------------------------------------------
+
+static char *read_builtins_valk(char *real_out) {
   const char *ws_root = lsp_workspace_root();
-  if (!ws_root) return;
+  if (!ws_root) return nullptr;
 
   char path[PATH_MAX];
   snprintf(path, sizeof(path), "%s/src/builtins.valk", ws_root);
+  if (!realpath(path, real_out)) return nullptr;
 
-  char real[PATH_MAX];
-  if (!realpath(path, real)) return;
-  if (symset_contains(visited, real)) return;
-
-  FILE *f = fopen(real, "rb");
-  if (!f) return;
+  FILE *f = fopen(real_out, "rb");
+  if (!f) return nullptr;
   fseek(f, 0, SEEK_END);
   long flen = ftell(f);
   fseek(f, 0, SEEK_SET);
-  if (flen <= 0 || flen > 10 * 1024 * 1024) { fclose(f); return; }
+  if (flen <= 0 || flen > 10 * 1024 * 1024) { fclose(f); return nullptr; }
   char *contents = calloc(flen + 1, 1);
   fread(contents, 1, flen, f);
   fclose(f);
+  return contents;
+}
 
+static void lsp_load_builtins_valk(lsp_symset_t *visited,
+                                   lsp_load_callback_fn cb, void *ctx) {
+  char real[PATH_MAX];
+  char *contents = read_builtins_valk(real);
+  if (!contents) return;
+  if (symset_contains(visited, real)) { free(contents); return; }
   symset_add(visited, real);
   cb(contents, real, ctx);
+  free(contents);
+}
+
+void lsp_load_builtins_into_store(lsp_doc_store_t *store) {
+  char real[PATH_MAX];
+  char *contents = read_builtins_valk(real);
+  if (!contents) return;
+
+  char uri[PATH_MAX + 8];
+  snprintf(uri, sizeof(uri), "file://%s", real);
+  if (doc_store_find(store, uri)) { free(contents); return; }
+
+  lsp_document_t *doc = doc_store_open(store, uri, contents, 0);
+  doc->is_background = true;
+  analyze_document_light(doc);
+
+  if (!s_builtins_inited) {
+    symset_init(&s_builtin_names);
+    s_builtins_inited = true;
+  }
+  for (const char **p = SPECIAL_FORMS; *p; p++)
+    symset_add(&s_builtin_names, *p);
+  for (size_t i = 0; i < doc->symbol_count; i++)
+    symset_add(&s_builtin_names, doc->symbols[i].name);
+
   free(contents);
 }
 
 void build_global_symset(lsp_document_t *doc, lsp_symset_t *globals) {
   symset_init(globals);
 
-  for (int i = 0; LSP_BUILTINS[i].name; i++)
-    symset_add(globals, LSP_BUILTINS[i].name);
+  if (s_builtins_inited) {
+    for (size_t i = 0; i < s_builtin_names.count; i++)
+      symset_add(globals, s_builtin_names.names[i]);
+  } else {
+    for (const char **p = SPECIAL_FORMS; *p; p++)
+      symset_add(globals, *p);
+  }
   for (size_t i = 0; i < doc->symbol_count; i++)
     symset_add(globals, doc->symbols[i].name);
 

@@ -1,5 +1,4 @@
 #include "lsp_doc.h"
-#include "lsp_builtins_gen.h"
 #include "lsp_io.h"
 #include "lsp_json.h"
 
@@ -189,26 +188,6 @@ void handle_hover(int id, void *params_raw, void *store_raw) {
                     fname, sym->pos.line + 1);
       found = true;
       break;
-    }
-  }
-
-  if (!found) {
-    const lsp_builtin_entry_t *bi = nullptr;
-    for (int i = 0; LSP_BUILTINS[i].name; i++) {
-      if (strcmp(LSP_BUILTINS[i].name, word) == 0) {
-        bi = &LSP_BUILTINS[i];
-        break;
-      }
-    }
-    if (bi) {
-      char *type_str = lsp_type_at_pos(doc, offset);
-      if (type_str) {
-        p += snprintf(p, pe - p, "```valk\n%s :: %s\n```", bi->name, type_str);
-        free(type_str);
-      } else {
-        p += snprintf(p, pe - p, "```valk\n%s\n```", bi->signature);
-      }
-      found = true;
     }
   }
 

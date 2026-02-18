@@ -1,5 +1,4 @@
 #include "lsp_doc.h"
-#include "lsp_builtins_gen.h"
 #include "lsp_io.h"
 #include "lsp_json.h"
 
@@ -545,9 +544,7 @@ void handle_workspace_symbol(int id, void *params_raw, void *store_raw) {
 // ---------------------------------------------------------------------------
 
 static bool is_builtin_name(const char *name) {
-  for (int i = 0; LSP_BUILTINS[i].name; i++)
-    if (strcmp(LSP_BUILTINS[i].name, name) == 0) return true;
-  return false;
+  return lsp_is_builtin(name);
 }
 
 void handle_prepare_rename(int id, void *params_raw, void *store_raw) {

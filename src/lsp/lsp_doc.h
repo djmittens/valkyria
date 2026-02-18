@@ -138,6 +138,9 @@ char *lsp_type_at_pos(lsp_document_t *doc, int offset);
 // Load graph (lsp_loads.c)
 void uri_to_path(const char *uri, char *path, size_t path_size);
 void build_global_symset(lsp_document_t *doc, lsp_symset_t *globals);
+bool lsp_is_builtin(const char *name);
+bool lsp_is_special_form(const char *name);
+void lsp_load_builtins_into_store(lsp_doc_store_t *store);
 typedef void (*lsp_load_callback_fn)(const char *contents, const char *real_path,
                                      void *ctx);
 void lsp_for_each_load(const char *text, const char *base_dir,

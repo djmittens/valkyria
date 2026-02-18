@@ -1,5 +1,4 @@
 #include "lsp_doc.h"
-#include "lsp_builtins_gen.h"
 #include "lsp_types.h"
 
 #include <stdio.h>
