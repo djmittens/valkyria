@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../diag.h"
 #include "../parser.h"
 
 #define is_special_form lsp_is_special_form
@@ -16,6 +17,8 @@
 typedef struct {
   lsp_symset_t *globals;
   lsp_scope_t *scope;
+  valk_diag_list_t *diags;
+  valk_name_resolver_t *resolver;
   lsp_document_t *doc;
   const char *text;
   int *cursor;
@@ -57,11 +60,10 @@ static void advance_cursor(walk_ctx_t *w, const char *sym) {
 
 static void diag_at_sym(walk_ctx_t *w, const char *sym, const char *msg,
                         int severity) {
-  if (!w->emit_diag) return;
+  if (!w->emit_diag || !w->diags) return;
   int off = find_sym_offset(w->text, sym, *w->cursor);
   if (off < 0) return;
-  lsp_pos_t p = offset_to_pos(w->text, off);
-  doc_add_diag_full(w->doc, msg, p.line, p.col, (int)strlen(sym), severity);
+  valk_diag_add(w->diags, msg, off, (int)strlen(sym), severity);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +96,11 @@ static void walk_sym(walk_ctx_t *w, valk_lval_t *expr) {
   }
 
   if (symset_contains(w->globals, name)) {
+    emit_sym(w, name, SEM_VARIABLE, 0);
+    return;
+  }
+
+  if (w->resolver && w->resolver->is_known(name, w->resolver->ctx)) {
     emit_sym(w, name, SEM_VARIABLE, 0);
     return;
   }
@@ -529,7 +536,8 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   }
 
   if (w->emit_diag && !is_special_form(name) && !is_builtin(name) &&
-      !scope_has(w->scope, name) && !symset_contains(w->globals, name)) {
+      !scope_has(w->scope, name) && !symset_contains(w->globals, name) &&
+      !(w->resolver && w->resolver->is_known(name, w->resolver->ctx))) {
     bool is_accessor = (name[0] >= 'A' && name[0] <= 'Z');
     if (is_accessor) {
       const char *colon = strchr(name, ':');
@@ -542,7 +550,8 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
     }
   }
 
-  check_arity(w, name, count_args(rest));
+  if (w->doc)
+    check_arity(w, name, count_args(rest));
 
   if (strcmp(name, "\\") == 0)       { walk_lambda(w, rest); return; }
   if (strcmp(name, "fun") == 0)      { walk_fun(w, rest); return; }
@@ -551,12 +560,22 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   if (strcmp(name, "type") == 0)     { walk_type(w, rest); return; }
   if (strcmp(name, "sig") == 0) {
     if (LVAL_TYPE(rest) != LVAL_CONS) return;
-    valk_lval_t *sig_name = valk_lval_head(rest);
+    valk_lval_t *name_q = valk_lval_head(rest);
+    valk_lval_t *sig_name = (name_q && LVAL_TYPE(name_q) == LVAL_CONS)
+      ? valk_lval_head(name_q) : name_q;
     if (sig_name && LVAL_TYPE(sig_name) == LVAL_SYM)
       emit_sym(w, sig_name->str, SEM_FUNCTION, SEM_MOD_DECLARATION);
     valk_lval_t *sig_type = valk_lval_tail(rest);
-    if (sig_type && LVAL_TYPE(sig_type) == LVAL_CONS)
-      walk_type_ann(w, valk_lval_head(sig_type));
+    if (sig_type && LVAL_TYPE(sig_type) == LVAL_CONS) {
+      valk_lval_t *type_q = valk_lval_head(sig_type);
+      valk_lval_t *type_node = type_q;
+      if (type_q && LVAL_TYPE(type_q) == LVAL_CONS) {
+        valk_lval_t *inner = valk_lval_head(type_q);
+        if (inner && LVAL_TYPE(inner) == LVAL_CONS)
+          type_node = inner;
+      }
+      walk_type_ann(w, type_node);
+    }
     return;
   }
   if (strcmp(name, "quote") == 0)    { return; }
@@ -584,6 +603,9 @@ void check_and_sem_pass(lsp_document_t *doc, bool emit_sem) {
   if (emit_sem)
     doc_sem_clear(doc);
 
+  valk_diag_list_t diags;
+  valk_diag_init(&diags);
+
   const char *text = doc->text;
   int pos = 0;
   int len = (int)doc->text_len;
@@ -594,6 +616,8 @@ void check_and_sem_pass(lsp_document_t *doc, bool emit_sem) {
   walk_ctx_t w = {
     .globals = &globals,
     .scope = top,
+    .diags = &diags,
+    .resolver = nullptr,
     .doc = doc,
     .text = text,
     .cursor = &cursor,
@@ -625,6 +649,13 @@ void check_and_sem_pass(lsp_document_t *doc, bool emit_sem) {
   scope_pop(top);
   symset_free(&globals);
 
+  for (size_t i = 0; i < diags.count; i++) {
+    lsp_pos_t p = offset_to_pos(text, diags.items[i].offset);
+    doc_add_diag_full(doc, diags.items[i].message, p.line, p.col,
+                      diags.items[i].len, diags.items[i].severity);
+  }
+  valk_diag_free(&diags);
+
   if (emit_sem && doc->sem_token_count > 1) {
     qsort(doc->sem_tokens, doc->sem_token_count, sizeof(lsp_sem_token_t),
           sem_token_cmp);
@@ -640,4 +671,73 @@ void check_and_sem_pass(lsp_document_t *doc, bool emit_sem) {
     }
     doc->sem_token_count = w2;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Standalone diagnostic check — callable from runtime (no LSP dependency)
+// ---------------------------------------------------------------------------
+
+valk_diag_list_t valk_check_text(const char *text,
+                                  valk_name_resolver_t resolver,
+                                  valk_lval_t **ast_out) {
+  lsp_symset_t file_defs;
+  symset_init(&file_defs);
+  extract_global_symbols_from_text(text, &file_defs);
+
+  valk_diag_list_t diags;
+  valk_diag_init(&diags);
+
+  int pos = 0;
+  int len = (int)strlen(text);
+  int cursor = 0;
+
+  struct { valk_lval_t **items; u64 count; u64 capacity; } exprs = {0};
+  if (ast_out) {
+    exprs.capacity = 32;
+    exprs.items = malloc(32 * sizeof(valk_lval_t *));
+  }
+
+  lsp_scope_t *top = scope_push(nullptr);
+
+  walk_ctx_t w = {
+    .globals = &file_defs,
+    .scope = top,
+    .diags = &diags,
+    .resolver = &resolver,
+    .doc = nullptr,
+    .text = text,
+    .cursor = &cursor,
+    .emit_sem = false,
+    .emit_diag = true,
+  };
+
+  while (pos < len) {
+    while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
+    if (pos >= len) break;
+    if (text[pos] == ';') {
+      while (pos < len && text[pos] != '\n') pos++;
+      continue;
+    }
+    cursor = pos;
+    valk_lval_t *expr = valk_lval_read(&pos, text);
+    if (ast_out) {
+      if (exprs.count >= exprs.capacity) {
+        exprs.capacity *= 2;
+        exprs.items = realloc(exprs.items, exprs.capacity * sizeof(valk_lval_t *));
+      }
+      exprs.items[exprs.count++] = expr;
+    }
+    if (LVAL_TYPE(expr) == LVAL_ERR) break;
+    walk_expr(&w, expr);
+  }
+
+  scope_pop(top);
+  symset_free(&file_defs);
+
+  if (ast_out) {
+    *ast_out = valk_lval_list(exprs.items, exprs.count);
+    free(exprs.items);
+  }
+
+  return diags;
 }

@@ -118,6 +118,7 @@ set(VALKYRIA_SOURCES
   src/log.c
   src/coverage.c
   src/source_loc.c
+  src/diag.c
   # AIO core (src/aio/)
   src/aio/aio_uv.c
   src/aio/aio_alloc.c

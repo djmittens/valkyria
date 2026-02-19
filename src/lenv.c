@@ -190,7 +190,6 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   if (valk_log_would_log(VALK_LOG_DEBUG)) {
     VALK_DEBUG("env put: %s", key->str);
   }
-
   valk_lval_t* safe_val = __lenv_ensure_safe_val(env, val);
 
   for (u64 i = 0; i < env->symbols.count; i++) {

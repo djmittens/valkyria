@@ -511,11 +511,19 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
 
   if (strcmp(name, "sig") == 0) {
     if (LVAL_TYPE(rest) != LVAL_CONS) return ty_nil(ctx->arena);
-    valk_lval_t *sig_name = valk_lval_head(rest);
+    valk_lval_t *name_q = valk_lval_head(rest);
     valk_lval_t *type_rest = valk_lval_tail(rest);
+    valk_lval_t *sig_name = (name_q && LVAL_TYPE(name_q) == LVAL_CONS)
+      ? valk_lval_head(name_q) : name_q;
     if (!sig_name || LVAL_TYPE(sig_name) != LVAL_SYM) return ty_nil(ctx->arena);
     if (LVAL_TYPE(type_rest) != LVAL_CONS) return ty_nil(ctx->arena);
-    valk_lval_t *type_expr = valk_lval_head(type_rest);
+    valk_lval_t *type_q = valk_lval_head(type_rest);
+    valk_lval_t *type_expr = type_q;
+    if (type_q && LVAL_TYPE(type_q) == LVAL_CONS) {
+      valk_lval_t *inner = valk_lval_head(type_q);
+      if (inner && LVAL_TYPE(inner) == LVAL_CONS)
+        type_expr = inner;
+    }
 
     ann_var_map_t avm = {.count = 0, .arena = ctx->arena};
     valk_type_t *ty = parse_type_ann(&avm, type_expr);
@@ -949,6 +957,9 @@ valk_type_t *infer_expr(infer_ctx_t *ctx, valk_lval_t *expr) {
     }
     return ty_resolve(result);
   }
+
+  if (strcmp(name, "do") == 0)
+    return infer_body_last(ctx, rest);
 
   // --- PList special forms (lsp_infer_plist.c) ---
   if (strcmp(name, "list") == 0) {

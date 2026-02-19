@@ -27,6 +27,7 @@ valk_type_t *parse_type_ann(ann_var_map_t *m, valk_lval_t *node) {
     if (strcmp(s, "Err") == 0) return ty_err(a);
     if (strcmp(s, "QExpr") == 0) return ty_qexpr(a);
     if (strcmp(s, "Never") == 0) return ty_never(a);
+    if (strcmp(s, "_") == 0) return ty_var(a);
     return ann_var(m, s);
   }
 

@@ -146,6 +146,9 @@ typedef void (*lsp_load_callback_fn)(const char *contents, const char *real_path
 void lsp_for_each_load(const char *text, const char *base_dir,
                        lsp_symset_t *visited, lsp_load_callback_fn cb, void *ctx);
 
+// Symbol extraction (lsp_loads.c)
+void extract_global_symbols_from_text(const char *text, lsp_symset_t *globals);
+
 // AST walker (lsp_walk.c)
 void check_and_sem_pass(lsp_document_t *doc, bool emit_sem);
 

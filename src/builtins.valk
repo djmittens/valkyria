@@ -5,465 +5,465 @@
 ; === Arithmetic ===
 
 ; Addition. Variadic: (+ 1 2 3) = 6
-(sig + (-> & Num Num))
+(sig '+ {-> & Num Num})
 ; Subtraction (or negation with 1 arg).
-(sig - (-> & Num Num))
+(sig '- {-> & Num Num})
 ; Multiplication.
-(sig * (-> & Num Num))
+(sig '* {-> & Num Num})
 ; Integer division.
-(sig / (-> & Num Num))
+(sig '/ {-> & Num Num})
 
 ; === Comparison ===
 
 ; Less than.
-(sig < (-> Num Num Num))
+(sig '< {-> Num Num Num})
 ; Greater than.
-(sig > (-> Num Num Num))
+(sig '> {-> Num Num Num})
 ; Less or equal.
-(sig <= (-> Num Num Num))
+(sig '<= {-> Num Num Num})
 ; Greater or equal.
-(sig >= (-> Num Num Num))
+(sig '>= {-> Num Num Num})
 ; Equality test.
-(sig == (-> A B Num))
+(sig '== {-> A B Num})
 ; Inequality test.
-(sig != (-> A B Num))
+(sig '!= {-> A B Num})
 
 ; === Ordering ===
 
 ; Compare two values by ordering.
-(sig ord (-> A A Num))
+(sig 'ord {-> A A Num})
 
 ; === Special forms ===
 
 ; Lambda: formals and body.
-(sig \ (-> QExpr QExpr A))
+(sig '\ {-> QExpr QExpr A})
 ; Named function definition.
-(sig fun (-> QExpr QExpr A))
+(sig 'fun {-> QExpr QExpr A})
 ; Global variable binding.
-(sig def (-> QExpr & A Nil))
+(sig 'def {-> QExpr & A Nil})
 ; Local variable binding.
-(sig = (-> QExpr & A Nil))
+(sig '= {-> QExpr & A Nil})
 ; Lexical scope.
-(sig let (-> QExpr A))
+(sig 'let {-> QExpr A})
 ; Conditional expression.
-(sig if (-> Num QExpr QExpr A))
+(sig 'if {-> Num QExpr QExpr A})
 ; Multi-branch conditional.
-(sig select (-> & QExpr A))
+(sig 'select {-> & QExpr A})
 ; Case dispatch on a value.
-(sig case (-> A & QExpr B))
+(sig 'case {-> A & QExpr B})
 ; Pattern matching.
-(sig match (-> A & QExpr B))
+(sig 'match {-> A & QExpr B})
 ; Algebraic type definition.
-(sig type (-> & QExpr Nil))
+(sig 'type {-> & QExpr Nil})
 ; Quote an expression.
-(sig quote (-> A QExpr))
+(sig 'quote {-> A QExpr})
 ; Quasiquote template.
-(sig quasiquote (-> QExpr QExpr))
+(sig 'quasiquote {-> QExpr QExpr})
 ; Unquote inside quasiquote.
-(sig unquote (-> A A))
+(sig 'unquote {-> A A})
 ; Splice-unquote inside quasiquote.
-(sig unquote-splicing (-> A A))
+(sig 'unquote-splicing {-> A A})
 ; Create a Q-expression from arguments.
-(sig list (-> & A (List A)))
+(sig 'list {-> & A (List A)})
 ; Load and evaluate a file. Returns nil.
-(sig load (-> Str Nil))
+(sig 'load {-> Str Nil})
 ; Parse a string into a Q-expression.
-(sig read (-> Str QExpr))
+(sig 'read {-> Str QExpr})
 
 ; === List operations ===
 
 ; Return first element of a Q-expression.
-(sig head (-> (List A) A))
+(sig 'head {-> (List A) A})
 ; Return all elements except the first.
-(sig tail (-> (List A) (List A)))
+(sig 'tail {-> (List A) (List A)})
 ; Prepend a value to a Q-expression.
-(sig cons (-> A (List A) (List A)))
+(sig 'cons {-> A (List A) (List A)})
 ; Return all elements except the last.
-(sig init (-> (List A) (List A)))
+(sig 'init {-> (List A) (List A)})
 ; Concatenate Q-expressions.
-(sig join (-> & (List A) (List A)))
+(sig 'join {-> & (List A) (List A)})
 ; Return length of a Q-expression or string.
-(sig len (-> A Num))
+(sig 'len {-> A Num})
 ; Generate a list of integers [start, end).
-(sig range (-> Num Num (List Num)))
+(sig 'range {-> Num Num (List Num)})
 ; Create a list by calling f(index) for each index 0..n-1.
-(sig repeat (-> (-> Num A) Num (List A)))
+(sig 'repeat {-> (-> Num A) Num (List A)})
 
 ; === Dynamic eval and apply ===
 
 ; Evaluate a Q-expression as code.
-(sig eval (-> QExpr A))
+(sig 'eval {-> QExpr A})
 ; Evaluate expressions sequentially, return last.
-(sig do (-> & A A))
+(sig 'do {-> & _ A})
 
 ; === Type predicates ===
 
 ; Test if value is a Q-expression.
-(sig list? (-> A Num))
+(sig 'list? {-> A Num})
 ; Test if value is an error.
-(sig error? (-> A Num))
+(sig 'error? {-> A Num})
 ; Test if value is an opaque reference.
-(sig ref? (-> A Num))
+(sig 'ref? {-> A Num})
 ; Test if value is a number.
-(sig num? (-> A Num))
+(sig 'num? {-> A Num})
 ; Test if value is a string.
-(sig str? (-> A Num))
+(sig 'str? {-> A Num})
 ; Test if value is an async handle.
-(sig handle? (-> A Num))
+(sig 'handle? {-> A Num})
 ; Test if value is a function.
-(sig fun? (-> A Num))
+(sig 'fun? {-> A Num})
 
 ; === I/O ===
 
 ; Print values without newline.
-(sig print (-> & A Nil))
+(sig 'print {-> & A Nil})
 ; Print values followed by newline.
-(sig println (-> & A Nil))
+(sig 'println {-> & A Nil})
 ; Formatted print (C-style format string).
-(sig printf (-> Str & A Nil))
+(sig 'printf {-> Str & A Nil})
 ; Create an error value.
-(sig error (-> Str Err))
+(sig 'error {-> Str Err})
 
 ; === String operations ===
 
 ; Replace occurrences in string.
-(sig str/replace (-> Str Str Str Str))
+(sig 'str/replace {-> Str Str Str Str})
 ; Extract substring by start and end index.
-(sig str/slice (-> Str Num Num Str))
+(sig 'str/slice {-> Str Num Num Str})
 ; Split string by delimiter.
-(sig str/split (-> Str Str (List Str)))
+(sig 'str/split {-> Str Str (List Str)})
 ; Parse string to number.
-(sig str->num (-> Str Num))
+(sig 'str->num {-> Str Num})
 ; Concatenate arguments as strings.
-(sig str (-> & A Str))
+(sig 'str {-> & A Str})
 ; Repeat pattern n times into a string.
-(sig make-string (-> A Num Str))
+(sig 'make-string {-> A Num Str})
 
 ; === File I/O ===
 
 ; Read entire file contents as string.
-(sig read-file (-> Str Str))
+(sig 'read-file {-> Str Str})
 
 ; === Async core ===
 
 ; Create async I/O system.
-(sig aio/start (-> (Handle (Ref aio))))
+(sig 'aio/start {-> (Handle (Ref aio))})
 ; Block until async handle completes, return result.
-(sig aio/await (-> (Handle A) A))
+(sig 'aio/await {-> (Handle A) A})
 ; Run event loop (blocks until stopped).
-(sig aio/run (-> (Ref aio) Nil))
+(sig 'aio/run {-> (Ref aio) Nil})
 ; Signal event loop to stop.
-(sig aio/stop (-> (Ref aio) Nil))
+(sig 'aio/stop {-> (Ref aio) Nil})
 ; Async sleep for ms milliseconds.
-(sig aio/sleep (-> (Ref aio) Num (Handle Nil)))
+(sig 'aio/sleep {-> (Ref aio) Num (Handle Nil)})
 ; Chain: run f with result when handle completes.
-(sig aio/then (-> (Handle A) (-> A B) (Handle B)))
+(sig 'aio/then {-> (Handle A) (-> A B) (Handle B)})
 ; Handle errors: run f if handle fails.
-(sig aio/catch (-> (Handle A) (-> Err A) (Handle A)))
+(sig 'aio/catch {-> (Handle A) (-> Err A) (Handle A)})
 ; Run f when handle settles (success or failure).
-(sig aio/finally (-> (Handle A) (-> Nil) (Handle A)))
+(sig 'aio/finally {-> (Handle A) (-> Nil) (Handle A)})
 ; Wrap a value in an immediately-resolved handle.
-(sig aio/pure (-> A (Handle A)))
+(sig 'aio/pure {-> A (Handle A)})
 ; Create an immediately-failed handle.
-(sig aio/fail (-> B (Handle A)))
+(sig 'aio/fail {-> B (Handle A)})
 ; Get result of completed handle.
-(sig aio/result (-> (Handle A) A))
+(sig 'aio/result {-> (Handle A) A})
 ; Get error of failed handle.
-(sig aio/error (-> (Handle A) Err))
+(sig 'aio/error {-> (Handle A) Err})
 ; Cancel an async operation. Returns :true if cancelled, :false otherwise.
-(sig aio/cancel (-> (Handle A) (| :true :false)))
+(sig 'aio/cancel {-> (Handle A) Nil})
 ; Check if handle was cancelled.
-(sig aio/cancelled? (-> (Handle A) Num))
+(sig 'aio/cancelled? {-> (Handle A) Num})
 ; Get handle status.
-(sig aio/status (-> (Handle A) (| :pending :running :completed :failed :cancelled :unknown)))
+(sig 'aio/status {-> (Handle A) (| :pending :running :completed :failed :cancelled :unknown)})
 
 ; === Async combinators ===
 
 ; Wait for all handles to complete.
-(sig aio/all (-> (List (Handle A)) (Handle (List A))))
+(sig 'aio/all {-> (List (Handle A)) (Handle (List A))})
 ; Wait for all handles to settle (complete or fail).
-(sig aio/all-settled (-> (List (Handle A)) (Handle (List A))))
+(sig 'aio/all-settled {-> (List (Handle A)) (Handle (List A))})
 ; Resolve with first completed handle.
-(sig aio/race (-> (List (Handle A)) (Handle A)))
+(sig 'aio/race {-> (List (Handle A)) (Handle A)})
 ; Resolve with first successful handle.
-(sig aio/any (-> (List (Handle A)) (Handle A)))
+(sig 'aio/any {-> (List (Handle A)) (Handle A)})
 ; Timeout: fail if handle doesn't complete in ms.
-(sig aio/within (-> (Handle A) Num (Handle A)))
+(sig 'aio/within {-> (Handle A) Num (Handle A)})
 ; Register cancellation callback.
-(sig aio/on-cancel (-> (Handle A) (-> Nil) (Handle A)))
+(sig 'aio/on-cancel {-> (Handle A) (-> Nil) (Handle A)})
 ; Run async operation with scoped cleanup. Callback receives the scope handle.
-(sig aio/scope (-> (-> (Handle A) A) (Handle A)))
+(sig 'aio/scope {-> (-> (Handle A) A) (Handle A)})
 ; Acquire/release resource pattern for async.
-(sig aio/bracket (-> (Handle A) (-> A Nil) (-> A B) (Handle B)))
+(sig 'aio/bracket {-> (Handle A) (-> A Nil) (-> A B) (Handle B)})
 ; Apply async function to each list element, collect results.
-(sig aio/traverse (-> (List A) (-> A (Handle B)) (Handle (List B))))
+(sig 'aio/traverse {-> (List A) (-> A (Handle B)) (Handle (List B))})
 
 ; === Async syntax ===
 
 ; Sequential async block. Use <- to bind async results.
-(sig aio/do (-> & A (Handle A)))
+(sig 'aio/do {-> & A (Handle A)})
 ; Parallel async bindings with optional :then sequential phases.
-(sig aio/let (-> QExpr & A (Handle A)))
+(sig 'aio/let {-> QExpr & A (Handle A)})
 ; Bind async handle result in aio/do block.
-(sig <- (-> (Handle A) A))
+(sig '<- {-> (Handle A) A})
 
 ; === Context ===
 
 ; Run body with a deadline (timeout in ms).
-(sig ctx/with-deadline (-> Num & A A))
+(sig 'ctx/with-deadline {-> Num & A A})
 ; Run body with a context key-value binding.
-(sig ctx/with (-> Sym A & B B))
+(sig 'ctx/with {-> Sym A & B B})
 
 ; === Async scheduling ===
 
 ; Schedule a callback after delay in ms.
-(sig aio/schedule (-> (Ref aio) Num (-> A) (Handle A)))
+(sig 'aio/schedule {-> (Ref aio) Num (-> A) (Handle A)})
 ; Schedule a repeating callback at interval in ms.
-(sig aio/interval (-> (Ref aio) Num (-> A) (Handle A)))
+(sig 'aio/interval {-> (Ref aio) Num (-> A) (Handle A)})
 ; Retry with exponential backoff delays.
-(sig aio/retry (-> (Ref aio) (-> (Handle A)) (List Num) (Handle A)))
+(sig 'aio/retry {-> (Ref aio) (-> (Handle A)) (List Num) (Handle A)})
 ; Create a handle that never completes.
-(sig aio/never (-> (Ref aio) (Handle Never)))
+(sig 'aio/never {-> (Ref aio) (Handle Never)})
 
 ; === Async diagnostics ===
 
 ; Async system metrics as JSON string.
-(sig aio/metrics-json (-> (Ref aio) Str))
+(sig 'aio/metrics-json {-> (Ref aio) Str})
 ; Async system metrics as compact JSON.
-(sig aio/metrics-json-compact (-> (Ref aio) Str))
+(sig 'aio/metrics-json-compact {-> (Ref aio) Str})
 ; Async system metrics in Prometheus format.
-(sig aio/metrics-prometheus (-> (Ref aio) Str))
+(sig 'aio/metrics-prometheus {-> (Ref aio) Str})
 ; System stats in Prometheus format.
-(sig aio/system-stats-prometheus (-> (Ref aio) Str))
+(sig 'aio/system-stats-prometheus {-> (Ref aio) Str})
 ; Diagnostics state as JSON.
-(sig aio/diagnostics-state-json (-> (Ref aio) Str))
+(sig 'aio/diagnostics-state-json {-> (Ref aio) Str})
 ; Diagnostics state as compact JSON.
-(sig aio/diagnostics-state-json-compact (-> (Ref aio) Str))
+(sig 'aio/diagnostics-state-json-compact {-> (Ref aio) Str})
 ; Registered async systems as JSON.
-(sig aio/systems-json (-> (Ref aio) Str))
+(sig 'aio/systems-json {-> (Ref aio) Str})
 ; Check if running on the event loop thread.
-(sig aio/on-loop-thread? (-> (Ref aio) Num))
+(sig 'aio/on-loop-thread? {-> (Ref aio) Num})
 ; Thread pool statistics.
-(sig aio/pool-stats (-> (Ref aio) (List Num)))
+(sig 'aio/pool-stats {-> (Ref aio) (List Num)})
 ; Slab allocator bucket histogram.
-(sig aio/slab-buckets (-> (Ref aio) Str Num Num Num Str))
+(sig 'aio/slab-buckets {-> (Ref aio) Str Num Num Num Str})
 
 ; === HTTP/2 ===
 
 ; Send HTTP/2 client request: sys host port path -> Handle(response).
-(sig http2/client-request (-> (Ref aio) Str Num Str (Handle (Ref http_response))))
+(sig 'http2/client-request {-> (Ref aio) Str Num Str (Handle (Ref http_response))})
 ; Send HTTP/2 client request with custom headers.
-(sig http2/client-request-with-headers (-> (Ref aio) Str Num Str (List (List Str)) (Handle (Ref http_response))))
+(sig 'http2/client-request-with-headers {-> (Ref aio) Str Num Str (List (List Str)) (Handle (Ref http_response))})
 ; Get response body as string.
-(sig http2/response-body (-> (Ref http_response) Str))
+(sig 'http2/response-body {-> (Ref http_response) Str})
 ; Get response status code as string.
-(sig http2/response-status (-> (Ref http_response) Str))
+(sig 'http2/response-status {-> (Ref http_response) Str})
 ; Get response headers as list of strings.
-(sig http2/response-headers (-> (Ref http_response) (List Str)))
+(sig 'http2/response-headers {-> (Ref http_response) (List Str)})
 ; Create an HTTP/2 request object.
-(sig http2/request (-> Str Str Str Str (Ref http_request)))
+(sig 'http2/request {-> Str Str Str Str (Ref http_request)})
 ; Add a header to a request object.
-(sig http2/request-add-header (-> (Ref http_request) Str Str Nil))
+(sig 'http2/request-add-header {-> (Ref http_request) Str Str Nil})
 ; Create a mock response for testing.
-(sig http2/mock-response (-> Str Str & A (Ref http_response)))
+(sig 'http2/mock-response {-> Str Str & A (Ref http_response)})
 ; Connect to an HTTP/2 server and invoke handler on each request.
-(sig http2/connect (-> (Ref aio) Str Num (-> (Ref http_request) Nil) Nil))
+(sig 'http2/connect {-> (Ref aio) Str Num (-> (Ref http_request) Nil) Nil})
 ; Start an HTTP/2 server listening on port.
-(sig http2/server-listen (-> (Ref aio) Num (-> (Ref http_request) A) & B (Handle (Ref http_server))))
+(sig 'http2/server-listen {-> (Ref aio) Num (-> (Ref http_request) A) & B (Handle (Ref http_server))})
 ; Set request handler for an existing server.
-(sig http2/server-handle (-> (Ref http_server) (-> (Ref http_request) Nil) Nil))
+(sig 'http2/server-handle {-> (Ref http_server) (-> (Ref http_request) Nil) Nil})
 ; Get the port number of a running server.
-(sig http2/server-port (-> (Handle (Ref http_server)) Num))
+(sig 'http2/server-port {-> (Handle (Ref http_server)) Num})
 ; Stop a running HTTP/2 server.
-(sig http2/server-stop (-> (Handle (Ref http_server)) (Handle Nil)))
+(sig 'http2/server-stop {-> (Handle (Ref http_server)) (Handle Nil)})
 
 ; === Request accessors ===
 
 ; Get request HTTP method.
-(sig req/method (-> (Ref http_request) Str))
+(sig 'req/method {-> (Ref http_request) Str})
 ; Get request path.
-(sig req/path (-> (Ref http_request) Str))
+(sig 'req/path {-> (Ref http_request) Str})
 ; Get request scheme (http/https).
-(sig req/scheme (-> (Ref http_request) Str))
+(sig 'req/scheme {-> (Ref http_request) Str})
 ; Get request authority (host:port).
-(sig req/authority (-> (Ref http_request) Str))
+(sig 'req/authority {-> (Ref http_request) Str})
 ; Get request body as string.
-(sig req/body (-> (Ref http_request) Str))
+(sig 'req/body {-> (Ref http_request) Str})
 ; Get all request headers as list.
-(sig req/headers (-> (Ref http_request) (List Str)))
+(sig 'req/headers {-> (Ref http_request) (List Str)})
 ; Get request stream ID.
-(sig req/stream-id (-> (Ref http_request) Num))
+(sig 'req/stream-id {-> (Ref http_request) Num})
 ; Get value of a specific request header.
-(sig req/header (-> (Ref http_request) Str Str))
+(sig 'req/header {-> (Ref http_request) Str Str})
 
 ; === Streaming ===
 
 ; Open a response stream on a request.
-(sig stream/open (-> (Ref http_request) & A (Ref stream)))
+(sig 'stream/open {-> (Ref http_request) & A (Ref stream)})
 ; Close a stream gracefully.
-(sig stream/close (-> (Ref stream) (Handle :closed)))
+(sig 'stream/close {-> (Ref stream) (Handle :closed)})
 ; Cancel a stream.
-(sig stream/cancel (-> (Ref stream) (Handle :closed)))
+(sig 'stream/cancel {-> (Ref stream) (Handle :closed)})
 ; Wait for a stream to be closed.
-(sig stream/closed (-> (Ref stream) (Handle :closed)))
+(sig 'stream/closed {-> (Ref stream) (Handle :closed)})
 ; Get stream ID.
-(sig stream/id (-> (Ref stream) Num))
+(sig 'stream/id {-> (Ref stream) Num})
 ; Check if stream is writable.
-(sig stream/writable? (-> (Ref stream) Num))
+(sig 'stream/writable? {-> (Ref stream) Num})
 ; Write data to a stream.
-(sig stream/write (-> (Ref stream) Str Num))
+(sig 'stream/write {-> (Ref stream) Str Num})
 ; Register close callback, returns stream for chaining.
-(sig stream/on-close (-> (Ref stream) (-> Nil) (Ref stream)))
+(sig 'stream/on-close {-> (Ref stream) (-> Nil) (Ref stream)})
 ; Register drain callback, returns stream for chaining.
-(sig stream/on-drain (-> (Ref stream) (-> Nil) (Ref stream)))
+(sig 'stream/on-drain {-> (Ref stream) (-> Nil) (Ref stream)})
 ; Set maximum concurrent sessions on stream.
-(sig stream/set-max-session (-> (Ref stream) Num (Ref stream)))
+(sig 'stream/set-max-session {-> (Ref stream) Num (Ref stream)})
 ; Set stream timeout in milliseconds.
-(sig stream/set-timeout (-> (Ref stream) Num (Ref stream)))
+(sig 'stream/set-timeout {-> (Ref stream) Num (Ref stream)})
 
 ; === Memory / GC ===
 
 ; Current arena memory capacity in bytes.
-(sig mem/arena/capacity (-> Num))
+(sig 'mem/arena/capacity {-> Num})
 ; Arena high-water mark in bytes.
-(sig mem/arena/high-water (-> Num))
+(sig 'mem/arena/high-water {-> Num})
 ; Current arena memory usage in bytes.
-(sig mem/arena/usage (-> Num))
+(sig 'mem/arena/usage {-> Num})
 ; Current heap memory usage in bytes.
-(sig mem/heap/usage (-> Num))
+(sig 'mem/heap/usage {-> Num})
 ; Heap hard limit in bytes.
-(sig mem/heap/hard-limit (-> Num))
+(sig 'mem/heap/hard-limit {-> Num})
 ; Current GC-tracked memory usage in bytes.
-(sig mem/gc/usage (-> Num))
+(sig 'mem/gc/usage {-> Num})
 ; GC collection threshold in bytes.
-(sig mem/gc/threshold (-> Num))
+(sig 'mem/gc/threshold {-> Num})
 ; Minimum interval between GC runs in microseconds.
-(sig mem/gc/min-interval (-> Num))
+(sig 'mem/gc/min-interval {-> Num})
 ; Force a garbage collection, returns bytes freed.
-(sig mem/gc/collect (-> Num))
+(sig 'mem/gc/collect {-> Num})
 ; Print GC statistics.
-(sig mem/gc/stats (-> Nil))
+(sig 'mem/gc/stats {-> Nil})
 ; Print memory statistics.
-(sig mem/stats (-> Nil))
+(sig 'mem/stats {-> Nil})
 ; Get checkpoint timing statistics.
-(sig mem/checkpoint/stats (-> (List Num)))
+(sig 'mem/checkpoint/stats {-> (List Num)})
 ; Set GC collection threshold, returns old value.
-(sig mem/gc/set-threshold (-> Num Num))
+(sig 'mem/gc/set-threshold {-> Num Num})
 ; Set minimum GC interval, returns old value.
-(sig mem/gc/set-min-interval (-> Num Num))
+(sig 'mem/gc/set-min-interval {-> Num Num})
 ; Set heap hard limit, returns old value.
-(sig mem/heap/set-hard-limit (-> Num Num))
+(sig 'mem/heap/set-hard-limit {-> Num Num})
 
 ; === Metrics ===
 
 ; All metrics as JSON string.
-(sig metrics/json (-> Str))
+(sig 'metrics/json {-> Str})
 ; All metrics in Prometheus text format.
-(sig metrics/prometheus (-> Str))
+(sig 'metrics/prometheus {-> Str})
 ; Metrics registry as JSON.
-(sig metrics/registry-json (-> Str))
+(sig 'metrics/registry-json {-> Str})
 ; Capture a metrics baseline snapshot.
-(sig metrics/baseline (-> (Ref metrics)))
+(sig 'metrics/baseline {-> (Ref metrics)})
 ; Collect metrics delta since last collection.
-(sig metrics/collect-delta (-> (Ref metrics)))
+(sig 'metrics/collect-delta {-> (Ref metrics)})
 ; Collect metrics delta from a baseline snapshot.
-(sig metrics/collect-delta-stateless (-> (Ref metrics) (Ref metrics)))
+(sig 'metrics/collect-delta-stateless {-> (Ref metrics) (Ref metrics)})
 ; Format metrics delta as JSON.
-(sig metrics/delta-json (-> (Ref metrics) Str))
+(sig 'metrics/delta-json {-> (Ref metrics) Str})
 ; Create a counter metric with name and optional labels.
-(sig metrics/counter (-> & Str (Ref metrics)))
+(sig 'metrics/counter {-> & Str (Ref metrics)})
 ; Create a gauge metric with name and optional labels.
-(sig metrics/gauge (-> & Str (Ref metrics)))
+(sig 'metrics/gauge {-> & Str (Ref metrics)})
 ; Create a histogram metric with name and optional labels.
-(sig metrics/histogram (-> & Str (Ref metrics)))
+(sig 'metrics/histogram {-> & Str (Ref metrics)})
 ; Increment a counter by amount.
-(sig metrics/counter-inc (-> (Ref metrics) Num Nil))
+(sig 'metrics/counter-inc {-> (Ref metrics) Num Nil})
 ; Record a histogram observation.
-(sig metrics/histogram-observe (-> (Ref metrics) Num Nil))
+(sig 'metrics/histogram-observe {-> (Ref metrics) Num Nil})
 ; Set a gauge to a value.
-(sig metrics/gauge-set (-> (Ref metrics) Num Nil))
+(sig 'metrics/gauge-set {-> (Ref metrics) Num Nil})
 ; Increment a gauge by 1.
-(sig metrics/gauge-inc (-> (Ref metrics) Nil))
+(sig 'metrics/gauge-inc {-> (Ref metrics) Nil})
 ; Decrement a gauge by 1.
-(sig metrics/gauge-dec (-> (Ref metrics) Nil))
+(sig 'metrics/gauge-dec {-> (Ref metrics) Nil})
 
 ; === Random ===
 
 ; Generate random integer in [min, max] range.
-(sig rand (-> Num Num Num))
+(sig 'rand {-> Num Num Num})
 ; Seed the random number generator.
-(sig rand-seed (-> Num Nil))
+(sig 'rand-seed {-> Num Nil})
 
 ; === Misc ===
 
 ; Current time in microseconds.
-(sig time-us (-> Num))
+(sig 'time-us {-> Num})
 ; Current call stack depth.
-(sig stack-depth (-> Num))
+(sig 'stack-depth {-> Num})
 ; Print the current environment as list of (symbol value) pairs.
-(sig penv (-> (List A)))
+(sig 'penv {-> (List A)})
 ; Exit process with status code.
-(sig exit (-> Num Num))
+(sig 'exit {-> Num Num})
 ; Alias for exit.
-(sig shutdown (-> Num Num))
+(sig 'shutdown {-> Num Num})
 ; Sleep for ms milliseconds (blocking).
-(sig sleep (-> Num Nil))
+(sig 'sleep {-> Num Nil})
 
 ; === Coverage ===
 
 ; Record a branch coverage hit.
-(sig coverage-branch (-> Num Num Num))
+(sig 'coverage-branch {-> Num Num Num})
 ; Coverage mark: identity with side effect.
-(sig coverage-mark (-> A A))
+(sig 'coverage-mark {-> A A})
 ; Coverage record: identity with side effect.
-(sig coverage-record (-> A A))
+(sig 'coverage-record {-> A A})
 
 ; === Source location ===
 
 ; Get source line number of an expression.
-(sig source-line (-> A Num))
+(sig 'source-line {-> A Num})
 ; Get source column number of an expression.
-(sig source-column (-> A Num))
+(sig 'source-column {-> A Num})
 ; Get source file name of an expression.
-(sig source-file (-> A Str))
+(sig 'source-file {-> A Str})
 
 ; === Context ===
 
 ; Get request deadline in microseconds.
-(sig ctx/deadline (-> Num))
+(sig 'ctx/deadline {-> Num})
 ; Check if request deadline has been exceeded.
-(sig ctx/deadline-exceeded? (-> Num))
+(sig 'ctx/deadline-exceeded? {-> Num})
 ; Get all context-local bindings.
-(sig ctx/locals (-> QExpr))
+(sig 'ctx/locals {-> QExpr})
 ; Get a context value by key.
-(sig ctx/get (-> Sym A))
+(sig 'ctx/get {-> Sym A})
 
 ; === Tracing ===
 
 ; Get current trace ID.
-(sig trace/id (-> Num))
+(sig 'trace/id {-> Num})
 ; Get current span ID.
-(sig trace/span (-> Num))
+(sig 'trace/span {-> Num})
 ; Get parent span ID.
-(sig trace/parent-span (-> Num))
+(sig 'trace/parent-span {-> Num})
 
 ; === VM ===
 
 ; VM metrics as JSON string.
-(sig vm/metrics-json (-> & A Str))
+(sig 'vm/metrics-json {-> & A Str})
 ; VM metrics as compact JSON.
-(sig vm/metrics-json-compact (-> & A Str))
+(sig 'vm/metrics-json-compact {-> & A Str})
 ; VM metrics in Prometheus format.
-(sig vm/metrics-prometheus (-> & A Str))
+(sig 'vm/metrics-prometheus {-> & A Str})
 
 ; === Test ===
 
 ; Start capturing stdout/stderr output.
-(sig test/capture-start (-> (Ref capture)))
+(sig 'test/capture-start {-> (Ref capture)})
 ; Stop capturing and return captured output as string.
-(sig test/capture-stop (-> (Ref capture) Str))
+(sig 'test/capture-stop {-> (Ref capture) Str})
 
 ; === Logging ===
 
 ; Set log level (debug/info/warn/error). Returns previous level.
-(sig sys/log/set-level (-> Str Str))
+(sig 'sys/log/set-level {-> Str Str})

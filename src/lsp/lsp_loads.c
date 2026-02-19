@@ -172,8 +172,8 @@ static void extract_type_ctors(valk_lval_t *tail, lsp_symset_t *globals) {
   }
 }
 
-static void extract_global_symbols_from_text(const char *text,
-                                             lsp_symset_t *globals) {
+void extract_global_symbols_from_text(const char *text,
+                                      lsp_symset_t *globals) {
   int pos = 0, len = (int)strlen(text);
   while (pos < len) {
     while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
@@ -191,7 +191,9 @@ static void extract_global_symbols_from_text(const char *text,
     if (strcmp(head->str, "type") == 0)
       extract_type_ctors(tail, globals);
     if (strcmp(head->str, "sig") == 0 && LVAL_TYPE(tail) == LVAL_CONS) {
-      valk_lval_t *sig_name = valk_lval_head(tail);
+      valk_lval_t *name_q = valk_lval_head(tail);
+      valk_lval_t *sig_name = (name_q && LVAL_TYPE(name_q) == LVAL_CONS)
+        ? valk_lval_head(name_q) : name_q;
       if (sig_name && LVAL_TYPE(sig_name) == LVAL_SYM)
         symset_add(globals, sig_name->str);
     }

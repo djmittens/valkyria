@@ -322,7 +322,9 @@ static void extract_symbols_visitor(valk_lval_t *expr, lsp_document_t *doc,
   if (strcmp(head->str, "sig") == 0) {
     valk_lval_t *tail = valk_lval_tail(expr);
     if (LVAL_TYPE(tail) != LVAL_CONS) return;
-    valk_lval_t *name_node = valk_lval_head(tail);
+    valk_lval_t *name_q = valk_lval_head(tail);
+    valk_lval_t *name_node = (name_q && LVAL_TYPE(name_q) == LVAL_CONS)
+      ? valk_lval_head(name_q) : name_q;
     if (!name_node || LVAL_TYPE(name_node) != LVAL_SYM) return;
 
     lsp_pos_t p = offset_to_pos(text, form_start);

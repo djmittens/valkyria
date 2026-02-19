@@ -397,7 +397,12 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
                  new_size);  // LCOV_EXCL_LINE
       return nullptr;  // LCOV_EXCL_LINE
     case VALK_ALLOC_ARENA: {
-      // Copy-alloc semantics for arena realloc
+      if (ptr && !valk_ptr_in_arena((valk_mem_arena_t *)self, ptr)) {
+        valk_gc_heap_t *heap = (valk_gc_heap_t *)valk_thread_ctx.heap;
+        if (heap)
+          return valk_gc_heap_realloc(heap, ptr, new_size);
+        return nullptr; // LCOV_EXCL_LINE
+      }
       sz old_size = 0;
       if (ptr) {  // LCOV_EXCL_BR_LINE - ptr null case
         old_size = *(((u64 *)ptr) - 1);

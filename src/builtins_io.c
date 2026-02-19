@@ -5,14 +5,58 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "coverage.h"
+#include "diag.h"
 #include "gc.h"
+#include "lsp/lsp_doc.h"
 #include "type_env.h"
+
+static bool env_has_name(const char *name, void *ctx) {
+  valk_lenv_t *env = ctx;
+  while (env) {
+    for (u64 i = 0; i < env->symbols.count; i++)
+      if (strcmp(env->symbols.items[i], name) == 0) return true;
+    env = env->parent;
+  }
+  return false;
+}
+
+static char *read_file_text(const char *filename) {
+  FILE *f = fopen(filename, "rb");
+  if (!f) return nullptr;
+  fseek(f, 0, SEEK_END);
+  long flen = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  if (flen <= 0) { fclose(f); return nullptr; } // LCOV_EXCL_LINE
+  char *text = calloc(flen + 1, 1);
+  fread(text, 1, flen, f);
+  fclose(f);
+  return text;
+}
 
 static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
 
-  valk_lval_t* expr = valk_parse_file(valk_lval_list_nth(a, 0)->str);
+  const char *filename = valk_lval_list_nth(a, 0)->str;
+  valk_coverage_record_file(filename);
+
+  char *text = read_file_text(filename);
+  if (!text)
+    return valk_lval_err("Could not open file (%s)", filename);
+
+  valk_lval_t *expr = nullptr;
+  valk_name_resolver_t resolver = {.is_known = env_has_name, .ctx = e};
+  valk_diag_list_t diags = valk_check_text(text, resolver, &expr);
+  if (valk_diag_error_count(&diags) > 0) {
+    valk_diag_fprint(&diags, filename, text, stderr);
+    valk_diag_free(&diags);
+    free(text);
+    return valk_lval_err("Diagnostics found errors in %s", filename);
+  }
+  valk_diag_free(&diags);
+  free(text);
+
   if (LVAL_TYPE(expr) == LVAL_ERR) {
     valk_lval_println(expr);
     return expr;

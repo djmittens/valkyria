@@ -14,7 +14,7 @@
 (def {false} 0)
 
 ; Check if value is nil (empty list)
-(sig nil? (-> A Num))
+(sig 'nil? {-> A Num})
 (fun {nil? x} {== x nil})
 
 ; === Standard Types ===
@@ -213,24 +213,24 @@
 })
 
 ; unpack list for a function
-(sig unpack (-> (-> & A B) (List A) B))
+(sig 'unpack {-> (-> & A B) (List A) B})
 (fun {unpack f l} {
      eval (join (list f) l)
 })
 
-(sig curry (-> (-> & A B) (List A) B))
+(sig 'curry {-> (-> & A B) (List A) B})
 (def {curry} unpack)
 
 ; Pack the list for a function
 ; eg for a function f, (pack f 1 2 3) becomes (f {1 2 3})
 ; Note: pack requires at least one argument beyond f to work
 ; For currying/uncurrying, use the curry/uncurry wrappers
-(sig pack (-> (-> (List A) B) & A B))
+(sig 'pack {-> (-> (List A) B) & A B})
 (fun {pack f & xs} {f xs})
 
 ; uncurry: Takes a function that expects a list and returns one that takes varargs
 ; (uncurry f) returns a function that collects args into a list and calls f
-(sig uncurry (-> (-> (List A) B) & A B))
+(sig 'uncurry {-> (-> (List A) B) & A B})
 (fun {uncurry f} {
   (\ {& args} {f args})
 })
@@ -271,7 +271,7 @@
 ; Nth item in the list
 ; LISTS ARE 1-BASED LIKE LUA
 ; Using if-else instead of select due to scoping limitations
-(sig nth (-> (List A) Num A))
+(sig 'nth {-> (List A) Num A})
 (fun {nth n _l} {
     if (<= n 0)
       {error "Invalid array index (should start with 1)"}
@@ -284,7 +284,7 @@
 (fun {last l} {nth (len l) l})
 
 ; Take N items from the front of the list
-(sig take (-> Num (List A) (List A)))
+(sig 'take {-> Num (List A) (List A)})
 (fun {take n l} {
      if (== n 0)
       {nil}
@@ -292,7 +292,7 @@
 })
 
 ; Drop N items from the front of the list
-(sig drop (-> Num (List A) (List A)))
+(sig 'drop {-> Num (List A) (List A)})
 (fun {drop n l} {
      if (== n 0)
      {l}
@@ -308,7 +308,7 @@
 })
 
 ; true if value exists inside of a list
-(sig exists (-> A (List A) Num))
+(sig 'exists {-> A (List A) Num})
 (fun {exists x l} {
      if(== l nil)
       {false}
@@ -316,7 +316,7 @@
 })
 
 ; Apply a function to List
-(sig map (-> (-> A B) (List A) (List B)))
+(sig 'map {-> (-> A B) (List A) (List B)})
 (fun {map f l} {
      if(== l nil)
       {nil}
@@ -324,7 +324,7 @@
 })
 
 ; Filter the list n stuff
-(sig filter (-> (-> A Num) (List A) (List A)))
+(sig 'filter {-> (-> A Num) (List A) (List A)})
 (fun {filter f l} {
      if(== l nil)
        {nil}
@@ -332,7 +332,7 @@
 })
 
 ; fold left or something
-(sig foldl (-> (-> A B A) A (List B) A))
+(sig 'foldl {-> (-> A B A) A (List B) A})
 (fun {foldl f z l} {
      if (== l nil)
       {z}
@@ -340,7 +340,7 @@
 })
 
 ; flat-map for lists (concatMap): applies f to each element, f returns a list, concat results
-(sig list/flat-map (-> (List A) (-> A (List B)) (List B)))
+(sig 'list/flat-map {-> (List A) (-> A (List B)) (List B)})
 (fun {list/flat-map l f} {
   if (== l nil)
     {nil}
@@ -348,7 +348,7 @@
 })
 
 ; Applicative for lists: apply each function in fs to each value in xs
-(sig list/ap (-> (List (-> A B)) (List A) (List B)))
+(sig 'list/ap {-> (List (-> A B)) (List A) (List B)})
 (fun {list/ap fs xs} {
   if (== fs nil)
     {nil}
@@ -356,7 +356,7 @@
 })
 
 ; Reverse a list
-(sig reverse (-> (List A) (List A)))
+(sig 'reverse {-> (List A) (List A)})
 (fun {reverse l} {
   (= {reverse-helper} (\ {acc remaining} {
     (if (== remaining nil)
@@ -367,9 +367,9 @@
 })
 
 ; Returns the sum of the list
-(sig sum (-> (List Num) Num))
+(sig 'sum {-> (List Num) Num})
 (fun {sum l} {foldl + 0 l})
-(sig product (-> (List Num) Num))
+(sig 'product {-> (List Num) Num})
 (fun {product l} {foldl * 1 l})
 
 ; Logics
@@ -483,7 +483,7 @@
 
 ; 3-argument get function with default value
 ; Usage: (get plist key default) => value or default
-(sig get (-> A Sym B B))
+(sig 'get {-> A Sym B B})
 (fun {get pl key default} {
   (= {val} (plist/get pl key))
   (if (== val nil) {default} {val})
