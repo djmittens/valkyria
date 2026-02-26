@@ -67,8 +67,12 @@
 (sig 'list {-> & A (List A)})
 ; Load and evaluate a file. Returns nil.
 (sig 'load {-> Str Nil})
-; Parse a string into a Q-expression.
+; Parse a string into a single Q-expression.
 (sig 'read {-> Str QExpr})
+; Parse a string into a list of all top-level expressions.
+(sig 'parse {-> Str (List QExpr)})
+; Validate a parsed AST against its source text. Returns list of diagnostic plists.
+(sig 'validate {-> (List QExpr) Str (List QExpr)})
 
 ; === List operations ===
 
@@ -467,3 +471,69 @@
 
 ; Set log level (debug/info/warn/error). Returns previous level.
 (sig 'sys/log/set-level {-> Str Str})
+
+; === JSON ===
+
+; Parse a JSON string into a Q-expression.
+; Objects become plists: {"a":1} -> {:a 1}
+; Arrays become lists: [1,2] -> {1 2}
+; Booleans become numbers: true -> 1, false -> 0
+; null becomes nil.
+(sig 'json/parse {-> Str QExpr})
+; Encode a Q-expression as a JSON string.
+; Plists (first elem is keyword) become objects: {:a 1} -> {"a":1}
+; Other lists become arrays: {1 2} -> [1,2]
+; :true/:false/:null encode as JSON true/false/null.
+(sig 'json/encode {-> A Str})
+
+; === Stdio ===
+
+; Read one line from stdin (including newline). Returns nil on EOF.
+(sig 'stdin/read-line {-> Str})
+; Read exactly N bytes from stdin. Errors on early EOF.
+(sig 'stdin/read-bytes {-> Num Str})
+; Write a string to stdout verbatim (no newline added).
+(sig 'stdout/write {-> Str Nil})
+; Flush stdout.
+(sig 'stdout/flush {-> Nil})
+; Write a string to stderr verbatim.
+(sig 'stderr/write {-> Str Nil})
+
+; === SQLite ===
+
+; Open a SQLite database file. Creates it if it doesn't exist.
+; Default busy timeout is 5000ms.
+(sig 'sqlite/open {-> Str Ref})
+; Close a SQLite database.
+(sig 'sqlite/close {-> Ref Nil})
+; Execute SQL (INSERT/UPDATE/DELETE/CREATE/etc). Returns rows changed.
+; Additional args are bound as ?-parameters.
+(sig 'sqlite/exec {-> Ref Str Num})
+; Execute multiple SQL statements separated by semicolons.
+; Useful for schema migrations. Does not support ?-parameters.
+(sig 'sqlite/exec-script {-> Ref Str Nil})
+; Query SQL (SELECT). Returns a list of plists, one per row.
+; Column names become keywords. Additional args are ?-parameters.
+(sig 'sqlite/query {-> Ref Str QExpr})
+; Query returning exactly one row. Errors if 0 or 2+ rows returned.
+(sig 'sqlite/query-row {-> Ref Str QExpr})
+; Query returning 0 or 1 row. Returns nil if no rows match.
+; Errors if 2+ rows returned.
+(sig 'sqlite/query-maybe {-> Ref Str QExpr})
+; Query returning a single scalar value from a 1-column, 1-row result.
+; Errors if not exactly 1 row and 1 column.
+(sig 'sqlite/query-value {-> Ref Str A})
+; Prepare a SQL statement for repeated execution.
+(sig 'sqlite/prepare {-> Ref Str Ref})
+; Bind parameters to a prepared statement. Returns the statement.
+(sig 'sqlite/bind {-> Ref Ref})
+; Step a prepared statement. Returns a plist row or nil when done.
+(sig 'sqlite/step {-> Ref QExpr})
+; Finalize (free) a prepared statement.
+(sig 'sqlite/finalize {-> Ref Nil})
+; Get the rowid of the last INSERT.
+(sig 'sqlite/last-insert-id {-> Ref Num})
+; Get the number of rows changed by the most recent INSERT/UPDATE/DELETE.
+(sig 'sqlite/changes {-> Ref Num})
+; Set the busy timeout in milliseconds.
+(sig 'sqlite/busy-timeout {-> Ref Num Nil})

@@ -2,6 +2,7 @@
 #include "parser.h"
 #include "memory.h"
 #include "metrics_v2.h"
+#include "eval_internal.h"
 #include "log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -178,6 +179,7 @@ void valk_system_register_thread(valk_system_t *sys,
 
   valk_thread_ctx.gc_thread_id = idx;
   valk_thread_ctx.gc_registered = true;
+  atomic_store(&valk_thread_ctx.safepoint_flags, 0);
   valk_thread_ctx.root_stack = malloc(sizeof(valk_lval_t*) * 256);
   valk_thread_ctx.root_stack_capacity = 256;
   valk_thread_ctx.root_stack_count = 0;
@@ -351,36 +353,53 @@ void valk_gc_thread_unregister(void) {
 
 // LCOV_EXCL_START - safe point slow path requires STW coordination from parallel GC
 void valk_gc_safe_point_slow(void) {
-  valk_gc_phase_e phase = atomic_load_explicit(&valk_sys->phase,
-                                                memory_order_acquire);
+  u32 flags = atomic_load_explicit(&valk_thread_ctx.safepoint_flags,
+                                    memory_order_acquire);
 
-  if (phase == VALK_GC_PHASE_PREPARING) {
-    while (atomic_load_explicit(&valk_sys->phase,
-                                 memory_order_acquire) == VALK_GC_PHASE_PREPARING) {
-      sched_yield();
+  if (flags & VALK_SP_STW) {
+    atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_STW);
+
+    valk_gc_phase_e phase = atomic_load_explicit(&valk_sys->phase,
+                                                   memory_order_acquire);
+
+    if (phase == VALK_GC_PHASE_PREPARING) {
+      while (atomic_load_explicit(&valk_sys->phase,
+                                   memory_order_acquire) == VALK_GC_PHASE_PREPARING) {
+        sched_yield();
+      }
+      phase = atomic_load_explicit(&valk_sys->phase, memory_order_acquire);
     }
-    phase = atomic_load_explicit(&valk_sys->phase, memory_order_acquire);
-  }
 
-  if (phase == VALK_GC_PHASE_STW_REQUESTED) {
-    if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
-        valk_thread_ctx.heap && valk_thread_ctx.root_env) {
+    if (phase == VALK_GC_PHASE_STW_REQUESTED) {
+      if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
+          valk_thread_ctx.heap && valk_thread_ctx.root_env) {
+        valk_checkpoint(valk_thread_ctx.scratch,
+                         valk_thread_ctx.heap,
+                         valk_thread_ctx.root_env);
+      }
+
+      valk_barrier_wait(&valk_sys->barrier);
+      valk_gc_participate_in_parallel_gc();
+      return;
+    }
+
+    if (valk_thread_ctx.checkpoint_enabled &&
+        valk_thread_ctx.scratch && valk_thread_ctx.heap && valk_thread_ctx.root_env &&
+        valk_should_checkpoint(valk_thread_ctx.scratch, valk_thread_ctx.checkpoint_threshold)) {
       valk_checkpoint(valk_thread_ctx.scratch,
-                      valk_thread_ctx.heap,
-                      valk_thread_ctx.root_env);
+                       valk_thread_ctx.heap,
+                       valk_thread_ctx.root_env);
     }
-
-    valk_barrier_wait(&valk_sys->barrier);
-    valk_gc_participate_in_parallel_gc();
     return;
   }
 
-  if (valk_thread_ctx.checkpoint_enabled &&
-      valk_thread_ctx.scratch && valk_thread_ctx.heap && valk_thread_ctx.root_env &&
-      valk_should_checkpoint(valk_thread_ctx.scratch, valk_thread_ctx.checkpoint_threshold)) {
-    valk_checkpoint(valk_thread_ctx.scratch,
-                    valk_thread_ctx.heap,
-                    valk_thread_ctx.root_env);
+  if (flags & VALK_SP_GC_COLLECT) {
+    atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_GC_COLLECT);
+    valk_gc_heap_t *heap = valk_thread_ctx.heap;
+    if (heap) {
+      valk_gc_heap_collect(heap);
+      atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_STW);
+    }
   }
 }
 // LCOV_EXCL_STOP

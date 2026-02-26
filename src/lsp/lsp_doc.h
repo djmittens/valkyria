@@ -152,21 +152,6 @@ void extract_global_symbols_from_text(const char *text, lsp_symset_t *globals);
 // AST walker (lsp_walk.c)
 void check_and_sem_pass(lsp_document_t *doc, bool emit_sem);
 
-// Hover helpers (lsp_hover.c)
-void handle_hover(int id, void *params, void *store);
-void handle_definition(int id, void *params, void *store);
-void extract_source_snippet(const char *text, int start, int end,
-                            char *out, size_t out_size);
-
-// Completion (lsp_completion.c)
-void handle_completion(int id, void *params, void *store);
-
-// References, rename & workspace symbol (lsp_references.c)
-void handle_references(int id, void *params, void *store);
-void handle_prepare_rename(int id, void *params, void *store);
-void handle_rename(int id, void *params, void *store);
-void handle_workspace_symbol(int id, void *params, void *store);
-
 // Workspace (lsp_workspace.c)
 const char *lsp_workspace_root(void);
 void lsp_workspace_set_root(const char *root);

@@ -674,12 +674,11 @@ void check_and_sem_pass(lsp_document_t *doc, bool emit_sem) {
 }
 
 // ---------------------------------------------------------------------------
-// Standalone diagnostic check — callable from runtime (no LSP dependency)
+// Validate a pre-parsed AST — callable from runtime (no LSP dependency)
 // ---------------------------------------------------------------------------
 
-valk_diag_list_t valk_check_text(const char *text,
-                                  valk_name_resolver_t resolver,
-                                  valk_lval_t **ast_out) {
+valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
+                                    valk_name_resolver_t resolver) {
   lsp_symset_t file_defs;
   symset_init(&file_defs);
   extract_global_symbols_from_text(text, &file_defs);
@@ -687,15 +686,7 @@ valk_diag_list_t valk_check_text(const char *text,
   valk_diag_list_t diags;
   valk_diag_init(&diags);
 
-  int pos = 0;
-  int len = (int)strlen(text);
   int cursor = 0;
-
-  struct { valk_lval_t **items; u64 count; u64 capacity; } exprs = {0};
-  if (ast_out) {
-    exprs.capacity = 32;
-    exprs.items = malloc(32 * sizeof(valk_lval_t *));
-  }
 
   lsp_scope_t *top = scope_push(nullptr);
 
@@ -711,33 +702,17 @@ valk_diag_list_t valk_check_text(const char *text,
     .emit_diag = true,
   };
 
-  while (pos < len) {
-    while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
-    if (pos >= len) break;
-    if (text[pos] == ';') {
-      while (pos < len && text[pos] != '\n') pos++;
-      continue;
-    }
-    cursor = pos;
-    valk_lval_t *expr = valk_lval_read(&pos, text);
-    if (ast_out) {
-      if (exprs.count >= exprs.capacity) {
-        exprs.capacity *= 2;
-        exprs.items = realloc(exprs.items, exprs.capacity * sizeof(valk_lval_t *));
-      }
-      exprs.items[exprs.count++] = expr;
-    }
+  valk_lval_t *rest = ast;
+  while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
+    valk_lval_t *expr = valk_lval_head(rest);
     if (LVAL_TYPE(expr) == LVAL_ERR) break;
+    if (expr->src_pos >= 0) cursor = expr->src_pos;
     walk_expr(&w, expr);
+    rest = valk_lval_tail(rest);
   }
 
   scope_pop(top);
   symset_free(&file_defs);
-
-  if (ast_out) {
-    *ast_out = valk_lval_list(exprs.items, exprs.count);
-    free(exprs.items);
-  }
 
   return diags;
 }

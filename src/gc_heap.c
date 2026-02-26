@@ -176,14 +176,12 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
   valk_gc_page_t *page = list->partial_pages;
   u32 start_slot = 0;
   u32 num_slots = VALK_GC_TLAB_SLOTS;
+  u32 pages_tried = 0;
 
-  if (page) {
-    start_slot = valk_gc_page_find_free_slots(page, num_slots);
-    if (start_slot == UINT32_MAX) {
-      list->partial_pages = page->next_partial;
-      page = nullptr;
+  while (page && pages_tried < VALK_GC_TLAB_REFILL_SCAN_LIMIT) {
+    pages_tried++;
     // LCOV_EXCL_START - page reclaim path requires MADV_DONTNEED to zero page
-    } else if (page->reclaimed) {
+    if (page->reclaimed) {
       page->size_class = size_class;
       page->slots_per_page = list->slots_per_page;
       page->bitmap_bytes = valk_gc_bitmap_bytes(size_class);
@@ -192,8 +190,29 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
       memset(valk_gc_page_mark_bitmap(page), 0, page->bitmap_bytes);
       atomic_fetch_add(&heap->committed_bytes, list->page_size);
       page->reclaimed = false;
+      start_slot = 0;
+      break;
     }
     // LCOV_EXCL_STOP
+
+    start_slot = valk_gc_page_find_free_slots(page, 1);
+    if (start_slot != UINT32_MAX) {
+      u8 *bitmap = valk_gc_page_alloc_bitmap(page);
+      u32 run = 1;
+      while (run < num_slots && start_slot + run < page->slots_per_page &&
+             !valk_gc_bitmap_test(bitmap, start_slot + run)) {
+        run++;
+      }
+      num_slots = run;
+      break;
+    }
+
+    page = page->next_partial;
+  }
+
+  if (!page || start_slot == UINT32_MAX) {
+    page = NULL;
+    num_slots = VALK_GC_TLAB_SLOTS;
   }
 
   if (!page) {
@@ -210,6 +229,7 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
     atomic_fetch_add(&list->total_slots, page->slots_per_page);
 
     start_slot = 0;
+    num_slots = VALK_GC_TLAB_SLOTS;
   }
 
   if (start_slot + num_slots > page->slots_per_page) {
@@ -245,6 +265,11 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
   tlab->classes[size_class].page = page;
   tlab->classes[size_class].next_slot = start_slot;
   tlab->classes[size_class].limit_slot = start_slot + num_slots;
+
+  if (valk_gc_should_collect(heap)) {
+    atomic_fetch_or_explicit(&valk_thread_ctx.safepoint_flags, VALK_SP_GC_COLLECT,
+                              memory_order_release);
+  }
 
   return true;
 }
@@ -339,8 +364,16 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
   }
 
   if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
-    VALK_ERROR("Failed to refill TLAB for class %d", size_class);
-    return nullptr;
+    if (valk_gc_heap_try_emergency_gc(heap, valk_gc_size_classes[size_class])) {
+      if (valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
+        ptr = valk_gc_tlab_alloc(valk_gc_local_tlab, size_class);
+        if (ptr) {
+          memset(ptr, 0, alloc_size);
+        }
+        return ptr;
+      }
+    }
+    valk_gc_oom_abort(heap, bytes);
   }
 
   ptr = valk_gc_tlab_alloc(valk_gc_local_tlab, size_class);

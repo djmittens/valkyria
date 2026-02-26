@@ -331,6 +331,40 @@ valk_lval_t* valk_parse_file(const char* filename) {
   return res;
 }
 
+valk_lval_t* valk_parse_text(const char* text) {
+  struct { valk_lval_t** items; u64 count; u64 capacity; } tmp = {0};
+  da_init(&tmp);
+
+  int pos = 0;
+
+  #define SKIP_WS_AND_COMMENTS_TEXT() do { \
+    while (strchr(" ;\t\v\r\n", text[pos]) && text[pos] != '\0') { \
+      if (text[pos] == ';') { \
+        while (text[pos] != '\n' && text[pos] != '\0') pos++; \
+      } else { \
+        pos++; \
+      } \
+    } \
+  } while(0)
+
+  SKIP_WS_AND_COMMENTS_TEXT();
+
+  while (text[pos] != '\0') {
+    da_add(&tmp, valk_lval_read(&pos, text));
+    valk_lval_t* last = tmp.items[tmp.count - 1];
+    if (LVAL_TYPE(last) == LVAL_ERR) break;
+    if (LVAL_TYPE(last) == LVAL_CONS && LVAL_TYPE(last->cons.head) == LVAL_ERR)
+      break;
+    SKIP_WS_AND_COMMENTS_TEXT();
+  }
+
+  #undef SKIP_WS_AND_COMMENTS_TEXT
+
+  valk_lval_t* res = valk_lval_list(tmp.items, tmp.count);
+  da_free(&tmp);
+  return res;
+}
+
 // LCOV_EXCL_BR_START - coverage-mode parser functions not exercised in normal test runs
 #ifdef VALK_COVERAGE
 

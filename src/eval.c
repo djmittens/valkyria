@@ -213,6 +213,7 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
 
   if (func->fun.builtin) {
     atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
+    VALK_GC_ROOT(args);
     valk_lval_t* result = func->fun.builtin(env, args);
     atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
     // LCOV_EXCL_START - defensive check: builtins should never return NULL
@@ -344,19 +345,29 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
   valk_lenv_t* cur_env = env;
   valk_lval_t* value = NULL;
   
-  void *saved_stack = valk_thread_ctx.eval_stack;
   valk_lval_t *saved_expr = valk_thread_ctx.eval_expr;
   valk_lval_t *saved_value = valk_thread_ctx.eval_value;
+  VALK_GC_ROOT(saved_expr);
+  VALK_GC_ROOT(saved_value);
+
+  void *saved_stack = valk_thread_ctx.eval_stack;
   valk_thread_ctx.eval_stack = &stack;
+
+  u32 my_depth = valk_thread_ctx.eval_stack_depth;
+  VALK_ASSERT(my_depth < 16, "Eval nesting too deep");
+  valk_thread_ctx.eval_stacks[my_depth] = &stack;
+  valk_thread_ctx.saved_eval_envs[my_depth] = valk_thread_ctx.eval_env;
+  valk_thread_ctx.eval_stack_depth = my_depth + 1;
   
   valk_eval_stack_push(&stack, (valk_cont_frame_t){.kind = CONT_DONE, .env = env});
 
   while (1) {
     valk_thread_ctx.eval_expr = expr;
     valk_thread_ctx.eval_value = value;
+    valk_thread_ctx.eval_env = cur_env;
 
     VALK_GC_SAFE_POINT();
-    
+
     expr = valk_thread_ctx.eval_expr;
     value = valk_thread_ctx.eval_value;
     
@@ -495,10 +506,12 @@ apply_cont:
 
       switch (frame.kind) {  // LCOV_EXCL_BR_LINE - continuation dispatch (not all types exercised)
         case CONT_DONE:
+          valk_thread_ctx.eval_stack_depth = my_depth;
           valk_eval_stack_destroy(&stack);
           valk_thread_ctx.eval_stack = saved_stack;
           valk_thread_ctx.eval_expr = saved_expr;
           valk_thread_ctx.eval_value = saved_value;
+          valk_thread_ctx.eval_env = valk_thread_ctx.saved_eval_envs[my_depth];
           return value;
           
         case CONT_SINGLE_ELEM:
@@ -589,7 +602,10 @@ apply_cont:
           cur_env = frame.env;
           continue;
         }
-        
+
+        case CONT_DO_NEXT:
+          __builtin_unreachable();
+
         case CONT_BODY_NEXT: {
           if (LVAL_TYPE(value) == LVAL_ERR) {
             goto apply_cont;

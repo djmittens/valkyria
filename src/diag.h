@@ -37,6 +37,5 @@ void valk_diag_fprint(valk_diag_list_t *list, const char *filename,
 
 struct valk_lval_t;
 
-valk_diag_list_t valk_check_text(const char *text,
-                                  valk_name_resolver_t resolver,
-                                  struct valk_lval_t **ast_out);
+valk_diag_list_t valk_validate_ast(struct valk_lval_t *ast, const char *text,
+                                    valk_name_resolver_t resolver);

@@ -62,6 +62,7 @@ typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
 typedef struct valk_async_handle_t valk_async_handle_t;  // Async handle (defined in aio_uv.c)
 valk_lval_t *valk_parse_file(const char *filename);
+valk_lval_t *valk_parse_text(const char *text);
 
 typedef enum {
   LVAL_UNDEFINED,

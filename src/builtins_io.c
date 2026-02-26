@@ -8,7 +8,6 @@
 #include "coverage.h"
 #include "diag.h"
 #include "gc.h"
-#include "lsp/lsp_doc.h"
 #include "type_env.h"
 
 static bool env_has_name(const char *name, void *ctx) {
@@ -45,9 +44,17 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
   if (!text)
     return valk_lval_err("Could not open file (%s)", filename);
 
-  valk_lval_t *expr = nullptr;
+  // Stage 1: Parse
+  valk_lval_t *ast = valk_parse_text(text);
+  if (LVAL_TYPE(ast) == LVAL_ERR) {
+    valk_lval_println(ast);
+    free(text);
+    return ast;
+  }
+
+  // Stage 2: Validate
   valk_name_resolver_t resolver = {.is_known = env_has_name, .ctx = e};
-  valk_diag_list_t diags = valk_check_text(text, resolver, &expr);
+  valk_diag_list_t diags = valk_validate_ast(ast, text, resolver);
   if (valk_diag_error_count(&diags) > 0) {
     valk_diag_fprint(&diags, filename, text, stderr);
     valk_diag_free(&diags);
@@ -57,13 +64,10 @@ static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
   valk_diag_free(&diags);
   free(text);
 
-  if (LVAL_TYPE(expr) == LVAL_ERR) {
-    valk_lval_println(expr);
-    return expr;
-  }
+  // Stage 3: Evaluate
   valk_lval_t* last = nullptr;
-  while (valk_lval_list_count(expr)) {
-    valk_lval_t* x = valk_type_transform_expr(valk_lval_pop(expr, 0));
+  while (valk_lval_list_count(ast)) {
+    valk_lval_t* x = valk_type_transform_expr(valk_lval_pop(ast, 0));
     if (LVAL_TYPE(x) == LVAL_NIL) continue;
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
@@ -97,6 +101,54 @@ static valk_lval_t* valk_builtin_read(valk_lenv_t* e, valk_lval_t* a) {
   const char* input = valk_lval_list_nth(a, 0)->str;
   int pos = 0;
   return valk_lval_read(&pos, input);
+}
+
+static valk_lval_t* valk_builtin_parse(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  return valk_parse_text(valk_lval_list_nth(a, 0)->str);
+}
+
+static void offset_to_line_col(const char *text, int offset, int *line, int *col) {
+  *line = 0; *col = 0;
+  for (int i = 0; i < offset && text[i]; i++) {
+    if (text[i] == '\n') { (*line)++; *col = 0; }
+    else (*col)++;
+  }
+}
+
+static valk_lval_t* valk_builtin_validate(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+
+  valk_lval_t *ast = valk_lval_list_nth(a, 0);
+  const char *text = valk_lval_list_nth(a, 1)->str;
+
+  valk_name_resolver_t resolver = {.is_known = env_has_name, .ctx = e};
+  valk_diag_list_t diags = valk_validate_ast(ast, text, resolver);
+
+  valk_lval_t **items = malloc(diags.count * sizeof(valk_lval_t *));
+  for (size_t i = 0; i < diags.count; i++) {
+    int line, col;
+    offset_to_line_col(text, diags.items[i].offset, &line, &col);
+    int end_col = col + diags.items[i].len;
+
+    valk_lval_t *fields[10] = {
+      valk_lval_sym(":line"),    valk_lval_num(line),
+      valk_lval_sym(":col"),     valk_lval_num(col),
+      valk_lval_sym(":end-col"), valk_lval_num(end_col),
+      valk_lval_sym(":severity"), valk_lval_num(diags.items[i].severity),
+      valk_lval_sym(":message"), valk_lval_str(diags.items[i].message),
+    };
+    items[i] = valk_lval_qlist(fields, 10);
+  }
+
+  valk_lval_t *result = valk_lval_qlist(items, diags.count);
+  free(items);
+  valk_diag_free(&diags);
+  return result;
 }
 
 static valk_lval_t* valk_builtin_read_file(valk_lenv_t* e, valk_lval_t* a) {
@@ -174,5 +226,7 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "ref?", valk_builtin_ref_p);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "read", valk_builtin_read);
+  valk_lenv_put_builtin(env, "parse", valk_builtin_parse);
+  valk_lenv_put_builtin(env, "validate", valk_builtin_validate);
   valk_lenv_put_builtin(env, "read-file", valk_builtin_read_file);
 }

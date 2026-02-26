@@ -105,3 +105,6 @@ void valk_register_mem_builtins(valk_lenv_t *env);
 void valk_register_http_builtins(valk_lenv_t *env);
 void valk_register_aio_builtins(valk_lenv_t *env);
 void valk_register_server_builtins(valk_lenv_t *env);
+void valk_register_json_builtins(valk_lenv_t *env);
+void valk_register_stdio_builtins(valk_lenv_t *env);
+void valk_register_sqlite_builtins(valk_lenv_t *env);

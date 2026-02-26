@@ -90,9 +90,6 @@ int main(int argc, char* argv[]) {
   bool force_repl = false;
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
-      if (strcmp(argv[i], "--lsp") == 0) {
-        return valk_lsp_main(argc, argv);
-      }
       if (strcmp(argv[i], "--quality-snapshot") == 0) {
         const char *dir = (i + 1 < argc) ? argv[++i] : ".";
         return valk_quality_snapshot(dir);
@@ -121,6 +118,7 @@ int main(int argc, char* argv[]) {
       if (LVAL_TYPE(res) == LVAL_ERR) {
         valk_lval_println(res);
       } else {
+        valk_gc_root_push(res);
         while (valk_lval_list_count(res) > 0) {
           valk_lval_t* x;
           VALK_WITH_ALLOC((void*)gc_heap) {
@@ -131,9 +129,11 @@ int main(int argc, char* argv[]) {
             valk_lval_println(x);
             break;
           }
+          valk_gc_root_push(x);
           VALK_WITH_ALLOC((void*)scratch) {
             x = valk_lval_eval(env, x);
           }
+          valk_gc_root_pop();
 
           if (LVAL_TYPE(x) == LVAL_ERR) {
             valk_lval_println(x);
@@ -142,9 +142,10 @@ int main(int argc, char* argv[]) {
 
           VALK_GC_SAFE_POINT();
           if (valk_gc_should_collect(gc_heap)) {
-            valk_gc_heap_collect(gc_heap);  // Mark res as additional root
+            valk_gc_heap_collect(gc_heap);
           }
         }
+        valk_gc_root_pop();
       }
     }
   }

@@ -41,6 +41,7 @@ static inline u8 valk_gc_size_class(sz bytes) {
 #define VALK_GC_PAGE_SIZE   (64 * 1024)
 #define VALK_GC_PAGE_ALIGN  64
 #define VALK_GC_TLAB_SLOTS  32
+#define VALK_GC_TLAB_REFILL_SCAN_LIMIT 4
 #define VALK_GC_SLOT_SIZE   80
 #define VALK_GC_SLOTS_PER_PAGE  819
 #define VALK_GC_BITMAP_SIZE  ((VALK_GC_SLOTS_PER_PAGE + 7) / 8)
@@ -51,6 +52,13 @@ static inline u16 valk_gc_slots_per_page(u8 size_class) {
   u16 slot_size = valk_gc_size_classes[size_class];
   sz usable = VALK_GC_PAGE_SIZE - VALK_GC_PAGE_HEADER_SIZE;
   u16 slots = (u16)((usable * 8) / (8 * slot_size + 2));
+  while (slots > 0) {
+    u16 bm = (u16)((slots + 7) / 8);
+    sz after_bitmaps = VALK_GC_PAGE_HEADER_SIZE + 2 * bm;
+    sz slots_start = (after_bitmaps + 63) & ~(sz)63;
+    if (slots_start + (sz)slots * slot_size <= VALK_GC_PAGE_SIZE) break;
+    slots--;
+  }
   return slots;
 }
 

@@ -100,6 +100,9 @@ set(VALKYRIA_SOURCES
   src/builtins_aio.c
   src/builtins_server.c
   src/builtins_test.c
+  src/builtins_json.c
+  src/builtins_stdio.c
+  src/builtins_sqlite.c
   src/memory.c
   src/slab.c
   src/memory_os.c
@@ -180,13 +183,9 @@ set(VALKYRIA_SOURCES
   src/aio/aio_ctx_builtins.c
   src/pool_metrics.c
   src/event_loop_metrics.c
-  src/lsp/lsp.c
   src/lsp/lsp_doc.c
   src/lsp/lsp_loads.c
   src/lsp/lsp_walk.c
-  src/lsp/lsp_hover.c
-  src/lsp/lsp_completion.c
-  src/lsp/lsp_references.c
   src/lsp/lsp_workspace.c
   src/lsp/lsp_analysis.c
   src/lsp/lsp_types.c
@@ -194,7 +193,6 @@ set(VALKYRIA_SOURCES
   src/lsp/lsp_infer_ann.c
   src/lsp/lsp_infer_plist.c
   src/lsp/lsp_builtin_schemes.c
-  src/lsp/lsp_io.c
   src/lsp/lsp_json.c
   src/lsp/lsp_db.c
   src/lsp/lsp_db_stats.c

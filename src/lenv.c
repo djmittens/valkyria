@@ -138,14 +138,7 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   }
 
   while (env) {
-    if (env->symbols.items == NULL) {
-      env = env->parent;
-      continue;
-    }
     for (u64 i = 0; i < env->symbols.count; i++) {
-      if (env->symbols.items[i] == NULL) {
-        break;
-      }
       if (strcmp(key->str, env->symbols.items[i]) == 0) {
         if (valk_log_would_log(VALK_LOG_TRACE)) {
           VALK_TRACE("env get idx=%zu key=%s", i, env->symbols.items[i]);

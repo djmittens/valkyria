@@ -355,10 +355,20 @@ extern valk_system_t *valk_sys;
 void valk_gc_thread_register(void);
 void valk_gc_thread_unregister(void);
 
+// ============================================================================
+// Safepoint Flags (CPython eval_breaker / Ruby interrupt_flag pattern)
+// ============================================================================
+// Per-thread bitmask checked once per eval iteration. Multiple subsystems
+// set bits; the slow path dispatches based on which bits are set.
+// Cost: one relaxed atomic load + predicted-not-taken branch per iteration.
+
+#define VALK_SP_GC_COLLECT   (1u << 0)
+#define VALK_SP_STW          (1u << 1)
+
 #define VALK_GC_SAFE_POINT() \
   do { \
-    if (__builtin_expect(atomic_load_explicit(&valk_sys->phase, \
-                         memory_order_acquire) != VALK_GC_PHASE_IDLE, 0)) { \
+    if (__builtin_expect(atomic_load_explicit(&valk_thread_ctx.safepoint_flags, \
+                         memory_order_acquire) != 0, 0)) { \
       valk_gc_safe_point_slow(); \
     } \
   } while (0)

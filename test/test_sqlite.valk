@@ -1,0 +1,294 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "sqlite-open-close"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (test/assert (ref? db) "sqlite/open should return a ref")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-create-table-and-insert"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+    (= {changed} (sqlite/exec db "INSERT INTO t (name) VALUES (?)" "alice"))
+    (test/assert-eq 1 changed "insert should change 1 row")
+    (= {id} (sqlite/last-insert-id db))
+    (test/assert-eq 1 id "first insert should have rowid 1")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-returns-plists"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+    (sqlite/exec db "INSERT INTO t (name, age) VALUES (?, ?)" "alice" 30)
+    (sqlite/exec db "INSERT INTO t (name, age) VALUES (?, ?)" "bob" 25)
+    (= {rows} (sqlite/query db "SELECT name, age FROM t ORDER BY name"))
+    (test/assert-eq 2 (len rows) "should return 2 rows")
+    (= {r1} (nth 1 rows))
+    (test/assert-eq "alice" (plist/get r1 :name) "first row name")
+    (test/assert-eq 30 (plist/get r1 :age) "first row age")
+    (= {r2} (nth 2 rows))
+    (test/assert-eq "bob" (plist/get r2 :name) "second row name")
+    (test/assert-eq 25 (plist/get r2 :age) "second row age")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-with-params"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (?)" "one")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (?)" "two")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (?)" "three")
+    (= {rows} (sqlite/query db "SELECT val FROM t WHERE id > ?" 1))
+    (test/assert-eq 2 (len rows) "should filter to 2 rows")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-empty-result"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {rows} (sqlite/query db "SELECT * FROM t"))
+    (test/assert-eq 0 (len rows) "empty table should return empty list")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-null-values"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (NULL)")
+    (= {rows} (sqlite/query db "SELECT val FROM t"))
+    (= {r1} (nth 1 rows))
+    (test/assert-eq nil (plist/get r1 :val) "NULL should map to nil")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-prepared-statements"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
+    (= {stmt} (sqlite/prepare db "INSERT INTO t (val) VALUES (?)"))
+    (sqlite/bind stmt 10)
+    (sqlite/step stmt)
+    (sqlite/bind stmt 20)
+    (sqlite/step stmt)
+    (sqlite/bind stmt 30)
+    (sqlite/step stmt)
+    (sqlite/finalize stmt)
+    (= {rows} (sqlite/query db "SELECT val FROM t ORDER BY val"))
+    (test/assert-eq 3 (len rows) "should have 3 rows from prepared inserts")
+    (test/assert-eq 10 (plist/get (nth 1 rows) :val) "first value")
+    (test/assert-eq 30 (plist/get (nth 3 rows) :val) "third value")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-prepared-select"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+    (sqlite/exec db "INSERT INTO t (name) VALUES ('a')")
+    (sqlite/exec db "INSERT INTO t (name) VALUES ('b')")
+    (sqlite/exec db "INSERT INTO t (name) VALUES ('c')")
+    (= {stmt} (sqlite/prepare db "SELECT name FROM t WHERE id = ?"))
+    (sqlite/bind stmt 2)
+    (= {row} (sqlite/step stmt))
+    (test/assert-eq "b" (plist/get row :name) "prepared select should return row")
+    (= {done} (sqlite/step stmt))
+    (test/assert-eq nil done "second step should return nil (done)")
+    (sqlite/finalize stmt)
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-exec-multiple-changes"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (1)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (2)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (3)")
+    (= {changed} (sqlite/exec db "DELETE FROM t WHERE val > ?" 1))
+    (test/assert-eq 2 changed "should delete 2 rows")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-transaction-pattern"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    (sqlite/exec db "BEGIN")
+    (sqlite/exec db "INSERT INTO t (val) VALUES ('a')")
+    (sqlite/exec db "INSERT INTO t (val) VALUES ('b')")
+    (sqlite/exec db "COMMIT")
+    (= {rows} (sqlite/query db "SELECT COUNT(*) as cnt FROM t"))
+    (test/assert-eq 2 (plist/get (nth 1 rows) :cnt) "committed rows should persist")
+    (sqlite/exec db "BEGIN")
+    (sqlite/exec db "INSERT INTO t (val) VALUES ('c')")
+    (sqlite/exec db "ROLLBACK")
+    (= {rows2} (sqlite/query db "SELECT COUNT(*) as cnt FROM t"))
+    (test/assert-eq 2 (plist/get (nth 1 rows2) :cnt) "rolled back rows should not persist")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-error-bad-sql"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {result} (sqlite/exec db "NOT VALID SQL"))
+    (test/assert (error? result) "bad SQL should return error")
+    (sqlite/close db)
+    true
+  })
+
+  ; --- New convenience query tests ---
+
+  (test "sqlite-query-row"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+    (sqlite/exec db "INSERT INTO t (name) VALUES ('alice')")
+    (= {row} (sqlite/query-row db "SELECT name FROM t WHERE id = ?" 1))
+    (test/assert-eq "alice" (plist/get row :name) "query-row returns the row")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-row-errors-on-zero"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {result} (sqlite/query-row db "SELECT * FROM t"))
+    (test/assert (error? result) "query-row should error on 0 rows")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-row-errors-on-multiple"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (sqlite/exec db "INSERT INTO t VALUES (2)")
+    (= {result} (sqlite/query-row db "SELECT * FROM t"))
+    (test/assert (error? result) "query-row should error on 2+ rows")
+    (sqlite/close db)
+    true
+  })
+
+  (test "sqlite-query-value"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES ('x')")
+    (sqlite/exec db "INSERT INTO t (val) VALUES ('y')")
+    (= {cnt} (sqlite/query-value db "SELECT COUNT(*) FROM t"))
+    (test/assert-eq 2 cnt "query-value returns the scalar")
+    (= {name} (sqlite/query-value db "SELECT val FROM t WHERE id = ?" 1))
+    (test/assert-eq "x" name "query-value with params")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-value-errors-on-zero-rows"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {result} (sqlite/query-value db "SELECT id FROM t"))
+    (test/assert (error? result) "query-value should error on 0 rows")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-value-errors-on-multi-col"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (a INTEGER, b INTEGER)")
+    (sqlite/exec db "INSERT INTO t VALUES (1, 2)")
+    (= {result} (sqlite/query-value db "SELECT a, b FROM t"))
+    (test/assert (error? result) "query-value should error on multiple columns")
+    (sqlite/close db)
+    true
+  })
+
+  (test "sqlite-query-maybe-returns-row"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+    (sqlite/exec db "INSERT INTO t (name) VALUES ('alice')")
+    (= {row} (sqlite/query-maybe db "SELECT name FROM t WHERE id = ?" 1))
+    (test/assert-eq "alice" (plist/get row :name) "query-maybe returns row when found")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-maybe-returns-nil"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {result} (sqlite/query-maybe db "SELECT * FROM t WHERE id = 999"))
+    (test/assert-eq nil result "query-maybe returns nil when no rows")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-maybe-errors-on-multiple"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (sqlite/exec db "INSERT INTO t VALUES (2)")
+    (= {result} (sqlite/query-maybe db "SELECT * FROM t"))
+    (test/assert (error? result) "query-maybe should error on 2+ rows")
+    (sqlite/close db)
+    true
+  })
+
+  (test "sqlite-exec-script"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec-script db "
+      CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+      CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT);
+      INSERT INTO users (name) VALUES ('alice');
+      INSERT INTO posts (user_id, title) VALUES (1, 'hello');
+    ")
+    (= {cnt} (sqlite/query-value db "SELECT COUNT(*) FROM users"))
+    (test/assert-eq 1 cnt "exec-script should execute all statements")
+    (= {title} (sqlite/query-value db "SELECT title FROM posts"))
+    (test/assert-eq "hello" title "data from exec-script should persist")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-exec-script-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {result} (sqlite/exec-script db "CREATE TABLE t (id INTEGER); GARBAGE;"))
+    (test/assert (error? result) "exec-script should error on bad SQL")
+    (sqlite/close db)
+    true
+  })
+
+  (test "sqlite-changes"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (1)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (2)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (3)")
+    (sqlite/exec db "UPDATE t SET val = val + 10 WHERE val > 1")
+    (= {changed} (sqlite/changes db))
+    (test/assert-eq 2 changed "changes should report last statement's changes")
+    (sqlite/close db)
+    true
+  })
+
+  (test "sqlite-busy-timeout"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/busy-timeout db 10000)
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (= {cnt} (sqlite/query-value db "SELECT COUNT(*) FROM t"))
+    (test/assert-eq 1 cnt "db should work after busy-timeout change")
+    (sqlite/close db)
+    true
+  })
+) (test/context-new))

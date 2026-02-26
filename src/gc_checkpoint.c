@@ -1,6 +1,7 @@
 #include "gc.h"
 #include "parser.h"
 #include "memory.h"
+#include "eval_internal.h"
 #include "log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -26,12 +27,10 @@ static inline void evac_value_and_process_env(valk_evacuation_ctx_t* ctx, valk_l
   }
 }
 
-static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
-  if (valk_thread_ctx.eval_stack == nullptr) return;
-
-  valk_eval_stack_t* stack = (valk_eval_stack_t*)valk_thread_ctx.eval_stack;
+static void evac_one_eval_stack(valk_evacuation_ctx_t* ctx, valk_eval_stack_t* stack) {
   for (u64 i = 0; i < stack->count; i++) {
     valk_cont_frame_t* frame = &stack->frames[i];
+    if (frame->env) valk_evacuate_env(ctx, frame->env);
     switch (frame->kind) {
       case CONT_EVAL_ARGS:
         evac_value_and_process_env(ctx, &frame->eval_args.func);
@@ -58,6 +57,7 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
         break;
       case CONT_BODY_NEXT:
         evac_value_and_process_env(ctx, &frame->body_next.remaining);
+        if (frame->body_next.call_env) valk_evacuate_env(ctx, frame->body_next.call_env);
         break;
       case CONT_CTX_DEADLINE:
         evac_value_and_process_env(ctx, &frame->ctx_deadline.body);
@@ -70,9 +70,20 @@ static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
         break;
     }
   }
+}
 
-  evac_value_and_process_env(ctx, &valk_thread_ctx.eval_expr);
-  evac_value_and_process_env(ctx, &valk_thread_ctx.eval_value);
+static void evac_checkpoint_eval_stack(valk_evacuation_ctx_t* ctx) {
+  valk_thread_context_t* tc = &valk_thread_ctx;
+
+  evac_value_and_process_env(ctx, &tc->eval_expr);
+  evac_value_and_process_env(ctx, &tc->eval_value);
+  if (tc->eval_env) valk_evacuate_env(ctx, tc->eval_env);
+
+  for (u32 i = 0; i < tc->eval_stack_depth; i++) {
+    valk_eval_stack_t* stack = (valk_eval_stack_t*)tc->eval_stacks[i];
+    if (stack) evac_one_eval_stack(ctx, stack);
+    if (tc->saved_eval_envs[i]) valk_evacuate_env(ctx, tc->saved_eval_envs[i]);
+  }
 }
 // LCOV_EXCL_STOP
 

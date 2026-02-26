@@ -2,6 +2,7 @@
 #include "parser.h"
 #include "memory.h"
 #include "async_handle.h"
+#include "eval_internal.h"
 #include "log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -30,25 +31,23 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
 // LCOV_EXCL_START - Heap2 marking with complex types requires runtime context from real GC cycle
 static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx) {
   if (lval == nullptr) return;
-  if (!mark_ptr_only(lval, ctx)) return;
-  valk_gc_mark_queue_push(ctx->queue, lval);
+
+  valk_gc_ptr_location_t loc;
+  bool in_heap = valk_gc_ptr_to_location(ctx->heap, lval, &loc);
+
+  if (in_heap) {
+    if (!valk_gc_page_try_mark(loc.page, loc.slot)) return;
+    valk_gc_mark_queue_push(ctx->queue, lval);
+  } else if (!valk_gc_mark_large_object(ctx->heap, lval)) {
+    mark_children(lval, ctx);
+  }
 }
 
-#define MARK_ENV_VISITED_MAX 128
-
 static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
-  valk_lenv_t *visited[MARK_ENV_VISITED_MAX];
-  u64 visited_count = 0;
-
   while (env != nullptr) {
-    for (u64 i = 0; i < visited_count; i++) {
-      if (visited[i] == env) return;
+    if (!mark_ptr_only(env, ctx)) {
+      return;
     }
-    if (visited_count < MARK_ENV_VISITED_MAX) {
-      visited[visited_count++] = env;
-    }
-
-    mark_ptr_only(env, ctx);
     mark_ptr_only(env->symbols.items, ctx);
     mark_ptr_only(env->vals.items, ctx);
     for (u64 i = 0; i < env->symbols.count; i++) {
@@ -99,6 +98,65 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
   }
 }
 // LCOV_EXCL_STOP
+
+static void mark_one_eval_stack(valk_eval_stack_t *stack, valk_gc_mark_ctx_t *ctx) {
+  for (u64 i = 0; i < stack->count; i++) {
+    valk_cont_frame_t *frame = &stack->frames[i];
+    if (frame->env) mark_env(frame->env, ctx);
+    switch (frame->kind) {
+      case CONT_EVAL_ARGS:
+        mark_lval(frame->eval_args.func, ctx);
+        mark_lval(frame->eval_args.remaining, ctx);
+        break;
+      case CONT_COLLECT_ARG:
+        mark_lval(frame->collect_arg.func, ctx);
+        mark_lval(frame->collect_arg.remaining, ctx);
+        for (u64 j = 0; j < frame->collect_arg.count; j++) {
+          mark_lval(frame->collect_arg.args[j], ctx);
+        }
+        break;
+      case CONT_IF_BRANCH:
+        mark_lval(frame->if_branch.true_branch, ctx);
+        mark_lval(frame->if_branch.false_branch, ctx);
+        break;
+      case CONT_DO_NEXT:
+        mark_lval(frame->do_next.remaining, ctx);
+        break;
+      case CONT_SELECT_CHECK:
+        mark_lval(frame->select_check.result_expr, ctx);
+        mark_lval(frame->select_check.remaining, ctx);
+        mark_lval(frame->select_check.original_args, ctx);
+        break;
+      case CONT_BODY_NEXT:
+        mark_lval(frame->body_next.remaining, ctx);
+        if (frame->body_next.call_env) mark_env(frame->body_next.call_env, ctx);
+        break;
+      case CONT_CTX_DEADLINE:
+        mark_lval(frame->ctx_deadline.body, ctx);
+        break;
+      case CONT_CTX_WITH:
+        mark_lval(frame->ctx_with.value_expr, ctx);
+        mark_lval(frame->ctx_with.body, ctx);
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+static void mark_eval_stack_roots(valk_gc_mark_ctx_t *ctx) {
+  valk_thread_context_t *tc = &valk_thread_ctx;
+
+  mark_lval(tc->eval_expr, ctx);
+  mark_lval(tc->eval_value, ctx);
+  if (tc->eval_env) mark_env(tc->eval_env, ctx);
+
+  for (u32 i = 0; i < tc->eval_stack_depth; i++) {
+    valk_eval_stack_t *stack = (valk_eval_stack_t *)tc->eval_stacks[i];
+    if (stack) mark_one_eval_stack(stack, ctx);
+    if (tc->saved_eval_envs[i]) mark_env(tc->saved_eval_envs[i], ctx);
+  }
+}
 
 static void mark_root_visitor2(valk_lval_t *val, void *user) {
   valk_gc_mark_ctx_t *ctx = user;
@@ -198,6 +256,7 @@ void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
   };
 
   valk_gc_visit_thread_roots(mark_root_visitor2, &ctx);
+  mark_eval_stack_roots(&ctx);
 
   if (my_id == 0) {
     valk_gc_visit_global_roots(mark_root_visitor2, &ctx);
@@ -315,6 +374,14 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
                         VALK_GC_PHASE_STW_REQUESTED,
                         memory_order_release);
 
+  for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
+    if (valk_sys->threads[i].active && valk_sys->threads[i].ctx != nullptr) {
+      valk_thread_context_t *tc = valk_sys->threads[i].ctx;
+      atomic_fetch_or_explicit(&tc->safepoint_flags, VALK_SP_STW,
+                                memory_order_release);
+    }
+  }
+
   pthread_mutex_unlock(&valk_sys->thread_mutex);
 
   valk_system_wake_threads(valk_sys);
@@ -417,6 +484,8 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
 
   atomic_fetch_add(&valk_sys->parallel_cycles, 1);
   atomic_fetch_add(&valk_sys->parallel_pause_us_total, pause_us);
+
+  atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_STW);
 
   VALK_DEBUG("GC cycle complete: reclaimed %zu bytes in %llu us (%zu threads)",
              reclaimed, (unsigned long long)pause_us, num_threads);

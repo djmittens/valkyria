@@ -1,0 +1,423 @@
+; Valkyria LSP Server — implemented in Valk
+;
+; JSON <-> Q-expression mapping:
+;   JSON object  -> plist:  {"a":1} -> {:a 1}
+;   JSON array   -> list:   [1,2]   -> {1 2}
+;   true/false   -> 1/0    (use :true/:false for encoding)
+;   null         -> (None) (Option type from prelude)
+;   nil          -> []     (nil = empty list, always)
+
+(load "src/prelude.valk")
+(load "src/symdb.valk")
+
+; ---------------------------------------------------------------------------
+; Helpers
+; ---------------------------------------------------------------------------
+
+(fun {strip-cr s} {str/replace (str/replace s "\r" "") "\n" ""})
+
+; ---------------------------------------------------------------------------
+; LSP I/O — Content-Length framing over stdin/stdout
+; ---------------------------------------------------------------------------
+
+(fun {lsp/read-content-length} {do
+  (= {line} (stdin/read-line))
+  (if (== line nil) {-1}
+    {if (<= (len line) 2) {-1}
+      {do
+        (= {parts} (str/split line ": "))
+        (if (< (len parts) 2) {-1}
+          {do
+            (= {val} (strip-cr (nth 2 parts)))
+            (= {next} (stdin/read-line))
+            (str->num val)})}})})
+
+(fun {lsp/read-message} {do
+  (= {content-length} (lsp/read-content-length))
+  (if (<= content-length 0) {nil}
+    {do
+      (= {body} (stdin/read-bytes content-length))
+      (if (error? body) {nil}
+        {json/parse body})})})
+
+(fun {lsp/write-message json-body} {do
+  (= {msg} (json/encode json-body))
+  (stdout/write (str "Content-Length: " (len msg) "\r\n\r\n"))
+  (stdout/write msg)
+  (stdout/flush)})
+
+(fun {lsp/send-response id result}
+  {lsp/write-message (list :jsonrpc "2.0" :id id :result result)})
+
+(fun {lsp/send-error id code message}
+  {lsp/write-message
+    (list :jsonrpc "2.0" :id id
+          :error (list :code code :message message))})
+
+(fun {lsp/send-notification method params}
+  {lsp/write-message
+    (list :jsonrpc "2.0" :method method :params params)})
+
+; ---------------------------------------------------------------------------
+; State
+; ---------------------------------------------------------------------------
+
+(def {lsp/documents} {})
+(def {lsp/db} nil)
+(def {lsp/root-path} nil)
+
+(fun {lsp/doc-store uri text}
+  {def {lsp/documents} (plist/set lsp/documents uri text)})
+
+(fun {lsp/doc-get uri}
+  {plist/get lsp/documents uri})
+
+; ---------------------------------------------------------------------------
+; LSP Capabilities
+; ---------------------------------------------------------------------------
+
+(def {lsp/capabilities}
+  {:capabilities
+    {:positionEncoding "utf-8"
+     :textDocumentSync
+       {:openClose :true
+        :change 1
+        :save {:includeText :true}}
+     :completionProvider
+       {:triggerCharacters {"(" "/" ":"}
+        :resolveProvider :false}
+     :hoverProvider :true
+     :definitionProvider :true
+     :referencesProvider :true
+     :documentSymbolProvider :true
+     :workspaceSymbolProvider :true}
+   :serverInfo
+     {:name "valk-lsp"
+      :version "0.3.0"}})
+
+; ---------------------------------------------------------------------------
+; Diagnostic publishing
+; ---------------------------------------------------------------------------
+
+(fun {make-lsp-diag d}
+  {list :range
+    (list :start (list :line (plist/get d :line)
+                       :character (plist/get d :col))
+          :end   (list :line (plist/get d :line)
+                       :character (plist/get d :end-col)))
+    :severity (plist/get d :severity)
+    :source "valk"
+    :message (plist/get d :message)})
+
+(fun {lsp/publish-diagnostics uri text} {do
+  (= {ast} (parse text))
+  (= {diags} (validate ast text))
+  (= {lsp-diags} (map make-lsp-diag diags))
+  (lsp/send-notification "textDocument/publishDiagnostics"
+    (list :uri uri :diagnostics lsp-diags))})
+
+; ---------------------------------------------------------------------------
+; Sync document to symdb
+; ---------------------------------------------------------------------------
+
+(fun {lsp/sync-doc uri text} {do
+  (lsp/doc-store uri text)
+  (if (nil? lsp/db) {}
+    {symdb/sync-document lsp/db uri text})})
+
+; ---------------------------------------------------------------------------
+; Method handlers — notifications
+; ---------------------------------------------------------------------------
+
+(fun {lsp/seed-builtins db} {do
+  (= {builtins-text} (read-file "src/builtins.valk"))
+  (if (error? builtins-text) {}
+    {do
+      (symdb/sync-symbols-only db "file:///builtins.valk" builtins-text)
+      (= {prelude-text} (read-file "src/prelude.valk"))
+      (if (error? prelude-text) {}
+        {symdb/sync-symbols-only db "file:///prelude.valk" prelude-text})
+      (stderr/write (str "[valk-lsp] seeded builtins + prelude\n"))})})
+
+(fun {handle-initialize id params} {do
+  (= {root-uri} (plist/get params :rootUri))
+  (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
+  (if (not (nil? root-uri))
+    {do
+      (def {lsp/root-path} (uri->path root-uri))
+      (= {db-dir} (str lsp/root-path "/.valk"))
+      (= {db-path} (str db-dir "/symdb.sqlite"))
+      (stderr/write (str "[valk-lsp] symdb: " db-path "\n"))
+      (def {lsp/db} (symdb/init db-path))
+      (lsp/seed-builtins lsp/db)
+      (stderr/write "[valk-lsp] symdb initialized\n")}
+    {})
+  (lsp/send-response id lsp/capabilities)})
+
+(fun {handle-did-open params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {text} (plist/get td :text))
+  (lsp/sync-doc uri text)
+  (lsp/publish-diagnostics uri text)})
+
+(fun {handle-did-change params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {changes} (plist/get params :contentChanges))
+  (if (nil? changes) {}
+    {do
+      (= {text} (plist/get (head changes) :text))
+      (lsp/sync-doc uri text)
+      (lsp/publish-diagnostics uri text)})})
+
+(fun {handle-did-close params} {do
+  (= {td} (plist/get params :textDocument))
+  (plist/get td :uri)})
+
+(fun {handle-did-save params} {do
+  (= {text} (plist/get params :text))
+  (if (nil? text) {}
+    {do
+      (= {td} (plist/get params :textDocument))
+      (= {uri} (plist/get td :uri))
+      (lsp/sync-doc uri text)
+      (lsp/publish-diagnostics uri text)})})
+
+; ---------------------------------------------------------------------------
+; Method handlers — requests
+; ---------------------------------------------------------------------------
+
+(fun {handle-hover id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {pos} (plist/get params :position))
+  (= {line} (plist/get pos :line))
+  (= {col} (plist/get pos :character))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id (None)}
+    {do
+      (= {word} (word-at-position text line col))
+      (if (nil? word) {lsp/send-response id (None)}
+        {do
+          (= {doc-info} (if (nil? lsp/db) {nil}
+            {symdb/symbol-doc lsp/db word}))
+          (= {doc-str} (if (nil? doc-info) {word}
+            {do
+              (= {d} (plist/get doc-info :doc))
+              (if (nil? d) {word} {d})}))
+          (lsp/send-response id
+            (list :contents
+              (list :kind "markdown"
+                    :value (str "```valk\n" doc-str "\n```"))
+              :range
+              (list :start (list :line line :character col)
+                    :end (list :line line :character (+ col (len word))))))})})})
+
+(fun {handle-definition id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {pos} (plist/get params :position))
+  (= {line} (plist/get pos :line))
+  (= {col} (plist/get pos :character))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id (None)}
+    {do
+      (= {word} (word-at-position text line col))
+      (if (nil? word) {lsp/send-response id (None)}
+        {if (nil? lsp/db) {lsp/send-response id (None)}
+          {do
+            (= {defn} (symdb/find-definition lsp/db word))
+            (if (nil? defn) {lsp/send-response id (None)}
+              {do
+                (= {def-path} (plist/get defn :path))
+                (= {def-uri} (str "file://" def-path))
+                (= {def-line} (plist/get defn :line))
+                (= {def-col} (plist/get defn :col))
+                (lsp/send-response id
+                  (list :uri def-uri
+                        :range (list
+                          :start (list :line def-line :character def-col)
+                          :end (list :line def-line :character (+ def-col (len word))))))})}})})})
+
+(fun {handle-references id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {pos} (plist/get params :position))
+  (= {line} (plist/get pos :line))
+  (= {col} (plist/get pos :character))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id nil}
+    {do
+      (= {word} (word-at-position text line col))
+      (if (nil? word) {lsp/send-response id nil}
+        {if (nil? lsp/db) {lsp/send-response id nil}
+          {do
+            (= {refs} (symdb/find-refs lsp/db word))
+            (= {lsp-refs} (map (\ {r} {
+              list :uri (str "file://" (plist/get r :path))
+                   :range (list
+                     :start (list :line (plist/get r :line) :character (plist/get r :col))
+                     :end (list :line (plist/get r :line) :character (+ (plist/get r :col) (len word))))
+            }) refs))
+            (lsp/send-response id lsp-refs)}})})})
+
+(fun {handle-completion id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {pos} (plist/get params :position))
+  (= {line} (plist/get pos :line))
+  (= {col} (plist/get pos :character))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id nil}
+    {do
+      (= {word} (word-at-position text line col))
+      (= {prefix} (if (nil? word) {""} {word}))
+      (if (nil? lsp/db) {lsp/send-response id nil}
+        {do
+          (= {syms} (if (== prefix "")
+            {symdb/all-symbol-names lsp/db}
+            {symdb/search-symbols lsp/db prefix}))
+          (= {items} (map (\ {s} {
+            list :label (plist/get s :name)
+                 :kind (symkind->completion-kind (plist/get s :kind))
+                 :detail (if (nil? (plist/get s :doc)) {""} {plist/get s :doc})
+          }) syms))
+          (lsp/send-response id (list :isIncomplete :false :items items))})})})
+
+(fun {symkind->completion-kind kind} {
+  if (== kind SYMKIND_FUNCTION) {3}
+  {if (== kind SYMKIND_VARIABLE) {6}
+  {if (== kind SYMKIND_TYPE) {7}
+  {if (== kind SYMKIND_CONSTRUCTOR) {4}
+    {6}}}}
+})
+
+(fun {handle-document-symbols id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (if (nil? lsp/db) {lsp/send-response id nil}
+    {do
+      (= {path} (uri->path uri))
+      (= {syms} (symdb/file-symbols lsp/db path))
+      (= {lsp-syms} (map (\ {s} {do
+        (= {sym-line} (plist/get s :line))
+        (= {sym-col} (plist/get s :col))
+        (= {sym-name} (plist/get s :name))
+        (= {sym-kind} (plist/get s :kind))
+        (list :name sym-name
+              :kind (symkind->lsp-kind sym-kind)
+              :range (list
+                :start (list :line sym-line :character sym-col)
+                :end (list :line sym-line :character (+ sym-col (len sym-name))))
+              :selectionRange (list
+                :start (list :line sym-line :character sym-col)
+                :end (list :line sym-line :character (+ sym-col (len sym-name)))))
+      }) syms))
+      (lsp/send-response id lsp-syms)})})
+
+(fun {handle-workspace-symbols id params} {do
+  (= {query} (plist/get params :query))
+  (if (nil? lsp/db) {lsp/send-response id nil}
+    {do
+      (= {syms} (if (nil? query) {symdb/all-symbol-names lsp/db}
+        {if (== query "") {symdb/all-symbol-names lsp/db}
+          {symdb/search-symbols lsp/db query}}))
+      (= {lsp-syms} (map (\ {s} {
+        list :name (plist/get s :name)
+             :kind (symkind->lsp-kind (plist/get s :kind))
+             :location (list
+               :uri (str "file://" (if (nil? (plist/get s :path))
+                 {""} {plist/get s :path}))
+               :range (list
+                 :start (list :line 0 :character 0)
+                 :end (list :line 0 :character 0)))
+      }) syms))
+      (lsp/send-response id lsp-syms)})})
+
+; ---------------------------------------------------------------------------
+; Dispatch
+; ---------------------------------------------------------------------------
+
+(fun {lsp/dispatch msg initialized} {do
+  (= {method} (plist/get msg :method))
+  (= {id} (plist/get msg :id))
+  (= {params} (plist/get msg :params))
+
+  (if (nil? method) {:continue}
+    {do
+      (stderr/write (str "[valk-lsp] <- " method "\n"))
+
+      (if (== method "initialize")
+        {do (handle-initialize id params) :initialized}
+
+      {if (== method "initialized")
+        {:continue}
+
+      {if (== method "shutdown")
+        {do (lsp/send-response id (None)) :shutdown}
+
+      {if (== method "exit")
+        {:shutdown}
+
+      {if (== initialized 0)
+        {do
+          (if (num? id) {lsp/send-error id -32002 "Server not initialized"} {})
+          :continue}
+
+      {if (== method "textDocument/didOpen")
+        {do (handle-did-open params) :continue}
+
+      {if (== method "textDocument/didChange")
+        {do (handle-did-change params) :continue}
+
+      {if (== method "textDocument/didClose")
+        {do (handle-did-close params) :continue}
+
+      {if (== method "textDocument/didSave")
+        {do (handle-did-save params) :continue}
+
+      {if (== method "textDocument/hover")
+        {do (handle-hover id params) :continue}
+
+      {if (== method "textDocument/definition")
+        {do (handle-definition id params) :continue}
+
+      {if (== method "textDocument/references")
+        {do (handle-references id params) :continue}
+
+      {if (== method "textDocument/completion")
+        {do (handle-completion id params) :continue}
+
+      {if (== method "textDocument/documentSymbol")
+        {do (handle-document-symbols id params) :continue}
+
+      {if (== method "workspace/symbol")
+        {do (handle-workspace-symbols id params) :continue}
+
+      {do
+        (if (num? id)
+          {lsp/send-error id -32601 (str "Method not found: " method)}
+          {})
+        :continue}}}}}}}}}}}}}}})})})
+; ---------------------------------------------------------------------------
+; Main loop
+; ---------------------------------------------------------------------------
+
+(fun {lsp/loop initialized} {do
+  (= {msg} (lsp/read-message))
+  (if (== msg nil) {}
+    {do
+      (= {action} (lsp/dispatch msg initialized))
+      (if (== action :shutdown) {}
+      {if (== action :initialized) {lsp/loop 1}
+        {lsp/loop initialized}})})})
+
+(fun {lsp/main} {do
+  (stderr/write "[valk-lsp] starting (valk implementation v0.3.0)\n")
+  (lsp/loop 0)
+  (if (not (nil? lsp/db)) {symdb/close lsp/db} {})
+  (stderr/write "[valk-lsp] shutdown\n")})
+
+; Entry point
+(lsp/main)
