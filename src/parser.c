@@ -64,4 +64,5 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_register_json_builtins(env);
   valk_register_stdio_builtins(env);
   valk_register_sqlite_builtins(env);
+  valk_register_dict_builtins(env);
 }

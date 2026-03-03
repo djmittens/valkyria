@@ -1,9 +1,11 @@
 #include "builtins_internal.h"
 
+#include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "coverage.h"
 #include "diag.h"
@@ -151,6 +153,75 @@ static valk_lval_t* valk_builtin_validate(valk_lenv_t* e, valk_lval_t* a) {
   return result;
 }
 
+static valk_lval_t* valk_builtin_src_pos(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return valk_lval_num(v->src_pos);
+}
+
+static valk_lval_t* valk_builtin_quoted_p(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return valk_lval_num((v->flags & LVAL_FLAG_QUOTED) ? 1 : 0);
+}
+
+static valk_lval_t* valk_builtin_offset_to_line_col(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+  const char *text = valk_lval_list_nth(a, 0)->str;
+  int offset = (int)valk_lval_list_nth(a, 1)->num;
+  int line = 0, col = 0;
+  for (int i = 0; i < offset && text[i]; i++) {
+    if (text[i] == '\n') { line++; col = 0; }
+    else col++;
+  }
+  valk_lval_t *items[2] = {valk_lval_num(line), valk_lval_num(col)};
+  return valk_lval_qlist(items, 2);
+}
+
+static valk_lval_t* valk_builtin_qcons(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  valk_lval_t* arg1 = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, arg1, LVAL_CONS, LVAL_NIL);
+  return valk_lval_qcons(valk_lval_list_nth(a, 0), arg1);
+}
+
+static valk_lval_t* valk_builtin_type_of(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return valk_lval_str(valk_ltype_name(LVAL_TYPE(v)));
+}
+
+static valk_lval_t* valk_builtin_str_p(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  return valk_lval_num(LVAL_TYPE(valk_lval_list_nth(a, 0)) == LVAL_STR ? 1 : 0);
+}
+
+static valk_lval_t* valk_builtin_sym_p(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  return valk_lval_num(LVAL_TYPE(valk_lval_list_nth(a, 0)) == LVAL_SYM ? 1 : 0);
+}
+
+static valk_lval_t* valk_builtin_num_p(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  return valk_lval_num(LVAL_TYPE(valk_lval_list_nth(a, 0)) == LVAL_NUM ? 1 : 0);
+}
+
+static valk_lval_t* valk_builtin_fun_p(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  return valk_lval_num(LVAL_TYPE(valk_lval_list_nth(a, 0)) == LVAL_FUN ? 1 : 0);
+}
+
 static valk_lval_t* valk_builtin_read_file(valk_lenv_t* e, valk_lval_t* a) {
   (void)e;
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -219,6 +290,58 @@ static valk_lval_t* valk_builtin_ref_p(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num(LVAL_TYPE(v) == LVAL_REF ? 1 : 0);
 }
 
+static valk_lval_t* valk_builtin_list_dir(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char* path = valk_lval_list_nth(a, 0)->str;
+  DIR* d = opendir(path);
+  if (!d) LVAL_RAISE(a, "Could not open directory (%s)", path);
+
+  size_t count = 0;
+  size_t cap = 64;
+  valk_lval_t** items = malloc(cap * sizeof(valk_lval_t*));
+
+  struct dirent* ent;
+  while ((ent = readdir(d))) {
+    if (ent->d_name[0] == '.') continue;
+
+    char full[4096];
+    snprintf(full, sizeof(full), "%s/%s", path, ent->d_name);
+    struct stat st;
+    const char* type_str = "file";
+    if (stat(full, &st) == 0 && S_ISDIR(st.st_mode))
+      type_str = "dir";
+
+    valk_lval_t* fields[4] = {
+      valk_lval_sym(":name"), valk_lval_str(ent->d_name),
+      valk_lval_sym(":type"), valk_lval_str(type_str),
+    };
+    if (count >= cap) {
+      cap *= 2;
+      items = realloc(items, cap * sizeof(valk_lval_t*));
+    }
+    items[count++] = valk_lval_qlist(fields, 4);
+  }
+  closedir(d);
+
+  valk_lval_t* result = valk_lval_qlist(items, count);
+  free(items);
+  return result;
+}
+
+static valk_lval_t* valk_builtin_file_size(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* path = valk_lval_list_nth(a, 0)->str;
+  struct stat st;
+  if (stat(path, &st) != 0)
+    LVAL_RAISE(a, "file-size: cannot stat (%s)", path);
+  return valk_lval_num((long)st.st_size);
+}
+
 void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
@@ -229,4 +352,15 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "parse", valk_builtin_parse);
   valk_lenv_put_builtin(env, "validate", valk_builtin_validate);
   valk_lenv_put_builtin(env, "read-file", valk_builtin_read_file);
+  valk_lenv_put_builtin(env, "src-pos", valk_builtin_src_pos);
+  valk_lenv_put_builtin(env, "qcons", valk_builtin_qcons);
+  valk_lenv_put_builtin(env, "type-of", valk_builtin_type_of);
+  valk_lenv_put_builtin(env, "str?", valk_builtin_str_p);
+  valk_lenv_put_builtin(env, "sym?", valk_builtin_sym_p);
+  valk_lenv_put_builtin(env, "num?", valk_builtin_num_p);
+  valk_lenv_put_builtin(env, "fun?", valk_builtin_fun_p);
+  valk_lenv_put_builtin(env, "quoted?", valk_builtin_quoted_p);
+  valk_lenv_put_builtin(env, "offset->line-col", valk_builtin_offset_to_line_col);
+  valk_lenv_put_builtin(env, "list-dir", valk_builtin_list_dir);
+  valk_lenv_put_builtin(env, "file-size", valk_builtin_file_size);
 }

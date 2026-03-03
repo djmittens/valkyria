@@ -9,12 +9,19 @@
 
 (load "src/prelude.valk")
 (load "src/symdb.valk")
+(load "src/lsp-analysis.valk")
+(load "src/lsp-validate.valk")
 
 ; ---------------------------------------------------------------------------
 ; Helpers
 ; ---------------------------------------------------------------------------
 
 (fun {strip-cr s} {str/replace (str/replace s "\r" "") "\n" ""})
+
+(fun {ends-with s suffix} {
+  if (< (len s) (len suffix)) {0}
+    {== (str/slice s (- (len s) (len suffix)) (len s)) suffix}
+})
 
 ; ---------------------------------------------------------------------------
 ; LSP I/O — Content-Length framing over stdin/stdout
@@ -88,12 +95,19 @@
         :resolveProvider :false}
      :hoverProvider :true
      :definitionProvider :true
-     :referencesProvider :true
-     :documentSymbolProvider :true
-     :workspaceSymbolProvider :true}
+      :referencesProvider :true
+      :renameProvider {:prepareProvider :true}
+      :documentSymbolProvider :true
+     :workspaceSymbolProvider :true
+     :semanticTokensProvider
+       {:legend
+         {:tokenTypes {"keyword" "function" "parameter" "variable"
+                       "number" "string" "type" "operator" "property"}
+          :tokenModifiers {"declaration" "defaultLibrary"}}
+        :full :true}}
    :serverInfo
      {:name "valk-lsp"
-      :version "0.3.0"}})
+             :version "0.4.0"}})
 
 ; ---------------------------------------------------------------------------
 ; Diagnostic publishing
@@ -111,7 +125,7 @@
 
 (fun {lsp/publish-diagnostics uri text} {do
   (= {ast} (parse text))
-  (= {diags} (validate ast text))
+  (= {diags} (vd/validate lsp/db ast text))
   (= {lsp-diags} (map make-lsp-diag diags))
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics lsp-diags))})
@@ -129,15 +143,116 @@
 ; Method handlers — notifications
 ; ---------------------------------------------------------------------------
 
-(fun {lsp/seed-builtins db} {do
-  (= {builtins-text} (read-file "src/builtins.valk"))
-  (if (error? builtins-text) {}
+(fun {lsp/seed-file db path} {do
+  (= {sz} (file-size path))
+  (if (error? sz) {0}
     {do
-      (symdb/sync-symbols-only db "file:///builtins.valk" builtins-text)
-      (= {prelude-text} (read-file "src/prelude.valk"))
-      (if (error? prelude-text) {}
-        {symdb/sync-symbols-only db "file:///prelude.valk" prelude-text})
-      (stderr/write (str "[valk-lsp] seeded builtins + prelude\n"))})})
+      (= {hash} (str sz))
+      (= {existing} (sqlite/query-maybe db
+        "SELECT hash FROM files WHERE path=?1" path))
+      (if (not (nil? existing))
+        {if (== (plist/get existing :hash) hash) {0}
+          {do
+            (= {text} (read-file path))
+            (if (error? text) {0}
+              {do (symdb/sync-symbols-only db (str "file://" path) text) 1})}}
+        {do
+          (= {text} (read-file path))
+          (if (error? text) {0}
+            {do (symdb/sync-symbols-only db (str "file://" path) text) 1})})})
+})
+
+(fun {lsp/seed-builtins db root} {do
+  (= {builtins-path} (str root "/src/builtins.valk"))
+  (= {b} (lsp/seed-file db builtins-path))
+  (= {prelude-path} (str root "/src/prelude.valk"))
+  (= {p} (lsp/seed-file db prelude-path))
+  (if (== (+ b p) 0)
+    {stderr/write "[valk-lsp] builtins + prelude cached\n"}
+    {stderr/write "[valk-lsp] seeded builtins + prelude\n"})})
+
+; ---------------------------------------------------------------------------
+; Workspace scanning — incremental background indexing
+; ---------------------------------------------------------------------------
+
+(def {lsp/skip-dirs} (list "build" "vendor" "node_modules" "coverage-report"
+                           "test-report" ".valk" ".git"))
+
+(fun {lsp/skip-dir? name} {
+  if (nil? lsp/skip-dirs) {0}
+    {lsp/skip-dir-check name lsp/skip-dirs}
+})
+
+(fun {lsp/skip-dir-check name dirs} {
+  if (nil? dirs) {0}
+    {if (== name (head dirs)) {1}
+      {lsp/skip-dir-check name (tail dirs)}}
+})
+
+(fun {lsp/scan-dir root acc} {do
+  (= {entries} (list-dir root))
+  (if (error? entries) {acc}
+    {lsp/scan-entries root entries acc})
+})
+
+(fun {lsp/scan-entries root entries acc} {
+  if (nil? entries) {acc}
+    {do
+      (= {entry} (head entries))
+      (= {name} (plist/get entry :name))
+      (= {type} (plist/get entry :type))
+      (= {full} (str root "/" name))
+      (= {acc} (if (== type "dir")
+        {if (lsp/skip-dir? name) {acc}
+          {lsp/scan-dir full acc}}
+        {if (ends-with name ".valk")
+          {qcons full acc}
+          {acc}}))
+      (lsp/scan-entries root (tail entries) acc)}
+})
+
+(fun {lsp/index-file db path} {do
+  (= {fpath} (uri->path (str "file://" path)))
+  (= {sz} (file-size path))
+  (if (error? sz) {0}
+    {do
+      (= {hash} (str sz))
+      (= {existing} (sqlite/query-maybe db
+        "SELECT hash FROM files WHERE path=?1" fpath))
+      (if (not (nil? existing))
+        {if (== (plist/get existing :hash) hash) {0}
+          {do
+            (= {text} (read-file path))
+            (if (error? text) {0}
+              {do (symdb/sync-file-symbols db (str "file://" path) text) 1})}}
+        {do
+          (= {text} (read-file path))
+          (if (error? text) {0}
+            {do (symdb/sync-file-symbols db (str "file://" path) text) 1})})})
+})
+
+(fun {lsp/collect-workspace-files root} {do
+  (stderr/write (str "[valk-lsp] collecting workspace files: " root "\n"))
+  (= {files} (lsp/scan-dir root nil))
+  (stderr/write (str "[valk-lsp] found " (len files) " .valk files\n"))
+  files})
+
+(fun {lsp/drain-scan db pending in-txn indexed} {
+  if (nil? pending) {do
+    (if (== in-txn 1) {sqlite/exec db "COMMIT"} {})
+    (if (> indexed 0)
+      {stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n")} {})
+    nil}
+  {if (stdin/has-data) {do
+    (if (== in-txn 1) {do (sqlite/exec db "COMMIT") {}} {})
+    (if (> indexed 0)
+      {stderr/write (str "[valk-lsp] scan paused: " indexed " indexed, " (len pending) " remaining\n")} {})
+    pending}
+  {do
+    (= {txn} (if (== in-txn 0) {do (sqlite/exec db "BEGIN") 1} {in-txn}))
+    (= {did} (lsp/index-file db (head pending)))
+    (lsp/drain-scan db (tail pending) txn (+ indexed did))}}
+})
 
 (fun {handle-initialize id params} {do
   (= {root-uri} (plist/get params :rootUri))
@@ -147,10 +262,8 @@
       (def {lsp/root-path} (uri->path root-uri))
       (= {db-dir} (str lsp/root-path "/.valk"))
       (= {db-path} (str db-dir "/symdb.sqlite"))
-      (stderr/write (str "[valk-lsp] symdb: " db-path "\n"))
       (def {lsp/db} (symdb/init db-path))
-      (lsp/seed-builtins lsp/db)
-      (stderr/write "[valk-lsp] symdb initialized\n")}
+      (lsp/seed-builtins lsp/db lsp/root-path)}
     {})
   (lsp/send-response id lsp/capabilities)})
 
@@ -158,7 +271,7 @@
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
   (= {text} (plist/get td :text))
-  (lsp/sync-doc uri text)
+  (lsp/doc-store uri text)
   (lsp/publish-diagnostics uri text)})
 
 (fun {handle-did-change params} {do
@@ -168,25 +281,54 @@
   (if (nil? changes) {}
     {do
       (= {text} (plist/get (head changes) :text))
-      (lsp/sync-doc uri text)
-      (lsp/publish-diagnostics uri text)})})
+      (lsp/doc-store uri text)})})
 
 (fun {handle-did-close params} {do
   (= {td} (plist/get params :textDocument))
   (plist/get td :uri)})
 
 (fun {handle-did-save params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
   (= {text} (plist/get params :text))
-  (if (nil? text) {}
-    {do
-      (= {td} (plist/get params :textDocument))
-      (= {uri} (plist/get td :uri))
-      (lsp/sync-doc uri text)
-      (lsp/publish-diagnostics uri text)})})
+  (if (nil? text) {do
+    (= {cached} (lsp/doc-get uri))
+    (if (nil? cached) {}
+      {do (lsp/sync-doc uri cached)
+          (lsp/publish-diagnostics uri cached)})}
+    {do (lsp/sync-doc uri text)
+        (lsp/publish-diagnostics uri text)})})
 
 ; ---------------------------------------------------------------------------
 ; Method handlers — requests
 ; ---------------------------------------------------------------------------
+
+(fun {hover/format-markdown info word} {do
+  (= {name} (plist/get info :name))
+  (= {type-sig} (plist/get info :sig))
+  (= {formals} (plist/get info :formals))
+  (= {doc} (plist/get info :doc))
+  (= {path} (plist/get info :path))
+  (= {sym-line} (plist/get info :line))
+  (= {sections} nil)
+  (= {sections} (if (not (nil? type-sig))
+    {qcons (str "```valk\n" name " : " type-sig "\n```") sections}
+    {sections}))
+  (= {sections} (if (not (nil? formals))
+    {qcons (str "```valk\n" formals "\n```") sections}
+    {if (nil? type-sig)
+      {qcons (str "```valk\n" word "\n```") sections}
+      {sections}}))
+  (= {sections} (if (not (nil? doc))
+    {qcons doc sections}
+    {sections}))
+  (= {sections} (if (not (nil? path))
+    {if (> sym-line 0)
+      {qcons (str "*" path ":" (+ sym-line 1) "*") sections}
+      {qcons (str "*" path "*") sections}}
+    {sections}))
+  (str/join (reverse sections) "\n\n---\n\n")
+})
 
 (fun {handle-hover id params} {do
   (= {td} (plist/get params :textDocument))
@@ -200,16 +342,15 @@
       (= {word} (word-at-position text line col))
       (if (nil? word) {lsp/send-response id (None)}
         {do
-          (= {doc-info} (if (nil? lsp/db) {nil}
-            {symdb/symbol-doc lsp/db word}))
-          (= {doc-str} (if (nil? doc-info) {word}
-            {do
-              (= {d} (plist/get doc-info :doc))
-              (if (nil? d) {word} {d})}))
+          (= {info} (if (nil? lsp/db) {nil}
+            {symdb/symbol-hover lsp/db word}))
+          (= {hover-str} (if (nil? info)
+            {str "```valk\n" word "\n```"}
+            {hover/format-markdown info word}))
           (lsp/send-response id
             (list :contents
               (list :kind "markdown"
-                    :value (str "```valk\n" doc-str "\n```"))
+                    :value hover-str)
               :range
               (list :start (list :line line :character col)
                     :end (list :line line :character (+ col (len word))))))})})})
@@ -240,6 +381,15 @@
                           :start (list :line def-line :character def-col)
                           :end (list :line def-line :character (+ def-col (len word))))))})}})})})
 
+(fun {ref->lsp-location uri text r} {do
+  (= {lc} (offset->line-col text (plist/get r :offset)))
+  (= {rname} (plist/get r :name))
+  (list :uri uri
+        :range (list
+          :start (list :line (head lc) :character (head (tail lc)))
+          :end (list :line (head lc) :character (+ (head (tail lc)) (len rname)))))
+})
+
 (fun {handle-references id params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -251,16 +401,96 @@
     {do
       (= {word} (word-at-position text line col))
       (if (nil? word) {lsp/send-response id nil}
-        {if (nil? lsp/db) {lsp/send-response id nil}
-          {do
-            (= {refs} (symdb/find-refs lsp/db word))
-            (= {lsp-refs} (map (\ {r} {
-              list :uri (str "file://" (plist/get r :path))
-                   :range (list
-                     :start (list :line (plist/get r :line) :character (plist/get r :col))
-                     :end (list :line (plist/get r :line) :character (+ (plist/get r :col) (len word))))
-            }) refs))
-            (lsp/send-response id lsp-refs)}})})})
+        {do
+          (= {local-refs} (ref/find-scoped-refs text line col))
+          (if (not (nil? local-refs))
+            {do
+              (= {lsp-refs} (map (\ {r} {ref->lsp-location uri text r}) local-refs))
+              (lsp/send-response id lsp-refs)}
+            {if (nil? lsp/db) {lsp/send-response id nil}
+              {do
+                (= {refs} (symdb/find-refs lsp/db word))
+                (= {lsp-refs} (map (\ {r} {
+                  list :uri (str "file://" (plist/get r :path))
+                       :range (list
+                         :start (list :line (plist/get r :line) :character (plist/get r :col))
+                         :end (list :line (plist/get r :line) :character (+ (plist/get r :col) (len word))))
+                }) refs))
+                (lsp/send-response id lsp-refs)}})})})})
+
+; ---------------------------------------------------------------------------
+; Completion — snippets and enriched symbol items
+; ---------------------------------------------------------------------------
+
+(def {lsp/form-snippets} (list
+  (list :label "fun" :detail "(fun {name} {body})"
+        :snippet "fun {${1:name}} {$0}" :sort "00")
+  (list :label "if" :detail "(if cond {then} {else})"
+        :snippet "if ${1:cond} {$2} {$0}" :sort "01")
+  (list :label "def" :detail "(def {name} value)"
+        :snippet "def {${1:name}} $0" :sort "02")
+  (list :label "=" :detail "(= {name} value)"
+        :snippet "= {${1:name}} $0" :sort "03")
+  (list :label "\\" :detail "(\\ {args} {body})"
+        :snippet "\\ {${1:args}} {$0}" :sort "04")
+  (list :label "do" :detail "(do expr...)"
+        :snippet "do $0" :sort "05")
+  (list :label "match" :detail "(match val {pat body}...)"
+        :snippet "match ${1:val} {$0}" :sort "06")
+  (list :label "select" :detail "(select {cond body}...)"
+        :snippet "select {${1:cond} $0}" :sort "07")
+  (list :label "case" :detail "(case val {pat body}...)"
+        :snippet "case ${1:val} {$0}" :sort "08")
+  (list :label "type" :detail "(type {Name} {Ctor fields})"
+        :snippet "type {${1:Name}} {$0}" :sort "09")
+  (list :label "load" :detail "(load \"path\")"
+        :snippet "load \"$0\"" :sort "10")
+  (list :label "sig" :detail "(sig 'name {type})"
+        :snippet "sig '${1:name} {$0}" :sort "11")
+  (list :label "let" :detail "(let {bindings} body)"
+        :snippet "let {$1} $0" :sort "12")
+))
+
+(fun {make-snippet-item s} {
+  list :label (plist/get s :label)
+       :kind 15
+       :detail (plist/get s :detail)
+       :insertText (plist/get s :snippet)
+       :insertTextFormat 2
+       :sortText (plist/get s :sort)
+})
+
+(fun {filter-snippets prefix snippets} {
+  if (nil? snippets) {nil}
+  {do
+    (= {s} (head snippets))
+    (= {label} (plist/get s :label))
+    (if (starts-with label prefix)
+      {qcons (make-snippet-item s) (filter-snippets prefix (tail snippets))}
+      {filter-snippets prefix (tail snippets)})}
+})
+
+(fun {symkind->completion-kind kind} {
+  if (== kind SYMKIND_FUNCTION) {3}
+  {if (== kind SYMKIND_VARIABLE) {6}
+  {if (== kind SYMKIND_TYPE) {7}
+  {if (== kind SYMKIND_CONSTRUCTOR) {4}
+    {6}}}}
+})
+
+(fun {make-sym-completion-item s} {do
+  (= {name} (plist/get s :name))
+  (= {kind} (plist/get s :kind))
+  (= {sig} (plist/get s :sig))
+  (= {doc} (plist/get s :doc))
+  (= {detail-str} (if (nil? sig) {""} {sig}))
+  (= {item} (list :label name
+                   :kind (symkind->completion-kind kind)
+                   :detail detail-str
+                   :sortText (str "1-" name)))
+  (if (nil? doc) {item}
+    {plist/set item :documentation (list :kind "markdown" :value doc)})
+})
 
 (fun {handle-completion id params} {do
   (= {td} (plist/get params :textDocument))
@@ -273,25 +503,19 @@
     {do
       (= {word} (word-at-position text line col))
       (= {prefix} (if (nil? word) {""} {word}))
-      (if (nil? lsp/db) {lsp/send-response id nil}
+      (= {snippet-items} (if (starts-with prefix ":")
+        {nil}
+        {if (== prefix "")
+          {map make-snippet-item lsp/form-snippets}
+          {filter-snippets prefix lsp/form-snippets}}))
+      (= {sym-items} (if (nil? lsp/db) {nil}
         {do
           (= {syms} (if (== prefix "")
-            {symdb/all-symbol-names lsp/db}
-            {symdb/search-symbols lsp/db prefix}))
-          (= {items} (map (\ {s} {
-            list :label (plist/get s :name)
-                 :kind (symkind->completion-kind (plist/get s :kind))
-                 :detail (if (nil? (plist/get s :doc)) {""} {plist/get s :doc})
-          }) syms))
-          (lsp/send-response id (list :isIncomplete :false :items items))})})})
-
-(fun {symkind->completion-kind kind} {
-  if (== kind SYMKIND_FUNCTION) {3}
-  {if (== kind SYMKIND_VARIABLE) {6}
-  {if (== kind SYMKIND_TYPE) {7}
-  {if (== kind SYMKIND_CONSTRUCTOR) {4}
-    {6}}}}
-})
+            {symdb/completion-all lsp/db}
+            {symdb/completion-symbols lsp/db prefix}))
+          (map make-sym-completion-item syms)}))
+      (= {all-items} (join snippet-items (if (nil? sym-items) {nil} {sym-items})))
+      (lsp/send-response id (list :isIncomplete :false :items all-items))})})
 
 (fun {handle-document-symbols id params} {do
   (= {td} (plist/get params :textDocument))
@@ -335,6 +559,115 @@
       }) syms))
       (lsp/send-response id lsp-syms)})})
 
+(fun {handle-semantic-tokens id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id (list :data nil)}
+    {do
+      (= {data} (sem/tokenize text))
+      (lsp/send-response id (list :data data))})})
+
+; ---------------------------------------------------------------------------
+; Rename support
+; ---------------------------------------------------------------------------
+
+(fun {handle-prepare-rename id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {pos} (plist/get params :position))
+  (= {line} (plist/get pos :line))
+  (= {col} (plist/get pos :character))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-error id -32602 "Document not found"}
+    {do
+      (= {wr} (word-range-at-position text line col))
+      (if (nil? wr) {lsp/send-error id -32602 "No symbol at cursor"}
+        {lsp/send-response id
+          (list :range (list
+            :start (list :line line :character (plist/get wr :start))
+            :end (list :line line :character (plist/get wr :end)))
+          :placeholder (plist/get wr :word))})})})
+
+(fun {ref->lsp-edit text r new-name} {do
+  (= {lc} (offset->line-col text (plist/get r :offset)))
+  (= {rlen} (plist/get r :len))
+  (list :range (list
+    :start (list :line (head lc) :character (head (tail lc)))
+    :end (list :line (head lc) :character (+ (head (tail lc)) rlen)))
+  :newText new-name)
+})
+
+(fun {db-ref->lsp-edit r word-len new-name} {
+  list :range (list
+    :start (list :line (plist/get r :line) :character (plist/get r :col))
+    :end (list :line (plist/get r :line) :character (+ (plist/get r :col) word-len)))
+  :newText new-name
+})
+
+(fun {rename/group-by-uri locs acc} {
+  if (nil? locs) {acc}
+  {do
+    (= {loc} (head locs))
+    (= {uri} (plist/get loc :uri))
+    (= {edit} (plist/get loc :edit))
+    (= {existing} (plist/get acc uri))
+    (= {new-edits} (if (nil? existing) {list edit} {qcons edit existing}))
+    (rename/group-by-uri (tail locs) (plist/set acc uri new-edits))}
+})
+
+(fun {rename/make-doc-changes grouped} {
+  rename/make-doc-changes-walk grouped nil
+})
+
+(fun {rename/make-doc-changes-walk pairs acc} {
+  if (nil? pairs) {acc}
+  {do
+    (= {uri} (head pairs))
+    (= {edits} (head (tail pairs)))
+    (= {doc-edit} (list :textDocument (list :uri uri :version (None))
+                        :edits edits))
+    (rename/make-doc-changes-walk (tail (tail pairs)) (qcons doc-edit acc))}
+})
+
+(fun {handle-rename id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {pos} (plist/get params :position))
+  (= {line} (plist/get pos :line))
+  (= {col} (plist/get pos :character))
+  (= {new-name} (plist/get params :newName))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-error id -32602 "Document not found"}
+    {do
+      (= {word} (word-at-position text line col))
+      (if (nil? word) {lsp/send-error id -32602 "No symbol at cursor"}
+        {do
+          (= {local-refs} (ref/find-scoped-refs text line col))
+          (if (not (nil? local-refs))
+            {do
+              (= {edits} (map (\ {r} {ref->lsp-edit text r new-name}) local-refs))
+              (= {doc-edit} (list :textDocument (list :uri uri :version (None))
+                                  :edits edits))
+              (lsp/send-response id (list :documentChanges (list doc-edit)))}
+            {if (nil? lsp/db) {lsp/send-error id -32602 "No workspace"}
+              {do
+                (= {word-len} (len word))
+                (= {db-refs} (symdb/find-refs lsp/db word))
+                (= {db-defs} (symdb/find-definitions lsp/db word))
+                (= {all-locs} (join
+                  (map (\ {r} {
+                    list :uri (str "file://" (plist/get r :path))
+                         :edit (db-ref->lsp-edit r word-len new-name)
+                  }) db-refs)
+                  (map (\ {d} {
+                    list :uri (str "file://" (plist/get d :path))
+                         :edit (db-ref->lsp-edit d word-len new-name)
+                  }) db-defs)))
+                (= {grouped} (rename/group-by-uri all-locs nil))
+                (= {doc-changes} (rename/make-doc-changes grouped))
+                (lsp/send-response id (list :documentChanges doc-changes))}})})})})
+
 ; ---------------------------------------------------------------------------
 ; Dispatch
 ; ---------------------------------------------------------------------------
@@ -347,75 +680,62 @@
   (if (nil? method) {:continue}
     {do
       (stderr/write (str "[valk-lsp] <- " method "\n"))
+      (match method
+        {"initialize" (handle-initialize id params) :initialized}
+        {"initialized" :scan}
+        {"shutdown" (lsp/send-response id (None)) :shutdown}
+        {"exit" :shutdown}
+        {_ (if (== initialized 0)
+             {do (if (num? id)
+                   {lsp/send-error id -32002 "Server not initialized"} {})
+                 :continue}
+             {lsp/dispatch-request method id params})})})})
 
-      (if (== method "initialize")
-        {do (handle-initialize id params) :initialized}
+(fun {lsp/dispatch-request method id params} {
+  match method
+    {"textDocument/didOpen" (handle-did-open params) :continue}
+    {"textDocument/didChange" (handle-did-change params) :continue}
+    {"textDocument/didClose" (handle-did-close params) :continue}
+    {"textDocument/didSave" (handle-did-save params) :continue}
+    {"textDocument/hover" (handle-hover id params) :continue}
+    {"textDocument/definition" (handle-definition id params) :continue}
+    {"textDocument/references" (handle-references id params) :continue}
+    {"textDocument/completion" (handle-completion id params) :continue}
+    {"textDocument/documentSymbol" (handle-document-symbols id params) :continue}
+    {"workspace/symbol" (handle-workspace-symbols id params) :continue}
+    {"textDocument/semanticTokens/full" (handle-semantic-tokens id params) :continue}
+    {"textDocument/prepareRename" (handle-prepare-rename id params) :continue}
+    {"textDocument/rename" (handle-rename id params) :continue}
+    {_ (if (num? id)
+         {lsp/send-error id -32601 (str "Method not found: " method)} {})
+       :continue}
+})
 
-      {if (== method "initialized")
-        {:continue}
-
-      {if (== method "shutdown")
-        {do (lsp/send-response id (None)) :shutdown}
-
-      {if (== method "exit")
-        {:shutdown}
-
-      {if (== initialized 0)
-        {do
-          (if (num? id) {lsp/send-error id -32002 "Server not initialized"} {})
-          :continue}
-
-      {if (== method "textDocument/didOpen")
-        {do (handle-did-open params) :continue}
-
-      {if (== method "textDocument/didChange")
-        {do (handle-did-change params) :continue}
-
-      {if (== method "textDocument/didClose")
-        {do (handle-did-close params) :continue}
-
-      {if (== method "textDocument/didSave")
-        {do (handle-did-save params) :continue}
-
-      {if (== method "textDocument/hover")
-        {do (handle-hover id params) :continue}
-
-      {if (== method "textDocument/definition")
-        {do (handle-definition id params) :continue}
-
-      {if (== method "textDocument/references")
-        {do (handle-references id params) :continue}
-
-      {if (== method "textDocument/completion")
-        {do (handle-completion id params) :continue}
-
-      {if (== method "textDocument/documentSymbol")
-        {do (handle-document-symbols id params) :continue}
-
-      {if (== method "workspace/symbol")
-        {do (handle-workspace-symbols id params) :continue}
-
-      {do
-        (if (num? id)
-          {lsp/send-error id -32601 (str "Method not found: " method)}
-          {})
-        :continue}}}}}}}}}}}}}}})})})
 ; ---------------------------------------------------------------------------
-; Main loop
+; Main loop — processes messages, drains scan work between them
 ; ---------------------------------------------------------------------------
 
-(fun {lsp/loop initialized} {do
+(fun {lsp/loop initialized pending} {do
+  (= {pending} (if (nil? pending) {nil}
+    {if (nil? lsp/db) {nil}
+      {lsp/drain-scan lsp/db pending 0 0}}))
   (= {msg} (lsp/read-message))
   (if (== msg nil) {}
     {do
       (= {action} (lsp/dispatch msg initialized))
       (if (== action :shutdown) {}
-      {if (== action :initialized) {lsp/loop 1}
-        {lsp/loop initialized}})})})
+      {if (== action :initialized)
+        {lsp/loop 1 nil}
+      {if (== action :scan)
+        {lsp/loop 1
+          (if (not (nil? lsp/db))
+            {lsp/collect-workspace-files lsp/root-path}
+            {nil})}
+        {lsp/loop initialized pending}}})})})
 
 (fun {lsp/main} {do
-  (stderr/write "[valk-lsp] starting (valk implementation v0.3.0)\n")
-  (lsp/loop 0)
+  (stderr/write "[valk-lsp] starting (valk implementation v0.5.0)\n")
+  (lsp/loop 0 nil)
   (if (not (nil? lsp/db)) {symdb/close lsp/db} {})
   (stderr/write "[valk-lsp] shutdown\n")})
 

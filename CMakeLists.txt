@@ -103,6 +103,7 @@ set(VALKYRIA_SOURCES
   src/builtins_json.c
   src/builtins_stdio.c
   src/builtins_sqlite.c
+  src/builtins_dict.c
   src/memory.c
   src/slab.c
   src/memory_os.c

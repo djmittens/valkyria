@@ -45,7 +45,6 @@ valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
   atomic_store(&heap->used_bytes, 0);
   atomic_store(&heap->large_object_bytes, 0);
   atomic_store(&heap->gc_in_progress, false);
-  heap->in_emergency_gc = false;
 
   atomic_store(&heap->collections, 0);
   atomic_store(&heap->bytes_allocated_total, 0);

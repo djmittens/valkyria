@@ -34,7 +34,12 @@ static void sigusr1_handler(int sig) {
 
 int main(int argc, char* argv[]) {
   char* input;
-  u64 const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;
+  u64 scratch_bytes = 128ULL * 1024 * 1024;
+
+  const char* scratch_env = getenv("VALK_SCRATCH_SIZE");
+  if (scratch_env && scratch_env[0] != '\0') {
+    scratch_bytes = strtoull(scratch_env, nullptr, 10);
+  }
 
   valk_system_config_t sys_cfg = valk_system_config_default();
   const char* hard_limit_env = getenv("VALK_HEAP_HARD_LIMIT");
@@ -50,8 +55,8 @@ int main(int argc, char* argv[]) {
 
   valk_gc_heap_t* gc_heap = sys->heap;
 
-  valk_mem_arena_t* scratch = malloc(SCRATCH_ARENA_BYTES);
-  valk_mem_arena_init(scratch, SCRATCH_ARENA_BYTES - sizeof(*scratch));
+  valk_mem_arena_t* scratch = malloc(scratch_bytes);
+  valk_mem_arena_init(scratch, scratch_bytes - sizeof(*scratch));
 
   // Set thread allocator to GC heap for persistent structures
   valk_thread_ctx.allocator = (void*)gc_heap;

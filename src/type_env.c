@@ -307,10 +307,36 @@ static valk_lval_t *transform_match(valk_type_env_t *env, valk_lval_t *match_for
     if (clause_len < 2) continue;
 
     valk_lval_t *pattern = valk_lval_list_nth(clause, 0);
-    valk_lval_t *body = valk_lval_list_nth(clause, 1);
+    valk_lval_t *body;
+    if (clause_len == 2) {
+      body = valk_lval_list_nth(clause, 1);
+    } else {
+      valk_lval_t *do_exprs = valk_lval_nil();
+      for (u64 j = clause_len; j >= 2; j--)
+        do_exprs = valk_lval_cons(valk_lval_list_nth(clause, j - 1), do_exprs);
+      body = valk_lval_cons(valk_lval_sym("do"), do_exprs);
+    }
 
     if (LVAL_TYPE(pattern) == LVAL_SYM && strcmp(pattern->str, "_") == 0) {
       chain = transform_expr(env, body);
+      continue;
+    }
+
+    if (LVAL_TYPE(pattern) == LVAL_STR || LVAL_TYPE(pattern) == LVAL_NUM) {
+      valk_lval_t *cond = valk_lval_cons(valk_lval_sym("=="),
+        valk_lval_cons(valk_lval_sym("__match_val"),
+          valk_lval_cons(pattern, valk_lval_nil())));
+
+      valk_lval_t *transformed_body = transform_expr(env, body);
+      valk_lval_t *true_branch = valk_lval_qcons(transformed_body, valk_lval_nil());
+      true_branch->flags |= LVAL_FLAG_QUOTED;
+      valk_lval_t *false_branch = valk_lval_qcons(chain, valk_lval_nil());
+      false_branch->flags |= LVAL_FLAG_QUOTED;
+
+      chain = valk_lval_cons(valk_lval_sym("if"),
+        valk_lval_cons(cond,
+          valk_lval_cons(true_branch,
+            valk_lval_cons(false_branch, valk_lval_nil()))));
       continue;
     }
 

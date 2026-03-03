@@ -116,6 +116,18 @@
 (sig 'handle? {-> A Num})
 ; Test if value is a function.
 (sig 'fun? {-> A Num})
+; Test if value is a symbol.
+(sig 'sym? {-> A Num})
+; Return the type name of a value as a string.
+(sig 'type-of {-> A Str})
+; Return the source byte offset of a parsed value (-1 if none).
+(sig 'src-pos {-> A Num})
+; Prepend to a Q-expression (like cons but returns Q-expression).
+(sig 'qcons {-> A (List B) (List B)})
+; Test if a list is quoted (Q-expression vs S-expression).
+(sig 'quoted? {-> A Num})
+; Convert byte offset to {line col} given source text.
+(sig 'offset->line-col {-> Str Num (List Num)})
 
 ; === I/O ===
 
@@ -537,3 +549,9 @@
 (sig 'sqlite/changes {-> Ref Num})
 ; Set the busy timeout in milliseconds.
 (sig 'sqlite/busy-timeout {-> Ref Num Nil})
+
+; --- Filesystem ---
+
+; List directory entries. Returns a list of plists with :name and :type keys.
+; Type is "file" or "dir". Hidden entries (starting with .) are skipped.
+(sig 'list-dir {-> Str QExpr})

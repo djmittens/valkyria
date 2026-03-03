@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <poll.h>
 
 static valk_lval_t *valk_builtin_stdin_read_line(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
@@ -84,9 +85,19 @@ static valk_lval_t *valk_builtin_stderr_write(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_nil();
 }
 
+static valk_lval_t *valk_builtin_stdin_has_data(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 0);
+  struct pollfd pfd = { .fd = fileno(stdin), .events = POLLIN };
+  int ret = poll(&pfd, 1, 0);
+  return valk_lval_num(ret > 0 && (pfd.revents & POLLIN) ? 1 : 0);
+}
+
 void valk_register_stdio_builtins(valk_lenv_t *env) {
+  setvbuf(stdin, NULL, _IONBF, 0);
   valk_lenv_put_builtin(env, "stdin/read-line", valk_builtin_stdin_read_line);
   valk_lenv_put_builtin(env, "stdin/read-bytes", valk_builtin_stdin_read_bytes);
+  valk_lenv_put_builtin(env, "stdin/has-data", valk_builtin_stdin_has_data);
   valk_lenv_put_builtin(env, "stdout/write", valk_builtin_stdout_write);
   valk_lenv_put_builtin(env, "stdout/flush", valk_builtin_stdout_flush);
   valk_lenv_put_builtin(env, "stderr/write", valk_builtin_stderr_write);

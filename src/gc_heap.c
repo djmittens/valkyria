@@ -275,8 +275,6 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
 }
 // LCOV_EXCL_BR_STOP
 
-static bool valk_gc_heap_try_emergency_gc(valk_gc_heap_t *heap, u64 needed);
-
 // LCOV_EXCL_BR_START - large object mmap/malloc failures and OOM paths
 static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
   u64 alloc_size = (bytes + 4095) & ~4095ULL;
@@ -284,9 +282,7 @@ static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
   u64 current = valk_gc_heap_used_bytes(heap);
 
   if (current + alloc_size > heap->hard_limit) {
-    if (!valk_gc_heap_try_emergency_gc(heap, alloc_size)) {
-      valk_gc_oom_abort(heap, bytes);
-    }
+    valk_gc_oom_abort(heap, bytes);
   }
 
   void *data = mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE,
@@ -336,13 +332,6 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
   }
 
   sz alloc_size = valk_gc_size_classes[size_class];
-  sz current = valk_gc_heap_used_bytes(heap);
-
-  if (current + alloc_size > heap->hard_limit) {
-    if (!valk_gc_heap_try_emergency_gc(heap, alloc_size)) {
-      valk_gc_oom_abort(heap, bytes);
-    }
-  }
 
   if (!valk_gc_local_tlab) {
     valk_gc_local_tlab = malloc(sizeof(valk_gc_tlab_t));
@@ -364,15 +353,6 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
   }
 
   if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
-    if (valk_gc_heap_try_emergency_gc(heap, valk_gc_size_classes[size_class])) {
-      if (valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
-        ptr = valk_gc_tlab_alloc(valk_gc_local_tlab, size_class);
-        if (ptr) {
-          memset(ptr, 0, alloc_size);
-        }
-        return ptr;
-      }
-    }
     valk_gc_oom_abort(heap, bytes);
   }
 
@@ -429,30 +409,5 @@ void *valk_gc_heap_realloc(valk_gc_heap_t *heap, void *ptr, sz new_size) {
 
 // LCOV_EXCL_START - fork safety function requires actual fork()
 void valk_gc_heap_reset_after_fork(void) {
-}
-// LCOV_EXCL_STOP
-
-// LCOV_EXCL_START - emergency GC triggered at hard limit requires specific memory pressure conditions
-static bool valk_gc_heap_try_emergency_gc(valk_gc_heap_t *heap, u64 needed) {
-  if (heap->in_emergency_gc) {
-    return false;
-  }
-
-  heap->in_emergency_gc = true;
-
-  VALK_WARN("Emergency GC: need %zu bytes, used %zu / %zu",
-            needed, valk_gc_heap_used_bytes(heap), heap->hard_limit);
-
-  u64 reclaimed = valk_gc_heap_collect(heap);
-
-  heap->in_emergency_gc = false;
-
-  u64 after = valk_gc_heap_used_bytes(heap);
-  if (after + needed <= heap->hard_limit) {
-    VALK_INFO("Emergency GC recovered %zu bytes, allocation can proceed", reclaimed);
-    return true;
-  }
-
-  return false;
 }
 // LCOV_EXCL_STOP

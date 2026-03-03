@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS symbols (
   kind INTEGER NOT NULL,
   arity INTEGER NOT NULL DEFAULT -1,
   doc TEXT,
+  sig TEXT,
   exported INTEGER NOT NULL DEFAULT 1
 );
 
@@ -57,6 +58,8 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 (fun {symdb/init path} {do
   (= {db} (sqlite/open path))
   (sqlite/exec-script db symdb/schema-sql)
+  (= {r} (sqlite/exec db "ALTER TABLE symbols ADD COLUMN sig TEXT"))
+  (if (error? r) {} {})
   db})
 
 (fun {symdb/close db} {sqlite/close db})
@@ -77,6 +80,55 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 (fun {clean-name s} {
   str/replace (str/replace (str/replace s "}" "") ")" "") "(" ""
+})
+
+; === String utilities ===
+
+(fun {str/join parts sep} {
+  if (nil? parts) {""}
+  {if (== (len parts) 1) {str (head parts)}
+    {str (head parts) sep (str/join (tail parts) sep)}}
+})
+
+; === Doc comment extraction ===
+
+(fun {strip-leading-spaces s} {
+  if (== (len s) 0) {s}
+  {if (== (str/slice s 0 1) " ")
+    {strip-leading-spaces (str/slice s 1 (len s))}
+    {s}}
+})
+
+(fun {strip-comment-prefix s} {
+  if (< (len s) 2) {""}
+  {if (== (str/slice s 0 2) "; ")
+    {str/slice s 2 (len s)}
+  {if (== (str/slice s 0 1) ";")
+    {str/slice s 1 (len s)}
+    {s}}}
+})
+
+(fun {extract-doc-comment-walk lines idx acc} {
+  if (< idx 0) {acc}
+  {do
+    (= {line} (nth (+ idx 1) lines))
+    (= {stripped} (strip-leading-spaces (str/replace line "\r" "")))
+    (if (== (len stripped) 0) {acc}
+    {if (== (str/slice stripped 0 1) ";")
+      {extract-doc-comment-walk lines (- idx 1)
+        (qcons (strip-comment-prefix stripped) acc)}
+      {acc}})}
+})
+
+(fun {extract-doc-comment lines def-line} {do
+  (= {comments} (extract-doc-comment-walk lines (- def-line 1) nil))
+  (if (nil? comments) {nil}
+    {str/join comments "\n"})
+})
+
+(fun {append-all items acc} {
+  if (nil? items) {acc}
+    {append-all (tail items) (qcons (head items) acc)}
 })
 
 ; Find byte offset of first occurrence of needle in haystack, or -1
@@ -136,7 +188,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (if (>= line (len lines)) {nil}
     {do
       (= {target} (nth (+ line 1) lines))
-      (if (>= col (len target)) {nil}
+      (if (> col (len target)) {nil}
         {do
           (= {start} (scan-word-start target col))
           (= {end} (scan-word-end target col))
@@ -144,46 +196,64 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
             {str/slice target start end})})})
 })
 
+(fun {word-range-at-position text line col} {do
+  (= {lines} (str/split text "\n"))
+  (if (>= line (len lines)) {nil}
+    {do
+      (= {target} (nth (+ line 1) lines))
+      (if (> col (len target)) {nil}
+        {do
+          (= {start} (scan-word-start target col))
+          (= {end} (scan-word-end target col))
+          (if (>= start end) {nil}
+            {list :word (str/slice target start end) :start start :end end})})})
+})
+
 ; === Symbol extraction from AST ===
 
 (fun {symdb/extract-symbols text} {do
   (= {ast} (parse text))
-  (symdb/walk-exprs ast text nil)
+  (if (error? ast) {nil}
+    {do
+      (= {lines} (str/split text "\n"))
+      (reverse (symdb/walk-exprs ast text lines nil))})
 })
 
-(fun {symdb/walk-exprs exprs text acc} {
+(fun {symdb/walk-exprs exprs text lines acc} {
   if (nil? exprs) {acc}
     {do
-      (= {syms} (symdb/extract-from-expr (head exprs) text))
-      (symdb/walk-exprs (tail exprs) text
-        (if (nil? syms) {acc} {join acc syms}))}
+      (= {syms} (symdb/extract-from-expr (head exprs) text lines))
+      (symdb/walk-exprs (tail exprs) text lines
+        (if (nil? syms) {acc} {append-all syms acc}))}
 })
 
-(fun {symdb/extract-from-expr expr text} {do
+(fun {symdb/extract-from-expr expr text lines} {do
   (if (not (list? expr)) {nil}
     {if (nil? expr) {nil}
       {do
         (= {form} (str (head expr)))
-        (if (== form "fun") {symdb/extract-fun expr text}
-        {if (== form "def") {symdb/extract-def expr text}
-        {if (== form "type") {symdb/extract-type expr text}
-        {if (== form "sig") {symdb/extract-sig expr text}
+        (if (== form "fun") {symdb/extract-fun expr text lines}
+        {if (== form "def") {symdb/extract-def expr text lines}
+        {if (== form "type") {symdb/extract-type expr text lines}
+        {if (== form "sig") {symdb/extract-sig expr text lines}
         {nil}}}})}})
 })
 
-(fun {symdb/extract-fun expr text} {do
+(fun {symdb/extract-fun expr text lines} {do
   (= {binding} (head (tail expr)))
   (if (not (list? binding)) {nil}
     {do
       (= {name} (str (head binding)))
       (= {params} (tail binding))
       (= {arity} (symdb/count-params params 0))
-      (= {pos} (pos-of-name text (str "(fun {" name)))
-      (= {line} (plist/get pos :line))
-      (= {col} (+ (plist/get pos :col) 6))
-      (list (list :name name :line line :col col
+      (= {lc} (offset->line-col text (src-pos expr)))
+      (= {line} (head lc))
+      (= {name-col} (+ (head (tail lc)) 6))
+      (= {doc-comment} (extract-doc-comment lines line))
+      (list (list :name name :line line :col name-col
                   :kind SYMKIND_FUNCTION :arity arity
-                  :doc (str "(fun {" name " ...})")))})
+                  :doc doc-comment
+                  :sig (str "(fun " binding " ...)")))})
 })
 
 (fun {symdb/count-params params n} {
@@ -196,30 +266,33 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
         {symdb/count-params (tail params) (+ n 1)}}})}
 })
 
-(fun {symdb/extract-def expr text} {do
+(fun {symdb/extract-def expr text lines} {do
   (= {binding} (head (tail expr)))
   (if (not (list? binding)) {nil}
     {do
       (= {name} (str (head binding)))
-      (= {pos} (pos-of-name text (str "(def {" name)))
-      (= {line} (plist/get pos :line))
-      (= {col} (+ (plist/get pos :col) 6))
-      (list (list :name name :line line :col col
+      (= {lc} (offset->line-col text (src-pos expr)))
+      (= {line} (head lc))
+      (= {name-col} (+ (head (tail lc)) 6))
+      (= {doc-comment} (extract-doc-comment lines line))
+      (list (list :name name :line line :col name-col
                   :kind SYMKIND_VARIABLE :arity -1
-                  :doc (str "(def {" name "} ...)")))})
+                  :doc doc-comment))})
 })
 
-(fun {symdb/extract-type expr text} {do
+(fun {symdb/extract-type expr text lines} {do
   (= {type-binding} (head (tail expr)))
   (if (not (list? type-binding)) {nil}
     {do
       (= {type-name} (str (head type-binding)))
-      (= {pos} (pos-of-name text (str "(type {" type-name)))
-      (= {line} (plist/get pos :line))
-      (= {col} (+ (plist/get pos :col) 7))
-      (= {type-sym} (list (list :name type-name :line line :col col
-                                :kind SYMKIND_TYPE :arity -1
-                                :doc (str "(type {" type-name " ...})"))))
+      (= {lc} (offset->line-col text (src-pos expr)))
+      (= {line} (head lc))
+      (= {name-col} (+ (head (tail lc)) 7))
+      (= {doc-comment} (extract-doc-comment lines line))
+      (= {type-sym} (list (list :name type-name :line line :col name-col
+                                 :kind SYMKIND_TYPE :arity -1
+                                 :doc doc-comment
+                                 :sig (str "(type " type-binding " ...)"))))
       (= {ctors} (symdb/extract-ctors (tail (tail expr)) text type-name))
       (join type-sym ctors)})
 })
@@ -230,31 +303,35 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (= {ctor} (head variants))
       (if (not (list? ctor)) {symdb/extract-ctors (tail variants) text type-name}
         {do
-          (= {ctor-name} (str (head ctor)))
+          (= {ctor-name-sym} (head ctor))
+          (= {ctor-name} (str ctor-name-sym))
           (= {ctor-arity} (- (len ctor) 1))
-          (= {pos} (pos-of-name text (str "{" ctor-name)))
-          (= {line} (plist/get pos :line))
-          (= {col} (+ (plist/get pos :col) 1))
+          (= {lc} (offset->line-col text (src-pos ctor-name-sym)))
+          (= {line} (head lc))
+          (= {col} (head (tail lc)))
           (= {sym} (list (list :name ctor-name :line line :col col
                                :kind SYMKIND_CONSTRUCTOR :arity ctor-arity
                                :doc (str type-name "::" ctor-name))))
           (join sym (symdb/extract-ctors (tail variants) text type-name))})}
 })
 
-(fun {symdb/extract-sig expr text} {do
+(fun {symdb/extract-sig expr text lines} {do
   (= {name-q} (head (tail expr)))
   (= {name} (if (list? name-q) {str (head name-q)} {str name-q}))
   (= {type-q} (head (tail (tail expr))))
   (= {sig-str} (str type-q))
+  (= {lc} (offset->line-col text (src-pos expr)))
+  (= {line} (head lc))
+  (= {doc-comment} (extract-doc-comment lines line))
   (list (list :name name :kind SYMKIND_FUNCTION :arity -1
-              :doc sig-str :is-sig 1))
+              :doc doc-comment :sig sig-str :is-sig 1))
 })
 
 ; === Reference extraction ===
 
 (fun {symdb/extract-refs text} {do
   (= {ast} (parse text))
-  (symdb/walk-refs ast text nil)
+  (reverse (symdb/walk-refs ast text nil))
 })
 
 (fun {symdb/walk-refs exprs text acc} {
@@ -265,19 +342,23 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 (fun {symdb/collect-refs-from expr text acc} {
   if (not (list? expr)) {
-    if (nil? expr) {acc}
+    if (not (sym? expr)) {acc}
       {do
         (= {name} (str expr))
-        (if (starts-with name ":") {acc}
+        (= {c0} (str/slice name 0 1))
+        (if (== c0 ":") {acc}
         {if (== name "nil") {acc}
         {if (== name "true") {acc}
         {if (== name "false") {acc}
         {if (== name "otherwise") {acc}
           {do
-            (= {pos} (pos-of-name text name))
-            (join acc (list (list :name name
-                                 :line (plist/get pos :line)
-                                 :col (plist/get pos :col))))}}}}})}}
+            (= {sp} (src-pos expr))
+            (if (< sp 0) {acc}
+              {do
+                (= {lc} (offset->line-col text sp))
+                (= {line} (head lc))
+                (= {col} (head (tail lc)))
+                (qcons (list :name name :line line :col col) acc)})}}}}})}}
     {if (nil? expr) {acc}
       {do
         (= {inner-acc} (symdb/collect-refs-from (head expr) text acc))
@@ -311,10 +392,9 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (sqlite/exec db "COMMIT")
 })
 
-(fun {symdb/sync-symbols-only db uri text} {do
+(fun {symdb/sync-file-symbols db uri text} {do
   (= {path} (uri->path uri))
   (= {hash} (str (len text)))
-  (sqlite/exec db "BEGIN")
   (sqlite/exec db
     "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
     path hash)
@@ -322,6 +402,11 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
   (= {syms} (symdb/extract-symbols text))
   (symdb/insert-symbols db file-id syms)
+})
+
+(fun {symdb/sync-symbols-only db uri text} {do
+  (sqlite/exec db "BEGIN")
+  (symdb/sync-file-symbols db uri text)
   (sqlite/exec db "COMMIT")
 })
 
@@ -333,36 +418,48 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (if (== is-sig 1)
         {do
           (= {existing} (sqlite/query-maybe db
-            "SELECT id FROM symbols WHERE file_id=?1 AND name=?2" file-id (plist/get s :name)))
+            "SELECT id, doc FROM symbols WHERE file_id=?1 AND name=?2" file-id (plist/get s :name)))
           (if (nil? existing)
             {sqlite/exec db
-              "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc) VALUES (?1, ?2, 0, 0, ?3, ?4, ?5)"
-              (plist/get s :name) file-id (plist/get s :kind) (plist/get s :arity) (plist/get s :doc)}
-            {sqlite/exec db
-              "UPDATE symbols SET doc=?1 WHERE id=?2"
-              (plist/get s :doc) (plist/get existing :id)})}
+              "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc, sig) VALUES (?1, ?2, 0, 0, ?3, ?4, ?5, ?6)"
+              (plist/get s :name) file-id (plist/get s :kind) (plist/get s :arity)
+              (plist/get s :doc) (plist/get s :sig)}
+            {do
+              (= {new-doc} (plist/get s :doc))
+              (= {old-doc} (plist/get existing :doc))
+              (= {final-doc} (if (nil? new-doc) {old-doc} {new-doc}))
+              (sqlite/exec db
+                "UPDATE symbols SET sig=?1, doc=?2 WHERE id=?3"
+                (plist/get s :sig) final-doc (plist/get existing :id))})}
         {sqlite/exec db
-          "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+          "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc, sig) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
           (plist/get s :name) file-id (plist/get s :line) (plist/get s :col)
-          (plist/get s :kind) (plist/get s :arity) (plist/get s :doc)})
+          (plist/get s :kind) (plist/get s :arity) (plist/get s :doc) (plist/get s :sig)})
       (symdb/insert-symbols db file-id (tail syms))}
 })
 
 (fun {symdb/insert-refs db file-id refs} {
   if (nil? refs) {nil}
     {do
+      (= {stmt} (sqlite/prepare db "INSERT INTO refs (name, file_id, line, col) VALUES (?1, ?2, ?3, ?4)"))
+      (symdb/insert-refs-step stmt file-id refs)
+      (sqlite/finalize stmt)}
+})
+
+(fun {symdb/insert-refs-step stmt file-id refs} {
+  if (nil? refs) {nil}
+    {do
       (= {r} (head refs))
-      (sqlite/exec db
-        "INSERT INTO refs (name, file_id, line, col) VALUES (?1, ?2, ?3, ?4)"
-        (plist/get r :name) file-id (plist/get r :line) (plist/get r :col))
-      (symdb/insert-refs db file-id (tail refs))}
+      (sqlite/bind stmt (plist/get r :name) file-id (plist/get r :line) (plist/get r :col))
+      (sqlite/step stmt)
+      (symdb/insert-refs-step stmt file-id (tail refs))}
 })
 
 ; === Query functions ===
 
 (fun {symdb/find-definition db name} {
   sqlite/query-maybe db
-    "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.kind != 0 ORDER BY s.id LIMIT 1"
+    "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.kind != 0 AND s.line > 0 ORDER BY s.id LIMIT 1"
     name
 })
 
@@ -389,6 +486,17 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
     "SELECT DISTINCT name, kind, doc FROM symbols ORDER BY name LIMIT 200" 
 })
 
+(fun {symdb/completion-all db} {
+  sqlite/query db
+    "SELECT name, kind, MAX(CASE WHEN sig LIKE '{->%' THEN sig END) as sig, MAX(doc) as doc FROM symbols GROUP BY name ORDER BY name LIMIT 200"
+})
+
+(fun {symdb/completion-symbols db prefix} {
+  sqlite/query db
+    "SELECT name, kind, MAX(CASE WHEN sig LIKE '{->%' THEN sig END) as sig, MAX(doc) as doc FROM symbols WHERE name LIKE ?1 GROUP BY name ORDER BY name LIMIT 100"
+    (str prefix "%")
+})
+
 (fun {symdb/find-refs db name} {
   sqlite/query db
     "SELECT r.line, r.col, f.path FROM refs r JOIN files f ON r.file_id=f.id WHERE r.name=?1 ORDER BY f.path, r.line, r.col"
@@ -399,6 +507,38 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   sqlite/query-maybe db
     "SELECT doc FROM symbols WHERE name=?1 AND doc IS NOT NULL ORDER BY id LIMIT 1"
     name
+})
+
+(fun {symdb/symbol-hover db name} {do
+  (= {def-row} (sqlite/query-maybe db
+    "SELECT s.name, s.kind, s.arity, s.doc, s.sig, f.path, s.line, s.col FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.line > 0 ORDER BY s.id LIMIT 1"
+    name))
+  (= {sig-row} (sqlite/query-maybe db
+    "SELECT s.sig, s.doc FROM symbols s WHERE s.name=?1 AND s.sig IS NOT NULL AND s.sig != '' AND s.sig LIKE '{->%' ORDER BY s.id LIMIT 1"
+    name))
+  (if (nil? def-row)
+    {if (nil? sig-row) {nil}
+      {do
+        (= {fallback} (sqlite/query-maybe db
+          "SELECT s.name, s.kind, s.arity, s.doc, s.sig, f.path, s.line, s.col FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 ORDER BY s.id LIMIT 1"
+          name))
+        (if (nil? fallback) {nil}
+          {do
+            (= {type-sig} (if (nil? sig-row) {nil} {plist/get sig-row :sig}))
+            (= {sig-doc} (if (nil? sig-row) {nil} {plist/get sig-row :doc}))
+            (= {fb-doc} (plist/get fallback :doc))
+            (= {final-doc} (if (nil? fb-doc) {sig-doc} {fb-doc}))
+            (plist/set (plist/set fallback :sig type-sig) :doc final-doc)})}}
+    {do
+      (= {type-sig} (if (nil? sig-row) {nil} {plist/get sig-row :sig}))
+      (= {formals} (plist/get def-row :sig))
+      (= {def-doc} (plist/get def-row :doc))
+      (= {sig-doc} (if (nil? sig-row) {nil} {plist/get sig-row :doc}))
+      (= {final-doc} (if (nil? def-doc) {sig-doc} {def-doc}))
+      (plist/set (plist/set (plist/set def-row
+        :sig type-sig)
+        :formals formals)
+        :doc final-doc)})
 })
 
 ; === LSP helpers ===

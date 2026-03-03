@@ -486,8 +486,16 @@ void valk_gc_set_thresholds(valk_gc_heap_t* heap,
 // LCOV_EXCL_BR_START - rate limiting branches depend on timing state
 bool valk_gc_should_collect(valk_gc_heap_t* heap) {
   if (!heap) return false;
+
+  sz committed = atomic_load(&heap->committed_bytes) +
+                 atomic_load(&heap->large_object_bytes);
+  u8 committed_pct = heap->hard_limit > 0
+    ? (u8)((committed * 100) / heap->hard_limit) : 0;
+
   u8 usage_pct = valk_gc_heap_usage_pct(heap);
-  if (usage_pct < heap->gc_threshold_pct) return false;
+  u8 pressure = committed_pct > usage_pct ? committed_pct : usage_pct;
+
+  if (pressure < heap->gc_threshold_pct) return false;
   if (heap->min_gc_interval_ms > 0 && heap->last_gc_time_us > 0) {
     u64 now_us = uv_hrtime() / 1000;
     u64 elapsed_ms = (now_us - heap->last_gc_time_us) / 1000;

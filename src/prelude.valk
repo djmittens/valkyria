@@ -270,15 +270,7 @@
 
 ; Nth item in the list
 ; LISTS ARE 1-BASED LIKE LUA
-; Using if-else instead of select due to scoping limitations
 (sig 'nth {-> (List A) Num A})
-(fun {nth n _l} {
-    if (<= n 0)
-      {error "Invalid array index (should start with 1)"}
-      {if (== n 1)
-        {fst _l}
-        {nth (- n 1) (tail _l)}}
-})
 
 ;last item in the list
 (fun {last l} {nth (len l) l})
@@ -355,16 +347,8 @@
     {join (map (head fs) xs) (list/ap (tail fs) xs)}
 })
 
-; Reverse a list
+; reverse is a C builtin (O(n) — was O(n²) in Valk via join)
 (sig 'reverse {-> (List A) (List A)})
-(fun {reverse l} {
-  (= {reverse-helper} (\ {acc remaining} {
-    (if (== remaining nil)
-      {acc}
-      {(reverse-helper (join (list (head remaining)) acc) (tail remaining))})
-  }))
-  (reverse-helper nil l)
-})
 
 ; Returns the sum of the list
 (sig 'sum {-> (List Num) Num})
@@ -435,15 +419,7 @@
 ; A plist is a flat list of alternating keys and values: {:key1 val1 :key2 val2 ...}
 ; Common in Lisp for lightweight key-value storage without a dedicated map type
 
-; Get value for key from plist, returns nil if not found
-; Usage: (plist/get {:name "Alice" :age 30} :name) => "Alice"
-(fun {plist/get pl key} {
-  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
-    {nil}
-    {if (== (head pl) key)
-      {head (tail pl)}
-      {plist/get (tail (tail pl)) key}}
-})
+; plist/get is a C builtin (was O(n) Valk with heavy per-step overhead)
 
 ; Set/update a key in plist, returns new plist
 ; Usage: (plist/set {:name "Alice"} :age 30) => {:name "Alice" :age 30}

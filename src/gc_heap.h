@@ -241,8 +241,8 @@ typedef struct {
 
 #define VALK_GC_VIRTUAL_RESERVE_PER_CLASS  (4ULL * 1024 * 1024 * 1024)
 #define VALK_GC_VIRTUAL_RESERVE     (VALK_GC_VIRTUAL_RESERVE_PER_CLASS * VALK_GC_NUM_SIZE_CLASSES)
-#define VALK_GC_DEFAULT_HARD_LIMIT  (512 * 1024 * 1024)
-#define VALK_GC_DEFAULT_SOFT_LIMIT  (384 * 1024 * 1024)
+#define VALK_GC_DEFAULT_HARD_LIMIT  (1024ULL * 1024 * 1024)
+#define VALK_GC_DEFAULT_SOFT_LIMIT  (768ULL * 1024 * 1024)
 #define VALK_GC_INITIAL_COMMIT      (16 * 1024 * 1024)
 
 // ============================================================================
@@ -272,7 +272,6 @@ struct valk_gc_heap {
   u64 last_gc_time_us;
 
   _Atomic bool gc_in_progress;
-  bool in_emergency_gc;
 
   _Atomic u64 collections;
   _Atomic sz bytes_allocated_total;

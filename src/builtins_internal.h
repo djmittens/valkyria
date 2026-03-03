@@ -108,3 +108,4 @@ void valk_register_server_builtins(valk_lenv_t *env);
 void valk_register_json_builtins(valk_lenv_t *env);
 void valk_register_stdio_builtins(valk_lenv_t *env);
 void valk_register_sqlite_builtins(valk_lenv_t *env);
+void valk_register_dict_builtins(valk_lenv_t *env);
