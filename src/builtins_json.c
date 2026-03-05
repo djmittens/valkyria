@@ -96,22 +96,28 @@ static void buf_append_escaped(json_buf_t *b, const char *s) {
 static bool is_plist(valk_lval_t *v) {
   if (LVAL_TYPE(v) == LVAL_NIL) return false;
   if (LVAL_TYPE(v) != LVAL_CONS) return false;
-  valk_lval_t *first = valk_lval_list_nth(v, 0);
+  valk_lval_t *first = v->cons.head;
   return LVAL_TYPE(first) == LVAL_SYM && first->str[0] == ':';
 }
 
 static bool is_option_none(valk_lval_t *v) {
   if (LVAL_TYPE(v) != LVAL_CONS) return false;
-  if (valk_lval_list_count(v) != 1) return false;
-  valk_lval_t *tag = valk_lval_list_nth(v, 0);
-  return LVAL_TYPE(tag) == LVAL_SYM && strcmp(tag->str, "Option::None") == 0;
+  valk_lval_t *head = v->cons.head;
+  valk_lval_t *tail = v->cons.tail;
+  if (LVAL_TYPE(head) != LVAL_SYM) return false;
+  if (tail != nullptr && !valk_lval_list_is_empty(tail)) return false;
+  return strcmp(head->str, "Option::None") == 0;
 }
 
 static bool is_option_some(valk_lval_t *v) {
   if (LVAL_TYPE(v) != LVAL_CONS) return false;
-  if (valk_lval_list_count(v) != 2) return false;
-  valk_lval_t *tag = valk_lval_list_nth(v, 0);
-  return LVAL_TYPE(tag) == LVAL_SYM && strcmp(tag->str, "Option::Some") == 0;
+  valk_lval_t *head = v->cons.head;
+  valk_lval_t *tail = v->cons.tail;
+  if (LVAL_TYPE(head) != LVAL_SYM) return false;
+  if (tail == nullptr || valk_lval_list_is_empty(tail)) return false;
+  valk_lval_t *rest = tail->cons.tail;
+  if (rest != nullptr && !valk_lval_list_is_empty(rest)) return false;
+  return strcmp(head->str, "Option::Some") == 0;
 }
 
 static void lval_to_json(json_buf_t *b, valk_lval_t *v) {
@@ -137,25 +143,34 @@ static void lval_to_json(json_buf_t *b, valk_lval_t *v) {
       if (is_option_none(v)) {
         buf_append_str(b, "null");
       } else if (is_option_some(v)) {
-        lval_to_json(b, valk_lval_list_nth(v, 1));
+        lval_to_json(b, v->cons.tail->cons.head);
       } else if (is_plist(v)) {
         buf_append_char(b, '{');
-        u64 count = valk_lval_list_count(v);
-        for (u64 i = 0; i + 1 < count; i += 2) {
-          if (i > 0) buf_append_char(b, ',');
-          valk_lval_t *key = valk_lval_list_nth(v, i);
+        bool first = true;
+        valk_lval_t *cur = v;
+        while (LVAL_TYPE(cur) == LVAL_CONS && !valk_lval_list_is_empty(cur)) {
+          valk_lval_t *key = cur->cons.head;
+          cur = cur->cons.tail;
+          if (LVAL_TYPE(cur) != LVAL_CONS || valk_lval_list_is_empty(cur)) break;
+          valk_lval_t *val = cur->cons.head;
+          cur = cur->cons.tail;
+          if (!first) buf_append_char(b, ',');
+          first = false;
           const char *kstr = key->str + 1;
           buf_append_escaped(b, kstr);
           buf_append_char(b, ':');
-          lval_to_json(b, valk_lval_list_nth(v, i + 1));
+          lval_to_json(b, val);
         }
         buf_append_char(b, '}');
       } else {
         buf_append_char(b, '[');
-        u64 count = valk_lval_list_count(v);
-        for (u64 i = 0; i < count; i++) {
-          if (i > 0) buf_append_char(b, ',');
-          lval_to_json(b, valk_lval_list_nth(v, i));
+        bool first = true;
+        valk_lval_t *cur = v;
+        while (LVAL_TYPE(cur) == LVAL_CONS && !valk_lval_list_is_empty(cur)) {
+          if (!first) buf_append_char(b, ',');
+          first = false;
+          lval_to_json(b, cur->cons.head);
+          cur = cur->cons.tail;
         }
         buf_append_char(b, ']');
       }

@@ -293,7 +293,7 @@
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
   (= {text} (plist/get td :text))
-  (lsp/doc-store uri text)
+  (lsp/sync-doc uri text)
   (lsp/publish-diagnostics uri text)})
 
 (fun {handle-did-change params} {do
@@ -303,7 +303,8 @@
   (if (nil? changes) {}
     {do
       (= {text} (plist/get (head changes) :text))
-      (lsp/doc-store uri text)})})
+      (lsp/doc-store uri text)
+      (lsp/publish-diagnostics uri text)})})
 
 (fun {handle-did-close params} {do
   (= {td} (plist/get params :textDocument))
