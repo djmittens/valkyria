@@ -10,15 +10,19 @@
 #include "common.h"
 #include "coverage.h"
 #include "memory.h"
+#include "source_loc.h"
 
 #ifdef VALK_COVERAGE
-#include "source_loc.h"
 void valk_coverage_mark_tree(valk_lval_t* lval);
 #endif
 
 static char valk_lval_str_unescape(char x);
 
 static char* lval_str_unescapable = "abfnrtv\\\'\"";
+
+// ---------------------------------------------------------------------------
+// Leaf parsers — shared by ctx reader
+// ---------------------------------------------------------------------------
 
 static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
   valk_lval_t* res;
@@ -111,89 +115,127 @@ static valk_lval_t* valk_lval_read_str(int* i, const char* s) {
   return result;
 }
 
-valk_lval_t* valk_lval_read(int* i, const char* s) {
-  valk_lval_t* res;
+// ---------------------------------------------------------------------------
+// Forward declarations for mutually recursive ctx reader
+// ---------------------------------------------------------------------------
 
-  while (strchr(" ;\t\v\r\n", s[*i]) && s[*i] != '\0') {
-    if (s[*i] == ';') {
-      while (s[*i] != '\n' && s[*i] != '\0') {
-        ++(*i);
+static valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx);
+static valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx);
+
+// ---------------------------------------------------------------------------
+// Whitespace + line tracking
+// ---------------------------------------------------------------------------
+
+static void parse_ctx_skip_whitespace(valk_parse_ctx_t *ctx) {
+  while (strchr(" ;\t\v\r\n", ctx->source[ctx->pos]) && ctx->source[ctx->pos] != '\0') {
+    if (ctx->source[ctx->pos] == '\n') {
+      ctx->line++;
+      ctx->line_start = ctx->pos + 1;
+    }
+    if (ctx->source[ctx->pos] == ';') {
+      while (ctx->source[ctx->pos] != '\n' && ctx->source[ctx->pos] != '\0') {
+        ctx->pos++;
       }
     } else {
-      ++(*i);
+      ctx->pos++;
     }
   }
+}
 
-  if (s[*i] == '\0') {
-    return valk_lval_err("Unexpected  end of input");
-  }
+// ---------------------------------------------------------------------------
+// Ctx-aware leaf wrappers
+// ---------------------------------------------------------------------------
 
-  int form_start = *i;
-
-  if (s[*i] == '\'') {
-    (*i)++;
-    valk_lval_t* quoted = valk_lval_read(i, s);
-    if (LVAL_TYPE(quoted) == LVAL_ERR) {
-      return quoted;
-    }
-    res = valk_lval_qcons(quoted, valk_lval_nil());
-  }
-  else if (s[*i] == '`') {
-    (*i)++;
-    valk_lval_t* quoted = valk_lval_read(i, s);
-    if (LVAL_TYPE(quoted) == LVAL_ERR) {
-      return quoted;
-    }
-    valk_lval_t* sym = valk_lval_sym("quasiquote");
-    res = valk_lval_cons(sym, valk_lval_cons(quoted, valk_lval_nil()));
-  }
-  else if (s[*i] == ',') {
-    (*i)++;
-    bool splicing = false;
-    if (s[*i] == '@') {
-      (*i)++;
-      splicing = true;
-    }
-    valk_lval_t* unquoted = valk_lval_read(i, s);
-    if (LVAL_TYPE(unquoted) == LVAL_ERR) {
-      return unquoted;
-    }
-    valk_lval_t* sym = valk_lval_sym(splicing ? "unquote-splicing" : "unquote");
-    res = valk_lval_cons(sym, valk_lval_cons(unquoted, valk_lval_nil()));
-  } else if (strchr("({", s[*i])) {
-    res = valk_lval_read_expr(i, s);
-  }
-  else if (strchr("abcdefghijklmnopqrstuvwxyz"
-                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                   "0123456789_+-*\\/=<>!&?:|",
-                   s[*i])) {
-    res = valk_lval_read_sym(i, s);
-  } else if (s[*i] == '"') {
-    res = valk_lval_read_str(i, s);
-  } else {
-    res = valk_lval_err("[offset: %ld] Unexpected character %c", *i, s[*i]);
-    ++(*i);
-  }
-
-  if (res->src_pos < 0) res->src_pos = form_start;
-
-  while (strchr(" ;\t\v\r\n", s[*i]) && s[*i] != '\0') {
-    if (s[*i] == ';') {
-      while (s[*i] != '\n' && s[*i] != '\0') {
-        ++(*i);
-      }
-    } else {
-      ++(*i);
-    }
-  }
+static valk_lval_t *valk_lval_read_sym_ctx(valk_parse_ctx_t *ctx) {
+  __attribute__((unused)) int saved_line = ctx->line;
+  __attribute__((unused)) int saved_col = ctx->pos - ctx->line_start + 1;
+  valk_lval_t *res = valk_lval_read_sym(&ctx->pos, ctx->source);
+  LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
   return res;
 }
 
-valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
-  int expr_start = *i;
+static valk_lval_t *valk_lval_read_str_ctx(valk_parse_ctx_t *ctx) {
+  __attribute__((unused)) int saved_line = ctx->line;
+  __attribute__((unused)) int saved_col = ctx->pos - ctx->line_start + 1;
+  valk_lval_t *res = valk_lval_read_str(&ctx->pos, ctx->source);
+  LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  return res;
+}
+
+// ---------------------------------------------------------------------------
+// Core reader — single unified implementation
+// ---------------------------------------------------------------------------
+
+static valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx) {
+  valk_lval_t *res;
+
+  parse_ctx_skip_whitespace(ctx);
+  int saved_pos = ctx->pos;
+  __attribute__((unused)) int saved_line = ctx->line;
+  __attribute__((unused)) int saved_col = ctx->pos - ctx->line_start + 1;
+
+  if (ctx->source[ctx->pos] == '\0') {
+    return valk_lval_err("Unexpected  end of input");
+  }
+
+  if (ctx->source[ctx->pos] == '\'') {
+    ctx->pos++;
+    valk_lval_t *quoted = valk_lval_read_ctx(ctx);
+    if (LVAL_TYPE(quoted) == LVAL_ERR) return quoted;
+    res = valk_lval_qcons(quoted, valk_lval_nil());
+    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  } else if (ctx->source[ctx->pos] == '`') {
+    ctx->pos++;
+    valk_lval_t *quoted = valk_lval_read_ctx(ctx);
+    if (LVAL_TYPE(quoted) == LVAL_ERR) return quoted;
+    valk_lval_t *sym = valk_lval_sym("quasiquote");
+    sym->src_pos = saved_pos;
+    LVAL_SET_SOURCE_LOC(sym, ctx->file_id, saved_line, saved_col);
+    res = valk_lval_cons(sym, valk_lval_cons(quoted, valk_lval_nil()));
+    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  } else if (ctx->source[ctx->pos] == ',') {
+    ctx->pos++;
+    bool splicing = false;
+    if (ctx->source[ctx->pos] == '@') {
+      ctx->pos++;
+      splicing = true;
+    }
+    valk_lval_t *unquoted = valk_lval_read_ctx(ctx);
+    if (LVAL_TYPE(unquoted) == LVAL_ERR) return unquoted;
+    valk_lval_t *sym = valk_lval_sym(splicing ? "unquote-splicing" : "unquote");
+    sym->src_pos = saved_pos;
+    LVAL_SET_SOURCE_LOC(sym, ctx->file_id, saved_line, saved_col);
+    res = valk_lval_cons(sym, valk_lval_cons(unquoted, valk_lval_nil()));
+    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  } else if (strchr("({", ctx->source[ctx->pos])) {
+    res = valk_lval_read_expr_ctx(ctx);
+    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
+  } else if (strchr("abcdefghijklmnopqrstuvwxyz"
+                     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                     "0123456789_+-*\\/=<>!&?:|",
+                     ctx->source[ctx->pos])) {
+    res = valk_lval_read_sym_ctx(ctx);
+  } else if (ctx->source[ctx->pos] == '"') {
+    res = valk_lval_read_str_ctx(ctx);
+  } else {
+    res = valk_lval_err("[offset: %d] Unexpected character %c", ctx->pos, ctx->source[ctx->pos]);
+    ctx->pos++;
+  }
+
+  if (res->src_pos < 0) res->src_pos = saved_pos;
+
+  parse_ctx_skip_whitespace(ctx);
+  return res;
+}
+
+static valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
+  int saved_pos = ctx->pos;
+  __attribute__((unused)) int saved_line = ctx->line;
+  __attribute__((unused)) int saved_col = ctx->pos - ctx->line_start + 1;
+
   char end;
   bool is_quoted = false;
-  if (s[(*i)++] == '{') {
+  if (ctx->source[ctx->pos++] == '{') {
     is_quoted = true;
     end = '}';
   } else {
@@ -202,56 +244,84 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
 
   u64 capacity = 16;
   u64 count = 0;
-  valk_lval_t** elements = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
+  valk_lval_t **elements = valk_mem_alloc(sizeof(valk_lval_t *) * capacity);
 
-  while (s[*i] != end) {
-    if (s[*i] == '\0') {
-      valk_lval_t* err = valk_lval_err(
+  while (ctx->source[ctx->pos] != end) {
+    if (ctx->source[ctx->pos] == '\0') {
+      return valk_lval_err(
           "[offset: %d] Unexpected end of input reading expr, while looking "
           "for `%c`",
-          *i, end);
-      return err;
+          ctx->pos, end);
     }
-    valk_lval_t* x = valk_lval_read(i, s);
-    if (LVAL_TYPE(x) == LVAL_ERR) {
-      return x;
-    }
+    valk_lval_t *x = valk_lval_read_ctx(ctx);
+    if (LVAL_TYPE(x) == LVAL_ERR) return x;
 
     if (count >= capacity) {
       capacity *= 2;
-      valk_lval_t** new_elements =
-          valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
-      memcpy(new_elements, elements, sizeof(valk_lval_t*) * count);
+      valk_lval_t **new_elements = valk_mem_alloc(sizeof(valk_lval_t *) * capacity);
+      memcpy(new_elements, elements, sizeof(valk_lval_t *) * count);
       elements = new_elements;
     }
     elements[count++] = x;
   }
-  (*i)++;
+  ctx->pos++;
 
-  valk_lval_t* result = valk_lval_nil();
+  valk_lval_t *result = valk_lval_nil();
+  LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col);
   for (u64 j = count; j > 0; j--) {
     if (is_quoted) {
       result = valk_lval_qcons(elements[j - 1], result);
     } else {
       result = valk_lval_cons(elements[j - 1], result);
     }
+    LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col);
   }
 
-  result->src_pos = expr_start;
+  result->src_pos = saved_pos;
   return result;
 }
 
-#ifdef VALK_COVERAGE
-static valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx);
-static valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx);
-#endif
+// ---------------------------------------------------------------------------
+// Public API — thin wrappers over ctx reader
+// ---------------------------------------------------------------------------
+
+valk_lval_t* valk_lval_read(int* i, const char* s) {
+  valk_parse_ctx_t ctx = {
+    .source = s,
+    .pos = *i,
+    .line = 1,
+    .line_start = 0,
+    .file_id = 0
+  };
+  valk_lval_t* res = valk_lval_read_ctx(&ctx);
+  *i = ctx.pos;
+  return res;
+}
+
+valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
+  valk_parse_ctx_t ctx = {
+    .source = s,
+    .pos = *i,
+    .line = 1,
+    .line_start = 0,
+    .file_id = 0
+  };
+  valk_lval_t* res = valk_lval_read_expr_ctx(&ctx);
+  *i = ctx.pos;
+  return res;
+}
+
+// ---------------------------------------------------------------------------
+// File and text parsing — both use ctx reader
+// ---------------------------------------------------------------------------
 
 valk_lval_t* valk_parse_file(const char* filename) {
   valk_coverage_record_file(filename);
+  u16 file_id = 0;
 #ifdef VALK_COVERAGE
-  u16 file_id = valk_source_register_file(filename);
+  file_id = valk_source_register_file(filename);
 #endif
-  
+
   FILE* f = fopen(filename, "rb");
   if (f == nullptr) {
     LVAL_RAISE(valk_lval_nil(), "Could not open file (%s)", filename);
@@ -279,7 +349,6 @@ valk_lval_t* valk_parse_file(const char* filename) {
 
   da_init(&tmp);
 
-#ifdef VALK_COVERAGE
   valk_parse_ctx_t ctx = {
     .source = input,
     .pos = 0,
@@ -287,43 +356,20 @@ valk_lval_t* valk_parse_file(const char* filename) {
     .line_start = 0,
     .file_id = file_id
   };
-  
+
   while (ctx.source[ctx.pos] != '\0') {
     valk_lval_t* expr = valk_lval_read_ctx(&ctx);
     if (LVAL_TYPE(expr) == LVAL_ERR) {
-      if (strstr(expr->str, "Unexpected end of input")) break;
+      if (strstr(expr->str, "Unexpected") && strstr(expr->str, "end of input"))
+        break;
       da_add(&tmp, expr);
       break;
     }
+#ifdef VALK_COVERAGE
     valk_coverage_mark_tree(expr);
+#endif
     da_add(&tmp, expr);
   }
-#else
-  int pos = 0;
-
-  #define SKIP_WS_AND_COMMENTS() do { \
-    while (strchr(" ;\t\v\r\n", input[pos]) && input[pos] != '\0') { \
-      if (input[pos] == ';') { \
-        while (input[pos] != '\n' && input[pos] != '\0') pos++; \
-      } else { \
-        pos++; \
-      } \
-    } \
-  } while(0)
-
-  SKIP_WS_AND_COMMENTS();
-
-  while (input[pos] != '\0') {
-    da_add(&tmp, valk_lval_read(&pos, input));
-    valk_lval_t* last = tmp.items[tmp.count - 1];
-    if (LVAL_TYPE(last) == LVAL_ERR) break;
-    if (LVAL_TYPE(last) == LVAL_CONS && LVAL_TYPE(last->cons.head) == LVAL_ERR)
-      break;
-    SKIP_WS_AND_COMMENTS();
-  }
-
-  #undef SKIP_WS_AND_COMMENTS
-#endif
 
   free(input);
   valk_lval_t* res = valk_lval_list(tmp.items, tmp.count);
@@ -335,179 +381,33 @@ valk_lval_t* valk_parse_text(const char* text) {
   struct { valk_lval_t** items; u64 count; u64 capacity; } tmp = {0};
   da_init(&tmp);
 
-  int pos = 0;
+  valk_parse_ctx_t ctx = {
+    .source = text,
+    .pos = 0,
+    .line = 1,
+    .line_start = 0,
+    .file_id = 0
+  };
 
-  #define SKIP_WS_AND_COMMENTS_TEXT() do { \
-    while (strchr(" ;\t\v\r\n", text[pos]) && text[pos] != '\0') { \
-      if (text[pos] == ';') { \
-        while (text[pos] != '\n' && text[pos] != '\0') pos++; \
-      } else { \
-        pos++; \
-      } \
-    } \
-  } while(0)
-
-  SKIP_WS_AND_COMMENTS_TEXT();
-
-  while (text[pos] != '\0') {
-    da_add(&tmp, valk_lval_read(&pos, text));
-    valk_lval_t* last = tmp.items[tmp.count - 1];
-    if (LVAL_TYPE(last) == LVAL_ERR) break;
-    if (LVAL_TYPE(last) == LVAL_CONS && LVAL_TYPE(last->cons.head) == LVAL_ERR)
+  while (ctx.source[ctx.pos] != '\0') {
+    valk_lval_t* expr = valk_lval_read_ctx(&ctx);
+    if (LVAL_TYPE(expr) == LVAL_ERR) {
+      if (strstr(expr->str, "Unexpected") && strstr(expr->str, "end of input"))
+        break;
+      da_add(&tmp, expr);
       break;
-    SKIP_WS_AND_COMMENTS_TEXT();
+    }
+    da_add(&tmp, expr);
   }
-
-  #undef SKIP_WS_AND_COMMENTS_TEXT
 
   valk_lval_t* res = valk_lval_list(tmp.items, tmp.count);
   da_free(&tmp);
   return res;
 }
 
-// LCOV_EXCL_BR_START - coverage-mode parser functions not exercised in normal test runs
-#ifdef VALK_COVERAGE
-
-static void parse_ctx_skip_whitespace(valk_parse_ctx_t *ctx) {
-  while (strchr(" ;\t\v\r\n", ctx->source[ctx->pos]) && ctx->source[ctx->pos] != '\0') {
-    if (ctx->source[ctx->pos] == '\n') {
-      ctx->line++;
-      ctx->line_start = ctx->pos + 1;
-    }
-    if (ctx->source[ctx->pos] == ';') {
-      while (ctx->source[ctx->pos] != '\n' && ctx->source[ctx->pos] != '\0') {
-        ctx->pos++;
-      }
-    } else {
-      ctx->pos++;
-    }
-  }
-}
-
-static valk_lval_t *valk_lval_read_sym_ctx(valk_parse_ctx_t *ctx) {
-  int saved_line = ctx->line;
-  int saved_col = ctx->pos - ctx->line_start + 1;
-  
-  valk_lval_t *res = valk_lval_read_sym(&ctx->pos, ctx->source);
-  LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
-  return res;
-}
-
-static valk_lval_t *valk_lval_read_str_ctx(valk_parse_ctx_t *ctx) {
-  int saved_line = ctx->line;
-  int saved_col = ctx->pos - ctx->line_start + 1;
-  
-  valk_lval_t *res = valk_lval_read_str(&ctx->pos, ctx->source);
-  LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
-  return res;
-}
-
-static valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx) {
-  valk_lval_t *res;
-  int saved_line = ctx->line;
-  int saved_col = ctx->pos - ctx->line_start + 1;
-  
-  parse_ctx_skip_whitespace(ctx);
-  saved_line = ctx->line;
-  saved_col = ctx->pos - ctx->line_start + 1;
-  
-  if (ctx->source[ctx->pos] == '\0') {
-    return valk_lval_err("Unexpected end of input");
-  }
-  
-  if (ctx->source[ctx->pos] == '\'') {
-    ctx->pos++;
-    valk_lval_t *quoted = valk_lval_read_ctx(ctx);
-    if (LVAL_TYPE(quoted) == LVAL_ERR) return quoted;
-    res = valk_lval_qcons(quoted, valk_lval_nil());
-    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
-  } else if (ctx->source[ctx->pos] == '`') {
-    ctx->pos++;
-    valk_lval_t *quoted = valk_lval_read_ctx(ctx);
-    if (LVAL_TYPE(quoted) == LVAL_ERR) return quoted;
-    valk_lval_t *sym = valk_lval_sym("quasiquote");
-    LVAL_SET_SOURCE_LOC(sym, ctx->file_id, saved_line, saved_col);
-    res = valk_lval_cons(sym, valk_lval_cons(quoted, valk_lval_nil()));
-    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
-  } else if (ctx->source[ctx->pos] == ',') {
-    ctx->pos++;
-    bool splicing = false;
-    if (ctx->source[ctx->pos] == '@') {
-      ctx->pos++;
-      splicing = true;
-    }
-    valk_lval_t *unquoted = valk_lval_read_ctx(ctx);
-    if (LVAL_TYPE(unquoted) == LVAL_ERR) return unquoted;
-    valk_lval_t *sym = valk_lval_sym(splicing ? "unquote-splicing" : "unquote");
-    LVAL_SET_SOURCE_LOC(sym, ctx->file_id, saved_line, saved_col);
-    res = valk_lval_cons(sym, valk_lval_cons(unquoted, valk_lval_nil()));
-    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
-  } else if (strchr("({", ctx->source[ctx->pos])) {
-    res = valk_lval_read_expr_ctx(ctx);
-    LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col);
-  } else if (strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-*\\/=<>!&?:|", ctx->source[ctx->pos])) {
-    res = valk_lval_read_sym_ctx(ctx);
-  } else if (ctx->source[ctx->pos] == '"') {
-    res = valk_lval_read_str_ctx(ctx);
-  } else {
-    res = valk_lval_err("[offset: %d] Unexpected character %c", ctx->pos, ctx->source[ctx->pos]);
-    ctx->pos++;
-  }
-  
-  parse_ctx_skip_whitespace(ctx);
-  return res;
-}
-
-static valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
-  char end;
-  bool is_quoted = false;
-  int saved_line = ctx->line;
-  int saved_col = ctx->pos - ctx->line_start + 1;
-  
-  if (ctx->source[ctx->pos++] == '{') {
-    is_quoted = true;
-    end = '}';
-  } else {
-    end = ')';
-  }
-  
-  u64 capacity = 16;
-  u64 count = 0;
-  valk_lval_t **elements = valk_mem_alloc(sizeof(valk_lval_t *) * capacity);
-  
-  while (ctx->source[ctx->pos] != end) {
-    if (ctx->source[ctx->pos] == '\0') {
-      return valk_lval_err("[offset: %d] Unexpected end of input reading expr", ctx->pos);
-    }
-    valk_lval_t *x = valk_lval_read_ctx(ctx);
-    if (LVAL_TYPE(x) == LVAL_ERR) return x;
-    
-    if (count >= capacity) {
-      capacity *= 2;
-      valk_lval_t **new_elements = valk_mem_alloc(sizeof(valk_lval_t *) * capacity);
-      memcpy(new_elements, elements, sizeof(valk_lval_t *) * count);
-      elements = new_elements;
-    }
-    elements[count++] = x;
-  }
-  ctx->pos++;
-  
-  valk_lval_t *result = valk_lval_nil();
-  LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col);
-  for (u64 j = count; j > 0; j--) {
-    if (is_quoted) {
-      result = valk_lval_qcons(elements[j - 1], result);
-    } else {
-      result = valk_lval_cons(elements[j - 1], result);
-    }
-    LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col);
-  }
-  
-  return result;
-}
-
-#endif // VALK_COVERAGE
-// LCOV_EXCL_BR_STOP
+// ---------------------------------------------------------------------------
+// Coverage builtins — only compiled in coverage mode
+// ---------------------------------------------------------------------------
 
 // LCOV_EXCL_START - coverage builtins are meta-level code for Valk coverage tracking
 #ifdef VALK_COVERAGE
@@ -582,6 +482,10 @@ void valk_register_coverage_builtins(valk_lenv_t* env) {
   UNUSED(env);
 #endif
 }
+
+// ---------------------------------------------------------------------------
+// String unescape
+// ---------------------------------------------------------------------------
 
 static char valk_lval_str_unescape(char x) {
   switch (x) {  // LCOV_EXCL_BR_LINE - not all escape sequences tested

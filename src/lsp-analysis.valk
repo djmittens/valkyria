@@ -99,16 +99,24 @@
     {sem/walk-each expr scope acc}}
 })
 
+(fun {sem/source-len name} {
+  if (== name "quote") {1}
+  {if (== name "quasiquote") {1}
+  {if (== name "unquote") {1}
+  {if (== name "unquote-splicing") {2}
+  {len name}}}}
+})
+
 (fun {sem/dispatch-sym-head hd name tl scope acc} {
   if (dict/has? SEM_KEYWORD_SET name)
     {sem/walk-keyword name hd tl scope acc}
   {if (dict/has? SEM_OPERATOR_SET name)
     {do
       (sem/walk-each tl scope
-        (sem/emit (src-pos hd) (len name) SEM_OPERATOR MOD_NONE acc))}
+        (sem/emit (src-pos hd) (sem/source-len name) SEM_OPERATOR MOD_NONE acc))}
   {do
     (sem/walk-each tl scope
-      (sem/emit (src-pos hd) (len name) SEM_FUNCTION MOD_NONE acc))}}
+      (sem/emit (src-pos hd) (sem/source-len name) SEM_FUNCTION MOD_NONE acc))}}
 })
 
 ; ---------------------------------------------------------------------------
@@ -123,7 +131,7 @@
   {if (== name "type") {sem/walk-type hd tl scope acc}
   {do
     (sem/walk-each tl scope
-      (sem/emit (src-pos hd) (len name) SEM_KEYWORD MOD_NONE acc))}}}}}
+      (sem/emit (src-pos hd) (sem/source-len name) SEM_KEYWORD MOD_NONE acc))}}}}}
 })
 
 ; ---------------------------------------------------------------------------

@@ -1,0 +1,273 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/symdb.valk")
+(load "src/lsp-analysis.valk")
+(load "src/lsp-validate.valk")
+
+(fun {ref-count text} {
+  len (ref/collect-refs text)
+})
+
+(fun {ref-names text} {
+  map (\{r} {plist/get r :name}) (ref/collect-refs text)
+})
+
+(fun {ref-defs text} {
+  filter (\{r} {== (plist/get r :is-def) 1}) (ref/collect-refs text)
+})
+
+(fun {ref-uses text} {
+  filter (\{r} {== (plist/get r :is-def) 0}) (ref/collect-refs text)
+})
+
+(test/run (list
+
+  ; --- Basic reference collection ---
+
+  (test "empty-no-refs"
+    {do
+      (test/assert-eq 0 (ref-count "")
+        "empty input should produce 0 refs")
+      true
+    })
+
+  (test "single-symbol-ref"
+    {do
+      (test/assert-eq 1 (ref-count "foo")
+        "single symbol should produce 1 ref")
+      (= {refs} (ref/collect-refs "foo"))
+      (= {r} (head refs))
+      (test/assert-eq "foo" (plist/get r :name) "name should be foo")
+      (test/assert-eq 0 (plist/get r :is-def) "should be use, not def")
+      (test/assert-eq -1 (plist/get r :scope-id) "global scope = -1")
+      true
+    })
+
+  (test "keywords-excluded"
+    {do
+      (test/assert-eq 0 (ref-count ":foo")
+        "keyword :foo should not produce refs")
+      true
+    })
+
+  (test "numbers-excluded"
+    {do
+      (test/assert-eq 0 (ref-count "42")
+        "numbers should not produce refs")
+      true
+    })
+
+  (test "strings-excluded"
+    {do
+      (test/assert-eq 0 (ref-count "\"hello\"")
+        "strings should not produce refs")
+      true
+    })
+
+  ; --- Function definitions ---
+
+  (test "fun-records-name-as-def"
+    {do
+      (= {defs} (ref-defs "(fun {f x} {x})"))
+      (= {names} (map (\{r} {plist/get r :name}) defs))
+      (test/assert (member? "f" names) "f should be recorded as def")
+      true
+    })
+
+  (test "fun-params-recorded-as-defs"
+    {do
+      (= {defs} (ref-defs "(fun {f a b} {+ a b})"))
+      (= {names} (map (\{r} {plist/get r :name}) defs))
+      (test/assert (member? "a" names) "param a should be def")
+      (test/assert (member? "b" names) "param b should be def")
+      true
+    })
+
+  (test "fun-name-is-global-scope"
+    {do
+      (= {defs} (ref-defs "(fun {f x} {x})"))
+      (= {f-def} (head (filter (\{r} {== (plist/get r :name) "f"}) defs)))
+      (test/assert-eq -1 (plist/get f-def :scope-id)
+        "function name should be global scope (-1)")
+      true
+    })
+
+  (test "fun-params-scoped-to-fun"
+    {do
+      (= {defs} (ref-defs "(fun {f x} {x})"))
+      (= {x-def} (head (filter (\{r} {== (plist/get r :name) "x"}) defs)))
+      (test/assert (!= -1 (plist/get x-def :scope-id))
+        "param should be scoped to fun, not global")
+      true
+    })
+
+  ; --- Lambda ---
+
+  (test "lambda-params-as-defs"
+    {do
+      (= {defs} (ref-defs "(\\ {a} {a})"))
+      (= {names} (map (\{r} {plist/get r :name}) defs))
+      (test/assert (member? "a" names) "lambda param should be def")
+      true
+    })
+
+  (test "lambda-body-uses-scoped"
+    {do
+      (= {uses} (ref-uses "(\\ {x} {x})"))
+      (= {x-use} (head (filter (\{r} {== (plist/get r :name) "x"}) uses)))
+      (test/assert (not (nil? x-use)) "should have use of x in body")
+      (test/assert (!= -1 (plist/get x-use :scope-id))
+        "body ref to x should be scoped to lambda")
+      true
+    })
+
+  ; --- def / = bindings ---
+
+  (test "def-records-global-defs"
+    {do
+      (= {defs} (ref-defs "(def {myvar} 42)"))
+      (= {names} (map (\{r} {plist/get r :name}) defs))
+      (test/assert (member? "myvar" names) "def should record myvar as def")
+      (= {mv} (head (filter (\{r} {== (plist/get r :name) "myvar"}) defs)))
+      (test/assert-eq -1 (plist/get mv :scope-id) "def should be global")
+      true
+    })
+
+  (test "assign-records-local-defs"
+    {do
+      (= {refs} (ref/collect-refs "(fun {f} {do (= {x} 1) x})"))
+      (= {defs} (filter (\{r} {== (plist/get r :is-def) 1}) refs))
+      (= {x-def} (head (filter (\{r} {== (plist/get r :name) "x"}) defs)))
+      (test/assert (not (nil? x-def)) "= should record x as def")
+      true
+    })
+
+  ; --- do block scope threading ---
+
+  (test "do-threads-assign-scope"
+    {do
+      (= {refs} (ref/collect-refs "(fun {f} {do (= {x} 1) x})"))
+      (= {uses} (filter (\{r} {== (plist/get r :is-def) 0}) refs))
+      (= {x-use} (head (filter (\{r} {== (plist/get r :name) "x"}) uses)))
+      (test/assert (not (nil? x-use)) "x should have a use ref after = binding")
+      (test/assert (!= -1 (plist/get x-use :scope-id) )
+        "x use after = should be scoped")
+      true
+    })
+
+  ; --- type ---
+
+  (test "type-records-type-and-ctors"
+    {do
+      (= {defs} (ref-defs "(type {Color} {Red} {Green} {Blue})"))
+      (= {names} (map (\{r} {plist/get r :name}) defs))
+      (test/assert (member? "Color" names) "type name should be def")
+      (test/assert (member? "Red" names) "constructor should be def")
+      (test/assert (member? "Green" names) "constructor should be def")
+      true
+    })
+
+  ; --- sig skipped ---
+
+  (test "sig-produces-no-refs"
+    {do
+      (test/assert-eq 0 (ref-count "(sig 'foo {-> Num Num})")
+        "sig should not produce any refs")
+      true
+    })
+
+  ; --- Ampersand ---
+
+  (test "ampersand-skipped"
+    {do
+      (= {defs} (ref-defs "(fun {f x & rest} {rest})"))
+      (= {names} (map (\{r} {plist/get r :name}) defs))
+      (test/assert (not (member? "&" names)) "& should not be a param def")
+      (test/assert (member? "rest" names) "rest should be a param def")
+      true
+    })
+
+  ; --- ref/find-at-offset ---
+
+  (test "find-at-offset-hit"
+    {do
+      (= {refs} (ref/collect-refs "foo"))
+      (= {r} (ref/find-at-offset refs 0))
+      (test/assert (not (nil? r)) "should find ref at offset 0")
+      (test/assert-eq "foo" (plist/get r :name) "should be foo")
+      true
+    })
+
+  (test "find-at-offset-miss"
+    {do
+      (= {refs} (ref/collect-refs "foo"))
+      (= {r} (ref/find-at-offset refs 100))
+      (test/assert (nil? r) "should not find ref at offset 100")
+      true
+    })
+
+  ; --- ref/matching-refs ---
+
+  (test "matching-refs-by-scope"
+    {do
+      (= {refs} (ref/collect-refs "(fun {f x} {x})"))
+      (= {x-ref} (head (filter (\{r} {== (plist/get r :name) "x"}) refs)))
+      (= {scope} (plist/get x-ref :scope-id))
+      (= {matched} (ref/matching-refs refs "x" scope nil))
+      (test/assert (>= (len matched) 2)
+        "should match both def and use of x in same scope")
+      true
+    })
+
+  ; --- line-col->offset ---
+
+  (test "line-col-first-line"
+    {do
+      (test/assert-eq 3 (line-col->offset "abcdef" 0 3)
+        "line 0, col 3 = offset 3")
+      true
+    })
+
+  (test "line-col-second-line"
+    {do
+      (test/assert-eq 4 (line-col->offset "abc\ndef" 1 0)
+        "line 1, col 0 = offset 4 (after abc\\n)")
+      true
+    })
+
+  (test "line-col-second-line-with-col"
+    {do
+      (test/assert-eq 6 (line-col->offset "abc\ndef" 1 2)
+        "line 1, col 2 = offset 6")
+      true
+    })
+
+  ; --- ref/find-scoped-refs ---
+
+  (test "scoped-refs-local"
+    {do
+      (= {text} "(fun {f x} {+ x x})")
+      (= {refs} (ref/find-scoped-refs text 0 7))
+      (test/assert (not (nil? refs)) "should find scoped refs for param x")
+      (test/assert (>= (len refs) 2) "should find def + uses of x")
+      true
+    })
+
+  (test "scoped-refs-global-returns-nil"
+    {do
+      (= {text} "(fun {f x} {x})")
+      (= {refs} (ref/find-scoped-refs text 0 5))
+      (test/assert (nil? refs) "global symbol f should return nil from scoped-refs")
+      true
+    })
+
+  ; --- Parse error ---
+
+  (test "parse-error-no-crash"
+    {do
+      (= {refs} (ref/collect-refs "(unclosed"))
+      (test/assert (nil? refs) "parse error should return nil, not crash")
+      true
+    })
+
+) {:suite-name "LSP References" :debug 0})

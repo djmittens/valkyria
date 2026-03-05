@@ -1,0 +1,370 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/symdb.valk")
+(load "src/lsp-analysis.valk")
+(load "src/lsp-validate.valk")
+
+(fun {diag-count text} {do
+  (= {ast} (parse text))
+  (len (vd/validate nil ast text))
+})
+
+(fun {diag-messages text} {do
+  (= {ast} (parse text))
+  (= {diags} (vd/validate nil ast text))
+  (map (\{d} {plist/get d :message}) diags)
+})
+
+(fun {first-diag text} {do
+  (= {ast} (parse text))
+  (= {diags} (vd/validate nil ast text))
+  (if (nil? diags) {nil} {head diags})
+})
+
+(fun {diag-count-with-db db text} {do
+  (= {ast} (parse text))
+  (len (vd/validate db ast text))
+})
+
+(test/run (list
+
+  ; --- No false positives on valid code ---
+
+  (test "valid-fun-no-diags"
+    {do
+      (test/assert-eq 0 (diag-count "(fun {add x y} {+ x y})")
+        "valid fun should produce 0 diagnostics")
+      true
+    })
+
+  (test "valid-def-no-diags"
+    {do
+      (test/assert-eq 0 (diag-count "(def {x} 42)")
+        "valid def should produce 0 diagnostics")
+      true
+    })
+
+  (test "valid-builtin-constants"
+    {do
+      (test/assert-eq 0 (diag-count "(if true {1} {nil})")
+        "true/nil should be known constants")
+      (test/assert-eq 0 (diag-count "false")
+        "false should be known constant")
+      true
+    })
+
+  (test "valid-special-forms"
+    {do
+      (test/assert-eq 0 (diag-count "(do 1 2 3)")
+        "do is a special form")
+      (test/assert-eq 0 (diag-count "(if true {1} {2})")
+        "if is a special form")
+      (test/assert-eq 0 (diag-count "(= {x} 1)")
+        "= is a special form")
+      true
+    })
+
+  (test "valid-keywords-not-flagged"
+    {do
+      (test/assert-eq 0 (diag-count ":foo")
+        "keyword :foo should not be flagged")
+      (test/assert-eq 0 (diag-count "(list :a 1 :b 2)")
+        "keywords in plist should not be flagged")
+      true
+    })
+
+  (test "valid-lambda-params-in-scope"
+    {do
+      (test/assert-eq 0 (diag-count "(\\ {x y} {+ x y})")
+        "lambda params should be in scope in body")
+      true
+    })
+
+  ; --- Undefined symbol detection ---
+
+  (test "undefined-symbol-detected"
+    {do
+      (test/assert (> (diag-count "bogus_symbol") 0)
+        "undefined symbol should produce a diagnostic")
+      true
+    })
+
+  (test "undefined-function-detected"
+    {do
+      (test/assert (> (diag-count "(not-a-real-function 1 2)") 0)
+        "undefined function should produce a diagnostic")
+      true
+    })
+
+  (test "undefined-sym-message-format"
+    {do
+      (= {d} (first-diag "bogus"))
+      (test/assert (not (nil? d)) "should have a diagnostic")
+      (= {msg} (plist/get d :message))
+      (test/assert-eq "Symbol 'bogus' is not defined" msg
+        "message should name the symbol")
+      true
+    })
+
+  (test "undefined-fn-message-format"
+    {do
+      (= {d} (first-diag "(nope 1)"))
+      (test/assert (not (nil? d)) "should have a diagnostic")
+      (= {msg} (plist/get d :message))
+      (test/assert-eq "Function 'nope' is not defined" msg
+        "message should say Function for call position")
+      true
+    })
+
+  ; --- Scope management ---
+
+  (test "fun-params-scoped-to-body"
+    {do
+      (test/assert-eq 0
+        (diag-count "(fun {f x} {x})")
+        "param x should be in scope inside body")
+      (test/assert (> (diag-count "(do (fun {f x} {x}) x)") 0)
+        "param x should NOT be in scope outside fun")
+      true
+    })
+
+  (test "lambda-params-scoped-to-body"
+    {do
+      (test/assert-eq 0
+        (diag-count "(\\ {a b} {+ a b})")
+        "lambda params should be in scope")
+      true
+    })
+
+  (test "def-adds-to-globals"
+    {do
+      (test/assert-eq 0
+        (diag-count "(do (def {myvar} 10) (myvar))")
+        "def should add name to globals visible everywhere")
+      true
+    })
+
+  (test "local-binding-in-do"
+    {do
+      (test/assert-eq 0
+        (diag-count "(do (= {x} 1) (= {y} (+ x 1)) y)")
+        "= binding should be visible in subsequent do expressions")
+      true
+    })
+
+  (test "nested-fun-scopes"
+    {do
+      (test/assert-eq 0
+        (diag-count "(fun {outer a} {fun {inner b} {+ a b}})")
+        "inner fun should see outer fun's params via globals")
+      true
+    })
+
+  ; --- Type declarations ---
+
+  (test "type-and-ctors-in-scope"
+    {do
+      (test/assert-eq 0
+        (diag-count "(do (type {Color} {Red} {Green} {Blue}) (Red))")
+        "type name and constructors should be in globals")
+      true
+    })
+
+  (test "type-with-fields"
+    {do
+      (test/assert-eq 0
+        (diag-count "(do (type {Point} {Point :x :y}) (Point 1 2))")
+        "constructor with fields should be in scope")
+      true
+    })
+
+  ; --- sig declarations ---
+
+  (test "sig-adds-name"
+    {do
+      (test/assert-eq 0
+        (diag-count "(do (sig 'myfn {-> Num Num}) (myfn 1))")
+        "sig should add name to globals")
+      true
+    })
+
+  ; --- match expressions ---
+
+  (test "match-pattern-binds"
+    {do
+      (test/assert-eq 0
+        (diag-count "(do (type {Maybe} {Just :val} {Nothing}) (match (Just 1) {(Just v) v} {(Nothing) 0}))")
+        "match pattern should bind v in clause body")
+      true
+    })
+
+  (test "match-wildcard"
+    {do
+      (test/assert-eq 0
+        (diag-count "(match 1 {_ 0})")
+        "_ is a known constant in match patterns")
+      true
+    })
+
+  ; --- Accessor pattern ---
+
+  (test "accessor-not-flagged"
+    {do
+      (test/assert-eq 0
+        (diag-count "(Foo:bar x)")
+        "Foo:bar accessor pattern should not be flagged")
+      true
+    })
+
+  (test "non-accessor-flagged"
+    {do
+      (test/assert (> (diag-count "(foo:bar x)") 0)
+        "lowercase foo:bar is not an accessor pattern")
+      true
+    })
+
+  ; --- aio/do bindings ---
+
+  (test "aio-do-bind"
+    {do
+      (test/assert-eq 0
+        (diag-count "(do (def {aio/do} 1) (def {<-} 1) (aio/do {x <- (+ 1 2) x}))")
+        "aio/do <- binding should add x to scope")
+      true
+    })
+
+  ; --- Quoted expressions ---
+
+  (test "quoted-data-not-walked"
+    {do
+      (test/assert-eq 0
+        (diag-count "'{unknown stuff here}")
+        "quoted data with unknown head should not be validated")
+      true
+    })
+
+  ; --- Diagnostic position ---
+
+  (test "diag-has-line-col"
+    {do
+      (= {d} (first-diag "bogus"))
+      (test/assert (not (nil? d)) "should have diagnostic")
+      (test/assert-eq 0 (plist/get d :line) "should be line 0")
+      (test/assert-eq 0 (plist/get d :col) "should be col 0")
+      (test/assert-eq 5 (plist/get d :end-col) "end-col should be col + len")
+      true
+    })
+
+  (test "diag-severity"
+    {do
+      (= {d} (first-diag "bogus"))
+      (test/assert-eq 1 (plist/get d :severity) "undefined sym should be error severity")
+      true
+    })
+
+  ; --- Multiple diagnostics ---
+
+  (test "multiple-undefined-syms"
+    {do
+      (test/assert-eq 2 (diag-count "(+ aaa bbb)")
+        "two undefined symbols should produce 2 diagnostics")
+      true
+    })
+
+  ; --- Empty / edge cases ---
+
+  (test "empty-input"
+    {do
+      (test/assert-eq 0 (diag-count "")
+        "empty input should produce 0 diagnostics")
+      true
+    })
+
+  (test "only-numbers"
+    {do
+      (test/assert-eq 0 (diag-count "42")
+        "number literal should produce 0 diagnostics")
+      true
+    })
+
+  (test "only-strings"
+    {do
+      (test/assert-eq 0 (diag-count "\"hello\"")
+        "string literal should produce 0 diagnostics")
+      true
+    })
+
+  ; --- With symdb ---
+
+  (test "symdb-known-symbols"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (= {r} (sqlite/exec db "ALTER TABLE symbols ADD COLUMN sig TEXT"))
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('test.valk', 'h1')")
+      (= {fid} (sqlite/last-insert-id db))
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind) VALUES ('known-fn', ?1, 0, 0, 1)" fid)
+      (= {n} (diag-count-with-db db "(known-fn 1)"))
+      (sqlite/close db)
+      (test/assert-eq 0 n "symbol in symdb should not be flagged")
+      true
+    })
+
+  (test "symdb-unknown-still-flagged"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (= {r} (sqlite/exec db "ALTER TABLE symbols ADD COLUMN sig TEXT"))
+      (= {n} (diag-count-with-db db "(totally-unknown 1)"))
+      (sqlite/close db)
+      (test/assert (> n 0) "symbol not in symdb should still be flagged")
+      true
+    })
+
+  ; --- Regression: real code with seeded symdb ---
+
+  (test "builtins-seeded-no-false-positives"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (symdb/sync-document db "file:///builtins.valk" bt)
+      (= {pt} (read-file "src/prelude.valk"))
+      (symdb/sync-document db "file:///prelude.valk" pt)
+      (= {code} "(fun {add-and-check x y} {do (= {sum} (+ x y)) (if (> sum 0) {str sum} {error \"negative\"})})")
+      (= {n} (diag-count-with-db db code))
+      (test/assert-eq 0 n "real code using builtins should produce 0 diagnostics")
+      (sqlite/close db)
+      true
+    })
+
+  (test "nonexistent-path-still-seeds"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {text} "(sig '+ {-> & Num Num})\n(sig 'head {-> (List A) A})")
+      (symdb/sync-document db "file:///fake/path.valk" text)
+      (= {code} "(+ 1 (head (list 1 2 3)))")
+      (= {n} (diag-count-with-db db code))
+      (test/assert-eq 0 n "builtins from fake path should still resolve")
+      (sqlite/close db)
+      true
+    })
+
+  ; --- Param annotation skipping ---
+
+  (test "skip-type-annotations"
+    {do
+      (test/assert-eq 0
+        (diag-count "(fun {f x :: Num -> Num} {x})")
+        ":: and -> type annotations should not add bogus params")
+      true
+    })
+
+  (test "varargs-ampersand"
+    {do
+      (test/assert-eq 0
+        (diag-count "(fun {f x & rest} {rest})")
+        "& should be skipped, rest should be in scope")
+      true
+    })
+
+) {:suite-name "LSP Validate" :debug 0})

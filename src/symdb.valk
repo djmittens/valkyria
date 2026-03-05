@@ -378,6 +378,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 (fun {symdb/sync-document db uri text} {do
   (= {path} (uri->path uri))
   (= {hash} (file/fingerprint path))
+  (= {hash} (if (error? hash) {str "text:" (len text)} {hash}))
   (sqlite/exec db "BEGIN")
   (sqlite/exec db
     "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"

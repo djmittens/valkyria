@@ -203,7 +203,6 @@ void valk_lval_print(valk_lval_t *val);
 valk_lval_t *valk_lval_read(int *i, const char *s);
 valk_lval_t *valk_lval_read_expr(int *i, const char *s);
 
-#ifdef VALK_COVERAGE
 typedef struct {
   const char *source;
   int pos;
@@ -211,6 +210,8 @@ typedef struct {
   int line_start;
   u16 file_id;
 } valk_parse_ctx_t;
+
+#ifdef VALK_COVERAGE
 
 
 
