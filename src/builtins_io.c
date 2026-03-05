@@ -331,6 +331,19 @@ static valk_lval_t* valk_builtin_list_dir(valk_lenv_t* e, valk_lval_t* a) {
   return result;
 }
 
+static valk_lval_t* valk_builtin_file_fingerprint(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* path = valk_lval_list_nth(a, 0)->str;
+  struct stat st;
+  if (stat(path, &st) != 0)
+    LVAL_RAISE(a, "file/fingerprint: cannot stat (%s)", path);
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%lld:%lld", (long long)st.st_mtime, (long long)st.st_size);
+  return valk_lval_str(buf);
+}
+
 static valk_lval_t* valk_builtin_file_size(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -338,7 +351,7 @@ static valk_lval_t* valk_builtin_file_size(valk_lenv_t* e, valk_lval_t* a) {
   const char* path = valk_lval_list_nth(a, 0)->str;
   struct stat st;
   if (stat(path, &st) != 0)
-    LVAL_RAISE(a, "file-size: cannot stat (%s)", path);
+    LVAL_RAISE(a, "file/size: cannot stat (%s)", path);
   return valk_lval_num((long)st.st_size);
 }
 
@@ -362,5 +375,6 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "quoted?", valk_builtin_quoted_p);
   valk_lenv_put_builtin(env, "offset->line-col", valk_builtin_offset_to_line_col);
   valk_lenv_put_builtin(env, "list-dir", valk_builtin_list_dir);
-  valk_lenv_put_builtin(env, "file-size", valk_builtin_file_size);
+  valk_lenv_put_builtin(env, "file/size", valk_builtin_file_size);
+  valk_lenv_put_builtin(env, "file/fingerprint", valk_builtin_file_fingerprint);
 }

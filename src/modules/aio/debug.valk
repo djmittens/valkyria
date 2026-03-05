@@ -42,9 +42,9 @@
       (= {v} (head (tail kv)))
       (select
         {(== k "slab") (plist/set config :slab v)}
-        {(== k "start") (plist/set config :start (int v))}
-        {(== k "end") (plist/set config :end (int v))}
-        {(== k "buckets") (plist/set config :buckets (int v))}
+        {(== k "start") (plist/set config :start (str->num v))}
+        {(== k "end") (plist/set config :end (str->num v))}
+        {(== k "buckets") (plist/set config :buckets (str->num v))}
         {otherwise config})}
      config)})
 

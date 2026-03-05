@@ -303,15 +303,14 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (= {ctor} (head variants))
       (if (not (list? ctor)) {symdb/extract-ctors (tail variants) text type-name}
         {do
-          (= {ctor-name-sym} (head ctor))
-          (= {ctor-name} (str ctor-name-sym))
+          (= {ctor-name} (str (head ctor)))
           (= {ctor-arity} (- (len ctor) 1))
-          (= {lc} (offset->line-col text (src-pos ctor-name-sym)))
+          (= {lc} (offset->line-col text (src-pos (head ctor))))
           (= {line} (head lc))
           (= {col} (head (tail lc)))
           (= {sym} (list (list :name ctor-name :line line :col col
-                               :kind SYMKIND_CONSTRUCTOR :arity ctor-arity
-                               :doc (str type-name "::" ctor-name))))
+                                :kind SYMKIND_CONSTRUCTOR :arity ctor-arity
+                                :doc (str type-name "::" ctor-name))))
           (join sym (symdb/extract-ctors (tail variants) text type-name))})}
 })
 
@@ -322,8 +321,9 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (= {sig-str} (str type-q))
   (= {lc} (offset->line-col text (src-pos expr)))
   (= {line} (head lc))
+  (= {col} (head (tail lc)))
   (= {doc-comment} (extract-doc-comment lines line))
-  (list (list :name name :kind SYMKIND_FUNCTION :arity -1
+  (list (list :name name :line line :col col :kind SYMKIND_FUNCTION :arity -1
               :doc doc-comment :sig sig-str :is-sig 1))
 })
 
@@ -377,7 +377,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 (fun {symdb/sync-document db uri text} {do
   (= {path} (uri->path uri))
-  (= {hash} (str (len text)))
+  (= {hash} (file/fingerprint path))
   (sqlite/exec db "BEGIN")
   (sqlite/exec db
     "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
@@ -392,9 +392,8 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (sqlite/exec db "COMMIT")
 })
 
-(fun {symdb/sync-file-symbols db uri text} {do
+(fun {symdb/sync-file-symbols db uri text hash} {do
   (= {path} (uri->path uri))
-  (= {hash} (str (len text)))
   (sqlite/exec db
     "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
     path hash)
@@ -404,9 +403,9 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (symdb/insert-symbols db file-id syms)
 })
 
-(fun {symdb/sync-symbols-only db uri text} {do
+(fun {symdb/sync-symbols-only db uri text hash} {do
   (sqlite/exec db "BEGIN")
-  (symdb/sync-file-symbols db uri text)
+  (symdb/sync-file-symbols db uri text hash)
   (sqlite/exec db "COMMIT")
 })
 
@@ -421,9 +420,9 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
             "SELECT id, doc FROM symbols WHERE file_id=?1 AND name=?2" file-id (plist/get s :name)))
           (if (nil? existing)
             {sqlite/exec db
-              "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc, sig) VALUES (?1, ?2, 0, 0, ?3, ?4, ?5, ?6)"
-              (plist/get s :name) file-id (plist/get s :kind) (plist/get s :arity)
-              (plist/get s :doc) (plist/get s :sig)}
+              "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc, sig) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+              (plist/get s :name) file-id (plist/get s :line) (plist/get s :col)
+              (plist/get s :kind) (plist/get s :arity) (plist/get s :doc) (plist/get s :sig)}
             {do
               (= {new-doc} (plist/get s :doc))
               (= {old-doc} (plist/get existing :doc))
@@ -459,7 +458,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 (fun {symdb/find-definition db name} {
   sqlite/query-maybe db
-    "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.kind != 0 AND s.line > 0 ORDER BY s.id LIMIT 1"
+    "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.kind != 0 ORDER BY (CASE WHEN s.arity >= 0 THEN 0 ELSE 1 END), s.id LIMIT 1"
     name
 })
 

@@ -123,8 +123,32 @@
     :source "valk"
     :message (plist/get d :message)})
 
+(fun {lsp/ensure-loads-indexed ast} {
+  if (nil? lsp/db) {}
+  {lsp/ensure-loads-walk ast}
+})
+
+(fun {lsp/ensure-loads-walk exprs} {
+  if (nil? exprs) {}
+  {do
+    (= {e} (head exprs))
+    (if (list? e)
+      {if (nil? e) {}
+        {do
+          (= {form} (str (head e)))
+          (if (== form "load")
+            {if (nil? (tail e)) {}
+              {do
+                (= {path} (str (head (tail e))))
+                (lsp/seed-file lsp/db path)}}
+            {})}}
+      {})
+    (lsp/ensure-loads-walk (tail exprs))}
+})
+
 (fun {lsp/publish-diagnostics uri text} {do
   (= {ast} (parse text))
+  (lsp/ensure-loads-indexed ast)
   (= {diags} (vd/validate lsp/db ast text))
   (= {lsp-diags} (map make-lsp-diag diags))
   (lsp/send-notification "textDocument/publishDiagnostics"
@@ -144,22 +168,21 @@
 ; ---------------------------------------------------------------------------
 
 (fun {lsp/seed-file db path} {do
-  (= {sz} (file-size path))
-  (if (error? sz) {0}
+  (= {fp} (file/fingerprint path))
+  (if (error? fp) {0}
     {do
-      (= {hash} (str sz))
       (= {existing} (sqlite/query-maybe db
         "SELECT hash FROM files WHERE path=?1" path))
       (if (not (nil? existing))
-        {if (== (plist/get existing :hash) hash) {0}
+        {if (== (plist/get existing :hash) fp) {0}
           {do
             (= {text} (read-file path))
             (if (error? text) {0}
-              {do (symdb/sync-symbols-only db (str "file://" path) text) 1})}}
+              {do (symdb/sync-symbols-only db (str "file://" path) text fp) 1})}}
         {do
           (= {text} (read-file path))
           (if (error? text) {0}
-            {do (symdb/sync-symbols-only db (str "file://" path) text) 1})})})
+            {do (symdb/sync-symbols-only db (str "file://" path) text fp) 1})})})
 })
 
 (fun {lsp/seed-builtins db root} {do
@@ -213,22 +236,21 @@
 
 (fun {lsp/index-file db path} {do
   (= {fpath} (uri->path (str "file://" path)))
-  (= {sz} (file-size path))
-  (if (error? sz) {0}
+  (= {fp} (file/fingerprint path))
+  (if (error? fp) {0}
     {do
-      (= {hash} (str sz))
       (= {existing} (sqlite/query-maybe db
         "SELECT hash FROM files WHERE path=?1" fpath))
       (if (not (nil? existing))
-        {if (== (plist/get existing :hash) hash) {0}
+        {if (== (plist/get existing :hash) fp) {0}
           {do
             (= {text} (read-file path))
             (if (error? text) {0}
-              {do (symdb/sync-file-symbols db (str "file://" path) text) 1})}}
+              {do (symdb/sync-file-symbols db (str "file://" path) text fp) 1})}}
         {do
           (= {text} (read-file path))
           (if (error? text) {0}
-            {do (symdb/sync-file-symbols db (str "file://" path) text) 1})})})
+            {do (symdb/sync-file-symbols db (str "file://" path) text fp) 1})})})
 })
 
 (fun {lsp/collect-workspace-files root} {do

@@ -150,6 +150,8 @@
 (sig 'str/split {-> Str Str (List Str)})
 ; Parse string to number.
 (sig 'str->num {-> Str Num})
+; Return "mtime:size" change-detection fingerprint for a file. Single stat() call, no read.
+(sig 'file/fingerprint {-> Str Str})
 ; Concatenate arguments as strings.
 (sig 'str {-> & A Str})
 ; Repeat pattern n times into a string.
@@ -555,3 +557,32 @@
 ; List directory entries. Returns a list of plists with :name and :type keys.
 ; Type is "file" or "dir". Hidden entries (starting with .) are skipped.
 (sig 'list-dir {-> Str QExpr})
+; Return file size in bytes. Errors if file doesn't exist.
+(sig 'file/size {-> Str Num})
+
+; === Plist / Dict / List extras ===
+
+; Get value from a plist by keyword key. Returns nil if not found.
+(sig 'plist/get {-> QExpr A A})
+; Test if a value is a member of a list.
+(sig 'member? {-> A (List A) Num})
+; Group a flat list into sub-lists of n elements.
+(sig 'list/group {-> Num (List A) (List (List A))})
+
+; Create an empty hash dict, optionally with initial capacity.
+(sig 'dict/new {-> & Num Ref})
+; Insert a key into a dict (mutating). Returns the dict.
+(sig 'dict/put! {-> Ref Str Ref})
+; Test if a dict contains a key. Returns 1 or 0.
+(sig 'dict/has? {-> Ref Str Num})
+; Create a dict from a Q-expression of keys.
+(sig 'dict/from-keys {-> (List Str) Ref})
+; Return number of entries in a dict.
+(sig 'dict/count {-> Ref Num})
+; Return all keys of a dict as a Q-expression.
+(sig 'dict/keys {-> Ref (List Str)})
+
+; === Stdio extras ===
+
+; Check if stdin has data available without blocking. Returns 1 or 0.
+(sig 'stdin/has-data {-> Num})
