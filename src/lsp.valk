@@ -165,15 +165,6 @@
   (if (nil? lsp/db) {}
     {symdb/sync-document lsp/db uri text})})
 
-(fun {lsp/sync-doc-symbols uri text} {do
-  (lsp/doc-store uri text)
-  (if (nil? lsp/db) {}
-    {do
-      (= {path} (uri->path uri))
-      (= {hash} (file/fingerprint path))
-      (= {hash} (if (error? hash) {str "text:" (len text)} {hash}))
-      (symdb/sync-symbols-only lsp/db uri text hash)})})
-
 ; ---------------------------------------------------------------------------
 ; Method handlers — notifications
 ; ---------------------------------------------------------------------------
@@ -189,11 +180,11 @@
           {do
             (= {text} (read-file path))
             (if (error? text) {0}
-              {do (symdb/sync-symbols-only db (str "file://" path) text fp) 1})}}
+              {do (symdb/sync-document db (str "file://" path) text) 1})}}
         {do
           (= {text} (read-file path))
           (if (error? text) {0}
-            {do (symdb/sync-symbols-only db (str "file://" path) text fp) 1})})})
+            {do (symdb/sync-document db (str "file://" path) text) 1})})})
 })
 
 (fun {lsp/seed-builtins db root} {do
@@ -304,7 +295,7 @@
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
   (= {text} (plist/get td :text))
-  (lsp/sync-doc-symbols uri text)
+  (lsp/sync-doc uri text)
   (lsp/publish-diagnostics uri text)})
 
 (fun {handle-did-change params} {do

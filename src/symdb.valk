@@ -380,16 +380,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (= {hash} (file/fingerprint path))
   (= {hash} (if (error? hash) {str "text:" (len text)} {hash}))
   (sqlite/exec db "BEGIN")
-  (sqlite/exec db
-    "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
-    path hash)
-  (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
-  (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
-  (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
-  (= {syms} (symdb/extract-symbols text))
-  (symdb/insert-symbols db file-id syms)
-  (= {refs} (symdb/extract-refs text))
-  (symdb/insert-refs db file-id refs)
+  (symdb/sync-file-symbols db uri text hash)
   (sqlite/exec db "COMMIT")
 })
 
@@ -400,14 +391,11 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
     path hash)
   (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
   (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
   (= {syms} (symdb/extract-symbols text))
   (symdb/insert-symbols db file-id syms)
-})
-
-(fun {symdb/sync-symbols-only db uri text hash} {do
-  (sqlite/exec db "BEGIN")
-  (symdb/sync-file-symbols db uri text hash)
-  (sqlite/exec db "COMMIT")
+  (= {refs} (symdb/extract-refs text))
+  (symdb/insert-refs db file-id refs)
 })
 
 (fun {symdb/insert-symbols db file-id syms} {

@@ -4,6 +4,21 @@
 (load "src/lsp-analysis.valk")
 (load "src/lsp-validate.valk")
 
+(fun {make-test-db} {do
+  (= {db} (sqlite/open ":memory:"))
+  (sqlite/exec-script db symdb/schema-sql)
+  (= {r} (sqlite/exec db "ALTER TABLE symbols ADD COLUMN sig TEXT"))
+  db
+})
+
+(fun {find-ref-by-name refs name} {
+  head (filter (\{r} {== (plist/get r :name) name}) refs)
+})
+
+(fun {refs-with-name refs name} {
+  filter (\{r} {== (plist/get r :name) name}) refs
+})
+
 (fun {ref-count text} {
   len (ref/collect-refs text)
 })
@@ -267,6 +282,392 @@
     {do
       (= {refs} (ref/collect-refs "(unclosed"))
       (test/assert (nil? refs) "parse error should return nil, not crash")
+      true
+    })
+
+  ; =========================================================================
+  ; symdb/extract-refs — position accuracy
+  ; =========================================================================
+
+  (test "extract-refs-single-line-positions"
+    {do
+      (= {refs} (symdb/extract-refs "(+ a b)"))
+      (test/assert-eq 3 (len refs) "should extract 3 refs")
+      (= {r-plus} (find-ref-by-name refs "+"))
+      (= {r-a} (find-ref-by-name refs "a"))
+      (= {r-b} (find-ref-by-name refs "b"))
+      (test/assert-eq 0 (plist/get r-plus :line) "+ line")
+      (test/assert-eq 1 (plist/get r-plus :col) "+ col")
+      (test/assert-eq 0 (plist/get r-a :line) "a line")
+      (test/assert-eq 3 (plist/get r-a :col) "a col")
+      (test/assert-eq 0 (plist/get r-b :line) "b line")
+      (test/assert-eq 5 (plist/get r-b :col) "b col")
+      true
+    })
+
+  (test "extract-refs-multiline-positions"
+    {do
+      (= {refs} (symdb/extract-refs "(fun {f x}\n  {+ x 1})"))
+      (= {r-fun} (find-ref-by-name refs "fun"))
+      (= {r-f} (find-ref-by-name refs "f"))
+      (= {r-plus} (find-ref-by-name refs "+"))
+      (test/assert-eq 0 (plist/get r-fun :line) "fun on line 0")
+      (test/assert-eq 1 (plist/get r-fun :col) "fun at col 1")
+      (test/assert-eq 0 (plist/get r-f :line) "f on line 0")
+      (test/assert-eq 6 (plist/get r-f :col) "f at col 6")
+      (test/assert-eq 1 (plist/get r-plus :line) "+ on line 1")
+      (test/assert-eq 3 (plist/get r-plus :col) "+ at col 3")
+      (= {x-refs} (refs-with-name refs "x"))
+      (test/assert-eq 2 (len x-refs) "x appears twice (param + body)")
+      (= {x1} (head x-refs))
+      (= {x2} (head (tail x-refs)))
+      (test/assert-eq 0 (plist/get x1 :line) "first x on line 0")
+      (test/assert-eq 8 (plist/get x1 :col) "first x at col 8")
+      (test/assert-eq 1 (plist/get x2 :line) "second x on line 1")
+      (test/assert-eq 5 (plist/get x2 :col) "second x at col 5")
+      true
+    })
+
+  (test "extract-refs-nested-expr"
+    {do
+      (= {refs} (symdb/extract-refs "(if (> a 0) {a} {b})"))
+      (= {names} (map (\{r} {plist/get r :name}) refs))
+      (test/assert (member? "if" names) "should have if")
+      (test/assert (member? ">" names) "should have >")
+      (test/assert (member? "b" names) "should have b")
+      (= {a-refs} (refs-with-name refs "a"))
+      (test/assert-eq 2 (len a-refs) "a appears twice (condition + then)")
+      (= {r-if} (find-ref-by-name refs "if"))
+      (test/assert-eq 1 (plist/get r-if :col) "if at col 1")
+      (= {r-gt} (find-ref-by-name refs ">"))
+      (test/assert-eq 5 (plist/get r-gt :col) "> at col 5")
+      (= {r-b} (find-ref-by-name refs "b"))
+      (test/assert-eq 17 (plist/get r-b :col) "b at col 17")
+      true
+    })
+
+  (test "extract-refs-fun-all-symbols"
+    {do
+      (= {refs} (symdb/extract-refs "(fun {f x y} {+ x y})"))
+      (= {names} (map (\{r} {plist/get r :name}) refs))
+      (test/assert (member? "fun" names) "should have fun")
+      (test/assert (member? "f" names) "should have f")
+      (test/assert (member? "x" names) "should have x")
+      (test/assert (member? "y" names) "should have y")
+      (test/assert (member? "+" names) "should have +")
+      (= {x-refs} (refs-with-name refs "x"))
+      (test/assert-eq 2 (len x-refs) "x appears twice (param + body)")
+      (= {y-refs} (refs-with-name refs "y"))
+      (test/assert-eq 2 (len y-refs) "y appears twice (param + body)")
+      true
+    })
+
+  (test "extract-refs-skips-nil-false-otherwise"
+    {do
+      (= {refs1} (symdb/extract-refs "nil"))
+      (test/assert-eq 0 (len refs1) "nil should produce 0 refs")
+      (= {refs2} (symdb/extract-refs "false"))
+      (test/assert-eq 0 (len refs2) "false should produce 0 refs")
+      (= {refs3} (symdb/extract-refs "(match x {otherwise 0})"))
+      (= {names} (map (\{r} {plist/get r :name}) refs3))
+      (test/assert (not (member? "otherwise" names)) "otherwise excluded")
+      (test/assert (member? "match" names) "match is a valid ref")
+      (test/assert (member? "x" names) "x is a valid ref")
+      true
+    })
+
+  (test "extract-refs-numbers-strings-not-extracted"
+    {do
+      (= {refs} (symdb/extract-refs "(+ 42 \"hello\")"))
+      (test/assert-eq 1 (len refs) "only + should be extracted")
+      (test/assert-eq "+" (plist/get (head refs) :name) "ref should be +")
+      true
+    })
+
+  (test "extract-refs-empty-input"
+    {do
+      (= {refs} (symdb/extract-refs ""))
+      (test/assert (nil? refs) "empty input produces nil")
+      true
+    })
+
+  (test "extract-refs-def-form"
+    {do
+      (= {refs} (symdb/extract-refs "(def {val} 42)"))
+      (= {names} (map (\{r} {plist/get r :name}) refs))
+      (test/assert (member? "def" names) "def is extracted")
+      (test/assert (member? "val" names) "val is extracted")
+      (test/assert-eq 2 (len refs) "only def and val (42 is a number)")
+      (= {r-val} (find-ref-by-name refs "val"))
+      (test/assert-eq 0 (plist/get r-val :line) "val line 0")
+      (test/assert-eq 6 (plist/get r-val :col) "val col 6")
+      true
+    })
+
+  (test "extract-refs-type-form"
+    {do
+      (= {refs} (symdb/extract-refs "(type {Color} {Red} {Green})"))
+      (= {names} (map (\{r} {plist/get r :name}) refs))
+      (test/assert (member? "type" names) "type extracted")
+      (test/assert (member? "Color" names) "Color extracted")
+      (test/assert (member? "Red" names) "Red extracted")
+      (test/assert (member? "Green" names) "Green extracted")
+      true
+    })
+
+  (test "extract-refs-lambda"
+    {do
+      (= {refs} (symdb/extract-refs "(map (\\{x} {+ x 1}) items)"))
+      (= {names} (map (\{r} {plist/get r :name}) refs))
+      (test/assert (member? "map" names) "map extracted")
+      (test/assert (member? "x" names) "x extracted")
+      (test/assert (member? "+" names) "+ extracted")
+      (test/assert (member? "items" names) "items extracted")
+      true
+    })
+
+  ; =========================================================================
+  ; symdb cross-file find-refs
+  ; =========================================================================
+
+  (test "find-refs-single-file-positions"
+    {do
+      (= {db} (make-test-db))
+      (= {text} "(fun {helper x} {+ x 1})")
+      (symdb/sync-document db "file:///a.valk" text)
+      (= {refs} (symdb/find-refs db "helper"))
+      (test/assert-eq 1 (len refs) "helper appears once in file")
+      (= {r} (head refs))
+      (test/assert-eq 0 (plist/get r :line) "helper line 0")
+      (test/assert-eq 6 (plist/get r :col) "helper col 6")
+      (test/assert-eq "/a.valk" (plist/get r :path) "path matches")
+      (= {x-refs} (symdb/find-refs db "x"))
+      (test/assert-eq 2 (len x-refs) "x appears twice (param + body)")
+      (= {x1} (head x-refs))
+      (= {x2} (head (tail x-refs)))
+      (test/assert-eq 13 (plist/get x1 :col) "first x at col 13")
+      (test/assert-eq 19 (plist/get x2 :col) "second x at col 19")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-cross-file"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///a.valk" "(fun {helper x} {+ x 1})")
+      (symdb/sync-document db "file:///b.valk" "(fun {main} {helper 42})")
+      (= {refs} (symdb/find-refs db "helper"))
+      (test/assert-eq 2 (len refs) "helper in 2 files")
+      (= {paths} (map (\{r} {plist/get r :path}) refs))
+      (test/assert (member? "/a.valk" paths) "found in a.valk")
+      (test/assert (member? "/b.valk" paths) "found in b.valk")
+      (= {r-a} (head (filter (\{r} {== (plist/get r :path) "/a.valk"}) refs)))
+      (= {r-b} (head (filter (\{r} {== (plist/get r :path) "/b.valk"}) refs)))
+      (test/assert-eq 6 (plist/get r-a :col) "helper def col in a.valk")
+      (test/assert-eq 13 (plist/get r-b :col) "helper use col in b.valk")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-cross-file-three-files"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///lib.valk" "(fun {add x y} {+ x y})")
+      (symdb/sync-document db "file:///a.valk" "(= {r} (add 1 2))")
+      (symdb/sync-document db "file:///b.valk" "(= {s} (add 3 4))")
+      (= {refs} (symdb/find-refs db "add"))
+      (test/assert-eq 3 (len refs) "add in 3 files")
+      (= {paths} (map (\{r} {plist/get r :path}) refs))
+      (test/assert (member? "/lib.valk" paths) "found in lib.valk")
+      (test/assert (member? "/a.valk" paths) "found in a.valk")
+      (test/assert (member? "/b.valk" paths) "found in b.valk")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-resync-clears-old"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(fun {old-fn x} {+ x 1})")
+      (= {refs-before} (symdb/find-refs db "old-fn"))
+      (test/assert-eq 1 (len refs-before) "old-fn should have 1 ref before resync")
+      (symdb/sync-document db "file:///t.valk" "(fun {new-fn y} {+ y 1})")
+      (= {refs-after} (symdb/find-refs db "old-fn"))
+      (test/assert-eq 0 (len refs-after) "old-fn should have 0 refs after resync")
+      (= {refs-new} (symdb/find-refs db "new-fn"))
+      (test/assert-eq 1 (len refs-new) "new-fn should have 1 ref after resync")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-nonexistent-symbol"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(fun {f x} {x})")
+      (= {refs} (symdb/find-refs db "nonexistent"))
+      (test/assert-eq 0 (len refs) "nonexistent symbol has 0 refs")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-ordering"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///b.valk" "(+ 1 2)")
+      (symdb/sync-document db "file:///a.valk" "(+ 3 4)\n(+ 5 6)")
+      (= {refs} (symdb/find-refs db "+"))
+      (test/assert-eq 3 (len refs) "3 refs to +")
+      (= {r1} (head refs))
+      (= {r2} (head (tail refs)))
+      (= {r3} (head (tail (tail refs))))
+      (test/assert-eq "/a.valk" (plist/get r1 :path) "first ref from a.valk")
+      (test/assert-eq "/a.valk" (plist/get r2 :path) "second ref from a.valk")
+      (test/assert-eq "/b.valk" (plist/get r3 :path) "third ref from b.valk")
+      (test/assert-eq 0 (plist/get r1 :line) "first + on line 0")
+      (test/assert-eq 1 (plist/get r2 :line) "second + on line 1")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-multiline-accuracy"
+    {do
+      (= {db} (make-test-db))
+      (= {text} "(fun {calc x y}\n  {+ (* x y)\n     (- x y)})")
+      (symdb/sync-document db "file:///t.valk" text)
+      (= {x-refs} (symdb/find-refs db "x"))
+      (test/assert-eq 3 (len x-refs) "x appears 3 times (param + 2 body)")
+      (= {x1} (head x-refs))
+      (= {x2} (head (tail x-refs)))
+      (= {x3} (head (tail (tail x-refs))))
+      (test/assert-eq 0 (plist/get x1 :line) "first x on line 0 (param)")
+      (test/assert-eq 1 (plist/get x2 :line) "second x on line 1 (* x y)")
+      (test/assert-eq 2 (plist/get x3 :line) "third x on line 2 (- x y)")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-keywords-not-indexed"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(list :name \"foo\" :age 42)")
+      (= {refs} (symdb/find-refs db ":name"))
+      (test/assert-eq 0 (len refs) "keyword :name should not be in refs")
+      (= {refs2} (symdb/find-refs db ":age"))
+      (test/assert-eq 0 (len refs2) "keyword :age should not be in refs")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-constants-not-indexed"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(if true {nil} {false})")
+      (= {r1} (symdb/find-refs db "true"))
+      (= {r2} (symdb/find-refs db "nil"))
+      (= {r3} (symdb/find-refs db "false"))
+      (test/assert-eq 0 (len r1) "true not in refs")
+      (test/assert-eq 0 (len r2) "nil not in refs")
+      (test/assert-eq 0 (len r3) "false not in refs")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-resync-preserves-other-files"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///a.valk" "(fun {shared x} {x})")
+      (symdb/sync-document db "file:///b.valk" "(shared 42)")
+      (= {refs-before} (symdb/find-refs db "shared"))
+      (test/assert-eq 2 (len refs-before) "shared in 2 files before resync")
+      (symdb/sync-document db "file:///a.valk" "(fun {shared y} {y})")
+      (= {refs-after} (symdb/find-refs db "shared"))
+      (test/assert-eq 2 (len refs-after) "shared still in 2 files after resync of a.valk")
+      (= {b-refs} (filter (\{r} {== (plist/get r :path) "/b.valk"}) refs-after))
+      (test/assert-eq 1 (len b-refs) "b.valk refs untouched")
+      (sqlite/close db)
+      true
+    })
+
+  (test "find-refs-definition-included"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(fun {greet name} {str name})")
+      (= {refs} (symdb/find-refs db "greet"))
+      (test/assert-eq 1 (len refs) "greet appears once (in fun binding)")
+      (= {name-refs} (symdb/find-refs db "name"))
+      (test/assert-eq 2 (len name-refs) "name appears twice (param + body)")
+      (sqlite/close db)
+      true
+    })
+
+  ; =========================================================================
+  ; sync-file-symbols indexes refs and replaces stale data
+  ; =========================================================================
+
+  (test "sync-file-symbols-reindexes-refs"
+    {do
+      (= {db} (make-test-db))
+      (= {v1} "(fun {helper x} {+ x 1})")
+      (symdb/sync-document db "file:///t.valk" v1)
+      (= {refs-before} (symdb/find-refs db "helper"))
+      (test/assert-eq 1 (len refs-before) "helper has 1 ref after sync-document")
+      (test/assert-eq 0 (plist/get (head refs-before) :line) "helper on line 0")
+      (= {v2} "(def {VERSION} 42)\n(fun {helper x} {+ x 1})")
+      (symdb/sync-file-symbols db "file:///t.valk" v2 "newhash")
+      (= {refs-after} (symdb/find-refs db "helper"))
+      (test/assert-eq 1 (len refs-after) "helper still has 1 ref after resync")
+      (test/assert-eq 1 (plist/get (head refs-after) :line)
+        "helper now on line 1 (shifted by inserted line)")
+      (sqlite/close db)
+      true
+    })
+
+  (test "sync-file-symbols-updates-positions"
+    {do
+      (= {db} (make-test-db))
+      (= {v1} "(fun {f x} {x})")
+      (symdb/sync-document db "file:///t.valk" v1)
+      (= {x-refs} (symdb/find-refs db "x"))
+      (test/assert-eq 2 (len x-refs) "x has 2 refs initially")
+      (test/assert-eq 0 (plist/get (head x-refs) :line) "x on line 0 initially")
+      (= {v2} "\n\n\n(fun {f x} {x})")
+      (symdb/sync-file-symbols db "file:///t.valk" v2 "newhash")
+      (= {x-after} (symdb/find-refs db "x"))
+      (test/assert-eq 2 (len x-after) "x still has 2 refs")
+      (test/assert-eq 3 (plist/get (head x-after) :line)
+        "x now on line 3 after resync")
+      (sqlite/close db)
+      true
+    })
+
+  (test "sync-file-symbols-preserves-other-file-refs"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///a.valk" "(fun {shared} {1})")
+      (symdb/sync-document db "file:///b.valk" "(shared)")
+      (= {refs-before} (symdb/find-refs db "shared"))
+      (test/assert-eq 2 (len refs-before) "shared in 2 files")
+      (symdb/sync-file-symbols db "file:///a.valk" "(fun {shared} {2})" "new")
+      (= {refs-after} (symdb/find-refs db "shared"))
+      (test/assert-eq 2 (len refs-after) "shared still in 2 files (re-indexed)")
+      (= {b-refs} (filter (\{r} {== (plist/get r :path) "/b.valk"}) refs-after))
+      (test/assert-eq 1 (len b-refs) "b.valk refs untouched")
+      (sqlite/close db)
+      true
+    })
+
+  (test "sync-file-symbols-removes-old-symbol-refs"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(fun {f x} {x})")
+      (= {refs-before} (symdb/find-refs db "f"))
+      (test/assert-eq 1 (len refs-before) "f has 1 ref")
+      (symdb/sync-file-symbols db "file:///t.valk" "(fun {g y} {y})" "new")
+      (= {f-after} (symdb/find-refs db "f"))
+      (= {g-after} (symdb/find-refs db "g"))
+      (test/assert-eq 0 (len f-after) "old f refs gone")
+      (test/assert-eq 1 (len g-after) "new g refs indexed")
+      (sqlite/close db)
       true
     })
 
