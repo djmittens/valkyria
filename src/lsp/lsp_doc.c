@@ -237,21 +237,28 @@ char *get_word_at(const char *text, int offset) {
   return strndup(text + start, end - start);
 }
 
-static bool in_comment_or_string(const char *text, int pos) {
+bool *lsp_build_skip_map(const char *text, int len) {
+  bool *skip = calloc(len, sizeof(bool));
+  if (!skip) return nullptr; // LCOV_EXCL_LINE
   bool in_str = false;
-  for (int i = 0; i < pos; i++) {
-    if (text[i] == '"' && !in_str)
+  for (int i = 0; i < len; i++) {
+    if (text[i] == '"' && !in_str) {
       in_str = true;
-    else if (text[i] == '"' && in_str)
+      skip[i] = true;
+    } else if (text[i] == '"' && in_str) {
+      skip[i] = true;
       in_str = false;
-    else if (text[i] == '\\' && in_str)
-      i++;
-    else if (text[i] == ';' && !in_str) {
-      while (i < pos && text[i] != '\n') i++;
-      if (i >= pos) return true;
+    } else if (text[i] == '\\' && in_str) {
+      skip[i] = true;
+      if (i + 1 < len) skip[++i] = true;
+    } else if (text[i] == ';' && !in_str) {
+      while (i < len && text[i] != '\n') skip[i++] = true;
+      if (i < len) i--;
+    } else if (in_str) {
+      skip[i] = true;
     }
   }
-  return in_str;
+  return skip;
 }
 
 int lsp_find_sym_offset(const char *text, const char *sym, int search_start) {
@@ -262,7 +269,21 @@ int lsp_find_sym_offset(const char *text, const char *sym, int search_start) {
     if (memcmp(text + i, sym, slen) != 0) continue;
     if (i > 0 && strchr(chars, text[i - 1])) continue;
     if (i + slen < tlen && strchr(chars, text[i + slen])) continue;
-    if (in_comment_or_string(text, i)) continue;
+    return i;
+  }
+  return -1;
+}
+
+int lsp_find_sym_offset_skipping(const char *text, const char *sym,
+                                  int search_start, const bool *skip) {
+  int slen = (int)strlen(sym);
+  int tlen = (int)strlen(text);
+  const char *chars = LSP_SYM_CHARS;
+  for (int i = search_start; i <= tlen - slen; i++) {
+    if (skip[i]) continue;
+    if (memcmp(text + i, sym, slen) != 0) continue;
+    if (i > 0 && strchr(chars, text[i - 1])) continue;
+    if (i + slen < tlen && strchr(chars, text[i + slen])) continue;
     return i;
   }
   return -1;

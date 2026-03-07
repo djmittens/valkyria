@@ -207,10 +207,16 @@
     (if (== after ":") {0} {1})}})
 })
 
+(fun {vd/in-scope? name scope-chain} {
+  if (nil? scope-chain) {0}
+  {if (dict/has? (head scope-chain) name) {1}
+  {vd/in-scope? name (tail scope-chain)}}
+})
+
 (fun {vd/is-known name scope globals-set known-set} {
   if (dict/has? VALIDATE_CONSTANTS name) {1}
   {if (dict/has? VALIDATE_SPECIAL_FORMS name) {1}
-  {if (member? name scope) {1}
+  {if (vd/in-scope? name scope) {1}
   {if (dict/has? globals-set name) {1}
   {if (dict/has? known-set name) {1}
   {if (vd/is-accessor name) {1}
@@ -319,9 +325,10 @@
 
 (fun {vd/thread-binding-vars binding ctx} {
   if (not (list? binding)) {ctx}
-  {plist/set ctx :scope
-    (join (plist/get ctx :scope)
-          (vd/collect-binding-names-list binding nil))}
+  {do
+    (vd/dict-add-names (head (plist/get ctx :scope))
+      (vd/collect-binding-names-list binding nil))
+    ctx}
 })
 
 (fun {vd/dispatch-call expr hd name tl ctx} {
@@ -376,8 +383,8 @@
     {ctx}))
   (= {param-names} (vd/collect-param-names params nil))
   (= {saved-scope} (plist/get ctx2 :scope))
-  (= {inner-scope} (join saved-scope param-names))
-  (= {ctx3} (plist/set ctx2 :scope inner-scope))
+  (= {local-dict} (dict/from-keys param-names))
+  (= {ctx3} (plist/set ctx2 :scope (qcons local-dict saved-scope)))
   (= {ctx4} (vd/walk-annotated-body params body-rest ctx3))
   (plist/set ctx4 :scope saved-scope)
 })
@@ -408,8 +415,8 @@
     {vd/collect-param-names formals nil}
     {nil}))
   (= {saved-scope} (plist/get ctx :scope))
-  (= {inner-scope} (join saved-scope param-names))
-  (= {ctx2} (plist/set ctx :scope inner-scope))
+  (= {local-dict} (dict/from-keys param-names))
+  (= {ctx2} (plist/set ctx :scope (qcons local-dict saved-scope)))
   (= {ctx3} (vd/walk-annotated-body formals body-rest ctx2))
   (plist/set ctx3 :scope saved-scope)
 })
@@ -432,7 +439,7 @@
   (= {names} (vd/collect-binding-names-list binding nil))
   (= {ctx2} (if (== form "def")
     {do (vd/dict-add-names (plist/get ctx :globals) names) ctx}
-    {plist/set ctx :scope (join (plist/get ctx :scope) names)}))
+    {do (vd/dict-add-names (head (plist/get ctx :scope)) names) ctx}))
   (vd/walk-body vals ctx2)
 })
 
@@ -487,7 +494,8 @@
 (fun {vd/walk-match-clause-inner pattern body ctx} {do
   (= {saved-scope} (plist/get ctx :scope))
   (= {pat-names} (vd/collect-pattern-names pattern nil))
-  (= {ctx2} (plist/set ctx :scope (join saved-scope pat-names)))
+  (= {local-dict} (dict/from-keys pat-names))
+  (= {ctx2} (plist/set ctx :scope (qcons local-dict saved-scope)))
   (= {ctx3} (vd/walk-body body ctx2))
   (plist/set ctx3 :scope saved-scope)
 })
@@ -534,8 +542,9 @@
   if (not (list? body)) {vd/walk-expr body ctx}
   {do
     (= {saved-scope} (plist/get ctx :scope))
-    (= {ctx2} (vd/walk-aio-do-stmts body ctx))
-    (plist/set ctx2 :scope saved-scope)}
+    (= {ctx2} (plist/set ctx :scope (qcons (dict/new) saved-scope)))
+    (= {ctx3} (vd/walk-aio-do-stmts body ctx2))
+    (plist/set ctx3 :scope saved-scope)}
 })
 
 (fun {vd/walk-aio-do-stmts stmts ctx} {
@@ -565,8 +574,7 @@
 (fun {vd/walk-aio-do-bind name rest ctx} {do
   (= {ctx2} (vd/walk-body rest ctx))
   (if (== name "_") {ctx2}
-    {plist/set ctx2 :scope
-      (qcons name (plist/get ctx2 :scope))})
+    {do (dict/put! (head (plist/get ctx2 :scope)) name) ctx2})
 })
 
 ; ---------------------------------------------------------------------------
@@ -582,9 +590,10 @@
   if (not (list? bindings)) {vd/walk-body body-rest ctx}
   {do
     (= {saved-scope} (plist/get ctx :scope))
-    (= {ctx2} (vd/walk-aio-let-bindings bindings ctx))
-    (= {ctx3} (vd/walk-body body-rest ctx2))
-    (plist/set ctx3 :scope saved-scope)}
+    (= {ctx2} (plist/set ctx :scope (qcons (dict/new) saved-scope)))
+    (= {ctx3} (vd/walk-aio-let-bindings bindings ctx2))
+    (= {ctx4} (vd/walk-body body-rest ctx3))
+    (plist/set ctx4 :scope saved-scope)}
 })
 
 (fun {vd/walk-aio-let-bindings bindings ctx} {
@@ -610,8 +619,8 @@
   if (not (sym? var)) {vd/walk-body rest ctx}
   {do
     (= {ctx2} (vd/walk-body rest ctx))
-    (plist/set ctx2 :scope
-      (qcons (str var) (plist/get ctx2 :scope)))}
+    (dict/put! (head (plist/get ctx2 :scope)) (str var))
+    ctx2}
 })
 
 ; ---------------------------------------------------------------------------
@@ -647,7 +656,7 @@
 (fun {vd/validate db ast text} {do
   (= {globals-set} (dict/from-keys (vd/collect-globals ast)))
   (= {known-set} (vd/load-known-set db))
-  (= {ctx} (list :scope nil
+  (= {ctx} (list :scope (list (dict/new))
                   :globals globals-set
                   :known known-set
                   :text text

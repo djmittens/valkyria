@@ -1,0 +1,323 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/symdb.valk")
+(load "src/lsp-analysis.valk")
+(load "src/lsp-validate.valk")
+(load "src/lsp-hints.valk")
+
+; --- Helpers ---
+
+(fun {hint-labels text} {do
+  (= {hints} (hint/collect text nil nil))
+  (map (\ {h} {plist/get h :label}) hints)
+})
+
+(fun {hint-at-line text target-line} {do
+  (= {hints} (hint/collect text nil nil))
+  (filter (\ {h} {== (plist/get (plist/get h :position) :line) target-line}) hints)
+})
+
+(fun {hint-count text} {
+  len (hint/collect text nil nil)
+})
+
+(test/run (list
+
+  ; --- Basic cases ---
+
+  (test "no-hints-empty"
+    {do
+      (test/assert-eq 0 (hint-count "") "empty input")
+      true
+    })
+
+  (test "no-hints-number"
+    {do
+      (test/assert-eq 0 (hint-count "42") "number literal")
+      true
+    })
+
+  (test "no-hints-operators"
+    {do
+      (test/assert-eq 0 (hint-count "(+ 1 2)") "operators excluded")
+      (test/assert-eq 0 (hint-count "(- 10 3)") "minus excluded")
+      (test/assert-eq 0 (hint-count "(== a b)") "equality excluded")
+      true
+    })
+
+  (test "no-hints-special-forms"
+    {do
+      (test/assert-eq 0 (hint-count "(if 1 {2} {3})") "if excluded")
+      (test/assert-eq 0 (hint-count "(def {x} 1)") "def excluded")
+      (test/assert-eq 0 (hint-count "(= {x} 1)") "= excluded")
+      true
+    })
+
+  ; --- Local function parameter hints ---
+
+  (test "local-fun-two-params"
+    {do
+      (= {text} "(fun {add a b} {+ a b}) (add 1 2)")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 2 (len hints) "should produce 2 hints")
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? "a:" labels) "should have a: hint")
+      (test/assert (member? "b:" labels) "should have b: hint")
+      true
+    })
+
+  (test "local-fun-three-params"
+    {do
+      (= {text} "(fun {make-point x y z} {list x y z}) (make-point 1 2 3)")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 3 (len hints) "should produce 3 hints")
+      true
+    })
+
+  (test "single-arg-no-hint"
+    {do
+      (= {text} "(fun {negate x} {- 0 x}) (negate 5)")
+      (test/assert-eq 0 (hint-count text) "single-arg calls get no hints")
+      true
+    })
+
+  ; --- Hint filtering ---
+
+  (test "skip-matching-arg-name"
+    {do
+      (= {text} "(fun {greet name age} {list name age}) (greet name 25)")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (not (member? "name:" labels)) "skip when arg matches param")
+      (test/assert (member? "age:" labels) "non-matching arg gets hint")
+      true
+    })
+
+  (test "skip-keyword-arg"
+    {do
+      (= {text} "(fun {make a b} {list a b}) (make :foo :bar)")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 0 (len hints) "keywords already name themselves")
+      true
+    })
+
+  ; --- Type annotation handling ---
+
+  (test "params-with-annotations"
+    {do
+      (= {text} "(fun {calc x :: Num y :: Num} {+ x y}) (calc 1 2)")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 2 (len hints) "annotations stripped from params")
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? "x:" labels) "x param found")
+      (test/assert (member? "y:" labels) "y param found")
+      true
+    })
+
+  (test "return-type-annotation"
+    {do
+      (= {text} "(fun {add a b -> Num} {+ a b}) (add 1 2)")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 2 (len hints) "return annotation excluded")
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? "a:" labels) "a param found")
+      (test/assert (member? "b:" labels) "b param found")
+      true
+    })
+
+  ; --- Rest params ---
+
+  (test "rest-params-stop"
+    {do
+      (= {text} "(fun {foo a b & rest} {list a b rest}) (foo 1 2 3 4)")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 2 (len hints) "rest params stop hint collection")
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? "a:" labels) "a before rest")
+      (test/assert (member? "b:" labels) "b before rest")
+      true
+    })
+
+  ; --- Nested calls ---
+
+  (test "nested-calls"
+    {do
+      (= {text} "(fun {add a b} {+ a b}) (add (add 1 2) 3)")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert (>= (len hints) 4) "hints for both outer and inner calls")
+      true
+    })
+
+  ; --- Hints inside special forms ---
+
+  (test "call-inside-do"
+    {do
+      (= {text} "(fun {foo a b} {list a b}) (do (foo 1 2))")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 2 (len hints) "calls inside do get hints")
+      true
+    })
+
+  (test "call-inside-if"
+    {do
+      (= {text} "(fun {foo a b} {list a b}) (if 1 {foo 1 2} {foo 3 4})")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 4 (len hints) "calls in both if branches")
+      true
+    })
+
+  (test "fun-body-gets-hints"
+    {do
+      (= {text} "(fun {bar x y} {list x y}) (fun {baz} {bar 1 2})")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 2 (len hints) "calls inside fun body get hints")
+      true
+    })
+
+  ; --- sig parsing ---
+
+  (test "parse-sig-simple"
+    {do
+      (= {params} (hint/parse-sig-params "(fun {foo a b c} ...)"))
+      (test/assert-eq 3 (len params) "3 params from sig")
+      (test/assert-eq "a" (nth 1 params) "first param")
+      (test/assert-eq "b" (nth 2 params) "second param")
+      (test/assert-eq "c" (nth 3 params) "third param")
+      true
+    })
+
+  (test "parse-sig-with-annotations"
+    {do
+      (= {params} (hint/parse-sig-params "(fun {calc x :: Num y :: Str} ...)"))
+      (test/assert-eq 2 (len params) "annotations stripped")
+      (test/assert-eq "x" (nth 1 params) "first param")
+      (test/assert-eq "y" (nth 2 params) "second param")
+      true
+    })
+
+  (test "parse-sig-with-rest"
+    {do
+      (= {params} (hint/parse-sig-params "(fun {foo a & rest} ...)"))
+      (test/assert-eq 1 (len params) "stop at &")
+      (test/assert-eq "a" (nth 1 params) "param before rest")
+      true
+    })
+
+  (test "parse-sig-no-params"
+    {do
+      (= {params} (hint/parse-sig-params "(fun {foo} ...)"))
+      (test/assert (nil? params) "no params")
+      true
+    })
+
+  (test "parse-sig-nil"
+    {do
+      (= {params} (hint/parse-sig-params nil))
+      (test/assert (nil? params) "nil sig")
+      true
+    })
+
+  (test "parse-sig-type-only"
+    {do
+      (= {params} (hint/parse-sig-params "{-> Num Num Num}"))
+      (test/assert (nil? params) "type sig has no {name ...} pattern")
+      true
+    })
+
+  ; --- Range filtering ---
+
+  (test "range-filter"
+    {do
+      (= {text} "(fun {foo a b} {list a b})\n\n\n(foo 1 2)")
+      (= {range} (list :start (list :line 3 :character 0)
+                       :end (list :line 3 :character 100)))
+      (= {hints} (hint/collect text nil range))
+      (test/assert-eq 2 (len hints) "only hints on line 3")
+      true
+    })
+
+  (test "range-excludes-other-lines"
+    {do
+      (= {text} "(fun {foo a b} {list a b})\n(foo 1 2)\n(foo 3 4)")
+      (= {range} (list :start (list :line 1 :character 0)
+                       :end (list :line 1 :character 100)))
+      (= {hints} (hint/collect text nil range))
+      (test/assert-eq 2 (len hints) "only line 1 hints")
+      true
+    })
+
+  ; --- Position correctness ---
+
+  (test "hint-kind-is-parameter"
+    {do
+      (= {text} "(fun {foo a b} {list a b}) (foo 1 2)")
+      (= {hints} (hint/collect text nil nil))
+      (= {kinds} (map (\ {h} {plist/get h :kind}) hints))
+      (test/assert (member? 2 kinds) "kind should be 2 (Parameter)")
+      true
+    })
+
+  (test "hint-has-padding-right"
+    {do
+      (= {text} "(fun {foo a b} {list a b}) (foo 1 2)")
+      (= {hints} (hint/collect text nil nil))
+      (= {h} (head hints))
+      (test/assert (not (nil? (plist/get h :paddingRight))) "paddingRight set")
+      true
+    })
+
+  ; --- Unknown function ---
+
+  (test "unknown-fun-no-hints"
+    {do
+      (= {text} "(unknown-fn 1 2 3)")
+      (test/assert-eq 0 (hint-count text) "unknown function gets no hints")
+      true
+    })
+
+  ; --- Multiple calls same function ---
+
+  (test "multiple-calls"
+    {do
+      (= {text} "(fun {foo a b} {list a b}) (foo 1 2) (foo 3 4)")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 4 (len hints) "4 hints for 2 calls x 2 params")
+      true
+    })
+
+  ; --- Lambda body ---
+
+  (test "call-inside-lambda"
+    {do
+      (= {text} "(fun {foo a b} {list a b}) (\\ {x} {foo x 1})")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 2 (len hints) "calls inside lambda get hints")
+      true
+    })
+
+  ; --- collect-local-params ---
+
+  (test "local-params-basic"
+    {do
+      (= {params} (hint/collect-local-params
+        (parse "(fun {add a b} {+ a b}) (fun {mul x y} {* x y})")))
+      (= {add-p} (plist/get params "add"))
+      (= {mul-p} (plist/get params "mul"))
+      (test/assert (not (nil? add-p)) "add params found")
+      (test/assert (not (nil? mul-p)) "mul params found")
+      (test/assert-eq 2 (len add-p) "add has 2 params")
+      (test/assert-eq 2 (len mul-p) "mul has 2 params")
+      true
+    })
+
+  (test "local-params-inside-do"
+    {do
+      (= {params} (hint/collect-local-params
+        (parse "(do (fun {helper a b} {+ a b}))")))
+      (= {p} (plist/get params "helper"))
+      (test/assert (not (nil? p)) "fun inside do block collected")
+      (test/assert-eq 2 (len p) "helper has 2 params")
+      true
+    })
+
+))

@@ -355,6 +355,118 @@ static valk_lval_t* valk_builtin_file_size(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num((long)st.st_size);
 }
 
+static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
+                                                    valk_lval_t *a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char *text = valk_lval_list_nth(a, 0)->str;
+  valk_lval_t *tokens = valk_lval_list_nth(a, 1);
+
+  int text_len = (int)strlen(text);
+  int prev_line = 0, prev_col = 0, scan_pos = 0;
+  valk_lval_t *result = valk_lval_nil();
+  int count = 0;
+
+  valk_lval_t *cur = tokens;
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+    valk_lval_t *tok = cur->cons.head;
+    if (!tok || LVAL_TYPE(tok) != LVAL_CONS) break;
+
+    valk_lval_t *off_v = tok->cons.head;
+    valk_lval_t *r1 = tok->cons.tail;
+    if (!r1 || LVAL_TYPE(r1) != LVAL_CONS) break;
+    valk_lval_t *len_v = r1->cons.head;
+    valk_lval_t *r2 = r1->cons.tail;
+    if (!r2 || LVAL_TYPE(r2) != LVAL_CONS) break;
+    valk_lval_t *type_v = r2->cons.head;
+    valk_lval_t *r3 = r2->cons.tail;
+    if (!r3 || LVAL_TYPE(r3) != LVAL_CONS) break;
+    valk_lval_t *mods_v = r3->cons.head;
+
+    int off = (int)off_v->num;
+    int tok_len = (int)len_v->num;
+    int tok_type = (int)type_v->num;
+    int tok_mods = (int)mods_v->num;
+
+    int line = prev_line, col = prev_col;
+    if (off > scan_pos) {
+      for (int i = scan_pos; i < off && i < text_len; i++) {
+        if (text[i] == '\n') { line++; col = 0; }
+        else col++;
+      }
+    } else if (off < scan_pos) {
+      line = 0; col = 0;
+      for (int i = 0; i < off && i < text_len; i++) {
+        if (text[i] == '\n') { line++; col = 0; }
+        else col++;
+      }
+    }
+    scan_pos = off;
+
+    int dl = line - prev_line;
+    int dc = (dl == 0) ? col - prev_col : col;
+
+    result = valk_lval_qcons(valk_lval_num(dl), result);
+    result = valk_lval_qcons(valk_lval_num(dc), result);
+    result = valk_lval_qcons(valk_lval_num(tok_len), result);
+    result = valk_lval_qcons(valk_lval_num(tok_type), result);
+    result = valk_lval_qcons(valk_lval_num(tok_mods), result);
+    (void)count;
+    count++;
+
+    prev_line = line;
+    prev_col = col;
+    cur = cur->cons.tail;
+  }
+
+  valk_lval_t *reversed = valk_lval_nil();
+  valk_lval_t *p = result;
+  while (p && LVAL_TYPE(p) == LVAL_CONS) {
+    reversed = valk_lval_qcons(p->cons.head, reversed);
+    p = p->cons.tail;
+  }
+  return reversed;
+}
+
+static valk_lval_t *valk_builtin_offsets_to_lines(valk_lenv_t *e,
+                                                    valk_lval_t *a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char *text = valk_lval_list_nth(a, 0)->str;
+  valk_lval_t *offsets = valk_lval_list_nth(a, 1);
+  int text_len = (int)strlen(text);
+
+  int scan_pos = 0, line = 0, col = 0;
+  valk_lval_t *result = valk_lval_nil();
+
+  valk_lval_t *cur = offsets;
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+    int off = (int)cur->cons.head->num;
+    if (off >= scan_pos) {
+      for (int i = scan_pos; i < off && i < text_len; i++) {
+        if (text[i] == '\n') { line++; col = 0; }
+        else col++;
+      }
+    }
+    scan_pos = off;
+    valk_lval_t *pair[2] = {valk_lval_num(line), valk_lval_num(col)};
+    result = valk_lval_qcons(valk_lval_qlist(pair, 2), result);
+    cur = cur->cons.tail;
+  }
+
+  valk_lval_t *reversed = valk_lval_nil();
+  valk_lval_t *p = result;
+  while (p && LVAL_TYPE(p) == LVAL_CONS) {
+    reversed = valk_lval_qcons(p->cons.head, reversed);
+    p = p->cons.tail;
+  }
+  return reversed;
+}
+
 void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
@@ -377,4 +489,6 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "list-dir", valk_builtin_list_dir);
   valk_lenv_put_builtin(env, "file/size", valk_builtin_file_size);
   valk_lenv_put_builtin(env, "file/fingerprint", valk_builtin_file_fingerprint);
+  valk_lenv_put_builtin(env, "sem/encode-deltas", valk_builtin_sem_encode_deltas);
+  valk_lenv_put_builtin(env, "offsets->line-cols", valk_builtin_offsets_to_lines);
 }

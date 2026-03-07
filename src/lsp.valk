@@ -11,6 +11,7 @@
 (load "src/symdb.valk")
 (load "src/lsp-analysis.valk")
 (load "src/lsp-validate.valk")
+(load "src/lsp-hints.valk")
 
 ; ---------------------------------------------------------------------------
 ; Helpers
@@ -104,7 +105,8 @@
          {:tokenTypes {"keyword" "function" "parameter" "variable"
                        "number" "string" "type" "operator" "property"}
           :tokenModifiers {"declaration" "defaultLibrary"}}
-        :full :true}}
+        :full :true}
+     :inlayHintProvider :true}
    :serverInfo
      {:name "valk-lsp"
              :version "0.4.0"}})
@@ -162,6 +164,15 @@
   (lsp/doc-store uri text)
   (if (nil? lsp/db) {}
     {symdb/sync-document lsp/db uri text})})
+
+(fun {lsp/sync-doc-symbols uri text} {do
+  (lsp/doc-store uri text)
+  (if (nil? lsp/db) {}
+    {do
+      (= {path} (uri->path uri))
+      (= {hash} (file/fingerprint path))
+      (= {hash} (if (error? hash) {str "text:" (len text)} {hash}))
+      (symdb/sync-symbols-only lsp/db uri text hash)})})
 
 ; ---------------------------------------------------------------------------
 ; Method handlers — notifications
@@ -293,7 +304,7 @@
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
   (= {text} (plist/get td :text))
-  (lsp/sync-doc uri text)
+  (lsp/sync-doc-symbols uri text)
   (lsp/publish-diagnostics uri text)})
 
 (fun {handle-did-change params} {do
@@ -692,6 +703,19 @@
                 (lsp/send-response id (list :documentChanges doc-changes))}})})})})
 
 ; ---------------------------------------------------------------------------
+; Inlay hints — parameter name hints for function calls
+; ---------------------------------------------------------------------------
+
+(fun {handle-inlay-hints id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {range} (plist/get params :range))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id nil}
+    {lsp/send-response id (hint/collect text lsp/db range)})
+})
+
+; ---------------------------------------------------------------------------
 ; Dispatch
 ; ---------------------------------------------------------------------------
 
@@ -729,6 +753,7 @@
     {"textDocument/semanticTokens/full" (handle-semantic-tokens id params) :continue}
     {"textDocument/prepareRename" (handle-prepare-rename id params) :continue}
     {"textDocument/rename" (handle-rename id params) :continue}
+    {"textDocument/inlayHint" (handle-inlay-hints id params) :continue}
     {_ (if (num? id)
          {lsp/send-error id -32601 (str "Method not found: " method)} {})
        :continue}

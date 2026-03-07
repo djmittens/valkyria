@@ -314,42 +314,10 @@
 })
 
 ; ---------------------------------------------------------------------------
-; Delta encoding — convert flat token list to LSP data array
+; Delta encoding — provided by C builtin sem/encode-deltas
+; Takes (text tokens) where tokens is list of 4-tuples (offset len type mods)
+; Returns flat list of 5-tuples (deltaLine deltaCol len type mods)
 ; ---------------------------------------------------------------------------
-
-(fun {sem/group-tokens flat} {
-  if (nil? flat) {nil}
-  {if (< (len flat) 4) {nil}
-  {qcons
-    (list (head flat)
-          (head (tail flat))
-          (head (tail (tail flat)))
-          (head (tail (tail (tail flat)))))
-    (sem/group-tokens (tail (tail (tail (tail flat)))))}}
-})
-
-(fun {sem/encode-deltas tokens text} {
-  sem/encode-loop tokens text 0 0 0 nil
-})
-
-(fun {sem/encode-loop tokens text prev-off prev-line prev-col acc} {
-  if (nil? tokens) {reverse acc}
-  {do
-    (= {tok} (head tokens))
-    (= {off} (head tok))
-    (= {slice} (str/slice text prev-off off))
-    (= {parts} (str/split slice "\n"))
-    (= {nlines} (- (len parts) 1))
-    (= {line} (+ prev-line nlines))
-    (= {col} (if (> nlines 0) {len (last parts)} {+ prev-col (- off prev-off)}))
-    (= {dl} (- line prev-line))
-    (sem/encode-loop (tail tokens) text off line col
-      (qcons (head (tail (tail (tail tok))))
-      (qcons (head (tail (tail tok)))
-      (qcons (head (tail tok))
-      (qcons (if (== dl 0) {- col prev-col} {col})
-      (qcons dl acc))))))}
-})
 
 ; ---------------------------------------------------------------------------
 ; Public API
@@ -360,9 +328,8 @@
 })
 
 (fun {sem/tokenize-ast ast text} {do
-  (sem/encode-deltas
-    (list/group 4 (reverse (sem/walk-each ast nil nil)))
-    text)
+  (sem/encode-deltas text
+    (list/group 4 (reverse (sem/walk-each ast nil nil))))
 })
 
 ; ---------------------------------------------------------------------------

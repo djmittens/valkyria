@@ -127,7 +127,10 @@ bool scope_has(lsp_scope_t *s, const char *name);
 
 // Text utilities
 char *get_word_at(const char *text, int offset);
+bool *lsp_build_skip_map(const char *text, int len);
 int lsp_find_sym_offset(const char *text, const char *sym, int search_start);
+int lsp_find_sym_offset_skipping(const char *text, const char *sym,
+                                  int search_start, const bool *skip);
 
 // Analysis entry points
 void analyze_document(lsp_document_t *doc);

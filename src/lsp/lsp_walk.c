@@ -21,6 +21,7 @@ typedef struct {
   valk_name_resolver_t *resolver;
   lsp_document_t *doc;
   const char *text;
+  const bool *skip_map;
   int *cursor;
   bool emit_sem;
   bool emit_diag;
@@ -41,10 +42,14 @@ static int count_args(valk_lval_t *rest) {
   return n;
 }
 
-#define find_sym_offset lsp_find_sym_offset
+static int find_sym(walk_ctx_t *w, const char *sym) {
+  if (w->skip_map)
+    return lsp_find_sym_offset_skipping(w->text, sym, *w->cursor, w->skip_map);
+  return lsp_find_sym_offset(w->text, sym, *w->cursor);
+}
 
 static void emit_sym(walk_ctx_t *w, const char *sym, int type, int mods) {
-  int off = find_sym_offset(w->text, sym, *w->cursor);
+  int off = find_sym(w, sym);
   if (off < 0) return;
   *w->cursor = off + (int)strlen(sym);
   if (w->emit_sem) {
@@ -54,14 +59,14 @@ static void emit_sym(walk_ctx_t *w, const char *sym, int type, int mods) {
 }
 
 static void advance_cursor(walk_ctx_t *w, const char *sym) {
-  int off = find_sym_offset(w->text, sym, *w->cursor);
+  int off = find_sym(w, sym);
   if (off >= 0) *w->cursor = off + (int)strlen(sym);
 }
 
 static void diag_at_sym(walk_ctx_t *w, const char *sym, const char *msg,
                         int severity) {
   if (!w->emit_diag || !w->diags) return;
-  int off = find_sym_offset(w->text, sym, *w->cursor);
+  int off = find_sym(w, sym);
   if (off < 0) return;
   valk_diag_add(w->diags, msg, off, (int)strlen(sym), severity);
 }
@@ -494,7 +499,7 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   if (LVAL_TYPE(expr) == LVAL_NUM && w->emit_sem) {
     char num_str[64];
     snprintf(num_str, sizeof(num_str), "%li", expr->num);
-    int off = find_sym_offset(w->text, num_str, *w->cursor);
+    int off = find_sym(w, num_str);
     if (off >= 0) {
       *w->cursor = off + (int)strlen(num_str);
       lsp_pos_t p = offset_to_pos(w->text, off);
@@ -610,6 +615,7 @@ void check_and_sem_pass(lsp_document_t *doc, bool emit_sem) {
   int pos = 0;
   int len = (int)doc->text_len;
   int cursor = 0;
+  bool *skip_map = lsp_build_skip_map(text, len);
 
   lsp_scope_t *top = scope_push(nullptr);
 
@@ -620,6 +626,7 @@ void check_and_sem_pass(lsp_document_t *doc, bool emit_sem) {
     .resolver = nullptr,
     .doc = doc,
     .text = text,
+    .skip_map = skip_map,
     .cursor = &cursor,
     .emit_sem = emit_sem,
     .emit_diag = true,
@@ -647,6 +654,7 @@ void check_and_sem_pass(lsp_document_t *doc, bool emit_sem) {
   }
 
   scope_pop(top);
+  free(skip_map);
   symset_free(&globals);
 
   for (size_t i = 0; i < diags.count; i++) {
@@ -687,6 +695,8 @@ valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
   valk_diag_init(&diags);
 
   int cursor = 0;
+  int tlen = (int)strlen(text);
+  bool *skip_map = lsp_build_skip_map(text, tlen);
 
   lsp_scope_t *top = scope_push(nullptr);
 
@@ -697,6 +707,7 @@ valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
     .resolver = &resolver,
     .doc = nullptr,
     .text = text,
+    .skip_map = skip_map,
     .cursor = &cursor,
     .emit_sem = false,
     .emit_diag = true,
@@ -712,6 +723,7 @@ valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
   }
 
   scope_pop(top);
+  free(skip_map);
   symset_free(&file_defs);
 
   return diags;
