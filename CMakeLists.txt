@@ -184,21 +184,8 @@ set(VALKYRIA_SOURCES
   src/aio/aio_ctx_builtins.c
   src/pool_metrics.c
   src/event_loop_metrics.c
-  src/lsp/lsp_doc.c
-  src/lsp/lsp_loads.c
-  src/lsp/lsp_walk.c
-  src/lsp/lsp_workspace.c
-  src/lsp/lsp_analysis.c
-  src/lsp/lsp_types.c
-  src/lsp/lsp_infer.c
-  src/lsp/lsp_infer_ann.c
-  src/lsp/lsp_infer_plist.c
-  src/lsp/lsp_builtin_schemes.c
-  src/lsp/lsp_json.c
-  src/lsp/lsp_db.c
-  src/lsp/lsp_db_stats.c
-  src/lsp/lsp_db_sync.c
-  src/lsp/lsp_quality.c
+  src/json.c
+  src/validate.c
   vendor/sqlite3/sqlite3.c
 )
 
@@ -232,7 +219,6 @@ endif()
 
 target_include_directories(valkyria PRIVATE
   ${PROJECT_SOURCE_DIR}/src
-  ${PROJECT_SOURCE_DIR}/src/lsp
   ${PROJECT_SOURCE_DIR}/src/aio
   ${PROJECT_SOURCE_DIR}/src/aio/system
   ${PROJECT_SOURCE_DIR}/src/aio/http2
@@ -410,9 +396,7 @@ add_executable(test_log test/unit/test_log.c test/testing.c)
 target_link_libraries(test_log PRIVATE "-lc" valkyria)
 include_directories(test_log src/)
 
-add_executable(test_symdb_unit test/unit/test_symdb.c test/testing.c)
-target_link_libraries(test_symdb_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_symdb_unit src/)
+
 
 add_executable(test_aio_alloc_unit test/unit/test_aio_alloc.c test/testing.c)
 target_link_libraries(test_aio_alloc_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})

@@ -113,46 +113,6 @@ static valk_lval_t* valk_builtin_parse(valk_lenv_t* e, valk_lval_t* a) {
   return valk_parse_text(valk_lval_list_nth(a, 0)->str);
 }
 
-static void offset_to_line_col(const char *text, int offset, int *line, int *col) {
-  *line = 0; *col = 0;
-  for (int i = 0; i < offset && text[i]; i++) {
-    if (text[i] == '\n') { (*line)++; *col = 0; }
-    else (*col)++;
-  }
-}
-
-static valk_lval_t* valk_builtin_validate(valk_lenv_t* e, valk_lval_t* a) {
-  LVAL_ASSERT_COUNT_EQ(a, a, 2);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
-
-  valk_lval_t *ast = valk_lval_list_nth(a, 0);
-  const char *text = valk_lval_list_nth(a, 1)->str;
-
-  valk_name_resolver_t resolver = {.is_known = env_has_name, .ctx = e};
-  valk_diag_list_t diags = valk_validate_ast(ast, text, resolver);
-
-  valk_lval_t **items = malloc(diags.count * sizeof(valk_lval_t *));
-  for (size_t i = 0; i < diags.count; i++) {
-    int line, col;
-    offset_to_line_col(text, diags.items[i].offset, &line, &col);
-    int end_col = col + diags.items[i].len;
-
-    valk_lval_t *fields[10] = {
-      valk_lval_sym(":line"),    valk_lval_num(line),
-      valk_lval_sym(":col"),     valk_lval_num(col),
-      valk_lval_sym(":end-col"), valk_lval_num(end_col),
-      valk_lval_sym(":severity"), valk_lval_num(diags.items[i].severity),
-      valk_lval_sym(":message"), valk_lval_str(diags.items[i].message),
-    };
-    items[i] = valk_lval_qlist(fields, 10);
-  }
-
-  valk_lval_t *result = valk_lval_qlist(items, diags.count);
-  free(items);
-  valk_diag_free(&diags);
-  return result;
-}
-
 static valk_lval_t* valk_builtin_src_pos(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -475,7 +435,6 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "read", valk_builtin_read);
   valk_lenv_put_builtin(env, "parse", valk_builtin_parse);
-  valk_lenv_put_builtin(env, "validate", valk_builtin_validate);
   valk_lenv_put_builtin(env, "read-file", valk_builtin_read_file);
   valk_lenv_put_builtin(env, "src-pos", valk_builtin_src_pos);
   valk_lenv_put_builtin(env, "qcons", valk_builtin_qcons);

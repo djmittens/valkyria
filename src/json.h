@@ -38,10 +38,4 @@ struct json_value_t {
 json_value_t json_parse(const char *input, size_t len);
 void json_free(json_value_t *val);
 
-json_value_t *json_get(json_value_t *obj, const char *key);
-const char *json_get_string(json_value_t *obj, const char *key);
-double json_get_number(json_value_t *obj, const char *key);
-int json_get_int(json_value_t *obj, const char *key);
-bool json_get_bool(json_value_t *obj, const char *key);
-
 char *json_escape_string(const char *input);

@@ -1,30 +1,206 @@
-#include "lsp_doc.h"
+#include "diag.h"
+#include "parser.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "../diag.h"
-#include "../parser.h"
-
-#define is_special_form lsp_is_special_form
-#define is_builtin lsp_is_builtin
-
-// ---------------------------------------------------------------------------
-// AST walker context + helpers
-// ---------------------------------------------------------------------------
+#define LSP_SYM_CHARS ("abcdefghijklmnopqrstuvwxyz" \
+                       "ABCDEFGHIJKLMNOPQRSTUVWXYZ" \
+                       "0123456789_+-*/\\=<>!&?:/")
 
 typedef struct {
-  lsp_symset_t *globals;
-  lsp_scope_t *scope;
+  char **names;
+  size_t count;
+  size_t cap;
+} symset_t;
+
+typedef struct scope {
+  symset_t locals;
+  struct scope *parent;
+} scope_t;
+
+static void symset_init(symset_t *s) {
+  s->names = nullptr;
+  s->count = 0;
+  s->cap = 0;
+}
+
+static void symset_free(symset_t *s) {
+  for (size_t i = 0; i < s->count; i++)
+    free(s->names[i]);
+  free(s->names);
+  s->names = nullptr;
+  s->count = s->cap = 0;
+}
+
+static bool symset_contains(symset_t *s, const char *name) {
+  for (size_t i = 0; i < s->count; i++)
+    if (strcmp(s->names[i], name) == 0) return true;
+  return false;
+}
+
+static void symset_add(symset_t *s, const char *name) {
+  if (symset_contains(s, name)) return;
+  if (s->count >= s->cap) {
+    s->cap = s->cap == 0 ? 64 : s->cap * 2;
+    s->names = realloc(s->names, sizeof(char *) * s->cap);
+  }
+  s->names[s->count++] = strdup(name);
+}
+
+static scope_t *scope_push(scope_t *parent) {
+  scope_t *s = calloc(1, sizeof(scope_t));
+  symset_init(&s->locals);
+  s->parent = parent;
+  return s;
+}
+
+static void scope_pop(scope_t *s) {
+  symset_free(&s->locals);
+  free(s);
+}
+
+static bool scope_has(scope_t *s, const char *name) {
+  while (s) {
+    if (symset_contains(&s->locals, name)) return true;
+    s = s->parent;
+  }
+  return false;
+}
+
+static bool *build_skip_map(const char *text, int len) {
+  bool *skip = calloc(len, sizeof(bool));
+  if (!skip) return nullptr; // LCOV_EXCL_LINE
+  bool in_str = false;
+  for (int i = 0; i < len; i++) {
+    if (text[i] == '"' && !in_str) {
+      in_str = true;
+      skip[i] = true;
+    } else if (text[i] == '"' && in_str) {
+      skip[i] = true;
+      in_str = false;
+    } else if (text[i] == '\\' && in_str) {
+      skip[i] = true;
+      if (i + 1 < len) skip[++i] = true;
+    } else if (text[i] == ';' && !in_str) {
+      while (i < len && text[i] != '\n') skip[i++] = true;
+      if (i < len) i--;
+    } else if (in_str) {
+      skip[i] = true;
+    }
+  }
+  return skip;
+}
+
+static int find_sym_offset(const char *text, const char *sym,
+                           int search_start, const bool *skip) {
+  int slen = (int)strlen(sym);
+  int tlen = (int)strlen(text);
+  const char *chars = LSP_SYM_CHARS;
+  for (int i = search_start; i <= tlen - slen; i++) {
+    if (skip && skip[i]) continue;
+    if (memcmp(text + i, sym, slen) != 0) continue;
+    if (i > 0 && strchr(chars, text[i - 1])) continue;
+    if (i + slen < tlen && strchr(chars, text[i + slen])) continue;
+    return i;
+  }
+  return -1;
+}
+
+static const char *SPECIAL_FORMS[] = {
+  "=", "\\", "def", "fun", "if", "do", "select", "case", "quote",
+  "load", "eval", "read", "let", "aio/let", "aio/do", "<-",
+  "type", "match", "sig", "ctx/with", "ctx/with-deadline",
+  nullptr
+};
+
+static bool is_special_form(const char *name) {
+  for (const char **p = SPECIAL_FORMS; *p; p++)
+    if (strcmp(*p, name) == 0) return true;
+  return false;
+}
+
+static void extract_def_or_fun(valk_lval_t *head, valk_lval_t *tail,
+                               symset_t *globals) {
+  if (strcmp(head->str, "def") != 0 && strcmp(head->str, "fun") != 0) return;
+  if (LVAL_TYPE(tail) != LVAL_CONS) return;
+  valk_lval_t *binding = valk_lval_head(tail);
+  if (!binding) return;
+
+  if (LVAL_TYPE(binding) == LVAL_CONS) {
+    valk_lval_t *first = valk_lval_head(binding);
+    if (first && LVAL_TYPE(first) == LVAL_SYM)
+      symset_add(globals, first->str);
+  } else if (LVAL_TYPE(binding) == LVAL_SYM) {
+    symset_add(globals, binding->str);
+  }
+}
+
+static void extract_type_ctors(valk_lval_t *tail, symset_t *globals) {
+  const char *type_name = NULL;
+  if (LVAL_TYPE(tail) == LVAL_CONS) {
+    valk_lval_t *name_q = valk_lval_head(tail);
+    if (name_q && LVAL_TYPE(name_q) == LVAL_CONS) {
+      valk_lval_t *tn = valk_lval_head(name_q);
+      if (tn && LVAL_TYPE(tn) == LVAL_SYM) type_name = tn->str;
+    }
+    tail = valk_lval_tail(tail);
+  }
+  while (tail && LVAL_TYPE(tail) == LVAL_CONS) {
+    valk_lval_t *variant = valk_lval_head(tail);
+    if (variant && LVAL_TYPE(variant) == LVAL_CONS) {
+      valk_lval_t *ctor_name = valk_lval_head(variant);
+      if (ctor_name && LVAL_TYPE(ctor_name) == LVAL_SYM) {
+        symset_add(globals, ctor_name->str);
+        if (type_name && ctor_name->str[0] != ':') {
+          char qname[256];
+          snprintf(qname, sizeof(qname), "%s::%s", type_name, ctor_name->str);
+          symset_add(globals, qname);
+        }
+      }
+    }
+    tail = valk_lval_tail(tail);
+  }
+}
+
+static void extract_global_symbols_from_text(const char *text,
+                                             symset_t *globals) {
+  int pos = 0, len = (int)strlen(text);
+  while (pos < len) {
+    while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
+    if (pos >= len) break;
+    if (text[pos] == ';') { while (pos < len && text[pos] != '\n') pos++; continue; }
+    valk_lval_t *expr = valk_lval_read(&pos, text);
+    if (LVAL_TYPE(expr) == LVAL_ERR) break;
+    if (LVAL_TYPE(expr) != LVAL_CONS) continue;
+
+    valk_lval_t *head = valk_lval_head(expr);
+    if (!head || LVAL_TYPE(head) != LVAL_SYM) continue;
+    valk_lval_t *tail = valk_lval_tail(expr);
+
+    extract_def_or_fun(head, tail, globals);
+    if (strcmp(head->str, "type") == 0)
+      extract_type_ctors(tail, globals);
+    if (strcmp(head->str, "sig") == 0 && LVAL_TYPE(tail) == LVAL_CONS) {
+      valk_lval_t *name_q = valk_lval_head(tail);
+      valk_lval_t *sig_name = (name_q && LVAL_TYPE(name_q) == LVAL_CONS)
+        ? valk_lval_head(name_q) : name_q;
+      if (sig_name && LVAL_TYPE(sig_name) == LVAL_SYM)
+        symset_add(globals, sig_name->str);
+    }
+  }
+}
+
+typedef struct {
+  symset_t *globals;
+  scope_t *scope;
   valk_diag_list_t *diags;
   valk_name_resolver_t *resolver;
-  lsp_document_t *doc;
   const char *text;
   const bool *skip_map;
   int *cursor;
-  bool emit_sem;
-  bool emit_diag;
 } walk_ctx_t;
 
 static void walk_expr(walk_ctx_t *w, valk_lval_t *expr);
@@ -43,19 +219,7 @@ static int count_args(valk_lval_t *rest) {
 }
 
 static int find_sym(walk_ctx_t *w, const char *sym) {
-  if (w->skip_map)
-    return lsp_find_sym_offset_skipping(w->text, sym, *w->cursor, w->skip_map);
-  return lsp_find_sym_offset(w->text, sym, *w->cursor);
-}
-
-static void emit_sym(walk_ctx_t *w, const char *sym, int type, int mods) {
-  int off = find_sym(w, sym);
-  if (off < 0) return;
-  *w->cursor = off + (int)strlen(sym);
-  if (w->emit_sem) {
-    lsp_pos_t p = offset_to_pos(w->text, off);
-    doc_add_sem(w->doc, p.line, p.col, (int)strlen(sym), type, mods);
-  }
+  return find_sym_offset(w->text, sym, *w->cursor, w->skip_map);
 }
 
 static void advance_cursor(walk_ctx_t *w, const char *sym) {
@@ -65,161 +229,76 @@ static void advance_cursor(walk_ctx_t *w, const char *sym) {
 
 static void diag_at_sym(walk_ctx_t *w, const char *sym, const char *msg,
                         int severity) {
-  if (!w->emit_diag || !w->diags) return;
+  if (!w->diags) return;
   int off = find_sym(w, sym);
   if (off < 0) return;
   valk_diag_add(w->diags, msg, off, (int)strlen(sym), severity);
 }
 
-// ---------------------------------------------------------------------------
-// Symbol resolution
-// ---------------------------------------------------------------------------
-
 static void walk_sym(walk_ctx_t *w, valk_lval_t *expr) {
   const char *name = expr->str;
 
-  if (name[0] == ':') {
-    emit_sym(w, name, SEM_PROPERTY, 0);
-    return;
-  }
+  if (name[0] == ':') { advance_cursor(w, name); return; }
 
   if (strcmp(name, "true") == 0 || strcmp(name, "false") == 0 ||
       strcmp(name, "nil") == 0 || strcmp(name, "otherwise") == 0 ||
       strcmp(name, "_") == 0) {
-    emit_sym(w, name, SEM_MACRO, SEM_MOD_READONLY);
+    advance_cursor(w, name);
     return;
   }
 
-  if (scope_has(w->scope, name)) {
-    emit_sym(w, name, SEM_PARAMETER, 0);
-    return;
-  }
-
-  if (is_builtin(name)) {
-    emit_sym(w, name, SEM_VARIABLE, SEM_MOD_DEFAULT_LIB);
-    return;
-  }
-
-  if (symset_contains(w->globals, name)) {
-    emit_sym(w, name, SEM_VARIABLE, 0);
-    return;
-  }
-
+  if (scope_has(w->scope, name)) { advance_cursor(w, name); return; }
+  if (is_special_form(name)) { advance_cursor(w, name); return; }
+  if (symset_contains(w->globals, name)) { advance_cursor(w, name); return; }
   if (w->resolver && w->resolver->is_known(name, w->resolver->ctx)) {
-    emit_sym(w, name, SEM_VARIABLE, 0);
+    advance_cursor(w, name);
     return;
   }
 
   if (name[0] >= 'A' && name[0] <= 'Z') {
     const char *colon = strchr(name, ':');
     if (colon && colon != name && colon[1] != '\0' && colon[1] != ':') {
-      emit_sym(w, name, SEM_VARIABLE, 0);
+      advance_cursor(w, name);
       return;
     }
   }
 
-  if (w->emit_diag) {
-    char msg[256];
-    snprintf(msg, sizeof(msg), "Symbol '%s' is not defined", name);
-    diag_at_sym(w, name, msg, 1);
-  }
+  char msg[256];
+  snprintf(msg, sizeof(msg), "Symbol '%s' is not defined", name);
+  diag_at_sym(w, name, msg, 1);
   advance_cursor(w, name);
 }
 
-// ---------------------------------------------------------------------------
-// Arity checking
-// ---------------------------------------------------------------------------
-
-static void check_arity(walk_ctx_t *w, const char *name, int nargs) {
-  if (!w->emit_diag) return;
-
-  for (size_t si = 0; si < w->doc->symbol_count; si++) {
-    if (w->doc->symbols[si].arity < 0 ||
-        strcmp(w->doc->symbols[si].name, name) != 0)
-      continue;
-    int expected = w->doc->symbols[si].arity;
-    bool variadic = w->doc->symbols[si].doc &&
-      (strstr(w->doc->symbols[si].doc, "& ") || strstr(w->doc->symbols[si].doc, "&}"));
-    if ((!variadic && nargs == expected) || (variadic && nargs >= expected - 1))
-      return;
-    char msg[256];
-    if (variadic)
-      snprintf(msg, sizeof(msg), "'%s' expects at least %d argument%s, got %d",
-               name, expected - 1, (expected - 1) == 1 ? "" : "s", nargs);
-    else
-      snprintf(msg, sizeof(msg), "'%s' expects %d argument%s, got %d",
-               name, expected, expected == 1 ? "" : "s", nargs);
-    diag_at_sym(w, name, msg, 1);
-    break;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Form-specific handlers
-// ---------------------------------------------------------------------------
-
-static void walk_type_ann(walk_ctx_t *w, valk_lval_t *node) {
-  if (!node) return;
-  if (LVAL_TYPE(node) == LVAL_SYM) {
-    const char *s = node->str;
-    if (s[0] == ':') {
-      emit_sym(w, s, SEM_TYPE, 0);
-    } else if (s[0] >= 'A' && s[0] <= 'Z') {
-      bool is_ground = strcmp(s, "Num") == 0 || strcmp(s, "Str") == 0 ||
-        strcmp(s, "Sym") == 0 || strcmp(s, "Nil") == 0 ||
-        strcmp(s, "Err") == 0 || strcmp(s, "Any") == 0 ||
-        strcmp(s, "Never") == 0 || strcmp(s, "QExpr") == 0 ||
-        strcmp(s, "PList") == 0 || strcmp(s, "List") == 0 ||
-        strcmp(s, "Handle") == 0 || strcmp(s, "Ref") == 0;
-      emit_sym(w, s, is_ground ? SEM_TYPE : SEM_TYPE_PARAM, 0);
-    } else if (strcmp(s, "??") == 0) {
-      emit_sym(w, s, SEM_TYPE, 0);
-    } else if (strcmp(s, "->") == 0 || strcmp(s, "|") == 0 ||
-               strcmp(s, "&") == 0) {
-      emit_sym(w, s, SEM_OPERATOR, 0);
-    }
-  } else if (LVAL_TYPE(node) == LVAL_CONS) {
-    valk_lval_t *cur = node;
-    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-      walk_type_ann(w, valk_lval_head(cur));
-      cur = valk_lval_tail(cur);
-    }
-  }
-}
-
 static void walk_annotated_formals(walk_ctx_t *w, valk_lval_t *formals,
-                                   lsp_scope_t *inner) {
+                                   scope_t *inner) {
   valk_lval_t *cur = formals;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
     valk_lval_t *h = valk_lval_head(cur);
 
     if (h && LVAL_TYPE(h) == LVAL_SYM && strcmp(h->str, "->") == 0) {
-      emit_sym(w, h->str, SEM_OPERATOR, 0);
+      advance_cursor(w, h->str);
       cur = valk_lval_tail(cur);
       if (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-        walk_type_ann(w, valk_lval_head(cur));
+        advance_cursor(w, valk_lval_head(cur)->str);
         cur = valk_lval_tail(cur);
       }
       continue;
     }
 
     if (h && LVAL_TYPE(h) == LVAL_SYM && strcmp(h->str, "::") == 0) {
-      emit_sym(w, h->str, SEM_OPERATOR, 0);
+      advance_cursor(w, h->str);
       cur = valk_lval_tail(cur);
       if (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-        walk_type_ann(w, valk_lval_head(cur));
+        advance_cursor(w, valk_lval_head(cur)->str);
         cur = valk_lval_tail(cur);
       }
       continue;
     }
 
     if (h && LVAL_TYPE(h) == LVAL_SYM) {
-      if (h->str[0] != '&') {
+      if (h->str[0] != '&')
         symset_add(&inner->locals, h->str);
-        emit_sym(w, h->str, SEM_PARAMETER, SEM_MOD_DECLARATION);
-      } else {
-        emit_sym(w, h->str, SEM_OPERATOR, 0);
-      }
+      advance_cursor(w, h->str);
     }
     cur = valk_lval_tail(cur);
   }
@@ -230,11 +309,11 @@ static void walk_lambda(walk_ctx_t *w, valk_lval_t *rest) {
   valk_lval_t *formals = valk_lval_head(rest);
   valk_lval_t *body_rest = valk_lval_tail(rest);
 
-  lsp_scope_t *inner = scope_push(w->scope);
+  scope_t *inner = scope_push(w->scope);
   if (formals && LVAL_TYPE(formals) == LVAL_CONS)
     walk_annotated_formals(w, formals, inner);
 
-  lsp_scope_t *saved = w->scope;
+  scope_t *saved = w->scope;
   w->scope = inner;
   walk_body(w, body_rest);
   w->scope = saved;
@@ -251,15 +330,15 @@ static void walk_fun(walk_ctx_t *w, valk_lval_t *rest) {
   valk_lval_t *fname = valk_lval_head(name_formals);
   if (fname && LVAL_TYPE(fname) == LVAL_SYM) {
     symset_add(w->globals, fname->str);
-    emit_sym(w, fname->str, SEM_FUNCTION, SEM_MOD_DEFINITION);
+    advance_cursor(w, fname->str);
   }
 
-  lsp_scope_t *inner = scope_push(w->scope);
+  scope_t *inner = scope_push(w->scope);
   valk_lval_t *params = valk_lval_tail(name_formals);
   if (params && LVAL_TYPE(params) == LVAL_CONS)
     walk_annotated_formals(w, params, inner);
 
-  lsp_scope_t *saved = w->scope;
+  scope_t *saved = w->scope;
   w->scope = inner;
   walk_body(w, body_rest);
   w->scope = saved;
@@ -281,7 +360,7 @@ static void walk_binding(walk_ctx_t *w, const char *form, valk_lval_t *rest) {
           symset_add(w->globals, s->str);
         else
           symset_add(&w->scope->locals, s->str);
-        emit_sym(w, s->str, SEM_VARIABLE, SEM_MOD_DEFINITION);
+        advance_cursor(w, s->str);
       }
       cur = valk_lval_tail(cur);
     }
@@ -290,7 +369,7 @@ static void walk_binding(walk_ctx_t *w, const char *form, valk_lval_t *rest) {
       symset_add(w->globals, binding->str);
     else
       symset_add(&w->scope->locals, binding->str);
-    emit_sym(w, binding->str, SEM_VARIABLE, SEM_MOD_DEFINITION);
+    advance_cursor(w, binding->str);
   }
 
   walk_body(w, val_rest);
@@ -305,14 +384,7 @@ static void walk_type(walk_ctx_t *w, valk_lval_t *rest) {
     valk_lval_t *tname = valk_lval_head(type_name_q);
     if (tname && LVAL_TYPE(tname) == LVAL_SYM) {
       tname_str = tname->str;
-      emit_sym(w, tname->str, SEM_TYPE, SEM_MOD_DEFINITION);
-    }
-    valk_lval_t *tparams = valk_lval_tail(type_name_q);
-    while (tparams && LVAL_TYPE(tparams) == LVAL_CONS) {
-      valk_lval_t *tp = valk_lval_head(tparams);
-      if (tp && LVAL_TYPE(tp) == LVAL_SYM)
-        emit_sym(w, tp->str, SEM_TYPE_PARAM, 0);
-      tparams = valk_lval_tail(tparams);
+      advance_cursor(w, tname->str);
     }
   }
 
@@ -335,17 +407,13 @@ static void walk_type(walk_ctx_t *w, valk_lval_t *rest) {
           snprintf(qname, sizeof(qname), "%s::%s", tname_str, ctor->str);
           symset_add(w->globals, qname);
         }
-        emit_sym(w, ctor->str, SEM_ENUM_MEMBER, SEM_MOD_DEFINITION);
+        advance_cursor(w, ctor->str);
       }
       valk_lval_t *fields = valk_lval_tail(variant);
       while (fields && LVAL_TYPE(fields) == LVAL_CONS) {
         valk_lval_t *fld = valk_lval_head(fields);
-        if (fld && LVAL_TYPE(fld) == LVAL_SYM) {
-          if (fld->str[0] == ':')
-            emit_sym(w, fld->str, SEM_PROPERTY, 0);
-          else
-            emit_sym(w, fld->str, SEM_TYPE_PARAM, 0);
-        }
+        if (fld && LVAL_TYPE(fld) == LVAL_SYM)
+          advance_cursor(w, fld->str);
         fields = valk_lval_tail(fields);
       }
     }
@@ -359,8 +427,8 @@ static void walk_aio_let(walk_ctx_t *w, valk_lval_t *rest) {
   valk_lval_t *body_rest = valk_lval_tail(rest);
   if (!bindings || LVAL_TYPE(bindings) != LVAL_CONS) return;
 
-  lsp_scope_t *inner = scope_push(w->scope);
-  lsp_scope_t *saved = w->scope;
+  scope_t *inner = scope_push(w->scope);
+  scope_t *saved = w->scope;
   w->scope = inner;
 
   uint32_t sf = bindings->flags;
@@ -371,7 +439,7 @@ static void walk_aio_let(walk_ctx_t *w, valk_lval_t *rest) {
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
     valk_lval_t *item = valk_lval_head(cur);
     if (item && LVAL_TYPE(item) == LVAL_SYM && item->str[0] == ':') {
-      emit_sym(w, item->str, SEM_KEYWORD, 0);
+      advance_cursor(w, item->str);
       cur = valk_lval_tail(cur);
       continue;
     }
@@ -380,7 +448,7 @@ static void walk_aio_let(walk_ctx_t *w, valk_lval_t *rest) {
       valk_lval_t *val_rest = valk_lval_tail(item);
       if (var && LVAL_TYPE(var) == LVAL_SYM) {
         symset_add(&inner->locals, var->str);
-        emit_sym(w, var->str, SEM_VARIABLE, SEM_MOD_DEFINITION);
+        advance_cursor(w, var->str);
       }
       walk_body(w, val_rest);
     }
@@ -399,8 +467,8 @@ static void walk_aio_do(walk_ctx_t *w, valk_lval_t *rest) {
   valk_lval_t *body = valk_lval_head(rest);
   if (!body || LVAL_TYPE(body) != LVAL_CONS) return;
 
-  lsp_scope_t *inner = scope_push(w->scope);
-  lsp_scope_t *saved = w->scope;
+  scope_t *inner = scope_push(w->scope);
+  scope_t *saved = w->scope;
   w->scope = inner;
 
   uint32_t sf = body->flags;
@@ -418,13 +486,10 @@ static void walk_aio_do(walk_ctx_t *w, valk_lval_t *rest) {
           arrow && LVAL_TYPE(arrow) == LVAL_SYM &&
           strcmp(arrow->str, "<-") == 0) {
         valk_lval_t *expr_rest = valk_lval_tail(sh_rest);
-        if (sh->str[0] != '_' || sh->str[1] != '\0') {
+        if (sh->str[0] != '_' || sh->str[1] != '\0')
           symset_add(&inner->locals, sh->str);
-          emit_sym(w, sh->str, SEM_VARIABLE, SEM_MOD_DEFINITION);
-        } else {
-          emit_sym(w, sh->str, SEM_VARIABLE, 0);
-        }
-        emit_sym(w, "<-", SEM_KEYWORD, 0);
+        advance_cursor(w, sh->str);
+        advance_cursor(w, "<-");
         walk_body(w, expr_rest);
         cur = valk_lval_tail(cur);
         continue;
@@ -450,30 +515,27 @@ static void walk_match(walk_ctx_t *w, valk_lval_t *rest) {
 
     valk_lval_t *pattern = valk_lval_head(clause);
     valk_lval_t *body = valk_lval_tail(clause);
-    lsp_scope_t *inner = scope_push(w->scope);
+    scope_t *inner = scope_push(w->scope);
 
     if (pattern && LVAL_TYPE(pattern) == LVAL_CONS) {
       valk_lval_t *pat_head = valk_lval_head(pattern);
       if (pat_head && LVAL_TYPE(pat_head) == LVAL_SYM)
-        emit_sym(w, pat_head->str, SEM_ENUM_MEMBER, 0);
+        advance_cursor(w, pat_head->str);
       valk_lval_t *pat_args = valk_lval_tail(pattern);
       while (pat_args && LVAL_TYPE(pat_args) == LVAL_CONS) {
         valk_lval_t *pv = valk_lval_head(pat_args);
         if (pv && LVAL_TYPE(pv) == LVAL_SYM) {
-          if (pv->str[0] == ':') {
-            emit_sym(w, pv->str, SEM_PROPERTY, 0);
-          } else {
+          if (pv->str[0] != ':')
             symset_add(&inner->locals, pv->str);
-            emit_sym(w, pv->str, SEM_PARAMETER, SEM_MOD_DEFINITION);
-          }
+          advance_cursor(w, pv->str);
         }
         pat_args = valk_lval_tail(pat_args);
       }
     } else if (pattern && LVAL_TYPE(pattern) == LVAL_SYM) {
-      emit_sym(w, pattern->str, SEM_VARIABLE, 0);
+      advance_cursor(w, pattern->str);
     }
 
-    lsp_scope_t *saved = w->scope;
+    scope_t *saved = w->scope;
     w->scope = inner;
     walk_body(w, body);
     w->scope = saved;
@@ -484,10 +546,6 @@ static void walk_match(walk_ctx_t *w, valk_lval_t *rest) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Main walk dispatch
-// ---------------------------------------------------------------------------
-
 static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   if (!expr) return;
 
@@ -496,15 +554,10 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
     return;
   }
 
-  if (LVAL_TYPE(expr) == LVAL_NUM && w->emit_sem) {
+  if (LVAL_TYPE(expr) == LVAL_NUM) {
     char num_str[64];
     snprintf(num_str, sizeof(num_str), "%li", expr->num);
-    int off = find_sym(w, num_str);
-    if (off >= 0) {
-      *w->cursor = off + (int)strlen(num_str);
-      lsp_pos_t p = offset_to_pos(w->text, off);
-      doc_add_sem(w->doc, p.line, p.col, (int)strlen(num_str), SEM_NUMBER, 0);
-    }
+    advance_cursor(w, num_str);
     return;
   }
 
@@ -516,9 +569,10 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
 
   if (expr->flags & LVAL_FLAG_QUOTED) {
     if (LVAL_TYPE(head) != LVAL_SYM ||
-        (!is_special_form(head->str) && !is_builtin(head->str) &&
+        (!is_special_form(head->str) &&
          !symset_contains(w->globals, head->str) &&
-         !scope_has(w->scope, head->str))) {
+         !scope_has(w->scope, head->str) &&
+         !(w->resolver && w->resolver->is_known(head->str, w->resolver->ctx)))) {
       return;
     }
   }
@@ -530,17 +584,9 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   }
 
   const char *name = head->str;
+  advance_cursor(w, name);
 
-  if (w->emit_sem) {
-    if (is_special_form(name))
-      emit_sym(w, name, SEM_KEYWORD, 0);
-    else if (is_builtin(name))
-      emit_sym(w, name, SEM_FUNCTION, SEM_MOD_DEFAULT_LIB);
-    else
-      emit_sym(w, name, SEM_FUNCTION, 0);
-  }
-
-  if (w->emit_diag && !is_special_form(name) && !is_builtin(name) &&
+  if (!is_special_form(name) &&
       !scope_has(w->scope, name) && !symset_contains(w->globals, name) &&
       !(w->resolver && w->resolver->is_known(name, w->resolver->ctx))) {
     bool is_accessor = (name[0] >= 'A' && name[0] <= 'Z');
@@ -555,8 +601,7 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
     }
   }
 
-  if (w->doc)
-    check_arity(w, name, count_args(rest));
+  (void)count_args;
 
   if (strcmp(name, "\\") == 0)       { walk_lambda(w, rest); return; }
   if (strcmp(name, "fun") == 0)      { walk_fun(w, rest); return; }
@@ -569,18 +614,7 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
     valk_lval_t *sig_name = (name_q && LVAL_TYPE(name_q) == LVAL_CONS)
       ? valk_lval_head(name_q) : name_q;
     if (sig_name && LVAL_TYPE(sig_name) == LVAL_SYM)
-      emit_sym(w, sig_name->str, SEM_FUNCTION, SEM_MOD_DECLARATION);
-    valk_lval_t *sig_type = valk_lval_tail(rest);
-    if (sig_type && LVAL_TYPE(sig_type) == LVAL_CONS) {
-      valk_lval_t *type_q = valk_lval_head(sig_type);
-      valk_lval_t *type_node = type_q;
-      if (type_q && LVAL_TYPE(type_q) == LVAL_CONS) {
-        valk_lval_t *inner = valk_lval_head(type_q);
-        if (inner && LVAL_TYPE(inner) == LVAL_CONS)
-          type_node = inner;
-      }
-      walk_type_ann(w, type_node);
-    }
+      advance_cursor(w, sig_name->str);
     return;
   }
   if (strcmp(name, "quote") == 0)    { return; }
@@ -591,103 +625,9 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   walk_body(w, rest);
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
-
-static int sem_token_cmp(const void *a, const void *b) {
-  const lsp_sem_token_t *ta = a, *tb = b;
-  if (ta->line != tb->line) return ta->line - tb->line;
-  return ta->col - tb->col;
-}
-
-void check_and_sem_pass(lsp_document_t *doc, bool emit_sem) {
-  lsp_symset_t globals;
-  build_global_symset(doc, &globals);
-
-  if (emit_sem)
-    doc_sem_clear(doc);
-
-  valk_diag_list_t diags;
-  valk_diag_init(&diags);
-
-  const char *text = doc->text;
-  int pos = 0;
-  int len = (int)doc->text_len;
-  int cursor = 0;
-  bool *skip_map = lsp_build_skip_map(text, len);
-
-  lsp_scope_t *top = scope_push(nullptr);
-
-  walk_ctx_t w = {
-    .globals = &globals,
-    .scope = top,
-    .diags = &diags,
-    .resolver = nullptr,
-    .doc = doc,
-    .text = text,
-    .skip_map = skip_map,
-    .cursor = &cursor,
-    .emit_sem = emit_sem,
-    .emit_diag = true,
-  };
-
-  while (pos < len) {
-    while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
-    if (pos >= len) break;
-
-    if (text[pos] == ';') {
-      int start = pos;
-      while (pos < len && text[pos] != '\n') pos++;
-      if (emit_sem) {
-        lsp_pos_t p = offset_to_pos(text, start);
-        doc_add_sem(doc, p.line, p.col, pos - start, SEM_COMMENT, 0);
-      }
-      continue;
-    }
-
-    cursor = pos;
-    valk_lval_t *expr = valk_lval_read(&pos, text);
-    if (LVAL_TYPE(expr) == LVAL_ERR) break;
-
-    walk_expr(&w, expr);
-  }
-
-  scope_pop(top);
-  free(skip_map);
-  symset_free(&globals);
-
-  for (size_t i = 0; i < diags.count; i++) {
-    lsp_pos_t p = offset_to_pos(text, diags.items[i].offset);
-    doc_add_diag_full(doc, diags.items[i].message, p.line, p.col,
-                      diags.items[i].len, diags.items[i].severity);
-  }
-  valk_diag_free(&diags);
-
-  if (emit_sem && doc->sem_token_count > 1) {
-    qsort(doc->sem_tokens, doc->sem_token_count, sizeof(lsp_sem_token_t),
-          sem_token_cmp);
-
-    size_t w2 = 0;
-    for (size_t r = 0; r < doc->sem_token_count; r++) {
-      if (w2 > 0 && doc->sem_tokens[r].line == doc->sem_tokens[w2 - 1].line &&
-          doc->sem_tokens[r].col == doc->sem_tokens[w2 - 1].col) {
-        doc->sem_tokens[w2 - 1] = doc->sem_tokens[r];
-        continue;
-      }
-      doc->sem_tokens[w2++] = doc->sem_tokens[r];
-    }
-    doc->sem_token_count = w2;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Validate a pre-parsed AST — callable from runtime (no LSP dependency)
-// ---------------------------------------------------------------------------
-
 valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
                                     valk_name_resolver_t resolver) {
-  lsp_symset_t file_defs;
+  symset_t file_defs;
   symset_init(&file_defs);
   extract_global_symbols_from_text(text, &file_defs);
 
@@ -696,21 +636,18 @@ valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
 
   int cursor = 0;
   int tlen = (int)strlen(text);
-  bool *skip_map = lsp_build_skip_map(text, tlen);
+  bool *skip_map = build_skip_map(text, tlen);
 
-  lsp_scope_t *top = scope_push(nullptr);
+  scope_t *top = scope_push(nullptr);
 
   walk_ctx_t w = {
     .globals = &file_defs,
     .scope = top,
     .diags = &diags,
     .resolver = &resolver,
-    .doc = nullptr,
     .text = text,
     .skip_map = skip_map,
     .cursor = &cursor,
-    .emit_sem = false,
-    .emit_diag = true,
   };
 
   valk_lval_t *rest = ast;

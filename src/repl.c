@@ -6,10 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <limits.h>
+
 #include "coverage.h"
 #include "gc.h"
 #include "log.h"
-#include "lsp/lsp.h"
 #include "memory.h"
 #include "parser.h"
 #include "type_env.h"
@@ -97,14 +98,45 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
       if (strcmp(argv[i], "--quality-snapshot") == 0) {
         const char *dir = (i + 1 < argc) ? argv[++i] : ".";
-        return valk_quality_snapshot(dir);
-      }
-      if (strcmp(argv[i], "--lsp-check") == 0) {
-        if (i + 1 >= argc) {
-          fprintf(stderr, "Usage: valk --lsp-check <file.valk>\n");
+        char resolved[PATH_MAX];
+        if (!realpath(dir, resolved)) {
+          fprintf(stderr, "quality-snapshot: cannot resolve path: %s\n", dir);
           return 1;
         }
-        return valk_lsp_check(argv[++i]);
+        VALK_WITH_ALLOC((void*)gc_heap) {
+          valk_lenv_put(env, valk_lval_sym("VALK_QUALITY_DIR"),
+                        valk_lval_str(resolved));
+        }
+        char script_path[PATH_MAX];
+        snprintf(script_path, sizeof(script_path), "%s/src/quality.valk", resolved);
+        script_mode = true;
+        valk_lval_t *res;
+        VALK_WITH_ALLOC((void*)gc_heap) {
+          res = valk_parse_file(script_path);
+        }
+        if (LVAL_TYPE(res) == LVAL_ERR) {
+          valk_lval_println(res);
+          return 1;
+        }
+        valk_gc_root_push(res);
+        while (valk_lval_list_count(res) > 0) {
+          valk_lval_t *x;
+          VALK_WITH_ALLOC((void*)gc_heap) {
+            x = valk_type_transform_expr(valk_lval_pop(res, 0));
+          }
+          if (LVAL_TYPE(x) == LVAL_NIL) continue;
+          if (LVAL_TYPE(x) == LVAL_ERR) { valk_lval_println(x); break; }
+          valk_gc_root_push(x);
+          VALK_WITH_ALLOC((void*)scratch) {
+            x = valk_lval_eval(env, x);
+          }
+          valk_gc_root_pop();
+          if (LVAL_TYPE(x) == LVAL_ERR) { valk_lval_println(x); break; }
+          VALK_GC_SAFE_POINT();
+          if (valk_gc_should_collect(gc_heap)) valk_gc_heap_collect(gc_heap);
+        }
+        valk_gc_root_pop();
+        continue;
       }
       if (strcmp(argv[i], "--script") == 0) {
         script_mode = true;

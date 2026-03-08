@@ -112,6 +112,23 @@
              :version "0.4.0"}})
 
 ; ---------------------------------------------------------------------------
+; Known-set cache — rebuilt only when symdb changes
+; ---------------------------------------------------------------------------
+
+(def {lsp/known-set-cache} nil)
+
+(fun {lsp/invalidate-known-set} {
+  def {lsp/known-set-cache} nil
+})
+
+(fun {lsp/get-known-set} {
+  if (nil? lsp/known-set-cache)
+    {do (def {lsp/known-set-cache} (vd/load-known-set lsp/db))
+        lsp/known-set-cache}
+    {lsp/known-set-cache}
+})
+
+; ---------------------------------------------------------------------------
 ; Diagnostic publishing
 ; ---------------------------------------------------------------------------
 
@@ -151,7 +168,7 @@
 (fun {lsp/publish-diagnostics uri text} {do
   (= {ast} (parse text))
   (lsp/ensure-loads-indexed ast)
-  (= {diags} (vd/validate lsp/db ast text))
+  (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
   (= {lsp-diags} (map make-lsp-diag diags))
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics lsp-diags))})
@@ -163,13 +180,16 @@
 (fun {lsp/sync-doc uri text} {do
   (lsp/doc-store uri text)
   (if (nil? lsp/db) {}
-    {symdb/sync-document lsp/db uri text})})
+    {do (= {changed} (symdb/sync-document lsp/db uri text))
+        (if (> changed 0) {lsp/invalidate-known-set} {})})})
 
 ; ---------------------------------------------------------------------------
 ; Method handlers — notifications
 ; ---------------------------------------------------------------------------
 
 (fun {lsp/seed-file db path} {do
+  (= {path} (if (starts-with path "/") {path}
+               {str lsp/root-path "/" path}))
   (= {fp} (file/fingerprint path))
   (if (error? fp) {0}
     {do
@@ -265,12 +285,14 @@
   if (nil? pending) {do
     (if (== in-txn 1) {sqlite/exec db "COMMIT"} {})
     (if (> indexed 0)
-      {stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n")} {})
+      {do (lsp/invalidate-known-set)
+          (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))} {})
     nil}
   {if (stdin/has-data) {do
     (if (== in-txn 1) {do (sqlite/exec db "COMMIT") {}} {})
     (if (> indexed 0)
-      {stderr/write (str "[valk-lsp] scan paused: " indexed " indexed, " (len pending) " remaining\n")} {})
+      {do (lsp/invalidate-known-set)
+          (stderr/write (str "[valk-lsp] scan paused: " indexed " indexed, " (len pending) " remaining\n"))} {})
     pending}
   {do
     (= {txn} (if (== in-txn 0) {do (sqlite/exec db "BEGIN") 1} {in-txn}))

@@ -1,4 +1,4 @@
-#include "lsp_json.h"
+#include "json.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -195,37 +195,6 @@ void json_free(json_value_t *val) {
     default:
       break;
   }
-}
-
-json_value_t *json_get(json_value_t *obj, const char *key) {
-  if (!obj || obj->type != JSON_OBJECT) return nullptr;
-  for (size_t i = 0; i < obj->object.count; i++) {
-    if (strcmp(obj->object.keys[i], key) == 0)
-      return &obj->object.vals[i];
-  }
-  return nullptr;
-}
-
-const char *json_get_string(json_value_t *obj, const char *key) {
-  json_value_t *v = json_get(obj, key);
-  if (v && v->type == JSON_STRING) return v->string.str;
-  return nullptr;
-}
-
-double json_get_number(json_value_t *obj, const char *key) {
-  json_value_t *v = json_get(obj, key);
-  if (v && v->type == JSON_NUMBER) return v->number;
-  return 0;
-}
-
-int json_get_int(json_value_t *obj, const char *key) {
-  return (int)json_get_number(obj, key);
-}
-
-bool json_get_bool(json_value_t *obj, const char *key) {
-  json_value_t *v = json_get(obj, key);
-  if (v && v->type == JSON_BOOL) return v->boolean;
-  return false;
 }
 
 char *json_escape_string(const char *input) {

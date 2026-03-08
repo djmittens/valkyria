@@ -55,11 +55,19 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 ; === Lifecycle ===
 
+(def {SYMDB_VERSION} 2)
+
 (fun {symdb/init path} {do
   (= {db} (sqlite/open path))
+  (= {ver} (sqlite/query-value db "PRAGMA user_version"))
+  (if (not (== ver SYMDB_VERSION))
+    {do
+      (sqlite/exec db "DROP TABLE IF EXISTS refs")
+      (sqlite/exec db "DROP TABLE IF EXISTS symbols")
+      (sqlite/exec db "DROP TABLE IF EXISTS files")
+      (sqlite/exec db (str "PRAGMA user_version=" SYMDB_VERSION))}
+    {})
   (sqlite/exec-script db symdb/schema-sql)
-  (= {r} (sqlite/exec db "ALTER TABLE symbols ADD COLUMN sig TEXT"))
-  (if (error? r) {} {})
   db})
 
 (fun {symdb/close db} {sqlite/close db})
@@ -214,9 +222,12 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 (fun {symdb/extract-symbols text} {do
   (= {ast} (parse text))
   (if (error? ast) {nil}
-    {do
-      (= {lines} (str/split text "\n"))
-      (reverse (symdb/walk-exprs ast text lines nil))})
+    {symdb/extract-symbols-from-ast ast text})
+})
+
+(fun {symdb/extract-symbols-from-ast ast text} {do
+  (= {lines} (str/split text "\n"))
+  (reverse (symdb/walk-exprs ast text lines nil))
 })
 
 (fun {symdb/walk-exprs exprs text lines acc} {
@@ -331,46 +342,62 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 (fun {symdb/extract-refs text} {do
   (= {ast} (parse text))
-  (reverse (symdb/walk-refs ast text nil))
+  (symdb/extract-refs-from-ast ast text)
 })
 
-(fun {symdb/walk-refs exprs text acc} {
+(fun {symdb/extract-refs-from-ast ast text} {do
+  (= {raw} (symdb/collect-raw-refs ast nil))
+  (if (nil? raw) {nil}
+    {do
+      (= {refs} (reverse raw))
+      (= {offsets} (map (\ {r} {plist/get r :offset}) refs))
+      (= {lcs} (offsets->line-cols text offsets))
+      (symdb/zip-refs-lcs refs lcs nil)})
+})
+
+(fun {symdb/zip-refs-lcs refs lcs acc} {
+  if (nil? refs) {reverse acc}
+  {do
+    (= {r} (head refs))
+    (= {lc} (head lcs))
+    (symdb/zip-refs-lcs (tail refs) (tail lcs)
+      (qcons (list :name (plist/get r :name)
+                   :line (head lc)
+                   :col (head (tail lc))) acc))}
+})
+
+(fun {symdb/collect-raw-refs exprs acc} {
   if (nil? exprs) {acc}
-    {symdb/walk-refs (tail exprs) text
-      (symdb/collect-refs-from (head exprs) text acc)}
+  {symdb/collect-raw-refs (tail exprs)
+    (symdb/collect-raw-ref (head exprs) acc)}
 })
 
-(fun {symdb/collect-refs-from expr text acc} {
+(fun {symdb/collect-raw-ref expr acc} {
   if (not (list? expr)) {
     if (not (sym? expr)) {acc}
-      {do
-        (= {name} (str expr))
-        (= {c0} (str/slice name 0 1))
-        (if (== c0 ":") {acc}
-        {if (== name "nil") {acc}
-        {if (== name "true") {acc}
-        {if (== name "false") {acc}
-        {if (== name "otherwise") {acc}
-          {do
-            (= {sp} (src-pos expr))
-            (if (< sp 0) {acc}
-              {do
-                (= {lc} (offset->line-col text sp))
-                (= {line} (head lc))
-                (= {col} (head (tail lc)))
-                (qcons (list :name name :line line :col col) acc)})}}}}})}}
-    {if (nil? expr) {acc}
-      {do
-        (= {inner-acc} (symdb/collect-refs-from (head expr) text acc))
-        (symdb/walk-refs-tail (tail expr) text inner-acc)}}
+    {do
+      (= {sp} (src-pos expr))
+      (if (< sp 0) {acc}
+        {do
+          (= {name} (str expr))
+          (= {c0} (str/slice name 0 1))
+          (if (== c0 ":") {acc}
+          {if (== name "nil") {acc}
+          {if (== name "true") {acc}
+          {if (== name "false") {acc}
+          {if (== name "otherwise") {acc}
+            {qcons (list :name name :offset sp) acc}}}}})})}
+  }
+  {if (nil? expr) {acc}
+    {if (== (str (head expr)) "sig") {acc}
+      {symdb/collect-raw-ref-children expr acc}}}
 })
 
-(fun {symdb/walk-refs-tail rest text acc} {
-  if (nil? rest) {acc}
-    {if (not (list? rest)) {acc}
-      {do
-        (= {inner-acc} (symdb/collect-refs-from (head rest) text acc))
-        (symdb/walk-refs-tail (tail rest) text inner-acc)}}
+(fun {symdb/collect-raw-ref-children expr acc} {
+  if (nil? expr) {acc}
+  {if (not (list? expr)) {acc}
+    {symdb/collect-raw-ref-children (tail expr)
+      (symdb/collect-raw-ref (head expr) acc)}}
 })
 
 ; === Database operations ===
@@ -379,22 +406,30 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (= {path} (uri->path uri))
   (= {hash} (file/fingerprint path))
   (= {hash} (if (error? hash) {str "text:" (len text)} {hash}))
-  (sqlite/exec db "BEGIN")
-  (symdb/sync-file-symbols db uri text hash)
-  (sqlite/exec db "COMMIT")
+  (= {existing} (sqlite/query-maybe db
+    "SELECT hash FROM files WHERE path=?1" path))
+  (if (not (nil? existing))
+    {if (== (plist/get existing :hash) hash) {0}
+      {do (sqlite/exec db "BEGIN")
+          (symdb/sync-file-symbols db uri text hash)
+          (sqlite/exec db "COMMIT") 1}}
+    {do (sqlite/exec db "BEGIN")
+        (symdb/sync-file-symbols db uri text hash)
+        (sqlite/exec db "COMMIT") 1})
 })
 
 (fun {symdb/sync-file-symbols db uri text hash} {do
   (= {path} (uri->path uri))
+  (= {ast} (parse text))
   (sqlite/exec db
     "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
     path hash)
   (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
   (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
   (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
-  (= {syms} (symdb/extract-symbols text))
+  (= {syms} (symdb/extract-symbols-from-ast ast text))
   (symdb/insert-symbols db file-id syms)
-  (= {refs} (symdb/extract-refs text))
+  (= {refs} (symdb/extract-refs-from-ast ast text))
   (symdb/insert-refs db file-id refs)
 })
 
@@ -488,12 +523,6 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 (fun {symdb/find-refs db name} {
   sqlite/query db
     "SELECT r.line, r.col, f.path FROM refs r JOIN files f ON r.file_id=f.id WHERE r.name=?1 ORDER BY f.path, r.line, r.col"
-    name
-})
-
-(fun {symdb/symbol-doc db name} {
-  sqlite/query-maybe db
-    "SELECT doc FROM symbols WHERE name=?1 AND doc IS NOT NULL ORDER BY id LIMIT 1"
     name
 })
 

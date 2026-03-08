@@ -572,6 +572,22 @@
       true
     })
 
+  (test "find-refs-sig-not-indexed"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///b.valk"
+        "(sig 'plist/get {-> QExpr A A})")
+      (symdb/sync-document db "file:///a.valk"
+        "(= {r} (plist/get mylist :name))")
+      (= {refs} (symdb/find-refs db "plist/get"))
+      (test/assert-eq 1 (len refs) "plist/get only from call site, not sig")
+      (test/assert-eq "/a.valk" (plist/get (head refs) :path) "ref from a.valk")
+      (= {sig-refs} (symdb/find-refs db "QExpr"))
+      (test/assert-eq 0 (len sig-refs) "type names inside sig not indexed")
+      (sqlite/close db)
+      true
+    })
+
   (test "find-refs-resync-preserves-other-files"
     {do
       (= {db} (make-test-db))

@@ -653,9 +653,12 @@
 ; Public entry point
 ; ---------------------------------------------------------------------------
 
-(fun {vd/validate db ast text} {do
+(fun {vd/validate db ast text} {
+  vd/validate-with-known db ast text (vd/load-known-set db)
+})
+
+(fun {vd/validate-with-known db ast text known-set} {do
   (= {globals-set} (dict/from-keys (vd/collect-globals ast)))
-  (= {known-set} (vd/load-known-set db))
   (= {ctx} (list :scope (list (dict/new))
                   :globals globals-set
                   :known known-set

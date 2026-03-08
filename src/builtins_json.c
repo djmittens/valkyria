@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "lsp/lsp_json.h"
+#include "json.h"
 
 static valk_lval_t *make_option_none(void) {
   valk_lval_t *items[1] = {valk_lval_sym("Option::None")};
