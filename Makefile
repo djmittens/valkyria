@@ -293,7 +293,6 @@ todo:
 coverage-reset:
 	@echo "=== Resetting coverage data ==="
 	find build-coverage -name "*.gcda" -delete 2>/dev/null || true
-	rm -rf coverage-report
 	rm -f build-coverage/coverage-valk.txt build-coverage/coverage-valk.info build-coverage/coverage-valk.*.info
 
 .PHONY: coverage-tests
@@ -309,7 +308,7 @@ coverage-report:
 		--output coverage-report \
 		--xml
 	@echo ""
-	@echo "Coverage reports: coverage-report/index.html, coverage-report/coverage.xml"
+	@echo "Coverage reports: coverage-report/latest/index.html"
 
 .PHONY: coverage
 coverage: build-coverage coverage-tests coverage-report coverage-check

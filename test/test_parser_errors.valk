@@ -17,10 +17,10 @@
     (test/assert result "quote with 0 args errors")
     true
   })
-  (test "quote-too-many-args"
+  (test "quote-is-not-special-form"
     {do
     (= {result} (error? (eval (read "(quote a b)"))))
-    (test/assert result "quote with 2 args errors")
+    (test/assert result "quote is not a builtin and errors")
     true
   })
   (test "quasiquote-wrong-args"

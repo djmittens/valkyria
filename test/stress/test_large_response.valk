@@ -1,50 +1,76 @@
-; Large Response Test Server (Self-Contained)
-; Serves a 50MB response through the Lisp machinery.
-; This exercises the full path: Lisp handler -> response building -> HTTP/2 framing -> SSL
-;
-; This test uses make-string to generate the test data at runtime, making it
-; self-contained with no external file dependencies.
-;
-; Run with: VALK_HEAP_HARD_LIMIT=256000000 ./build/valk test/stress/test_large_response.valk
-; Test with: curl -k -o /dev/null -w "%{size_download}\n" https://localhost:8445/big
+; test_large_response.valk
+; Stress test for 50MB response through the Lisp machinery.
+; Exercises: Lisp handler -> response building -> HTTP/2 framing -> SSL
 
 (load "src/prelude.valk")
 
-; Fixed port for testing (can't easily pass command line args)
-(def {port} 8445)
-
-(println "=== Large Response Test Server ===")
+(println "=== Large Response Stress Test ===")
 (println "")
 
 ; 50MB = 52428800 bytes
 (def {RESPONSE_SIZE} 52428800)
 
-; Generate the 50MB test data using make-string
-(println "Generating 50MB test data...")
+(println "Pre-allocating 50MB test data...")
 (def {big-string} (make-string RESPONSE_SIZE 65))  ; 65 = 'A'
-(printf "Generated: %d bytes\n" (len big-string))
+(printf "  50MB: %d bytes\n" (len big-string))
 (println "")
 
-(def {sys} aio)
+(def {aio} (aio/await (aio/start)))
 
-; Server handler - returns the 50MB string via Lisp (uses quasiquote)
 (def {server-handler}
   (\ {req} {
     (= {path} (req/path req))
     (select
       {(== path "/big")
-       ; Use quasiquote - this ensures the response goes through Lisp machinery
-       {`{:status "200" :content-type "text/plain" :body ,big-string}}}
-      {(== path "/shutdown")
-       {(do
-          (aio/stop sys)
-          {:status "200" :content-type "text/plain" :body "shutting down"})}}
+       `{:status "200" :content-type "text/plain" :body ,big-string}}
       {otherwise
-       {{:status "200" :content-type "text/plain" :body "Request /big for 50MB"}}})
-  }))
+       {:status "404" :content-type "text/plain" :body "Not found"}})}))
 
-; Start the server
-(printf "Starting server on port %d...\n" port)
-(http2/server-listen sys port server-handler)
-(println "Server ready. Request /big for 50MB response, /shutdown to stop.")
-(aio/run sys)
+(def {server} (http2/server-listen aio 0 server-handler))
+(def {test-port} (http2/server-port server))
+(printf "Starting server on port %d\n" test-port)
+
+(def {tests-passed} 0)
+(def {tests-failed} 0)
+
+(aio/schedule aio 500 (\ {} {
+  (println "Testing 50MB download...")
+  (aio/then (http2/client-request aio "127.0.0.1" test-port "/big")
+    (\ {resp} {
+      (if (error? resp)
+        {(do
+           (printf "FAIL: 50MB download error: %s\n" (error-message resp))
+           (def {tests-failed} (+ tests-failed 1)))}
+        {(do
+           (= {body} (http2/response-body resp))
+           (= {body-len} (len body))
+           (if (== body-len RESPONSE_SIZE)
+             {(do
+                (printf "PASS: 50MB download - %d bytes\n" body-len)
+                (def {tests-passed} (+ tests-passed 1)))}
+             {(do
+                (printf "FAIL: 50MB download - expected %d, got %d\n" RESPONSE_SIZE body-len)
+                (def {tests-failed} (+ tests-failed 1)))}))})
+
+      (println "")
+      (println "=== Results ===")
+      (printf "Passed: %d/1\n" tests-passed)
+      (printf "Failed: %d\n" tests-failed)
+
+      (if (== tests-failed 0)
+        {(println "PASS: Large response stress test passed")}
+        {(println "FAIL: Large response stress test failed")})
+
+      (aio/stop aio)
+    }))
+}))
+
+(aio/schedule aio 120000 (\ {} {
+  (println "TIMEOUT: Test did not complete in 120 seconds")
+  (def {tests-failed} (+ tests-failed 1))
+  (aio/stop aio)
+}))
+
+(aio/run aio)
+
+(exit (if (== tests-failed 0) {0} {1}))

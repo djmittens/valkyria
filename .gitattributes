@@ -1,0 +1,5 @@
+vendor/** linguist-generated=true
+editors/src/parser.c linguist-generated=true
+editors/src/node-types.json linguist-generated=true
+editors/src/grammar.json linguist-generated=true
+editors/package-lock.json linguist-generated=true

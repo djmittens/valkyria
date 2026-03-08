@@ -281,67 +281,59 @@
     (def {async-op} (async/try (async/pure 42)))
     (def {result} nil)
     (async-op (\ {x} {(def {result} x)}))
-    (and (== (head result) "ok") (== (nth 2 result) 42))
+    (and (ok? result) (== (Ok:value result) 42))
   })
   (test "async/try-result passes through tagged error"
     {do
-    ; Async op that returns a convention-based error (tagged tuple)
-    (def {error-async} (\ {k} { (k (list "error" "test error")) }))
+    (def {error-async} (\ {k} { (k (Err "test error")) }))
     (def {async-op} (async/try-result error-async))
     (def {result} nil)
     (async-op (\ {x} {(def {result} x)}))
-    (and (== (head result) "error") (== (nth 2 result) "test error"))
+    (and (err? result) (== (Err:error result) "test error"))
   })
   (test "async/try-result passes through tagged ok"
     {do
-    ; Async op that returns already tagged result
-    (def {ok-async} (\ {k} { (k (list "ok" 100)) }))
+    (def {ok-async} (\ {k} { (k (Ok 100)) }))
     (def {async-op} (async/try-result ok-async))
     (def {result} nil)
     (async-op (\ {x} {(def {result} x)}))
-    (and (== (head result) "ok") (== (nth 2 result) 100))
+    (and (ok? result) (== (Ok:value result) 100))
   })
   (test "async/try-result wraps untagged result"
     {do
-    ; Async op that returns untagged result
     (def {untagged-async} (\ {k} { (k 42) }))
     (def {async-op} (async/try-result untagged-async))
     (def {result} nil)
     (async-op (\ {x} {(def {result} x)}))
-    (and (== (head result) "ok") (== (nth 2 result) 42))
+    (and (ok? result) (== (Ok:value result) 42))
   })
   (test "async/try-result wraps list with length 1"
     {do
-    ; Async op that returns a single-element list (not a tagged tuple)
     (def {single-elem-async} (\ {k} { (k (list "value")) }))
     (def {async-op} (async/try-result single-elem-async))
     (def {result} nil)
     (async-op (\ {x} {(def {result} x)}))
-    (and (== (head result) "ok") (== (nth 2 result) (list "value")))
+    (and (ok? result) (== (Ok:value result) (list "value")))
   })
   (test "async/try-result wraps list with length 3"
     {do
-    ; Async op that returns a three-element list (not a tagged tuple)
     (def {triple-elem-async} (\ {k} { (k (list 1 2 3)) }))
     (def {async-op} (async/try-result triple-elem-async))
     (def {result} nil)
     (async-op (\ {x} {(def {result} x)}))
-    (and (== (head result) "ok") (== (nth 2 result) (list 1 2 3)))
+    (and (ok? result) (== (Ok:value result) (list 1 2 3)))
   })
   (test "async/try-result wraps list with non-standard tag"
     {do
-    ; Async op that returns a 2-element list but with non-ok/error tag
     (def {custom-tag-async} (\ {k} { (k (list "warning" "something happened")) }))
     (def {async-op} (async/try-result custom-tag-async))
     (def {result} nil)
     (async-op (\ {x} {(def {result} x)}))
-    ; Should wrap the whole list in "ok" since "warning" is not a recognized tag
-    (and (== (head result) "ok") (== (nth 2 result) (list "warning" "something happened")))
+    (and (ok? result) (== (Ok:value result) (list "warning" "something happened")))
   })
   (test "async/recover uses primary on success"
     {do
-    ; Using tagged ok result
-    (def {risky-op} (\ {k} { (k (list "ok" 42)) }))
+    (def {risky-op} (\ {k} { (k (Ok 42)) }))
     (def {fallback-op} (async/pure 999))
     (def {async-op} (async/recover risky-op fallback-op))
     (def {result} nil)
@@ -350,8 +342,7 @@
   })
   (test "async/recover uses fallback on error"
     {do
-    ; Async op that returns a convention-based error (tagged tuple)
-    (def {error-async} (\ {k} { (k (list "error" "operation failed")) }))
+    (def {error-async} (\ {k} { (k (Err "operation failed")) }))
     (def {fallback-op} (async/pure 999))
     (def {async-op} (async/recover error-async fallback-op))
     (def {result} nil)
@@ -360,7 +351,6 @@
   })
   (test "async/recover with untagged success"
     {do
-    ; Using untagged result (should be treated as success)
     (def {risky-op} (\ {k} { (k 42) }))
     (def {fallback-op} (async/pure 999))
     (def {async-op} (async/recover risky-op fallback-op))

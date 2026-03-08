@@ -81,7 +81,7 @@ void test_allocation_triggers_auto_gc(VALK_TEST_ARGS()) {
 
   valk_system_create(NULL);
 
-  valk_gc_heap_t *small_heap = valk_gc_heap_create(1024 * 1024);
+  valk_gc_heap_t *small_heap = valk_gc_heap_create(8 * 1024 * 1024);
   valk_thread_ctx.heap = small_heap;
 
   valk_aio_system_t *local_sys = valk_aio_start();
@@ -91,7 +91,7 @@ void test_allocation_triggers_auto_gc(VALK_TEST_ARGS()) {
   u64 gc_cycles_before = atomic_load(&valk_sys->parallel_cycles);
 
   for (int i = 0; i < 100; i++) {
-    valk_gc_heap_alloc(small_heap, 16384);
+    valk_gc_heap_alloc(small_heap, 128);
   }
 
   u64 gc_cycles_after = atomic_load(&valk_sys->parallel_cycles);

@@ -1,0 +1,246 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(type {Coord}
+  {:x Num :y Num})
+
+(type {Animal}
+  {Cat :name Str}
+  {Dog :name Str :breed Str}
+  {Fish})
+
+(type {Wrapper a}
+  {Wrap :inner a})
+
+(type {Pair a b}
+  {:fst a :snd b})
+
+(sig add :: Num -> Num -> Num)
+(def {add} (\ {a b} {+ a b}))
+
+(test/run (list
+
+  (test "match-literal-string"
+    {do
+      (= {greet} (\ {name} {
+        match name
+          {"alice" "hi alice"}
+          {"bob"   "hi bob"}
+          {_       "who?"}
+      }))
+      (test/assert-eq "hi alice" (greet "alice") "match string alice")
+      (test/assert-eq "hi bob" (greet "bob") "match string bob")
+      (test/assert-eq "who?" (greet "charlie") "match string wildcard")
+      true
+    })
+
+  (test "match-literal-number"
+    {do
+      (= {describe} (\ {n} {
+        match n
+          {0 "zero"}
+          {1 "one"}
+          {_ "other"}
+      }))
+      (test/assert-eq "zero" (describe 0) "match num 0")
+      (test/assert-eq "one" (describe 1) "match num 1")
+      (test/assert-eq "other" (describe 99) "match num wildcard")
+      true
+    })
+
+  (test "match-multi-expr-body"
+    {do
+      (= {process} (\ {a} {
+        match a
+          {(Cat :name n)
+            (= {prefix} "cat:")
+            (str/concat prefix n)}
+          {(Dog :name n :breed b)
+            (= {prefix} "dog:")
+            (= {info} (str/concat n "-" b))
+            (str/concat prefix info)}
+          {(Fish) "fish"}
+      }))
+      (test/assert-eq "cat:whiskers" (process (Cat :name "whiskers")) "multi-expr cat")
+      (test/assert-eq "dog:rex-lab" (process (Dog :name "rex" :breed "lab")) "multi-expr dog")
+      (test/assert-eq "fish" (process (Fish)) "fish match")
+      true
+    })
+
+  (test "match-positional-with-wildcard-field"
+    {do
+      (= {get-breed} (\ {a} {
+        match a
+          {(Dog _ b) b}
+          {_ "n/a"}
+      }))
+      (test/assert-eq "poodle" (get-breed (Dog "fido" "poodle")) "positional wildcard field")
+      (test/assert-eq "n/a" (get-breed (Cat "kitty")) "non-dog returns n/a")
+      true
+    })
+
+  (test "match-enum-no-bindings"
+    {do
+      (= {is-fish} (\ {a} {
+        match a
+          {(Fish) 1}
+          {_ 0}
+      }))
+      (test/assert-eq 1 (is-fish (Fish)) "fish is fish")
+      (test/assert-eq 0 (is-fish (Cat "x")) "cat is not fish")
+      true
+    })
+
+  (test "constructor-wrong-positional-count"
+    {do
+      (= {result} (error? (eval (list Dog "name-only"))))
+      true
+    })
+
+  (test "constructor-missing-keyword-field"
+    {do
+      (= {result} (error? (eval (list Dog :name "rex"))))
+      true
+    })
+
+  (test "product-type-accessor"
+    {do
+      (= {c} (Coord :x 10 :y 20))
+      (test/assert-eq 10 (Coord:x c) "Coord:x")
+      (test/assert-eq 20 (Coord:y c) "Coord:y")
+      true
+    })
+
+  (test "product-type-positional"
+    {do
+      (= {c} (Coord 5 15))
+      (test/assert-eq 5 (Coord:x c) "positional Coord:x")
+      (test/assert-eq 15 (Coord:y c) "positional Coord:y")
+      true
+    })
+
+  (test "sum-match-qualified-names"
+    {do
+      (= {which} (\ {a} {
+        match a
+          {(Animal::Cat :name n) (str/concat "cat:" n)}
+          {(Animal::Dog :name n :breed b) (str/concat "dog:" n)}
+          {(Animal::Fish) "fish"}
+      }))
+      (test/assert-eq "cat:mr" (which (Cat :name "mr")) "qualified Cat match")
+      (test/assert-eq "dog:bo" (which (Dog :name "bo" :breed "x")) "qualified Dog match")
+      (test/assert-eq "fish" (which (Fish)) "qualified Fish match")
+      true
+    })
+
+  (test "nested-type-in-match"
+    {do
+      (= {unwrap-wrap} (\ {w} {
+        match w
+          {(Wrap :inner v) v}
+      }))
+      (= {w} (Wrap :inner 42))
+      (test/assert-eq 42 (unwrap-wrap w) "unwrap wrapped value")
+      true
+    })
+
+  (test "parameterized-product-type"
+    {do
+      (= {p} (Pair :fst 1 :snd "hello"))
+      (test/assert-eq 1 (Pair:fst p) "Pair:fst")
+      (test/assert-eq "hello" (Pair:snd p) "Pair:snd")
+      true
+    })
+
+  (test "match-with-constructor-in-body"
+    {do
+      (= {swap-animal} (\ {a} {
+        match a
+          {(Cat :name n) (Dog :name n :breed "unknown")}
+          {(Dog :name n :breed _) (Cat :name n)}
+          {(Fish) (Fish)}
+      }))
+      (= {swapped} (swap-animal (Cat :name "mr")))
+      (test/assert (== (head swapped) (head {Animal::Dog})) "cat swapped to dog")
+      (test/assert-eq "mr" (Dog:name swapped) "preserved name")
+      true
+    })
+
+  (test "sig-declaration-no-error"
+    {do
+      (test/assert-eq 5 (add 2 3) "sig-annotated function works")
+      true
+    })
+
+  (test "match-inside-lambda-qexpr"
+    {do
+      (= {f} (\ {x} {
+        match x
+          {(Cat :name n) n}
+          {_ "other"}
+      }))
+      (test/assert-eq "sam" (f (Cat :name "sam")) "match in lambda qexpr body")
+      (test/assert-eq "other" (f (Fish)) "wildcard in lambda qexpr body")
+      true
+    })
+
+  (test "nested-match-values"
+    {do
+      (= {deep} (\ {w} {
+        match w
+          {(Wrap :inner v)
+            (match v
+              {(Wrap :inner x) x}
+            )}
+      }))
+      (= {result} (deep (Wrap :inner (Wrap :inner 99))))
+      (test/assert-eq 99 result "nested match unwrap")
+      true
+    })
+
+  (test "match-positional-multiple-bindings"
+    {do
+      (= {describe-dog} (\ {a} {
+        match a
+          {(Dog n b) (str/concat n " the " b)}
+          {_ "not a dog"}
+      }))
+      (test/assert-eq "rex the lab" (describe-dog (Dog "rex" "lab")) "positional multi-bind")
+      true
+    })
+
+  (test "accessor-on-second-field"
+    {do
+      (= {d} (Dog :name "fido" :breed "beagle"))
+      (test/assert-eq "beagle" (Dog:breed d) "accessor second field")
+      true
+    })
+
+  (test "constructor-call-in-list-context"
+    {do
+      (= {animals} (list (Cat :name "a") (Dog :name "b" :breed "c") (Fish)))
+      (test/assert-eq 3 (len animals) "list of constructors")
+      (test/assert-eq "a" (Cat:name (nth 1 animals)) "first in list")
+      true
+    })
+
+  (test "match-with-do-in-wildcard"
+    {do
+      (= {f} (\ {x} {
+        match x
+          {(Cat :name n) n}
+          {_ (= {v} "default") v}
+      }))
+      (test/assert-eq "default" (f (Fish)) "wildcard with multi-expr body")
+      true
+    })
+
+  (test "redeclare-existing-type-is-noop"
+    {do
+      (type {Color} {Red} {Green} {Blue})
+      (= {c} (Red))
+      (test/assert (== (head c) (head {Color::Red})) "redeclared type still works")
+      true
+    })
+
+) {:suite-name "Type System Coverage"})

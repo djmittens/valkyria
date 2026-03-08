@@ -14,24 +14,223 @@
 (def {false} 0)
 
 ; Check if value is nil (empty list)
+(sig 'nil? {-> A Num})
 (fun {nil? x} {== x nil})
- 
-; unpack list for a function
 
+; === Standard Types ===
+
+(type {Option a}
+  {None}
+  {Some :value a})
+
+(type {Result ok err}
+  {Ok :value ok}
+  {Err :error err})
+
+(type {Pair a b}
+  {:fst a :snd b})
+
+(type {Order}
+  {LT}
+  {EQ}
+  {GT})
+
+(type {Response}
+  {:status Str :content-type Str :body Str})
+ 
+; === Option utilities ===
+
+(fun {some? x} {
+  if (not (list? x)) {false}
+    {match x {(Some :value _) true} {_ false}}
+})
+
+(fun {none? x} {
+  if (not (list? x)) {false}
+    {match x {(None) true} {_ false}}
+})
+
+(fun {option/unwrap-or opt default} {
+  match opt
+    {(Some :value v) v}
+    {(None) default}
+})
+
+(fun {option/map opt f} {
+  match opt
+    {(Some :value v) (Some (f v))}
+    {(None) (None)}
+})
+
+(fun {option/flat-map opt f} {
+  match opt
+    {(Some :value v) (f v)}
+    {(None) (None)}
+})
+
+(fun {option/filter opt pred} {
+  match opt
+    {(Some :value v) (if (pred v) {(Some v)} {(None)})}
+    {(None) (None)}
+})
+
+(fun {option/or a b} {
+  match a
+    {(Some :value v) (Some v)}
+    {(None) b}
+})
+
+(fun {option/from-nullable val} {
+  if (== val nil) {(None)} {(Some val)}
+})
+
+; traverse: apply f (returning Option) to each element, collect into Option of list
+; If any f returns None, the whole result is None
+(fun {option/traverse l f} {
+  if (== l nil)
+    {(Some nil)}
+    {do
+      (= {hd} (f (head l)))
+      (match hd
+        {(None) (None)}
+        {(Some :value v)
+          (match (option/traverse (tail l) f)
+            {(None) (None)}
+            {(Some :value rest) (Some (join (list v) rest))})})}
+})
+
+; sequence: turn a list of Options into an Option of list
+(fun {option/sequence l} {
+  (option/traverse l id)
+})
+
+; Applicative: apply a wrapped function to a wrapped value
+(fun {option/ap of ov} {
+  match of
+    {(Some :value f) (option/map ov f)}
+    {(None) (None)}
+})
+
+; === Result utilities ===
+
+(fun {ok? x} {
+  if (not (list? x)) {false}
+    {match x {(Ok :value _) true} {_ false}}
+})
+(fun {err? x} {
+  if (not (list? x)) {false}
+    {match x {(Err :error _) true} {_ false}}
+})
+
+(fun {result/unwrap-or res default} {
+  match res
+    {(Ok :value v) v}
+    {(Err :error e) default}
+})
+
+(fun {result/map res f} {
+  match res
+    {(Ok :value v) (Ok (f v))}
+    {(Err :error e) (Err e)}
+})
+
+(fun {result/map-err res f} {
+  match res
+    {(Ok :value v) (Ok v)}
+    {(Err :error e) (Err (f e))}
+})
+
+(fun {result/flat-map res f} {
+  match res
+    {(Ok :value v) (f v)}
+    {(Err :error e) (Err e)}
+})
+
+(fun {result/ap rf rv} {
+  match rf
+    {(Ok :value f) (result/map rv f)}
+    {(Err :error e) (Err e)}
+})
+
+; traverse: apply f (returning Result) to each element, collect into Result of list
+; If any f returns Err, the whole result is that Err
+(fun {result/traverse l f} {
+  if (== l nil)
+    {(Ok nil)}
+    {do
+      (= {hd} (f (head l)))
+      (match hd
+        {(Err :error e) (Err e)}
+        {(Ok :value v)
+          (match (result/traverse (tail l) f)
+            {(Err :error e) (Err e)}
+            {(Ok :value rest) (Ok (join (list v) rest))})})}
+})
+
+; sequence: turn a list of Results into a Result of list
+(fun {result/sequence l} {
+  (result/traverse l id)
+})
+
+(fun {result/or a b} {
+  match a
+    {(Ok :value v) (Ok v)}
+    {(Err :error e) b}
+})
+
+(fun {result/to-option res} {
+  match res
+    {(Ok :value v) (Some v)}
+    {(Err :error e) (None)}
+})
+
+(fun {option/to-result opt err} {
+  match opt
+    {(Some :value v) (Ok v)}
+    {(None) (Err err)}
+})
+
+; === Pair utilities ===
+
+(fun {pair a b} {(Pair :fst a :snd b)})
+
+(fun {pair/map-fst p f} {
+  (Pair :fst (f (Pair:fst p)) :snd (Pair:snd p))
+})
+
+(fun {pair/map-snd p f} {
+  (Pair :fst (Pair:fst p) :snd (f (Pair:snd p)))
+})
+
+(fun {pair/bimap p f g} {
+  (Pair :fst (f (Pair:fst p)) :snd (g (Pair:snd p)))
+})
+
+; === Order utilities ===
+
+(fun {compare a b} {
+  if (< a b) {(LT)} {if (== a b) {(EQ)} {(GT)}}
+})
+
+; unpack list for a function
+(sig 'unpack {-> (-> & A B) (List A) B})
 (fun {unpack f l} {
      eval (join (list f) l)
 })
 
+(sig 'curry {-> (-> & A B) (List A) B})
 (def {curry} unpack)
 
 ; Pack the list for a function
 ; eg for a function f, (pack f 1 2 3) becomes (f {1 2 3})
 ; Note: pack requires at least one argument beyond f to work
 ; For currying/uncurrying, use the curry/uncurry wrappers
+(sig 'pack {-> (-> (List A) B) & A B})
 (fun {pack f & xs} {f xs})
 
 ; uncurry: Takes a function that expects a list and returns one that takes varargs
 ; (uncurry f) returns a function that collects args into a list and calls f
+(sig 'uncurry {-> (-> (List A) B) & A B})
 (fun {uncurry f} {
   (\ {& args} {f args})
 })
@@ -71,19 +270,13 @@
 
 ; Nth item in the list
 ; LISTS ARE 1-BASED LIKE LUA
-; Using if-else instead of select due to scoping limitations
-(fun {nth n _l} {
-    if (<= n 0)
-      {error "Invalid array index (should start with 1)"}
-      {if (== n 1)
-        {fst _l}
-        {nth (- n 1) (tail _l)}}
-})
+(sig 'nth {-> (List A) Num A})
 
 ;last item in the list
 (fun {last l} {nth (len l) l})
 
 ; Take N items from the front of the list
+(sig 'take {-> Num (List A) (List A)})
 (fun {take n l} {
      if (== n 0)
       {nil}
@@ -91,6 +284,7 @@
 })
 
 ; Drop N items from the front of the list
+(sig 'drop {-> Num (List A) (List A)})
 (fun {drop n l} {
      if (== n 0)
      {l}
@@ -106,6 +300,7 @@
 })
 
 ; true if value exists inside of a list
+(sig 'exists {-> A (List A) Num})
 (fun {exists x l} {
      if(== l nil)
       {false}
@@ -113,6 +308,7 @@
 })
 
 ; Apply a function to List
+(sig 'map {-> (-> A B) (List A) (List B)})
 (fun {map f l} {
      if(== l nil)
       {nil}
@@ -120,6 +316,7 @@
 })
 
 ; Filter the list n stuff
+(sig 'filter {-> (-> A Num) (List A) (List A)})
 (fun {filter f l} {
      if(== l nil)
        {nil}
@@ -127,24 +324,36 @@
 })
 
 ; fold left or something
+(sig 'foldl {-> (-> A B A) A (List B) A})
 (fun {foldl f z l} {
      if (== l nil)
       {z}
       {foldl f (f z (head l)) (tail  l)}
 })
 
-; Reverse a list
-(fun {reverse l} {
-  (= {reverse-helper} (\ {acc remaining} {
-    (if (== remaining nil)
-      {acc}
-      {(reverse-helper (join (list (head remaining)) acc) (tail remaining))})
-  }))
-  (reverse-helper nil l)
+; flat-map for lists (concatMap): applies f to each element, f returns a list, concat results
+(sig 'list/flat-map {-> (List A) (-> A (List B)) (List B)})
+(fun {list/flat-map l f} {
+  if (== l nil)
+    {nil}
+    {join (f (head l)) (list/flat-map (tail l) f)}
 })
 
+; Applicative for lists: apply each function in fs to each value in xs
+(sig 'list/ap {-> (List (-> A B)) (List A) (List B)})
+(fun {list/ap fs xs} {
+  if (== fs nil)
+    {nil}
+    {join (map (head fs) xs) (list/ap (tail fs) xs)}
+})
+
+; reverse is a C builtin (O(n) — was O(n²) in Valk via join)
+(sig 'reverse {-> (List A) (List A)})
+
 ; Returns the sum of the list
+(sig 'sum {-> (List Num) Num})
 (fun {sum l} {foldl + 0 l})
+(sig 'product {-> (List Num) Num})
 (fun {product l} {foldl * 1 l})
 
 ; Logics
@@ -210,15 +419,7 @@
 ; A plist is a flat list of alternating keys and values: {:key1 val1 :key2 val2 ...}
 ; Common in Lisp for lightweight key-value storage without a dedicated map type
 
-; Get value for key from plist, returns nil if not found
-; Usage: (plist/get {:name "Alice" :age 30} :name) => "Alice"
-(fun {plist/get pl key} {
-  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
-    {nil}
-    {if (== (head pl) key)
-      {head (tail pl)}
-      {plist/get (tail (tail pl)) key}}
-})
+; plist/get is a C builtin (was O(n) Valk with heavy per-step overhead)
 
 ; Set/update a key in plist, returns new plist
 ; Usage: (plist/set {:name "Alice"} :age 30) => {:name "Alice" :age 30}
@@ -258,6 +459,7 @@
 
 ; 3-argument get function with default value
 ; Usage: (get plist key default) => value or default
+(sig 'get {-> A Sym B B})
 (fun {get pl key default} {
   (= {val} (plist/get pl key))
   (if (== val nil) {default} {val})

@@ -63,6 +63,14 @@ vim.api.nvim_create_autocmd({'BufRead', 'BufNewFile'}, {
   end
 })
 
+-- Register .valk filetype and tree-sitter parser
+vim.filetype.add({
+  extension = {
+    valk = 'valk',
+  },
+})
+vim.treesitter.language.register('valk', 'valk')
+
 -- Setup the build command
 vim.keymap.set('n', '<leader>b', ":mak build<CR>", {
   desc = 'Build project',

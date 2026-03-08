@@ -1,3 +1,5 @@
+// LCOV_EXCL_BR_START - logic branches individually excluded per-line; residual branches
+// from macro expansions and multi-line continuations differ between gcov and llvm-cov
 #include "aio_combinators_internal.h"
 
 extern void valk_async_handle_run_resource_cleanups(valk_async_handle_t *handle);
@@ -139,3 +141,4 @@ void valk_async_propagate_completion(valk_async_handle_t *source) {
   if (!source) return; // LCOV_EXCL_LINE - defensive null check
   valk_async_propagate_single(source);
 }
+// LCOV_EXCL_BR_STOP

@@ -1,0 +1,164 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "unary-negate"
+    {do
+    (test/assert-eq -5 (- 5) "unary minus negates")
+    true
+  })
+  (test "add-multiple"
+    {do
+    (test/assert-eq 10 (+ 1 2 3 4) "add multiple numbers")
+    true
+  })
+  (test "sub-multiple"
+    {do
+    (test/assert-eq -4 (- 1 2 3) "subtract multiple numbers")
+    true
+  })
+  (test "mul-multiple"
+    {do
+    (test/assert-eq 24 (* 1 2 3 4) "multiply multiple numbers")
+    true
+  })
+  (test "div-basic"
+    {do
+    (test/assert-eq 5 (/ 10 2) "basic division")
+    true
+  })
+  (test "div-by-zero"
+    {do
+    (= {result} (/ 10 0))
+    (test/assert (error? result) "division by zero returns error")
+    true
+  })
+  (test "type-error-add-string"
+    {do
+    (= {result} (+ 1 "two"))
+    (test/assert (error? result) "adding string to number errors")
+    true
+  })
+  (test "type-error-sub-string"
+    {do
+    (= {result} (- "a" 1))
+    (test/assert (error? result) "subtracting with string errors")
+    true
+  })
+  (test "type-error-mul-string"
+    {do
+    (= {result} (* "a" 2))
+    (test/assert (error? result) "multiplying with string errors")
+    true
+  })
+  (test "type-error-div-string"
+    {do
+    (= {result} (/ "a" 2))
+    (test/assert (error? result) "dividing with string errors")
+    true
+  })
+  (test "str->num-valid"
+    {do
+    (test/assert-eq 42 (str->num "42") "parse valid number")
+    (test/assert-eq -10 (str->num "-10") "parse negative number")
+    (test/assert-eq 0 (str->num "0") "parse zero")
+    true
+  })
+  (test "str->num-invalid"
+    {do
+    (= {result} (str->num "abc"))
+    (test/assert (error? result) "invalid number string errors")
+    true
+  })
+  (test "str->num-empty"
+    {do
+    (= {result} (str->num ""))
+    (test/assert (error? result) "empty string errors")
+    true
+  })
+  (test "str->num-partial"
+    {do
+    (= {result} (str->num "42abc"))
+    (test/assert (error? result) "partial number string errors")
+    true
+  })
+  (test "ord-numbers"
+    {do
+    (test/assert-eq -1 (ord 1 2) "1 < 2 gives -1")
+    (test/assert-eq 0 (ord 5 5) "5 == 5 gives 0")
+    (test/assert-eq 1 (ord 10 3) "10 > 3 gives 1")
+    true
+  })
+  (test "ord-strings"
+    {do
+    (= {r} (ord "abc" "def"))
+    (test/assert (< r 0) "abc < def")
+    (test/assert-eq 0 (ord "same" "same") "same strings give 0")
+    true
+  })
+  (test "ord-mixed-types-error"
+    {do
+    (= {result} (ord 1 "a"))
+    (test/assert (error? result) "ord with mixed types errors")
+    true
+  })
+  (test "comparison-operators"
+    {do
+    (test/assert (> 5 3) "5 > 3")
+    (test/assert (< 3 5) "3 < 5")
+    (test/assert (>= 5 5) "5 >= 5")
+    (test/assert (<= 5 5) "5 <= 5")
+    (test/assert (>= 6 5) "6 >= 5")
+    (test/assert (<= 4 5) "4 <= 5")
+    true
+  })
+  (test "equality-operators"
+    {do
+    (test/assert (== 5 5) "5 == 5")
+    (test/assert (!= 5 6) "5 != 6")
+    (test/assert (== "a" "a") "string equality")
+    (test/assert (!= "a" "b") "string inequality")
+    true
+  })
+  (test "rand-no-args"
+    {do
+    (rand-seed 42)
+    (= {r} (rand))
+    (test/assert (>= r 0) "rand returns non-negative")
+    true
+  })
+  (test "rand-with-bound"
+    {do
+    (rand-seed 42)
+    (= {r} (rand 10))
+    (test/assert (>= r 0) "rand with bound >= 0")
+    (test/assert (< r 10) "rand with bound < 10")
+    true
+  })
+  (test "rand-with-range"
+    {do
+    (rand-seed 42)
+    (= {r} (rand 5 10))
+    (test/assert (>= r 5) "rand range >= low")
+    (test/assert (< r 10) "rand range < high")
+    true
+  })
+  (test "rand-bad-bound"
+    {do
+    (= {result} (rand 0))
+    (test/assert (error? result) "rand with 0 bound errors")
+    true
+  })
+  (test "rand-bad-range"
+    {do
+    (= {result} (rand 10 5))
+    (test/assert (error? result) "rand with high <= low errors")
+    true
+  })
+  (test "rand-too-many-args"
+    {do
+    (= {result} (rand 1 2 3))
+    (test/assert (error? result) "rand with 3 args errors")
+    true
+  })
+) (test/context-new))

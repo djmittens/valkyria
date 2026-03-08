@@ -334,6 +334,9 @@ typedef struct {
   // Request context (Finagle-style context propagation)
   struct valk_request_ctx *request_ctx;   // Current request context for deadline/tracing
   
+  // Safepoint flag (CPython eval_breaker pattern)
+  _Atomic u32 safepoint_flags;    // Bitmask of pending safepoint reasons (VALK_SP_*)
+
   // Parallel GC fields (Phase 0)
   u64 gc_thread_id;            // Index in GC coordinator's thread registry
   bool gc_registered;             // Whether registered with parallel GC
@@ -341,10 +344,18 @@ typedef struct {
   sz root_stack_count;
   sz root_stack_capacity;
   
-  // Eval stack for checkpoint evacuation
+  // Eval stack registry (precise root tracking for nested eval)
+  void *eval_stacks[16];          // All active eval stacks (nested eval calls)
+  u32 eval_stack_depth;            // Number of active eval stacks
+
+  // Saved eval envs for nested eval (parallel to eval_stacks)
+  struct valk_lenv_t *saved_eval_envs[16];
+
+  // Current eval state (innermost eval loop)
   void *eval_stack;               // Current valk_eval_stack_t* (forward ref)
   struct valk_lval_t *eval_expr;  // Current expression being evaluated
   struct valk_lval_t *eval_value; // Current value in evaluation
+  struct valk_lenv_t *eval_env;   // Current environment in eval loop
 } valk_thread_context_t;
 
 extern __thread valk_thread_context_t valk_thread_ctx;

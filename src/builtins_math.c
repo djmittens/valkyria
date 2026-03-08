@@ -3,6 +3,9 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+static int rand_seeded = 0;
 
 typedef enum { MATH_ADD, MATH_SUB, MATH_MUL, MATH_DIV } math_op_e;
 
@@ -148,6 +151,53 @@ static valk_lval_t* valk_builtin_str_to_num(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num(num);
 }
 
+static valk_lval_t* valk_builtin_modulo(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+  long x = valk_lval_list_nth(a, 0)->num;
+  long y = valk_lval_list_nth(a, 1)->num;
+  if (y == 0) return valk_lval_err("Modulo By Zero");
+  return valk_lval_num(x % y);
+}
+
+static valk_lval_t* valk_builtin_rand(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (!rand_seeded) {
+    srand((unsigned)time(nullptr));
+    rand_seeded = 1;
+  }
+  u64 count = valk_lval_list_count(a);
+  if (count == 0) {
+    return valk_lval_num(rand());
+  }
+  if (count == 1) {
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+    long n = valk_lval_list_nth(a, 0)->num;
+    if (n <= 0) return valk_lval_err("rand: bound must be positive, got %ld", n);
+    return valk_lval_num(rand() % n);
+  }
+  if (count == 2) {
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+    long lo = valk_lval_list_nth(a, 0)->num;
+    long hi = valk_lval_list_nth(a, 1)->num;
+    if (hi <= lo) return valk_lval_err("rand: high must be > low");
+    return valk_lval_num(lo + rand() % (hi - lo));
+  }
+  LVAL_RAISE(a, "rand takes 0-2 arguments, got %zu", count);
+}
+
+static valk_lval_t* valk_builtin_rand_seed(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+  srand((unsigned)valk_lval_list_nth(a, 0)->num);
+  rand_seeded = 1;
+  return valk_lval_num(0);
+}
+
 void valk_register_math_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "+", valk_builtin_plus);
   valk_lenv_put_builtin(env, "-", valk_builtin_minus);
@@ -161,4 +211,7 @@ void valk_register_math_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "==", valk_builtin_eq);
   valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
   valk_lenv_put_builtin(env, "str->num", valk_builtin_str_to_num);
+  valk_lenv_put_builtin(env, "%", valk_builtin_modulo);
+  valk_lenv_put_builtin(env, "rand", valk_builtin_rand);
+  valk_lenv_put_builtin(env, "rand-seed", valk_builtin_rand_seed);
 }

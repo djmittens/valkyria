@@ -91,11 +91,11 @@
 ; Try Pattern - Convert errors to result values
 ; ============================================================================
 
-; aio/try: Wrap a handle to catch errors and return {:ok value} or {:err error}
+; aio/try: Wrap a handle to catch errors and return Ok or Err
 (fun {aio/try handle}
   {(aio/catch
-    (aio/then handle (\ {result} {{:ok result}}))
-    (\ {err} {{:err err}}))})
+    (aio/then handle (\ {result} {(Ok result)}))
+    (\ {err} {(Err err)}))})
 
 ; ============================================================================
 ; Delay with Value Helper

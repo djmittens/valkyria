@@ -62,6 +62,7 @@ typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
 typedef struct valk_async_handle_t valk_async_handle_t;  // Async handle (defined in aio_uv.c)
 valk_lval_t *valk_parse_file(const char *filename);
+valk_lval_t *valk_parse_text(const char *text);
 
 typedef enum {
   LVAL_UNDEFINED,
@@ -106,6 +107,7 @@ struct valk_lval_t {
   _Atomic u64 flags;
   void *origin_allocator;  // Always track where this value was allocated
   struct valk_lval_t *gc_next;  // Linked list for GC heap tracking
+  int src_pos;
 #ifdef VALK_COVERAGE
   u16 cov_file_id;
   u16 cov_line;
@@ -201,7 +203,6 @@ void valk_lval_print(valk_lval_t *val);
 valk_lval_t *valk_lval_read(int *i, const char *s);
 valk_lval_t *valk_lval_read_expr(int *i, const char *s);
 
-#ifdef VALK_COVERAGE
 typedef struct {
   const char *source;
   int pos;
@@ -209,6 +210,8 @@ typedef struct {
   int line_start;
   u16 file_id;
 } valk_parse_ctx_t;
+
+#ifdef VALK_COVERAGE
 
 
 

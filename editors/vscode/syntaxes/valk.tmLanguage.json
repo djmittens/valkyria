@@ -1,0 +1,57 @@
+{
+  "scopeName": "source.valk",
+  "name": "Valk",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#keyword" },
+    { "include": "#special" },
+    { "include": "#plist-key" },
+    { "include": "#builtin" },
+    { "include": "#operator" },
+    { "include": "#parens" }
+  ],
+  "repository": {
+    "comment": {
+      "match": ";.*$",
+      "name": "comment.line.semicolon.valk"
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.valk",
+      "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.valk" }]
+    },
+    "number": {
+      "match": "(?<=\\s|\\(|\\{|^)-?\\d+(\\.\\d+)?\\b",
+      "name": "constant.numeric.valk"
+    },
+    "keyword": {
+      "match": "(?<=\\()\\s*(def|fun|if|do|select|case|load|eval|quote|let|aio/let|aio/do|<-)(?=\\s|\\))",
+      "captures": { "1": { "name": "keyword.control.valk" } }
+    },
+    "special": {
+      "match": "\\b(true|false|nil|otherwise)\\b",
+      "name": "constant.language.valk"
+    },
+    "plist-key": {
+      "match": "(?<=\\s|\\(|\\{):[a-zA-Z0-9_/\\-]+",
+      "name": "entity.other.attribute-name.valk"
+    },
+    "builtin": {
+      "match": "(?<=\\()\\s*(println|print|printf|str|make-string|read-file|error\\??|list\\??|nil\\??|handle\\??|ref\\??|list|head|tail|join|cons|len|init|range|repeat|nth|fst|snd|take|drop|map|filter|foldl|reverse|sum|product|flip|comp|id|curry|uncurry|pack|unpack|not|and|or|time-us|sleep|exit|penv|get|test|test-async|aio/[a-z][a-z/\\-]*|http2/[a-z][a-z/\\-]*|req/[a-z][a-z/\\-]*|stream/[a-z][a-z/\\-]*|sse/[a-z][a-z/\\-]*|metrics/[a-z][a-z/\\-]*|mem/[a-z][a-z/\\-]*|test/[a-z][a-z/\\-]*|plist/[a-z][a-z/\\-]*|str/[a-z][a-z/\\-]*|ctx/[a-z][a-z/\\-]*|vm/[a-z][a-z/\\-]*|trace/[a-z][a-z/\\-]*)(?=\\s|\\))",
+      "captures": { "1": { "name": "support.function.valk" } }
+    },
+    "operator": {
+      "match": "(?<=\\()\\s*([=+\\-*/<>!&|]{1,2})(?=\\s|\\))",
+      "captures": { "1": { "name": "keyword.operator.valk" } }
+    },
+    "parens": {
+      "patterns": [
+        { "match": "[()]", "name": "punctuation.paren.valk" },
+        { "match": "[{}]", "name": "punctuation.curly.valk" }
+      ]
+    }
+  }
+}

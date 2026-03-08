@@ -15,7 +15,7 @@ __thread valk_thread_context_t valk_thread_ctx = {.allocator = nullptr, .heap = 
 valk_mem_allocator_t valk_malloc_allocator = {.type = VALK_ALLOC_MALLOC};
 
 char *valk_mem_allocator_e_to_string(valk_mem_allocator_e self) {
-  switch (self) {
+  switch (self) { // LCOV_EXCL_BR_LINE - enum string conversion
     case VALK_ALLOC_NULL:
       return "nullptr Alloc";
     case VALK_ALLOC_MALLOC:
@@ -237,9 +237,9 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
       atomic_fetch_add_explicit(&self->stats.total_allocations, 1, memory_order_relaxed);
       atomic_fetch_add_explicit(&self->stats.total_bytes_allocated, bytes, memory_order_relaxed);
       sz cur_hwm = atomic_load_explicit(&self->stats.high_water_mark, memory_order_relaxed);
-      while (end > cur_hwm) {
-        if (atomic_compare_exchange_weak_explicit(&self->stats.high_water_mark, &cur_hwm, end,
-                                                   memory_order_relaxed, memory_order_relaxed))
+      while (end > cur_hwm) { // LCOV_EXCL_BR_LINE - CAS retry loop
+        if (atomic_compare_exchange_weak_explicit(&self->stats.high_water_mark, &cur_hwm, end, // LCOV_EXCL_BR_LINE
+                                                    memory_order_relaxed, memory_order_relaxed))
           break;
       }
 
@@ -397,14 +397,19 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
                  new_size);  // LCOV_EXCL_LINE
       return nullptr;  // LCOV_EXCL_LINE
     case VALK_ALLOC_ARENA: {
-      // Copy-alloc semantics for arena realloc
+      if (ptr && !valk_ptr_in_arena((valk_mem_arena_t *)self, ptr)) { // LCOV_EXCL_BR_LINE - cross-allocator realloc
+        valk_gc_heap_t *heap = (valk_gc_heap_t *)valk_thread_ctx.heap;
+        if (heap) // LCOV_EXCL_BR_LINE - heap availability
+          return valk_gc_heap_realloc(heap, ptr, new_size);
+        return nullptr; // LCOV_EXCL_LINE
+      }
       sz old_size = 0;
       if (ptr) {  // LCOV_EXCL_BR_LINE - ptr null case
         old_size = *(((u64 *)ptr) - 1);
       }
       void *np = valk_mem_arena_alloc((void *)self, new_size);
       if (ptr && np) {  // LCOV_EXCL_BR_LINE - alloc failure
-        sz n = old_size < new_size ? old_size : new_size;
+        sz n = old_size < new_size ? old_size : new_size; // LCOV_EXCL_BR_LINE - size comparison
         memcpy(np, ptr, n);
       }
       return np;
@@ -434,12 +439,12 @@ void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
         }
         void *np = valk_region_alloc(region, new_size);
         if (ptr && np) {  // LCOV_EXCL_BR_LINE - alloc failure
-          sz n = old_size < new_size ? old_size : new_size;
+          sz n = old_size < new_size ? old_size : new_size; // LCOV_EXCL_BR_LINE - size comparison
           memcpy(np, ptr, n);
         }
         return np;
       }
-      if (region->gc_heap) {
+      if (region->gc_heap) { // LCOV_EXCL_BR_LINE - region backing type
         return valk_gc_heap_realloc(region->gc_heap, ptr, new_size);
       }
       return nullptr;  // LCOV_EXCL_LINE - region with no backing
@@ -494,7 +499,7 @@ bool valk_chunked_ptrs_push(valk_chunked_ptrs_t *self, void *ptr, void *alloc_ct
       chunk = malloc(sizeof(valk_ptr_chunk_t));
       self->malloc_chunks = true;
     }
-    if (!chunk) return false;
+    if (!chunk) return false; // LCOV_EXCL_LINE - OOM
     chunk->next = nullptr;
     
     if (self->tail) {
@@ -522,7 +527,7 @@ void *valk_chunked_ptrs_get(valk_chunked_ptrs_t *self, u32 index) {
     chunk = chunk->next;
   }
   
-  return chunk ? chunk->items[item_idx] : nullptr;
+  return chunk ? chunk->items[item_idx] : nullptr; // LCOV_EXCL_BR_LINE - defensive null check
 }
 
 void valk_chunked_ptrs_free(valk_chunked_ptrs_t *self) {

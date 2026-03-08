@@ -2,6 +2,7 @@
 #include "parser.h"
 #include "memory.h"
 #include "metrics_v2.h"
+#include "eval_internal.h"
 #include "log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,9 @@ valk_system_t *valk_sys = &__system_storage;
 static void __system_init_coordinator(valk_system_t *sys) {
   atomic_store(&sys->phase, VALK_GC_PHASE_IDLE);
   atomic_store(&sys->threads_registered, 0);
+  pthread_mutex_init(&sys->thread_mutex, nullptr);
+  sys->thread_free_count = 0;
+  sys->next_fresh_idx = 0;
   sys->barrier_initialized = false;
 
   for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
@@ -84,6 +88,7 @@ void valk_system_destroy(valk_system_t *sys) {
   }
 
   pthread_mutex_destroy(&sys->subsystems_lock);
+  pthread_mutex_destroy(&sys->thread_mutex);
 
   sys->initialized = false;
 
@@ -148,25 +153,36 @@ void valk_system_register_thread(valk_system_t *sys,
   valk_thread_ctx.system = sys;
   valk_thread_ctx.heap = sys->heap;
 
-  u64 idx = atomic_fetch_add(&sys->threads_registered, 1);
-  if (idx >= VALK_SYSTEM_MAX_THREADS) {
-    VALK_ERROR("Too many threads registered (max %d)", VALK_SYSTEM_MAX_THREADS);
-    atomic_fetch_sub(&sys->threads_registered, 1);
-    return;
+  pthread_mutex_lock(&sys->thread_mutex);
+
+  u64 idx;
+  if (sys->thread_free_count > 0) {
+    idx = sys->thread_free_list[--sys->thread_free_count];
+  } else {
+    idx = sys->next_fresh_idx;
+    if (idx >= VALK_SYSTEM_MAX_THREADS) {
+      pthread_mutex_unlock(&sys->thread_mutex);
+      VALK_ERROR("Too many threads registered (max %d)", VALK_SYSTEM_MAX_THREADS);
+      return;
+    }
+    sys->next_fresh_idx++;
   }
-
-  valk_thread_ctx.gc_thread_id = idx;
-  valk_thread_ctx.gc_registered = true;
-
-  valk_thread_ctx.root_stack = malloc(sizeof(valk_lval_t*) * 256);
-  valk_thread_ctx.root_stack_capacity = 256;
-  valk_thread_ctx.root_stack_count = 0;
 
   sys->threads[idx].ctx = &valk_thread_ctx;
   sys->threads[idx].thread_id = pthread_self();
   sys->threads[idx].active = true;
   sys->threads[idx].wake_fn = wake_fn;
   sys->threads[idx].wake_ctx = wake_ctx;
+  atomic_fetch_add(&sys->threads_registered, 1);
+
+  pthread_mutex_unlock(&sys->thread_mutex);
+
+  valk_thread_ctx.gc_thread_id = idx;
+  valk_thread_ctx.gc_registered = true;
+  atomic_store(&valk_thread_ctx.safepoint_flags, 0);
+  valk_thread_ctx.root_stack = malloc(sizeof(valk_lval_t*) * 256);
+  valk_thread_ctx.root_stack_capacity = 256;
+  valk_thread_ctx.root_stack_count = 0;
   valk_gc_mark_queue_init(&sys->threads[idx].mark_queue);
 
   VALK_DEBUG("Thread registered: idx=%llu", (unsigned long long)idx);
@@ -175,15 +191,31 @@ void valk_system_register_thread(valk_system_t *sys,
 void valk_system_unregister_thread(valk_system_t *sys) {
   if (!valk_thread_ctx.gc_registered) return;
 
-  VALK_GC_SAFE_POINT();
-
   u64 idx = valk_thread_ctx.gc_thread_id;
-  sys->threads[idx].active = false;
-  sys->threads[idx].ctx = nullptr;
-  sys->threads[idx].wake_fn = nullptr;
-  sys->threads[idx].wake_ctx = nullptr;
 
-  atomic_fetch_sub(&sys->threads_registered, 1);
+  for (;;) {
+    VALK_GC_SAFE_POINT();
+
+    pthread_mutex_lock(&sys->thread_mutex);
+
+    valk_gc_phase_e cur_phase = atomic_load_explicit(&sys->phase,
+                                                      memory_order_acquire);
+    if (cur_phase != VALK_GC_PHASE_IDLE) {
+      pthread_mutex_unlock(&sys->thread_mutex);
+      sched_yield();
+      continue;
+    }
+
+    sys->threads[idx].active = false;
+    sys->threads[idx].ctx = nullptr;
+    sys->threads[idx].wake_fn = nullptr;
+    sys->threads[idx].wake_ctx = nullptr;
+    atomic_fetch_sub(&sys->threads_registered, 1);
+    sys->thread_free_list[sys->thread_free_count++] = idx;
+
+    pthread_mutex_unlock(&sys->thread_mutex);
+    break;
+  }
 
   if (valk_thread_ctx.root_stack) {
     free(valk_thread_ctx.root_stack);
@@ -220,8 +252,7 @@ void valk_system_remove_subsystem(valk_system_t *sys, void *ctx) {
 }
 
 void valk_system_wake_threads(valk_system_t *sys) {
-  u64 n = atomic_load(&sys->threads_registered);
-  for (u64 i = 0; i < n && i < VALK_SYSTEM_MAX_THREADS; i++) {
+  for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
     if (sys->threads[i].active && sys->threads[i].wake_fn) {
       sys->threads[i].wake_fn(sys->threads[i].wake_ctx);
     }
@@ -322,27 +353,53 @@ void valk_gc_thread_unregister(void) {
 
 // LCOV_EXCL_START - safe point slow path requires STW coordination from parallel GC
 void valk_gc_safe_point_slow(void) {
-  valk_gc_phase_e phase = atomic_load(&valk_sys->phase);
+  u32 flags = atomic_load_explicit(&valk_thread_ctx.safepoint_flags,
+                                    memory_order_acquire);
 
-  if (phase == VALK_GC_PHASE_STW_REQUESTED) {
-    if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
-        valk_thread_ctx.heap && valk_thread_ctx.root_env) {
-      valk_checkpoint(valk_thread_ctx.scratch,
-                      valk_thread_ctx.heap,
-                      valk_thread_ctx.root_env);
+  if (flags & VALK_SP_STW) {
+    atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_STW);
+
+    valk_gc_phase_e phase = atomic_load_explicit(&valk_sys->phase,
+                                                   memory_order_acquire);
+
+    if (phase == VALK_GC_PHASE_PREPARING) {
+      while (atomic_load_explicit(&valk_sys->phase,
+                                   memory_order_acquire) == VALK_GC_PHASE_PREPARING) {
+        sched_yield();
+      }
+      phase = atomic_load_explicit(&valk_sys->phase, memory_order_acquire);
     }
 
-    valk_barrier_wait(&valk_sys->barrier);
-    valk_gc_participate_in_parallel_gc();
+    if (phase == VALK_GC_PHASE_STW_REQUESTED) {
+      if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
+          valk_thread_ctx.heap && valk_thread_ctx.root_env) {
+        valk_checkpoint(valk_thread_ctx.scratch,
+                         valk_thread_ctx.heap,
+                         valk_thread_ctx.root_env);
+      }
+
+      valk_barrier_wait(&valk_sys->barrier);
+      valk_gc_participate_in_parallel_gc();
+      return;
+    }
+
+    if (valk_thread_ctx.checkpoint_enabled &&
+        valk_thread_ctx.scratch && valk_thread_ctx.heap && valk_thread_ctx.root_env &&
+        valk_should_checkpoint(valk_thread_ctx.scratch, valk_thread_ctx.checkpoint_threshold)) {
+      valk_checkpoint(valk_thread_ctx.scratch,
+                       valk_thread_ctx.heap,
+                       valk_thread_ctx.root_env);
+    }
     return;
   }
 
-  if (valk_thread_ctx.checkpoint_enabled &&
-      valk_thread_ctx.scratch && valk_thread_ctx.heap && valk_thread_ctx.root_env &&
-      valk_should_checkpoint(valk_thread_ctx.scratch, valk_thread_ctx.checkpoint_threshold)) {
-    valk_checkpoint(valk_thread_ctx.scratch,
-                    valk_thread_ctx.heap,
-                    valk_thread_ctx.root_env);
+  if (flags & VALK_SP_GC_COLLECT) {
+    atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_GC_COLLECT);
+    valk_gc_heap_t *heap = valk_thread_ctx.heap;
+    if (heap) {
+      valk_gc_heap_collect(heap);
+      atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_STW);
+    }
   }
 }
 // LCOV_EXCL_STOP
@@ -429,8 +486,16 @@ void valk_gc_set_thresholds(valk_gc_heap_t* heap,
 // LCOV_EXCL_BR_START - rate limiting branches depend on timing state
 bool valk_gc_should_collect(valk_gc_heap_t* heap) {
   if (!heap) return false;
+
+  sz committed = atomic_load(&heap->committed_bytes) +
+                 atomic_load(&heap->large_object_bytes);
+  u8 committed_pct = heap->hard_limit > 0
+    ? (u8)((committed * 100) / heap->hard_limit) : 0;
+
   u8 usage_pct = valk_gc_heap_usage_pct(heap);
-  if (usage_pct < heap->gc_threshold_pct) return false;
+  u8 pressure = committed_pct > usage_pct ? committed_pct : usage_pct;
+
+  if (pressure < heap->gc_threshold_pct) return false;
   if (heap->min_gc_interval_ms > 0 && heap->last_gc_time_us > 0) {
     u64 now_us = uv_hrtime() / 1000;
     u64 elapsed_ms = (now_us - heap->last_gc_time_us) / 1000;

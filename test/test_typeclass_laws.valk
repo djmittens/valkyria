@@ -1,0 +1,543 @@
+; Typeclass Law Tests (Part 1)
+; Property-based verification of Functor, Applicative, Monad, and Semiring laws
+; for Option, Result, and Num
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+(load "src/modules/property.valk")
+
+(rand-seed 42)
+
+(def {N} 100)
+
+; === Helper functions for testing ===
+
+(fun {double x} {* x 2})
+(fun {inc x} {+ x 1})
+(fun {square x} {* x x})
+(fun {negate x} {- 0 x})
+
+; === Typeclass instances ===
+; Use `list` not `{...}` so lambdas are evaluated into closures
+
+(def {option-functor}
+  (list :map (\ {f fa} {(option/map fa f)})
+        :mk  (\ {a} {(Some a)})
+        :eq  (\ {a b} {(== a b)})))
+
+(def {option-applicative}
+  (list :pure (\ {a} {(Some a)})
+        :ap   (\ {ff fa} {(option/ap ff fa)})
+        :eq   (\ {a b} {(== a b)})))
+
+(def {option-monad}
+  (list :pure     (\ {a} {(Some a)})
+        :flat-map (\ {ma f} {(option/flat-map ma f)})
+        :eq       (\ {a b} {(== a b)})))
+
+(def {result-functor}
+  (list :map (\ {f fa} {(result/map fa f)})
+        :mk  (\ {a} {(Ok a)})
+        :eq  (\ {a b} {(== a b)})))
+
+(def {result-applicative}
+  (list :pure (\ {a} {(Ok a)})
+        :ap   (\ {ff fa} {(result/ap ff fa)})
+        :eq   (\ {a b} {(== a b)})))
+
+(def {result-monad}
+  (list :pure     (\ {a} {(Ok a)})
+        :flat-map (\ {ma f} {(result/flat-map ma f)})
+        :eq       (\ {a b} {(== a b)})))
+
+(def {num-semiring}
+  (list :add + :mul * :zero 0 :one 1
+        :eq (\ {a b} {(== a b)})))
+
+(def {list-functor}
+  (list :map (\ {f fa} {(map f fa)})
+        :mk  (\ {a} {(list a)})
+        :eq  (\ {a b} {(== a b)})))
+
+(def {list-applicative}
+  (list :pure (\ {a} {(list a)})
+        :ap   (\ {ff fa} {(list/ap ff fa)})
+        :eq   (\ {a b} {(== a b)})))
+
+(def {list-monad}
+  (list :pure     (\ {a} {(list a)})
+        :flat-map (\ {ma f} {(list/flat-map ma f)})
+        :eq       (\ {a b} {(== a b)})))
+
+(def {pair-bifunctor}
+  (list :bimap (\ {p f g} {(pair/bimap p f g)})
+        :mk    (\ {a b} {(pair a b)})
+        :eq    (\ {a b} {(== a b)})))
+
+(def {option-traversable}
+  (list :traverse (\ {l f} {(option/traverse l f)})
+        :pure     (\ {a} {(Some a)})
+        :eq       (\ {a b} {(== a b)})))
+
+(def {result-traversable}
+  (list :traverse (\ {l f} {(result/traverse l f)})
+        :pure     (\ {a} {(Ok a)})
+        :eq       (\ {a b} {(== a b)})))
+
+; === Generators ===
+
+(fun {gen-small-int} {(gen/int (- 0 50) 50)})
+(fun {gen-positive} {(gen/int 1 100)})
+(fun {gen-small-list-size} {(gen/int 0 6)})
+
+; === Tests ===
+
+(test/run (list
+
+  ; ==========================================
+  ; Option Functor Laws
+  ; ==========================================
+
+  (test "option-functor-identity"
+    {(prop/check "option/map id = id" N
+      (\ {} {(laws/functor-identity option-functor gen-small-int)}))})
+
+  (test "option-functor-composition"
+    {(prop/check "option/map composition" N
+      (\ {} {(laws/functor-composition option-functor gen-small-int double inc)}))})
+
+  (test "option-functor-identity-none"
+    {do
+      (= {fmap} (plist/get option-functor :map))
+      (= {eq}   (plist/get option-functor :eq))
+      (test/assert (eq (fmap id (None)) (None)) "map id None = None")
+    })
+
+  (test "option-functor-composition-varied"
+    {(prop/check "option/map comp varied" N
+      (\ {} {(laws/functor-composition option-functor gen-small-int inc square)}))})
+
+  ; ==========================================
+  ; Option Applicative Laws
+  ; ==========================================
+
+  (test "option-applicative-identity"
+    {(prop/check "ap (pure id) v = v" N
+      (\ {} {(laws/applicative-identity option-applicative gen-small-int)}))})
+
+  (test "option-applicative-homomorphism"
+    {(prop/check "ap (pure f) (pure x) = pure (f x)" N
+      (\ {} {(laws/applicative-homomorphism option-applicative gen-small-int double)}))})
+
+  (test "option-applicative-homomorphism-inc"
+    {(prop/check "ap (pure inc) (pure x) = pure (inc x)" N
+      (\ {} {(laws/applicative-homomorphism option-applicative gen-small-int inc)}))})
+
+  (test "option-applicative-none-absorb"
+    {do
+      (= {ap}   (plist/get option-applicative :ap))
+      (= {pure} (plist/get option-applicative :pure))
+      (= {eq}   (plist/get option-applicative :eq))
+      (test/assert (eq (ap (None) (pure 42)) (None))
+                   "ap None (Some x) = None")
+    })
+
+  ; ==========================================
+  ; Option Monad Laws
+  ; ==========================================
+
+  (test "option-monad-left-identity"
+    {(prop/check "flat-map (pure a) f = f a" N
+      (\ {} {(laws/monad-left-identity option-monad gen-small-int
+               (\ {x} {(Some (* x 2))}))}))})
+
+  (test "option-monad-right-identity"
+    {(prop/check "flat-map m pure = m" N
+      (\ {} {(laws/monad-right-identity option-monad gen-small-int)}))})
+
+  (test "option-monad-associativity"
+    {(prop/check "flat-map associativity" N
+      (\ {} {(laws/monad-associativity option-monad gen-small-int
+               (\ {x} {(Some (+ x 1))})
+               (\ {x} {(Some (* x 2))}))}))})
+
+  (test "option-monad-none-propagation"
+    {do
+      (= {flat-map} (plist/get option-monad :flat-map))
+      (test/assert (== (flat-map (None) (\ {x} {(Some (* x 2))})) (None))
+                   "flat-map None f = None")
+    })
+
+  (test "option-monad-flat-map-to-none"
+    {(prop/check "flat-map (Some a) (const None) = None" N
+      (\ {} {do
+        (= {flat-map} (plist/get option-monad :flat-map))
+        (= {pure}     (plist/get option-monad :pure))
+        (= {a} (gen-small-int))
+        (== (flat-map (pure a) (\ {_} {(None)})) (None))
+      }))})
+
+  ; ==========================================
+  ; Result Functor Laws
+  ; ==========================================
+
+  (test "result-functor-identity"
+    {(prop/check "result/map id = id" N
+      (\ {} {(laws/functor-identity result-functor gen-small-int)}))})
+
+  (test "result-functor-composition"
+    {(prop/check "result/map composition" N
+      (\ {} {(laws/functor-composition result-functor gen-small-int double inc)}))})
+
+  (test "result-functor-err-propagation"
+    {do
+      (= {fmap} (plist/get result-functor :map))
+      (= {eq}   (plist/get result-functor :eq))
+      (test/assert (eq (fmap double (Err "oops")) (Err "oops"))
+                   "map f (Err e) = Err e")
+    })
+
+  ; ==========================================
+  ; Result Applicative Laws
+  ; ==========================================
+
+  (test "result-applicative-identity"
+    {(prop/check "ap (pure id) v = v" N
+      (\ {} {(laws/applicative-identity result-applicative gen-small-int)}))})
+
+  (test "result-applicative-homomorphism"
+    {(prop/check "ap (pure f) (pure x) = pure (f x)" N
+      (\ {} {(laws/applicative-homomorphism result-applicative gen-small-int double)}))})
+
+  (test "result-applicative-err-absorb"
+    {do
+      (= {ap}   (plist/get result-applicative :ap))
+      (= {pure} (plist/get result-applicative :pure))
+      (= {eq}   (plist/get result-applicative :eq))
+      (test/assert (eq (ap (Err "bad") (pure 42)) (Err "bad"))
+                   "ap (Err e) (Ok x) = Err e")
+    })
+
+  ; ==========================================
+  ; Result Monad Laws
+  ; ==========================================
+
+  (test "result-monad-left-identity"
+    {(prop/check "flat-map (pure a) f = f a" N
+      (\ {} {(laws/monad-left-identity result-monad gen-small-int
+               (\ {x} {(Ok (* x 2))}))}))})
+
+  (test "result-monad-right-identity"
+    {(prop/check "flat-map m pure = m" N
+      (\ {} {(laws/monad-right-identity result-monad gen-small-int)}))})
+
+  (test "result-monad-associativity"
+    {(prop/check "flat-map associativity" N
+      (\ {} {(laws/monad-associativity result-monad gen-small-int
+               (\ {x} {(Ok (+ x 1))})
+               (\ {x} {(Ok (* x 2))}))}))})
+
+  (test "result-monad-err-propagation"
+    {do
+      (= {flat-map} (plist/get result-monad :flat-map))
+      (test/assert (== (flat-map (Err "fail") (\ {x} {(Ok (* x 2))})) (Err "fail"))
+                   "flat-map (Err e) f = Err e")
+    })
+
+  (test "result-monad-flat-map-to-err"
+    {(prop/check "flat-map (Ok a) (const Err) = Err" N
+      (\ {} {do
+        (= {flat-map} (plist/get result-monad :flat-map))
+        (= {pure}     (plist/get result-monad :pure))
+        (= {a} (gen-small-int))
+        (== (flat-map (pure a) (\ {_} {(Err "nope")})) (Err "nope"))
+      }))})
+
+  ; ==========================================
+  ; Num Semiring Laws
+  ; ==========================================
+
+  (test "semiring-additive-identity"
+    {(prop/check "a + 0 = a = 0 + a" N
+      (\ {} {(laws/semiring-additive-identity num-semiring gen-small-int)}))})
+
+  (test "semiring-multiplicative-identity"
+    {(prop/check "a * 1 = a = 1 * a" N
+      (\ {} {(laws/semiring-multiplicative-identity num-semiring gen-small-int)}))})
+
+  (test "semiring-additive-commutativity"
+    {(prop/check "a + b = b + a" N
+      (\ {} {(laws/semiring-additive-commutativity num-semiring gen-small-int)}))})
+
+  (test "semiring-additive-associativity"
+    {(prop/check "(a + b) + c = a + (b + c)" N
+      (\ {} {(laws/semiring-additive-associativity num-semiring gen-small-int)}))})
+
+  (test "semiring-multiplicative-associativity"
+    {(prop/check "(a * b) * c = a * (b * c)" N
+      (\ {} {(laws/semiring-multiplicative-associativity num-semiring gen-small-int)}))})
+
+  (test "semiring-left-right-distributivity"
+    {(prop/check "a * (b + c) = a*b + a*c" N
+      (\ {} {(laws/semiring-distributivity num-semiring gen-small-int)}))})
+
+  (test "semiring-annihilation"
+    {(prop/check "a * 0 = 0 = 0 * a" N
+      (\ {} {(laws/semiring-annihilation num-semiring gen-small-int)}))})
+
+  ; ==========================================
+  ; Cross-typeclass consistency
+  ; ==========================================
+
+  (test "option-map-via-flatmap-consistency"
+    {(prop/check "map f = flat-map (comp pure f)" N
+      (\ {} {do
+        (= {a} (gen-small-int))
+        (= {fa} (Some a))
+        (== (option/map fa double)
+            (option/flat-map fa (\ {x} {(Some (double x))})))
+      }))})
+
+  (test "result-map-via-flatmap-consistency"
+    {(prop/check "map f = flat-map (comp pure f)" N
+      (\ {} {do
+        (= {a} (gen-small-int))
+        (= {fa} (Ok a))
+        (== (result/map fa double)
+            (result/flat-map fa (\ {x} {(Ok (double x))})))
+      }))})
+
+  (test "option-to-result-roundtrip"
+    {(prop/check "to-result then to-option roundtrips Some" N
+      (\ {} {do
+        (= {a} (gen-small-int))
+        (= {opt} (Some a))
+        (== (result/to-option (option/to-result opt "err")) opt)
+      }))})
+
+  (test "result-to-option-ok"
+    {(prop/check "to-option (Ok a) = Some a" N
+      (\ {} {do
+        (= {a} (gen-small-int))
+        (== (result/to-option (Ok a)) (Some a))
+      }))})
+
+  (test "result-to-option-err"
+    {(test/assert (== (result/to-option (Err "x")) (None))
+                  "to-option (Err e) = None")})
+
+  (test "option-none-to-result"
+    {(test/assert (== (option/to-result (None) "missing") (Err "missing"))
+                  "to-result None err = Err err")})
+
+  ; ==========================================
+  ; List Functor Laws
+  ; ==========================================
+
+  (test "list-functor-identity"
+    {(prop/check "map id = id" N
+      (\ {} {(laws/functor-identity list-functor gen-small-int)}))})
+
+  (test "list-functor-composition"
+    {(prop/check "map (f . g) = map f . map g" N
+      (\ {} {(laws/functor-composition list-functor gen-small-int double inc)}))})
+
+  (test "list-functor-empty"
+    {(test/assert (== (map inc nil) nil) "map f [] = []")})
+
+  (test "list-functor-multi"
+    {(prop/check "map over multi-element list" N
+      (\ {} {do
+        (= {n} (gen/int 1 6))
+        (= {l} (gen/list-of gen-small-int n))
+        (== (map id l) l)
+      }))})
+
+  ; ==========================================
+  ; List Applicative Laws
+  ; ==========================================
+
+  (test "list-applicative-identity"
+    {(prop/check "ap [id] v = v" N
+      (\ {} {(laws/applicative-identity list-applicative gen-small-int)}))})
+
+  (test "list-applicative-homomorphism"
+    {(prop/check "ap [f] [x] = [f x]" N
+      (\ {} {(laws/applicative-homomorphism list-applicative gen-small-int double)}))})
+
+  (test "list-applicative-cartesian"
+    {(test/assert
+      (== (list/ap (list double inc) {10 20})
+          {20 40 11 21})
+      "ap [double inc] [10 20] = [20 40 11 21]")})
+
+  (test "list-applicative-empty-fns"
+    {(test/assert (== (list/ap nil {1 2 3}) nil)
+                  "ap [] xs = []")})
+
+  (test "list-applicative-empty-vals"
+    {(test/assert (== (list/ap (list inc) nil) nil)
+                  "ap [f] [] = []")})
+
+  ; ==========================================
+  ; List Monad Laws
+  ; ==========================================
+
+  (test "list-monad-left-identity"
+    {(prop/check "flat-map [a] f = f a" N
+      (\ {} {(laws/monad-left-identity list-monad gen-small-int
+               (\ {x} {(list x (* x 2))}))}))})
+
+  (test "list-monad-right-identity"
+    {(prop/check "flat-map m pure = m" N
+      (\ {} {do
+        (= {n} (gen/int 1 5))
+        (= {l} (gen/list-of gen-small-int n))
+        (== (list/flat-map l (\ {x} {(list x)})) l)
+      }))})
+
+  (test "list-monad-associativity"
+    {(prop/check "flat-map associativity" N
+      (\ {} {(laws/monad-associativity list-monad gen-small-int
+               (\ {x} {(list x (+ x 1))})
+               (\ {x} {(list (* x 10))}))}))})
+
+  (test "list-monad-flat-map-empty"
+    {(test/assert (== (list/flat-map nil (\ {x} {(list x x)})) nil)
+                  "flat-map [] f = []")})
+
+  (test "list-monad-flat-map-to-empty"
+    {(prop/check "flat-map xs (const []) = []" N
+      (\ {} {do
+        (= {n} (gen/int 0 5))
+        (= {l} (gen/list-of gen-small-int n))
+        (== (list/flat-map l (\ {_} {nil})) nil)
+      }))})
+
+  ; ==========================================
+  ; Pair Bifunctor Laws
+  ; ==========================================
+
+  (test "pair-bifunctor-identity"
+    {(prop/check "bimap id id = id" N
+      (\ {} {(laws/bifunctor-identity pair-bifunctor gen-small-int gen-small-int)}))})
+
+  (test "pair-bifunctor-composition"
+    {(prop/check "bimap (f.g) (h.k) = bimap f h . bimap g k" N
+      (\ {} {(laws/bifunctor-composition pair-bifunctor gen-small-int gen-small-int
+               double inc negate square)}))})
+
+  (test "pair-bifunctor-map-fst-is-bimap"
+    {(prop/check "map-fst f = bimap f id" N
+      (\ {} {do
+        (= {a} (gen-small-int))
+        (= {b} (gen-small-int))
+        (= {p} (pair a b))
+        (== (pair/map-fst p double) (pair/bimap p double id))
+      }))})
+
+  (test "pair-bifunctor-map-snd-is-bimap"
+    {(prop/check "map-snd g = bimap id g" N
+      (\ {} {do
+        (= {a} (gen-small-int))
+        (= {b} (gen-small-int))
+        (= {p} (pair a b))
+        (== (pair/map-snd p double) (pair/bimap p id double))
+      }))})
+
+  ; ==========================================
+  ; Option Traversable Laws
+  ; ==========================================
+
+  (test "option-traverse-identity"
+    {(prop/check "traverse l Some = Some l" N
+      (\ {} {(laws/traversable-identity option-traversable gen-small-int gen-small-list-size)}))})
+
+  (test "option-traverse-all-some"
+    {(prop/check "traverse succeeds when all Some" N
+      (\ {} {do
+        (= {n} (gen/int 1 5))
+        (= {l} (gen/list-of gen-small-int n))
+        (== (option/traverse l (\ {x} {(Some (* x 2))}))
+            (Some (map double l)))
+      }))})
+
+  (test "option-traverse-one-none"
+    {(test/assert
+      (== (option/traverse {1 2 3} (\ {x} {(if (== x 2) {(None)} {(Some x)})}))
+          (None))
+      "traverse fails on first None")})
+
+  (test "option-traverse-empty"
+    {(test/assert (== (option/traverse nil (\ {x} {(Some x)})) (Some nil))
+                  "traverse [] f = Some []")})
+
+  (test "option-sequence-all-some"
+    {(test/assert (== (option/sequence (list (Some 1) (Some 2) (Some 3)))
+                      (Some {1 2 3}))
+                  "sequence [Some 1, Some 2, Some 3] = Some [1 2 3]")})
+
+  (test "option-sequence-one-none"
+    {(test/assert (== (option/sequence (list (Some 1) (None) (Some 3)))
+                      (None))
+                  "sequence [Some 1, None, Some 3] = None")})
+
+  (test "option-sequence-empty"
+    {(test/assert (== (option/sequence nil) (Some nil))
+                  "sequence [] = Some []")})
+
+  ; ==========================================
+  ; Result Traversable Laws
+  ; ==========================================
+
+  (test "result-traverse-identity"
+    {(prop/check "traverse l Ok = Ok l" N
+      (\ {} {(laws/traversable-identity result-traversable gen-small-int gen-small-list-size)}))})
+
+  (test "result-traverse-all-ok"
+    {(prop/check "traverse succeeds when all Ok" N
+      (\ {} {do
+        (= {n} (gen/int 1 5))
+        (= {l} (gen/list-of gen-small-int n))
+        (== (result/traverse l (\ {x} {(Ok (* x 2))}))
+            (Ok (map double l)))
+      }))})
+
+  (test "result-traverse-one-err"
+    {(test/assert
+      (== (result/traverse {1 2 3} (\ {x} {(if (== x 2) {(Err "bad")} {(Ok x)})}))
+          (Err "bad"))
+      "traverse fails on first Err")})
+
+  (test "result-traverse-empty"
+    {(test/assert (== (result/traverse nil (\ {x} {(Ok x)})) (Ok nil))
+                  "traverse [] f = Ok []")})
+
+  (test "result-sequence-all-ok"
+    {(test/assert (== (result/sequence (list (Ok 1) (Ok 2) (Ok 3)))
+                      (Ok {1 2 3}))
+                  "sequence [Ok 1, Ok 2, Ok 3] = Ok [1 2 3]")})
+
+  (test "result-sequence-one-err"
+    {(test/assert (== (result/sequence (list (Ok 1) (Err "fail") (Ok 3)))
+                      (Err "fail"))
+                  "sequence [Ok 1, Err, Ok 3] = Err")})
+
+  (test "result-sequence-empty"
+    {(test/assert (== (result/sequence nil) (Ok nil))
+                  "sequence [] = Ok []")})
+
+  ; ==========================================
+  ; List map-via-flatmap consistency
+  ; ==========================================
+
+  (test "list-map-via-flatmap-consistency"
+    {(prop/check "map f = flat-map (comp pure f)" N
+      (\ {} {do
+        (= {n} (gen/int 1 5))
+        (= {l} (gen/list-of gen-small-int n))
+        (== (map double l)
+            (list/flat-map l (\ {x} {(list (double x))})))
+      }))})
+
+) {:suite-name "Typeclass Laws"})

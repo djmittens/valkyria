@@ -6,11 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <limits.h>
+
 #include "coverage.h"
 #include "gc.h"
 #include "log.h"
 #include "memory.h"
 #include "parser.h"
+#include "type_env.h"
 
 // Global pointers for signal handler (Phase 8: Telemetry)
 static valk_mem_arena_t* g_scratch_for_signal = nullptr;
@@ -32,7 +35,12 @@ static void sigusr1_handler(int sig) {
 
 int main(int argc, char* argv[]) {
   char* input;
-  u64 const SCRATCH_ARENA_BYTES = 4 * 1024 * 1024;
+  u64 scratch_bytes = 128ULL * 1024 * 1024;
+
+  const char* scratch_env = getenv("VALK_SCRATCH_SIZE");
+  if (scratch_env && scratch_env[0] != '\0') {
+    scratch_bytes = strtoull(scratch_env, nullptr, 10);
+  }
 
   valk_system_config_t sys_cfg = valk_system_config_default();
   const char* hard_limit_env = getenv("VALK_HEAP_HARD_LIMIT");
@@ -48,8 +56,8 @@ int main(int argc, char* argv[]) {
 
   valk_gc_heap_t* gc_heap = sys->heap;
 
-  valk_mem_arena_t* scratch = malloc(SCRATCH_ARENA_BYTES);
-  valk_mem_arena_init(scratch, SCRATCH_ARENA_BYTES - sizeof(*scratch));
+  valk_mem_arena_t* scratch = malloc(scratch_bytes);
+  valk_mem_arena_init(scratch, scratch_bytes - sizeof(*scratch));
 
   // Set thread allocator to GC heap for persistent structures
   valk_thread_ctx.allocator = (void*)gc_heap;
@@ -88,6 +96,48 @@ int main(int argc, char* argv[]) {
   bool force_repl = false;
   if (argc >= 2) {
     for (int i = 1; i < argc; ++i) {
+      if (strcmp(argv[i], "--quality-snapshot") == 0) {
+        const char *dir = (i + 1 < argc) ? argv[++i] : ".";
+        char resolved[PATH_MAX];
+        if (!realpath(dir, resolved)) {
+          fprintf(stderr, "quality-snapshot: cannot resolve path: %s\n", dir);
+          return 1;
+        }
+        VALK_WITH_ALLOC((void*)gc_heap) {
+          valk_lenv_put(env, valk_lval_sym("VALK_QUALITY_DIR"),
+                        valk_lval_str(resolved));
+        }
+        char script_path[PATH_MAX];
+        snprintf(script_path, sizeof(script_path), "%s/src/quality.valk", resolved);
+        script_mode = true;
+        valk_lval_t *res;
+        VALK_WITH_ALLOC((void*)gc_heap) {
+          res = valk_parse_file(script_path);
+        }
+        if (LVAL_TYPE(res) == LVAL_ERR) {
+          valk_lval_println(res);
+          return 1;
+        }
+        valk_gc_root_push(res);
+        while (valk_lval_list_count(res) > 0) {
+          valk_lval_t *x;
+          VALK_WITH_ALLOC((void*)gc_heap) {
+            x = valk_type_transform_expr(valk_lval_pop(res, 0));
+          }
+          if (LVAL_TYPE(x) == LVAL_NIL) continue;
+          if (LVAL_TYPE(x) == LVAL_ERR) { valk_lval_println(x); break; }
+          valk_gc_root_push(x);
+          VALK_WITH_ALLOC((void*)scratch) {
+            x = valk_lval_eval(env, x);
+          }
+          valk_gc_root_pop();
+          if (LVAL_TYPE(x) == LVAL_ERR) { valk_lval_println(x); break; }
+          VALK_GC_SAFE_POINT();
+          if (valk_gc_should_collect(gc_heap)) valk_gc_heap_collect(gc_heap);
+        }
+        valk_gc_root_pop();
+        continue;
+      }
       if (strcmp(argv[i], "--script") == 0) {
         script_mode = true;
         continue;
@@ -99,16 +149,28 @@ int main(int argc, char* argv[]) {
       script_mode = true;  // Any file argument implies script mode
       valk_lval_t* res;
       // Parse into GC heap (persistent - AST must survive checkpoints)
-      VALK_WITH_ALLOC((void*)gc_heap) { res = valk_parse_file(argv[i]); }
+      VALK_WITH_ALLOC((void*)gc_heap) {
+        res = valk_parse_file(argv[i]);
+      }
       if (LVAL_TYPE(res) == LVAL_ERR) {
         valk_lval_println(res);
       } else {
+        valk_gc_root_push(res);
         while (valk_lval_list_count(res) > 0) {
-          // Evaluate in scratch arena - checkpoint will evacuate survivors
           valk_lval_t* x;
-          VALK_WITH_ALLOC((void*)scratch) {
-            x = valk_lval_eval(env, valk_lval_pop(res, 0));
+          VALK_WITH_ALLOC((void*)gc_heap) {
+            x = valk_type_transform_expr(valk_lval_pop(res, 0));
           }
+          if (LVAL_TYPE(x) == LVAL_NIL) continue;
+          if (LVAL_TYPE(x) == LVAL_ERR) {
+            valk_lval_println(x);
+            break;
+          }
+          valk_gc_root_push(x);
+          VALK_WITH_ALLOC((void*)scratch) {
+            x = valk_lval_eval(env, x);
+          }
+          valk_gc_root_pop();
 
           if (LVAL_TYPE(x) == LVAL_ERR) {
             valk_lval_println(x);
@@ -117,9 +179,10 @@ int main(int argc, char* argv[]) {
 
           VALK_GC_SAFE_POINT();
           if (valk_gc_should_collect(gc_heap)) {
-            valk_gc_heap_collect(gc_heap);  // Mark res as additional root
+            valk_gc_heap_collect(gc_heap);
           }
         }
+        valk_gc_root_pop();
       }
     }
   }
@@ -160,6 +223,13 @@ int main(int argc, char* argv[]) {
         if (input[pos] == '\0') break;
 
         valk_lval_t* expr = valk_lval_read(&pos, input);
+        if (LVAL_TYPE(expr) == LVAL_ERR) {
+          result = expr;
+          break;
+        }
+
+        expr = valk_type_transform_expr(expr);
+        if (LVAL_TYPE(expr) == LVAL_NIL) continue;
         if (LVAL_TYPE(expr) == LVAL_ERR) {
           result = expr;
           break;

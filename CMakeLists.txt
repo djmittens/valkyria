@@ -89,6 +89,7 @@ set(VALKYRIA_SOURCES
   src/eval.c
   src/lenv.c
   src/reader.c
+  src/type_env.c
   src/builtins_math.c
   src/builtins_list.c
   src/builtins_string.c
@@ -99,6 +100,10 @@ set(VALKYRIA_SOURCES
   src/builtins_aio.c
   src/builtins_server.c
   src/builtins_test.c
+  src/builtins_json.c
+  src/builtins_stdio.c
+  src/builtins_sqlite.c
+  src/builtins_dict.c
   src/memory.c
   src/slab.c
   src/memory_os.c
@@ -117,6 +122,7 @@ set(VALKYRIA_SOURCES
   src/log.c
   src/coverage.c
   src/source_loc.c
+  src/diag.c
   # AIO core (src/aio/)
   src/aio/aio_uv.c
   src/aio/aio_alloc.c
@@ -178,6 +184,9 @@ set(VALKYRIA_SOURCES
   src/aio/aio_ctx_builtins.c
   src/pool_metrics.c
   src/event_loop_metrics.c
+  src/json.c
+  src/validate.c
+  vendor/sqlite3/sqlite3.c
 )
 
 if(COVERAGE)
@@ -187,6 +196,11 @@ else()
 endif()
 
 
+
+# SQLite amalgamation: disable strict warnings (third-party code)
+set_source_files_properties(vendor/sqlite3/sqlite3.c PROPERTIES
+  COMPILE_FLAGS "-w"
+)
 
 if(VALK_COVERAGE)
   add_compile_definitions(VALK_COVERAGE)
@@ -214,6 +228,7 @@ target_include_directories(valkyria PRIVATE
 target_include_directories(valkyria SYSTEM PRIVATE
   ${LIBUV_INCLUDE_DIRS}
   ${PROJECT_SOURCE_DIR}/vendor
+  ${PROJECT_SOURCE_DIR}/vendor/sqlite3
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -225,7 +240,9 @@ target_link_libraries(valkyria PRIVATE
   ${LIBUV_LIBRARIES}
   OpenSSL::SSL
   OpenSSL::Crypto
-  m)
+  m
+  dl
+  pthread)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BACKTRACE_LIBRARIES)
   target_link_libraries(valkyria PRIVATE ${BACKTRACE_LIBRARIES})
@@ -378,6 +395,8 @@ include_directories(test_metrics_builtins src/)
 add_executable(test_log test/unit/test_log.c test/testing.c)
 target_link_libraries(test_log PRIVATE "-lc" valkyria)
 include_directories(test_log src/)
+
+
 
 add_executable(test_aio_alloc_unit test/unit/test_aio_alloc.c test/testing.c)
 target_link_libraries(test_aio_alloc_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
@@ -551,4 +570,12 @@ include_directories(test_http2_session_unit src/)
 add_executable(test_conn_admission_unit test/unit/test_conn_admission.c test/testing.c)
 target_link_libraries(test_conn_admission_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_conn_admission_unit src/)
+
+add_executable(test_validate test/test_validate.c test/testing.c)
+target_link_libraries(test_validate PRIVATE "-lc" valkyria)
+include_directories(test_validate src/)
+
+add_executable(test_type_env test/test_type_env.c test/testing.c)
+target_link_libraries(test_type_env PRIVATE "-lc" valkyria)
+include_directories(test_type_env src/)
 

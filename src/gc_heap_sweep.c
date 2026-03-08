@@ -114,28 +114,25 @@ sz valk_gc_sweep_page(valk_gc_page_t *page) {
 
   u8 *alloc_bitmap = valk_gc_page_alloc_bitmap(page);
   u8 *mark_bitmap = valk_gc_page_mark_bitmap(page);
+  u16 bm_bytes = page->bitmap_bytes;
 
-  u64 num_words = (slots + 63) / 64;
+  for (u16 byte_offset = 0; byte_offset < bm_bytes; byte_offset++) {
+    u8 alloc_byte = alloc_bitmap[byte_offset];
+    u8 mark_byte = mark_bitmap[byte_offset];
 
-  for (u64 w = 0; w < num_words; w++) {
-    u64 alloc, mark;
-    memcpy(&alloc, alloc_bitmap + w * 8, sizeof(u64));
-    memcpy(&mark, mark_bitmap + w * 8, sizeof(u64));
+    u8 garbage_byte = alloc_byte & ~mark_byte;
+    if (garbage_byte) {
+      u8 new_alloc_byte = alloc_byte & mark_byte;
+      alloc_bitmap[byte_offset] = new_alloc_byte;
 
-    u64 garbage = alloc & ~mark;
-
-    if (garbage != 0) {
-      freed += (sz)__builtin_popcountll(garbage);
-      u64 new_alloc = alloc & mark;
-      memcpy(alloc_bitmap + w * 8, &new_alloc, sizeof(u64));
-
-      u64 temp = garbage;
+      u8 temp = garbage_byte;
       while (temp) {
-        u64 bit = (u64)__builtin_ctzll(temp);
-        u64 slot = w * 64 + bit;
+        u32 bit = (u32)__builtin_ctz(temp);
+        u32 slot = (u32)byte_offset * 8 + bit;
 
         if (slot < slots) {
-          void *ptr = valk_gc_page_slot_ptr(page, (u32)slot);
+          freed++;
+          void *ptr = valk_gc_page_slot_ptr(page, slot);
 
           // LCOV_EXCL_BR_START - LVAL_REF finalizer requires integration with ref creation API
           if (slot_size >= sizeof(valk_lval_t)) {
@@ -148,12 +145,11 @@ sz valk_gc_sweep_page(valk_gc_page_t *page) {
           // LCOV_EXCL_BR_STOP
         }
 
-        temp &= temp - 1;
+        temp &= (u8)(temp - 1);
       }
     }
 
-    u64 zero = 0;
-    memcpy(mark_bitmap + w * 8, &zero, sizeof(u64));
+    mark_bitmap[byte_offset] = 0;
   }
 
   atomic_fetch_sub(&page->num_allocated, (u32)freed);
@@ -226,7 +222,8 @@ sz valk_gc_reclaim_empty_pages(valk_gc_heap_t *heap) {
 
     pthread_mutex_lock(&list->lock);
 
-    for (valk_gc_page_t *page = list->all_pages; page != nullptr; page = page->next) {
+    for (valk_gc_page_t *page = list->all_pages; page != nullptr; ) {
+      valk_gc_page_t *next_page = page->next;
       u32 allocated = atomic_load(&page->num_allocated);
 
       if (allocated == 0 && !page->reclaimed) {
@@ -236,10 +233,12 @@ sz valk_gc_reclaim_empty_pages(valk_gc_heap_t *heap) {
 #else
         madvise(page, page_size, MADV_DONTNEED);
 #endif
-        atomic_fetch_sub(&heap->committed_bytes, page_size);
+        page->next = next_page;
         page->reclaimed = true;
+        atomic_fetch_sub(&heap->committed_bytes, page_size);
         pages_reclaimed++;
       }
+      page = next_page;
     }
 
     pthread_mutex_unlock(&list->lock);

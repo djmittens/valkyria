@@ -10,11 +10,14 @@ Output: coverage-report/index.html with file-by-file browsing
 """
 
 import os
+import shutil
 import sys
 import html
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from xml.etree import ElementTree as ET
+
+MAX_COVERAGE_DIRS = 10
 
 # Import shared coverage data structures and parsing
 from coverage_common import (
@@ -1383,6 +1386,20 @@ tr.tier-fail {{
     (output_dir / "index.html").write_text(index_html)
 
 
+def prune_old_runs(report_root, prefix, max_keep):
+    """Keep only the newest max_keep timestamped dirs matching prefix under report_root."""
+    root = Path(report_root)
+    if not root.is_dir():
+        return
+    dirs = sorted(
+        [d for d in root.iterdir() if d.is_dir() and d.name.startswith(prefix)],
+        key=lambda d: d.name,
+    )
+    while len(dirs) > max_keep:
+        old = dirs.pop(0)
+        shutil.rmtree(old, ignore_errors=True)
+
+
 def main():
     import argparse
 
@@ -1408,7 +1425,11 @@ def main():
 
     build_dir = Path(args.build_dir).resolve()
     source_root = Path(args.source_root).resolve()
-    output_dir = Path(args.output).resolve()
+    base_output = Path(args.output)
+
+    # Create timestamped subdirectory under the output root
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    output_dir = (base_output / ts).resolve()
 
     valk_lcov = Path(args.valk_lcov) if args.valk_lcov else None
 
@@ -1433,6 +1454,17 @@ def main():
         print("\nGenerating Cobertura XML report...")
         generate_cobertura_xml(report, xml_path, source_root)
         print(f"  XML: {xml_path}")
+
+    # Symlink latest -> this run
+    latest_link = base_output / "latest"
+    try:
+        latest_link.unlink(missing_ok=True)
+        latest_link.symlink_to(ts)
+    except OSError:
+        pass
+
+    # Prune old coverage dirs
+    prune_old_runs(base_output, "20", MAX_COVERAGE_DIRS)
 
     # Compute Runtime (C) and Stdlib (Valk) stats separately
     runtime_files = {
@@ -1487,7 +1519,7 @@ def main():
         f"  Branches: {branches_pct:.1f}% ({total_branches_hit}/{total_branches_found})"
     )
     print(f"{'=' * 60}")
-    print(f"\nOpen {output_dir}/index.html in a browser to view the report.")
+    print(f"\nOpen {base_output}/latest/index.html in a browser to view the report.")
 
 
 if __name__ == "__main__":

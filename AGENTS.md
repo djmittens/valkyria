@@ -12,6 +12,49 @@
 - ASAN tests: `make test-c-asan`, `make test-valk-asan`
 - TSAN tests: `make test-c-tsan`, `make test-valk-tsan`
 
+## Quality Snapshots (Code Quality Tracking)
+
+Track whether changes degrade codebase quality using structural metrics from the symbol database.
+
+### Commands
+- `build/valk --quality-snapshot .` — Emit JSON metrics for the whole workspace to stdout
+- `python3 scripts/quality-diff.py before.json after.json` — Diff two snapshots, report regressions
+
+### Workflow: Before/After Any Significant Change
+```bash
+# 1. Snapshot before changes
+build/valk --quality-snapshot . 2>/dev/null > /tmp/quality_before.json
+
+# 2. Make changes, build, test ...
+
+# 3. Snapshot after changes
+build/valk --quality-snapshot . 2>/dev/null > /tmp/quality_after.json
+
+# 4. Diff
+python3 scripts/quality-diff.py /tmp/quality_before.json /tmp/quality_after.json
+```
+
+### What the Diff Reports
+| Regression | What it means |
+|---|---|
+| `dead symbols +N` | Created functions/variables nobody calls |
+| `fan-out of X: +N` | A function now depends on too many things |
+| `coupling A -> B: +N refs` | Two files became more tightly coupled |
+| `new coupling: A -> B` | Previously independent files are now coupled |
+| `lines: +N (+M%)` | File grew substantially |
+| `symbols: +N` | File has many more definitions |
+| `hotspot X: +N refs` | Central symbol became even more central (fragile) |
+
+### When to Run
+- After adding new features (did you leave dead code behind?)
+- After refactoring (did coupling increase or decrease?)
+- After completing a multi-file change (any new coupling edges?)
+
+### Rules
+- If the diff shows regressions, explain why they're acceptable OR fix them
+- Dead symbols are the most common LLM failure mode — always check
+- A quality diff with 0 regressions is the goal
+
 ## Sanitizer Output (CRITICAL)
 Sanitizer output can flood context. **Always redirect to file, then summarize.**
 

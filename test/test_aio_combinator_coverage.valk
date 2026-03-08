@@ -20,7 +20,7 @@
       (aio/fail "acquire failed")
       (\ {r} {(= {released} 1)})
       (\ {r} {(aio/pure r)})))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
 
   (test "bracket: acquire cancelled synchronously"
@@ -32,7 +32,7 @@
       (\ {r} {nil})
       (\ {r} {(aio/pure r)})))
     (= {status} (aio/status b))
-    (or (== status (quote :cancelled)) (== status (quote :completed)))
+    (or (== status :cancelled) (== status :completed))
   })
 
   (test "bracket: use-fn returns error"
@@ -42,7 +42,7 @@
       (aio/pure "resource")
       (\ {r} {(= {released} true)})
       (\ {r} {(error "use failed")})))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
 
   (test "bracket: use-fn returns plain value (not handle)"
@@ -51,7 +51,7 @@
       (aio/pure "resource")
       (\ {r} {nil})
       (\ {r} {42})))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
 
   (test "bracket: use-fn returns completed handle synchronously"
@@ -60,7 +60,7 @@
       (aio/pure "res")
       (\ {r} {nil})
       (\ {r} {(aio/pure (* 2 21))})))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
 
   (test "bracket: use-fn returns failed handle synchronously"
@@ -69,7 +69,7 @@
       (aio/pure "res")
       (\ {r} {nil})
       (\ {r} {(aio/fail "use handle failed")})))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
 
   (test "bracket: arg validation - wrong arg count"
@@ -95,25 +95,25 @@
   (test "scope: fn returns plain value"
     {do
     (= {h} (aio/scope (\ {s} {42})))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
 
   (test "scope: fn returns error"
     {do
     (= {h} (aio/scope (\ {s} {(error "scope err")})))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
 
   (test "scope: fn returns completed handle"
     {do
     (= {h} (aio/scope (\ {s} {(aio/pure 99)})))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
 
   (test "scope: fn returns failed handle"
     {do
     (= {h} (aio/scope (\ {s} {(aio/fail "inner fail")})))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
 
   (test "scope: arg validation - wrong arg count"
@@ -211,7 +211,7 @@
     {do
     (= {h} (aio/fail "source failed"))
     (= {h2} (aio/then h (\ {x} {(aio/pure x)})))
-    (== (aio/status h2) (quote :failed))
+    (== (aio/status h2) :failed)
   })
 
   ; --- aio/all (aio_comb_all.c) ---
@@ -219,25 +219,25 @@
   (test "all: one failure cancels others"
     {do
     (= {h} (aio/all (list (aio/pure 1) (aio/fail "err") (aio/pure 3))))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
 
   (test "all: all fail"
     {do
     (= {h} (aio/all (list (aio/fail "e1") (aio/fail "e2"))))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
 
   (test "all: empty list returns completed"
     {do
     (= {h} (aio/all (list)))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
 
   (test "all: single element"
     {do
     (= {h} (aio/all (list (aio/pure 42))))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
 
   ; --- aio/race and aio/any (aio_comb_race.c, aio_comb_any.c) ---
@@ -245,13 +245,13 @@
   (test "race: first fails, sets status"
     {do
     (= {h} (aio/race (list (aio/fail "e1") (aio/fail "e2"))))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
 
   (test "any: all fail"
     {do
     (= {h} (aio/any (list (aio/fail "e1") (aio/fail "e2") (aio/fail "e3"))))
-    (== (aio/status h) (quote :failed))
+    (== (aio/status h) :failed)
   })
 
   ; --- aio/all-settled (aio_comb_all_settled.c) ---
@@ -259,19 +259,19 @@
   (test "all-settled: mix of success and failure"
     {do
     (= {h} (aio/all-settled (list (aio/pure 1) (aio/fail "err") (aio/pure 3))))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
 
   (test "all-settled: all failures"
     {do
     (= {h} (aio/all-settled (list (aio/fail "e1") (aio/fail "e2"))))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
 
   (test "all-settled: empty list"
     {do
     (= {h} (aio/all-settled (list)))
-    (== (aio/status h) (quote :completed))
+    (== (aio/status h) :completed)
   })
 
   ; --- aio/sleep arg validation (aio_comb_timers.c) ---
