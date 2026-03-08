@@ -291,4 +291,300 @@
     (sqlite/close db)
     true
   })
+
+  (test "sqlite-null-binding"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (?)" nil)
+    (= {rows} (sqlite/query db "SELECT val FROM t"))
+    (= {r1} (nth 1 rows))
+    (test/assert-eq nil (plist/get r1 :val) "nil binding inserts NULL")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-float-column"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val REAL)")
+    (sqlite/exec db "INSERT INTO t (val) VALUES (3.14)")
+    (= {rows} (sqlite/query db "SELECT val FROM t"))
+    (= {r1} (nth 1 rows))
+    (= {v} (plist/get r1 :val))
+    (test/assert (num? v) "float column returns a number")
+    true
+  })
+  (test "sqlite-null-column-via-query"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    (sqlite/exec db "INSERT INTO t (id) VALUES (1)")
+    (= {row} (sqlite/query-row db "SELECT val FROM t WHERE id = 1"))
+    (test/assert-eq nil (plist/get row :val) "unset column is nil")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-exec-on-closed-db"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/exec db "SELECT 1"))
+    (test/assert (error? result) "exec on closed db errors")
+    true
+  })
+  (test "sqlite-query-on-closed-db"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/query db "SELECT 1"))
+    (test/assert (error? result) "query on closed db errors")
+    true
+  })
+  (test "sqlite-query-value-null"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    (sqlite/exec db "INSERT INTO t (id) VALUES (1)")
+    (= {v} (sqlite/query-value db "SELECT val FROM t"))
+    (test/assert-eq nil v "query-value returns nil for NULL")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-value-errors-on-multiple-rows"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (sqlite/exec db "INSERT INTO t VALUES (2)")
+    (= {result} (sqlite/query-value db "SELECT id FROM t"))
+    (test/assert (error? result) "query-value errors on multiple rows")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-prepare-on-closed-db"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/prepare db "SELECT 1"))
+    (test/assert (error? result) "prepare on closed db errors")
+    true
+  })
+  (test "sqlite-prepare-bad-sql"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {result} (sqlite/prepare db "NOT VALID SQL"))
+    (test/assert (error? result) "prepare with bad SQL errors")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-bind-after-finalize"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {stmt} (sqlite/prepare db "INSERT INTO t VALUES (?)"))
+    (sqlite/finalize stmt)
+    (= {result} (sqlite/bind stmt 1))
+    (test/assert (error? result) "bind after finalize errors")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-step-after-finalize"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {stmt} (sqlite/prepare db "INSERT INTO t VALUES (?)"))
+    (sqlite/finalize stmt)
+    (= {result} (sqlite/step stmt))
+    (test/assert (error? result) "step after finalize errors")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-last-insert-id-on-closed"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/last-insert-id db))
+    (test/assert (error? result) "last-insert-id on closed db errors")
+    true
+  })
+  (test "sqlite-changes-on-closed"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/changes db))
+    (test/assert (error? result) "changes on closed db errors")
+    true
+  })
+  (test "sqlite-busy-timeout-on-closed"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/busy-timeout db 1000))
+    (test/assert (error? result) "busy-timeout on closed db errors")
+    true
+  })
+  (test "sqlite-exec-script-on-closed"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/exec-script db "SELECT 1"))
+    (test/assert (error? result) "exec-script on closed db errors")
+    true
+  })
+  (test "sqlite-double-close"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-double-finalize"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {stmt} (sqlite/prepare db "SELECT 1"))
+    (sqlite/finalize stmt)
+    (sqlite/finalize stmt)
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-row-on-closed"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/query-row db "SELECT 1"))
+    (test/assert (error? result) "query-row on closed db errors")
+    true
+  })
+  (test "sqlite-query-maybe-on-closed"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/query-maybe db "SELECT 1"))
+    (test/assert (error? result) "query-maybe on closed db errors")
+    true
+  })
+  (test "sqlite-query-value-on-closed"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/close db)
+    (= {result} (sqlite/query-value db "SELECT 1"))
+    (test/assert (error? result) "query-value on closed db errors")
+    true
+  })
+  (test "sqlite-type-assertions"
+    {do
+    (= {r1} (sqlite/exec 42 "SELECT 1"))
+    (test/assert (error? r1) "exec with non-ref first arg errors")
+    (= {r2} (sqlite/query 42 "SELECT 1"))
+    (test/assert (error? r2) "query with non-ref first arg errors")
+    (= {r3} (sqlite/close 42))
+    (test/assert (error? r3) "close with non-ref arg errors")
+    (= {r4} (sqlite/query-row 42 "SELECT 1"))
+    (test/assert (error? r4) "query-row with non-ref errors")
+    (= {r5} (sqlite/query-maybe 42 "SELECT 1"))
+    (test/assert (error? r5) "query-maybe with non-ref errors")
+    (= {r6} (sqlite/query-value 42 "SELECT 1"))
+    (test/assert (error? r6) "query-value with non-ref errors")
+    (= {r7} (sqlite/prepare 42 "SELECT 1"))
+    (test/assert (error? r7) "prepare with non-ref errors")
+    (= {r8} (sqlite/last-insert-id 42))
+    (test/assert (error? r8) "last-insert-id with non-ref errors")
+    (= {r9} (sqlite/changes 42))
+    (test/assert (error? r9) "changes with non-ref errors")
+    (= {r10} (sqlite/busy-timeout 42 100))
+    (test/assert (error? r10) "busy-timeout with non-ref errors")
+    (= {r11} (sqlite/exec-script 42 "SELECT 1"))
+    (test/assert (error? r11) "exec-script with non-ref errors")
+    true
+  })
+  (test "sqlite-bind-with-null"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, b INTEGER)")
+    (= {stmt} (sqlite/prepare db "INSERT INTO t (a, b) VALUES (?, ?)"))
+    (sqlite/bind stmt nil 42)
+    (sqlite/step stmt)
+    (sqlite/finalize stmt)
+    (= {row} (sqlite/query-row db "SELECT a, b FROM t WHERE id = 1"))
+    (test/assert-eq nil (plist/get row :a) "null bound for text column")
+    (test/assert-eq 42 (plist/get row :b) "integer bound correctly")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-bind-type-assertion"
+    {do
+    (= {r1} (sqlite/bind 42 1))
+    (test/assert (error? r1) "bind with non-stmt errors")
+    true
+  })
+  (test "sqlite-step-type-assertion"
+    {do
+    (= {r1} (sqlite/step 42))
+    (test/assert (error? r1) "step with non-stmt errors")
+    true
+  })
+  (test "sqlite-finalize-type-assertion"
+    {do
+    (= {r1} (sqlite/finalize 42))
+    (test/assert (error? r1) "finalize with non-stmt errors")
+    true
+  })
+  (test "sqlite-exec-unsupported-bind-type"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {result} (sqlite/exec db "INSERT INTO t VALUES (?)" (list 1 2)))
+    (test/assert (error? result) "exec with list binding errors")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-unsupported-bind-type"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {result} (sqlite/query db "SELECT * FROM t WHERE id = ?" (list 1 2)))
+    (test/assert (error? result) "query with list binding errors")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-exec-step-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY UNIQUE)")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (= {result} (sqlite/exec db "INSERT INTO t VALUES (1)"))
+    (test/assert (error? result) "duplicate insert errors")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-query-bad-sql"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {result} (sqlite/query db "NOT VALID SQL"))
+    (test/assert (error? result) "query with bad SQL errors")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-exec-returning-rows"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    (sqlite/exec db "INSERT INTO t VALUES (1, 'a')")
+    (sqlite/exec db "INSERT INTO t VALUES (2, 'b')")
+    (= {changed} (sqlite/exec db "SELECT * FROM t"))
+    (test/assert (>= changed 0) "exec on SELECT returns 0 changes")
+    (sqlite/close db)
+    true
+  })
+  (test "sqlite-bind-unsupported-type"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {stmt} (sqlite/prepare db "INSERT INTO t VALUES (?)"))
+    (= {result} (sqlite/bind stmt (list 1 2)))
+    (test/assert (error? result) "bind with list type errors")
+    (sqlite/finalize stmt)
+    (sqlite/close db)
+    true
+  })
 ) (test/context-new))

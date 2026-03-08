@@ -571,3 +571,11 @@ add_executable(test_conn_admission_unit test/unit/test_conn_admission.c test/tes
 target_link_libraries(test_conn_admission_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_conn_admission_unit src/)
 
+add_executable(test_validate test/test_validate.c test/testing.c)
+target_link_libraries(test_validate PRIVATE "-lc" valkyria)
+include_directories(test_validate src/)
+
+add_executable(test_type_env test/test_type_env.c test/testing.c)
+target_link_libraries(test_type_env PRIVATE "-lc" valkyria)
+include_directories(test_type_env src/)
+

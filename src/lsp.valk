@@ -96,20 +96,29 @@
         :resolveProvider :false}
      :hoverProvider :true
      :definitionProvider :true
-      :referencesProvider :true
-      :renameProvider {:prepareProvider :true}
-      :documentSymbolProvider :true
+     :referencesProvider :true
+     :renameProvider {:prepareProvider :true}
+     :documentSymbolProvider :true
      :workspaceSymbolProvider :true
      :semanticTokensProvider
        {:legend
          {:tokenTypes {"keyword" "function" "parameter" "variable"
                        "number" "string" "type" "operator" "property"}
           :tokenModifiers {"declaration" "defaultLibrary"}}
-        :full :true}
-     :inlayHintProvider :true}
+        :full :true
+        :range :true}
+     :inlayHintProvider :true
+     :signatureHelpProvider
+       {:triggerCharacters {"(" " "}
+        :retriggerCharacters {" "}}
+     :documentHighlightProvider :true
+     :documentLinkProvider {:resolveProvider :false}
+     :foldingRangeProvider :true
+     :selectionRangeProvider :true
+     :codeLensProvider {:resolveProvider :false}
+     :codeActionProvider {:codeActionKinds {"quickfix"}}}
    :serverInfo
-     {:name "valk-lsp"
-             :version "0.4.0"}})
+     {:name "valk-lsp"}})
 
 ; ---------------------------------------------------------------------------
 ; Known-set cache — rebuilt only when symdb changes
@@ -167,11 +176,21 @@
 
 (fun {lsp/publish-diagnostics uri text} {do
   (= {ast} (parse text))
-  (lsp/ensure-loads-indexed ast)
-  (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
-  (= {lsp-diags} (map make-lsp-diag diags))
-  (lsp/send-notification "textDocument/publishDiagnostics"
-    (list :uri uri :diagnostics lsp-diags))})
+  (if (error? ast)
+    {lsp/send-notification "textDocument/publishDiagnostics"
+      (list :uri uri :diagnostics
+        (list (list :range
+          (list :start (list :line 0 :character 0)
+                :end   (list :line 0 :character 1))
+          :severity 1
+          :source "valk"
+          :message (str ast))))}
+    {do
+      (lsp/ensure-loads-indexed ast)
+      (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
+      (= {lsp-diags} (map make-lsp-diag diags))
+      (lsp/send-notification "textDocument/publishDiagnostics"
+        (list :uri uri :diagnostics lsp-diags))})})
 
 ; ---------------------------------------------------------------------------
 ; Sync document to symdb
@@ -183,6 +202,24 @@
     {do (= {changed} (symdb/sync-document lsp/db uri text))
         (if (> changed 0) {lsp/invalidate-known-set} {})})})
 
+(fun {lsp/sync-doc-text uri text} {do
+  (if (nil? lsp/db) {}
+    {do
+      (= {hash} (str "mem:" (len text)))
+      (= {path} (uri->path uri))
+      (= {existing} (sqlite/query-maybe lsp/db
+        "SELECT hash FROM files WHERE path=?1" path))
+      (if (not (nil? existing))
+        {if (== (plist/get existing :hash) hash) {}
+          {do (sqlite/exec lsp/db "BEGIN")
+              (symdb/sync-file-symbols lsp/db uri text hash)
+              (sqlite/exec lsp/db "COMMIT")
+              (lsp/invalidate-known-set)}}
+        {do (sqlite/exec lsp/db "BEGIN")
+            (symdb/sync-file-symbols lsp/db uri text hash)
+            (sqlite/exec lsp/db "COMMIT")
+            (lsp/invalidate-known-set)})})})
+
 ; ---------------------------------------------------------------------------
 ; Method handlers — notifications
 ; ---------------------------------------------------------------------------
@@ -190,21 +227,7 @@
 (fun {lsp/seed-file db path} {do
   (= {path} (if (starts-with path "/") {path}
                {str lsp/root-path "/" path}))
-  (= {fp} (file/fingerprint path))
-  (if (error? fp) {0}
-    {do
-      (= {existing} (sqlite/query-maybe db
-        "SELECT hash FROM files WHERE path=?1" path))
-      (if (not (nil? existing))
-        {if (== (plist/get existing :hash) fp) {0}
-          {do
-            (= {text} (read-file path))
-            (if (error? text) {0}
-              {do (symdb/sync-document db (str "file://" path) text) 1})}}
-        {do
-          (= {text} (read-file path))
-          (if (error? text) {0}
-            {do (symdb/sync-document db (str "file://" path) text) 1})})})
+  (lsp/sync-file db path)
 })
 
 (fun {lsp/seed-builtins db root} {do
@@ -256,23 +279,8 @@
       (lsp/scan-entries root (tail entries) acc)}
 })
 
-(fun {lsp/index-file db path} {do
-  (= {fpath} (uri->path (str "file://" path)))
-  (= {fp} (file/fingerprint path))
-  (if (error? fp) {0}
-    {do
-      (= {existing} (sqlite/query-maybe db
-        "SELECT hash FROM files WHERE path=?1" fpath))
-      (if (not (nil? existing))
-        {if (== (plist/get existing :hash) fp) {0}
-          {do
-            (= {text} (read-file path))
-            (if (error? text) {0}
-              {do (symdb/sync-file-symbols db (str "file://" path) text fp) 1})}}
-        {do
-          (= {text} (read-file path))
-          (if (error? text) {0}
-            {do (symdb/sync-file-symbols db (str "file://" path) text fp) 1})})})
+(fun {lsp/index-file db path} {
+  lsp/sync-file db path
 })
 
 (fun {lsp/collect-workspace-files root} {do
@@ -286,7 +294,9 @@
     (if (== in-txn 1) {sqlite/exec db "COMMIT"} {})
     (if (> indexed 0)
       {do (lsp/invalidate-known-set)
-          (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))} {})
+          (lsp/progress-end lsp/progress-token (str "indexed " indexed " files"))
+          (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
+          (lsp/cleanup-stale-files)} {})
     nil}
   {if (stdin/has-data) {do
     (if (== in-txn 1) {do (sqlite/exec db "COMMIT") {}} {})
@@ -328,11 +338,17 @@
     {do
       (= {text} (plist/get (head changes) :text))
       (lsp/doc-store uri text)
-      (lsp/publish-diagnostics uri text)})})
+      (if (not (stdin/has-data))
+        {do (lsp/sync-doc-text uri text)
+            (lsp/publish-diagnostics uri text)}
+        {})})})
 
 (fun {handle-did-close params} {do
   (= {td} (plist/get params :textDocument))
-  (plist/get td :uri)})
+  (= {uri} (plist/get td :uri))
+  (def {lsp/documents} (plist/set lsp/documents uri nil))
+  (lsp/send-notification "textDocument/publishDiagnostics"
+    (list :uri uri :diagnostics nil))})
 
 (fun {handle-did-save params} {do
   (= {td} (plist/get params :textDocument))
@@ -547,6 +563,8 @@
   (= {col} (plist/get pos :character))
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {lsp/send-response id nil}
+    {if (lsp/in-string? text line col)
+      {lsp/send-response id (list :isIncomplete :false :items nil)}
     {do
       (= {word} (word-at-position text line col))
       (= {prefix} (if (nil? word) {""} {word}))
@@ -562,7 +580,7 @@
             {symdb/completion-symbols lsp/db prefix}))
           (map make-sym-completion-item syms)}))
       (= {all-items} (join snippet-items (if (nil? sym-items) {nil} {sym-items})))
-      (lsp/send-response id (list :isIncomplete :false :items all-items))})})
+      (lsp/send-response id (list :isIncomplete :false :items all-items))}})})
 
 (fun {handle-document-symbols id params} {do
   (= {td} (plist/get params :textDocument))
@@ -594,15 +612,20 @@
       (= {syms} (if (nil? query) {symdb/all-symbol-names lsp/db}
         {if (== query "") {symdb/all-symbol-names lsp/db}
           {symdb/search-symbols lsp/db query}}))
-      (= {lsp-syms} (map (\ {s} {
-        list :name (plist/get s :name)
+      (= {lsp-syms} (map (\ {s} {do
+        (= {sym-line} (plist/get s :line))
+        (= {sym-col} (plist/get s :col))
+        (= {sym-name} (plist/get s :name))
+        (= {sl} (if (nil? sym-line) {0} {sym-line}))
+        (= {sc} (if (nil? sym-col) {0} {sym-col}))
+        (list :name sym-name
              :kind (symkind->lsp-kind (plist/get s :kind))
              :location (list
                :uri (str "file://" (if (nil? (plist/get s :path))
                  {""} {plist/get s :path}))
                :range (list
-                 :start (list :line 0 :character 0)
-                 :end (list :line 0 :character 0)))
+                 :start (list :line sl :character sc)
+                 :end (list :line sl :character (+ sc (len sym-name))))))
       }) syms))
       (lsp/send-response id lsp-syms)})})
 
@@ -729,6 +752,555 @@
 })
 
 ; ---------------------------------------------------------------------------
+; Signature help — show function signature as user types arguments
+; ---------------------------------------------------------------------------
+
+(fun {sig/scan-back text pos dp db} {
+  if (< pos 0) {nil}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (== ch ")")
+      {sig/scan-back text (- pos 1) (+ dp 1) db}
+    {if (== ch "(")
+      {if (== dp 0) {pos}
+        {sig/scan-back text (- pos 1) (- dp 1) db}}
+    {if (== ch "}")
+      {sig/scan-back text (- pos 1) dp (+ db 1)}
+    {if (== ch "{")
+      {if (> db 0)
+        {sig/scan-back text (- pos 1) dp (- db 1)}
+        {sig/scan-back text (- pos 1) dp db}}
+      {sig/scan-back text (- pos 1) dp db}}}})}
+})
+
+(fun {sig/extract-name text open-pos} {do
+  (= {start} (+ open-pos 1))
+  (= {end} (scan-word-end text start))
+  (if (>= start end) {nil}
+    {str/slice text start end})
+})
+
+(fun {sig/count-args text start end dp db count in-word} {
+  if (>= start end) {count}
+  {do
+    (= {ch} (str/slice text start (+ start 1)))
+    (if (== ch "(") {sig/count-args text (+ start 1) end (+ dp 1) db count 0}
+    {if (== ch ")") {sig/count-args text (+ start 1) end (- dp 1) db count 0}
+    {if (== ch "{") {sig/count-args text (+ start 1) end dp (+ db 1) count 0}
+    {if (== ch "}") {sig/count-args text (+ start 1) end dp (- db 1) count 0}
+    {if (if (== dp 0) {== db 0} {0})
+      {if (if (== ch " ") {1} {if (== ch "\n") {1} {if (== ch "\t") {1} {0}}})
+        {sig/count-args text (+ start 1) end dp db count 0}
+        {sig/count-args text (+ start 1) end dp db
+          (if (== in-word 0) {+ count 1} {count}) 1}}
+      {sig/count-args text (+ start 1) end dp db count in-word}}}}})}
+})
+
+(fun {sig/lookup-params name text db} {do
+  (= {local} (hint/collect-local-params (parse text)))
+  (= {params} (plist/get local name))
+  (if (not (nil? params)) {params}
+    {hint/query-db-params db name})
+})
+
+(fun {handle-signature-help id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {pos} (plist/get params :position))
+  (= {line} (plist/get pos :line))
+  (= {col} (plist/get pos :character))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id (None)}
+    {do
+      (= {offset} (line-col->offset text line col))
+      (= {open-pos} (sig/scan-back text (- offset 1) 0 0))
+      (if (nil? open-pos) {lsp/send-response id (None)}
+        {do
+          (= {name} (sig/extract-name text open-pos))
+          (if (nil? name) {lsp/send-response id (None)}
+            {do
+              (= {fn-params} (sig/lookup-params name text lsp/db))
+              (if (nil? fn-params) {lsp/send-response id (None)}
+                {do
+                  (= {name-end} (+ open-pos 1 (len name)))
+                  (= {arg-idx} (sig/count-args text name-end offset 0 0 0 0))
+                  (= {active} (if (>= arg-idx (len fn-params))
+                    {- (len fn-params) 1} {arg-idx}))
+                  (= {param-items} (map (\ {p} {
+                    list :label p
+                  }) fn-params))
+                  (= {sig-label} (str "(" name " " (str/join fn-params " ") ")"))
+                  (lsp/send-response id
+                    (list :signatures
+                      (list (list :label sig-label
+                                  :parameters param-items
+                                  :activeParameter (if (< active 0) {0} {active})))
+                      :activeSignature 0
+                      :activeParameter (if (< active 0) {0} {active})))})})})})})}
+
+)
+
+; ---------------------------------------------------------------------------
+; Document highlight — highlight all occurrences of symbol under cursor
+; ---------------------------------------------------------------------------
+
+(fun {handle-document-highlight id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {pos} (plist/get params :position))
+  (= {line} (plist/get pos :line))
+  (= {col} (plist/get pos :character))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id nil}
+    {do
+      (= {word} (word-at-position text line col))
+      (if (nil? word) {lsp/send-response id nil}
+        {do
+          (= {local-refs} (ref/find-scoped-refs text line col))
+          (if (not (nil? local-refs))
+            {lsp/send-response id
+              (map (\ {r} {do
+                (= {lc} (offset->line-col text (plist/get r :offset)))
+                (= {rname} (plist/get r :name))
+                (= {kind} (if (== (plist/get r :is-def) 1) {3} {2}))
+                (list :range (list
+                  :start (list :line (head lc) :character (head (tail lc)))
+                  :end (list :line (head lc) :character (+ (head (tail lc)) (len rname))))
+                :kind kind)
+              }) local-refs)}
+            {do
+              (= {all-refs} (ref/collect-refs text))
+              (= {matching} (filter (\ {r} {== (plist/get r :name) word}) all-refs))
+              (lsp/send-response id
+                (map (\ {r} {do
+                  (= {lc} (offset->line-col text (plist/get r :offset)))
+                  (= {rname} (plist/get r :name))
+                  (= {kind} (if (== (plist/get r :is-def) 1) {3} {2}))
+                  (list :range (list
+                    :start (list :line (head lc) :character (head (tail lc)))
+                    :end (list :line (head lc) :character (+ (head (tail lc)) (len rname))))
+                  :kind kind)
+                }) matching))})})})})}
+
+)
+
+; ---------------------------------------------------------------------------
+; Document links — make (load "path") clickable
+; ---------------------------------------------------------------------------
+
+(fun {link/collect-loads ast text root} {
+  link/walk-exprs ast text root nil
+})
+
+(fun {link/walk-exprs exprs text root acc} {
+  if (nil? exprs) {acc}
+  {link/walk-exprs (tail exprs) text root
+    (link/walk-one (head exprs) text root acc)}
+})
+
+(fun {link/walk-one expr text root acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {link/check-load expr (head expr) (tail expr) text root acc}}
+})
+
+(fun {link/check-load expr hd tl text root acc} {
+  if (not (sym? hd)) {acc}
+  {if (not (== (str hd) "load")) {link/walk-exprs tl text root acc}
+  {if (nil? tl) {acc}
+  {link/extract-load-target (head tl) text root acc}}}
+})
+
+(fun {link/extract-load-target target text root acc} {
+  if (not (str? target)) {acc}
+  {do
+    (= {path} (str target))
+    (= {pos} (src-pos target))
+    (if (< pos 0) {acc}
+      {do
+        (= {lc} (offset->line-col text pos))
+        (= {line} (head lc))
+        (= {col} (head (tail lc)))
+        (= {full-path} (if (starts-with path "/") {path}
+          {str root "/" path}))
+        (qcons (list :range (list
+          :start (list :line line :character col)
+          :end (list :line line :character (+ col (len path) 2)))
+          :target (str "file://" full-path)) acc)})}
+})
+
+(fun {handle-document-link id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id nil}
+    {do
+      (= {ast} (parse text))
+      (if (error? ast) {lsp/send-response id nil}
+        {do
+          (= {root} (if (nil? lsp/root-path) {"."} {lsp/root-path}))
+          (lsp/send-response id (link/collect-loads ast text root))})})})
+
+; ---------------------------------------------------------------------------
+; Folding ranges — fold fun, do, match, type, let blocks
+; ---------------------------------------------------------------------------
+
+(def {FOLD_FORMS}
+  (dict/from-keys {"fun" "do" "match" "select" "case" "type" "let" "\\"
+   "aio/do" "aio/let" "if" "ctx/with" "ctx/with-deadline"}))
+
+(fun {fold/collect ast text} {
+  fold/walk-exprs ast text nil
+})
+
+(fun {fold/walk-exprs exprs text acc} {
+  if (nil? exprs) {acc}
+  {fold/walk-exprs (tail exprs) text
+    (fold/walk-one (head exprs) text acc)}
+})
+
+(fun {fold/walk-one expr text acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {fold/check-form expr (head expr) (tail expr) text acc}}
+})
+
+(fun {fold/check-form expr hd tl text acc} {do
+  (= {acc2} (fold/walk-exprs tl text acc))
+  (if (not (sym? hd)) {fold/walk-exprs tl text acc}
+    {if (dict/has? FOLD_FORMS (str hd))
+      {fold/emit-range expr text acc2}
+      {fold/walk-exprs tl text acc}})
+})
+
+(fun {fold/emit-range expr text acc} {do
+  (= {start-pos} (src-pos expr))
+  (if (< start-pos 0) {acc}
+    {do
+      (= {start-lc} (offset->line-col text start-pos))
+      (= {start-line} (head start-lc))
+      (= {expr-str} (str expr))
+      (= {end-offset} (+ start-pos (len expr-str)))
+      (= {end-lc} (offset->line-col text end-offset))
+      (= {end-line} (head end-lc))
+      (if (<= end-line start-line) {acc}
+        {qcons (list :startLine start-line
+                     :endLine end-line
+                     :kind "region") acc})})
+})
+
+(fun {handle-folding-range id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id nil}
+    {do
+      (= {ast} (parse text))
+      (if (error? ast) {lsp/send-response id nil}
+        {lsp/send-response id (fold/collect ast text)})})})
+
+; ---------------------------------------------------------------------------
+; Selection range — smart selection expansion using AST structure
+; ---------------------------------------------------------------------------
+
+(fun {sel/find-ranges text positions} {
+  map (\ {pos} {do
+    (= {line} (plist/get pos :line))
+    (= {col} (plist/get pos :character))
+    (= {offset} (line-col->offset text line col))
+    (= {ast} (parse text))
+    (if (error? ast)
+      {list :range (list :start pos :end pos)}
+      {do
+        (= {ranges} (sel/collect-enclosing ast text offset nil))
+        (sel/build-nested ranges)})
+  }) positions
+})
+
+(fun {sel/collect-enclosing exprs text offset acc} {
+  if (nil? exprs) {acc}
+  {sel/collect-enclosing (tail exprs) text offset
+    (sel/check-one (head exprs) text offset acc)}
+})
+
+(fun {sel/check-one expr text offset acc} {
+  if (not (list? expr)) {acc}
+  {do
+    (= {start} (src-pos expr))
+    (if (< start 0) {acc}
+      {do
+        (= {expr-str} (str expr))
+        (= {end} (+ start (len expr-str)))
+        (if (if (>= offset start) {<= offset end} {0})
+          {do
+            (= {start-lc} (offset->line-col text start))
+            (= {end-lc} (offset->line-col text end))
+            (= {range} (list :start (list :line (head start-lc) :character (head (tail start-lc)))
+                              :end (list :line (head end-lc) :character (head (tail end-lc)))))
+            (sel/collect-enclosing expr text offset (qcons range acc))}
+          {acc})})}
+})
+
+(fun {sel/build-nested ranges} {
+  if (nil? ranges) {list :range (list :start (list :line 0 :character 0)
+                                       :end (list :line 0 :character 0))}
+  {sel/build-nested-walk ranges}
+})
+
+(fun {sel/build-nested-walk ranges} {
+  if (nil? ranges) {nil}
+  {if (nil? (tail ranges))
+    {list :range (head ranges)}
+    {list :range (head ranges)
+          :parent (sel/build-nested-walk (tail ranges))}}
+})
+
+(fun {handle-selection-range id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {positions} (plist/get params :positions))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id nil}
+    {lsp/send-response id (sel/find-ranges text positions)})})
+
+; ---------------------------------------------------------------------------
+; Code lens — show reference counts above function definitions
+; ---------------------------------------------------------------------------
+
+(fun {handle-code-lens id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (if (nil? lsp/db) {lsp/send-response id nil}
+    {do
+      (= {path} (uri->path uri))
+      (= {syms} (symdb/file-symbols lsp/db path))
+      (= {lenses} (lens/build-from-syms syms lsp/db))
+      (lsp/send-response id lenses)})})
+
+(fun {lens/build-from-syms syms db} {
+  if (nil? syms) {nil}
+  {do
+    (= {s} (head syms))
+    (= {kind} (plist/get s :kind))
+    (if (== kind SYMKIND_FUNCTION)
+      {do
+        (= {name} (plist/get s :name))
+        (= {count} (symdb/ref-count db name))
+        (= {sym-line} (plist/get s :line))
+        (= {sym-col} (plist/get s :col))
+        (= {lens} (list :range (list
+          :start (list :line sym-line :character sym-col)
+          :end (list :line sym-line :character (+ sym-col (len name))))
+          :command (list :title (str count " reference" (if (== count 1) {""} {"s"}))
+                         :command "")))
+        (qcons lens (lens/build-from-syms (tail syms) db))}
+      {lens/build-from-syms (tail syms) db})}
+})
+
+; ---------------------------------------------------------------------------
+; Code action — quick fixes for undefined symbols
+; ---------------------------------------------------------------------------
+
+(fun {handle-code-action id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {context} (plist/get params :context))
+  (= {diagnostics} (plist/get context :diagnostics))
+  (if (nil? diagnostics) {lsp/send-response id nil}
+    {do
+      (= {actions} (ca/collect-actions diagnostics uri))
+      (lsp/send-response id actions)})})
+
+(fun {ca/collect-actions diags uri} {
+  if (nil? diags) {nil}
+  {do
+    (= {d} (head diags))
+    (= {msg} (plist/get d :message))
+    (= {actions} (if (nil? msg) {nil}
+      {ca/check-undefined msg d uri}))
+    (join actions (ca/collect-actions (tail diags) uri))}
+})
+
+(fun {ca/check-undefined msg d uri} {
+  if (not (starts-with msg "Symbol '")) {
+    if (not (starts-with msg "Function '")) {nil}
+    {ca/suggest-similar msg d uri}}
+  {ca/suggest-similar msg d uri}
+})
+
+(fun {ca/extract-name-from-msg msg} {do
+  (= {parts} (str/split msg "'"))
+  (if (< (len parts) 3) {nil}
+    {nth 2 parts})
+})
+
+(fun {ca/suggest-similar msg d uri} {
+  if (nil? lsp/db) {nil}
+  {do
+    (= {name} (ca/extract-name-from-msg msg))
+    (if (nil? name) {nil}
+      {do
+        (= {candidates} (symdb/search-symbols lsp/db name))
+        (= {range} (plist/get d :range))
+        (ca/make-fix-actions candidates name range uri d)})}
+})
+
+(fun {ca/make-fix-actions candidates original range uri d} {
+  if (nil? candidates) {nil}
+  {do
+    (= {c} (head candidates))
+    (= {cname} (plist/get c :name))
+    (if (== cname original) {ca/make-fix-actions (tail candidates) original range uri d}
+      {do
+        (= {action} (list :title (str "Did you mean '" cname "'?")
+                          :kind "quickfix"
+                          :diagnostics (list d)
+                          :edit (list :changes
+                            (list uri (list (list :range range :newText cname))))))
+        (qcons action (ca/make-fix-actions (tail candidates) original range uri d))})}
+})
+
+; ---------------------------------------------------------------------------
+; Semantic tokens range — tokens for visible viewport only
+; ---------------------------------------------------------------------------
+
+(fun {handle-semantic-tokens-range id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {range} (plist/get params :range))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id (list :data nil)}
+    {do
+      (= {start-line} (plist/get (plist/get range :start) :line))
+      (= {end-line} (plist/get (plist/get range :end) :line))
+      (= {data} (sem/tokenize text))
+      (= {filtered} (sem/filter-range data start-line end-line 0 nil))
+      (lsp/send-response id (list :data filtered))})})
+
+(fun {sem/filter-range tokens start-line end-line cur-line acc} {
+  if (nil? tokens) {reverse acc}
+  {if (< (len tokens) 5) {reverse acc}
+  {do
+    (= {dl} (head tokens))
+    (= {dc} (head (tail tokens)))
+    (= {tlen} (head (tail (tail tokens))))
+    (= {ttype} (head (tail (tail (tail tokens)))))
+    (= {tmods} (head (tail (tail (tail (tail tokens))))))
+    (= {new-line} (+ cur-line dl))
+    (= {rest} (tail (tail (tail (tail (tail tokens))))))
+    (if (> new-line end-line) {reverse acc}
+      {if (< new-line start-line)
+        {sem/filter-range rest start-line end-line new-line acc}
+        {sem/filter-range rest start-line end-line new-line
+          (qcons tmods (qcons ttype (qcons tlen (qcons dc (qcons dl acc)))))}})}}
+})
+
+; ---------------------------------------------------------------------------
+; Completion context filtering
+; ---------------------------------------------------------------------------
+
+(fun {lsp/in-string? text line col} {do
+  (= {offset} (line-col->offset text line col))
+  (lsp/count-quotes text offset 0 0)
+})
+
+(fun {lsp/count-quotes text limit pos count} {
+  if (>= pos limit) {== (% count 2) 1}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (== ch "\"")
+      {lsp/count-quotes text limit (+ pos 1) (+ count 1)}
+    {if (== ch "\\")
+      {lsp/count-quotes text limit (+ pos 2) count}
+      {lsp/count-quotes text limit (+ pos 1) count}})}
+})
+
+; ---------------------------------------------------------------------------
+; Stale file cleanup
+; ---------------------------------------------------------------------------
+
+(fun {lsp/cleanup-stale-files} {
+  if (nil? lsp/db) {}
+  {do
+    (= {indexed} (symdb/all-indexed-paths lsp/db))
+    (= {removed} (lsp/check-stale-files indexed 0))
+    (if (> removed 0)
+      {do (lsp/invalidate-known-set)
+          (stderr/write (str "[valk-lsp] removed " removed " stale files\n"))}
+      {})}
+})
+
+(fun {lsp/check-stale-files files count} {
+  if (nil? files) {count}
+  {do
+    (= {f} (head files))
+    (= {path} (plist/get f :path))
+    (= {file-id} (plist/get f :id))
+    (= {fp} (file/fingerprint path))
+    (if (error? fp)
+      {do (symdb/remove-file lsp/db file-id)
+          (lsp/check-stale-files (tail files) (+ count 1))}
+      {lsp/check-stale-files (tail files) count})}
+})
+
+; ---------------------------------------------------------------------------
+; Unified file sync helper
+; ---------------------------------------------------------------------------
+
+(fun {lsp/sync-file db path} {do
+  (= {fp} (file/fingerprint path))
+  (if (error? fp) {0}
+    {do
+      (= {fpath} (uri->path (str "file://" path)))
+      (= {existing} (sqlite/query-maybe db
+        "SELECT hash FROM files WHERE path=?1" fpath))
+      (if (not (nil? existing))
+        {if (== (plist/get existing :hash) fp) {0}
+          {do
+            (= {text} (read-file path))
+            (if (error? text) {0}
+              {do (symdb/sync-file-symbols db (str "file://" path) text fp) 1})}}
+        {do
+          (= {text} (read-file path))
+          (if (error? text) {0}
+            {do (symdb/sync-file-symbols db (str "file://" path) text fp) 1})})})
+})
+
+; ---------------------------------------------------------------------------
+; Progress support
+; ---------------------------------------------------------------------------
+
+(def {lsp/progress-token} 0)
+
+(fun {lsp/next-progress-token} {do
+  (def {lsp/progress-token} (+ lsp/progress-token 1))
+  lsp/progress-token
+})
+
+(fun {lsp/progress-begin token title total} {do
+  (lsp/send-notification "$/progress"
+    (list :token token
+          :value (list :kind "begin"
+                       :title title
+                       :percentage 0)))
+})
+
+(fun {lsp/progress-report token message pct} {do
+  (lsp/send-notification "$/progress"
+    (list :token token
+          :value (list :kind "report"
+                       :message message
+                       :percentage pct)))
+})
+
+(fun {lsp/progress-end token message} {do
+  (lsp/send-notification "$/progress"
+    (list :token token
+          :value (list :kind "end"
+                       :message message)))
+})
+
+; ---------------------------------------------------------------------------
 ; Dispatch
 ; ---------------------------------------------------------------------------
 
@@ -764,9 +1336,18 @@
     {"textDocument/documentSymbol" (handle-document-symbols id params) :continue}
     {"workspace/symbol" (handle-workspace-symbols id params) :continue}
     {"textDocument/semanticTokens/full" (handle-semantic-tokens id params) :continue}
+    {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id params) :continue}
     {"textDocument/prepareRename" (handle-prepare-rename id params) :continue}
     {"textDocument/rename" (handle-rename id params) :continue}
     {"textDocument/inlayHint" (handle-inlay-hints id params) :continue}
+    {"textDocument/signatureHelp" (handle-signature-help id params) :continue}
+    {"textDocument/documentHighlight" (handle-document-highlight id params) :continue}
+    {"textDocument/documentLink" (handle-document-link id params) :continue}
+    {"textDocument/foldingRange" (handle-folding-range id params) :continue}
+    {"textDocument/selectionRange" (handle-selection-range id params) :continue}
+    {"textDocument/codeLens" (handle-code-lens id params) :continue}
+    {"textDocument/codeAction" (handle-code-action id params) :continue}
+    {"$/cancelRequest" :continue}
     {_ (if (num? id)
          {lsp/send-error id -32601 (str "Method not found: " method)} {})
        :continue}
@@ -790,12 +1371,16 @@
       {if (== action :scan)
         {lsp/loop 1
           (if (not (nil? lsp/db))
-            {lsp/collect-workspace-files lsp/root-path}
+            {do
+              (= {files} (lsp/collect-workspace-files lsp/root-path))
+              (= {tok} (lsp/next-progress-token))
+              (lsp/progress-begin tok "Indexing workspace" (len files))
+              files}
             {nil})}
         {lsp/loop initialized pending}}})})})
 
 (fun {lsp/main} {do
-  (stderr/write "[valk-lsp] starting (valk implementation v0.5.0)\n")
+  (stderr/write "[valk-lsp] starting\n")
   (lsp/loop 0 nil)
   (if (not (nil? lsp/db)) {symdb/close lsp/db} {})
   (stderr/write "[valk-lsp] shutdown\n")})

@@ -38,15 +38,29 @@
 })
 
 (fun {hint/params-dispatch hd tl params} {
-  if (not (sym? hd)) {params}
-  {if (== (str hd) "fun") {hint/params-from-fun tl params}
-  {if (== (str hd) "do") {hint/params-walk tl params}
-  {params}}}
+  if (not (sym? hd)) {hint/params-walk tl params}
+  {do
+    (= {name} (str hd))
+    (if (== name "fun") {hint/params-from-fun tl params}
+    {if (== name "do") {hint/params-walk tl params}
+    {if (== name "\\") {hint/params-walk-lambda tl params}
+    {if (== name "if") {hint/params-walk tl params}
+    {if (== name "match") {hint/params-walk tl params}
+    {if (== name "select") {hint/params-walk tl params}
+    {if (== name "let") {hint/params-walk tl params}
+    {hint/params-walk tl params}}}}}}})}
+})
+
+(fun {hint/params-walk-lambda tl params} {
+  if (< (len tl) 2) {params}
+  {hint/params-walk (tail tl) params}
 })
 
 (fun {hint/params-from-fun tl params} {
   if (< (len tl) 2) {params}
-  {hint/params-from-formals (head tl) params}
+  {do
+    (= {params2} (hint/params-from-formals (head tl) params))
+    (hint/params-walk (tail tl) params2)}
 })
 
 (fun {hint/params-from-formals formals params} {

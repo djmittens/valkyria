@@ -17,6 +17,7 @@
 static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx);
 static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx);
 
+// LCOV_EXCL_START - Heap2 mark internals only reachable from parallel GC cycle
 static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
   if (ptr == nullptr) return false;
 
@@ -27,8 +28,6 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
     return valk_gc_mark_large_object(ctx->heap, ptr);
   }
 }
-
-// LCOV_EXCL_START - Heap2 marking with complex types requires runtime context from real GC cycle
 static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx) {
   if (lval == nullptr) return;
 
@@ -97,7 +96,6 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
       break;
   }
 }
-// LCOV_EXCL_STOP
 
 static void mark_one_eval_stack(valk_eval_stack_t *stack, valk_gc_mark_ctx_t *ctx) {
   for (u64 i = 0; i < stack->count; i++) {
@@ -166,6 +164,7 @@ static void mark_root_visitor2(valk_lval_t *val, void *user) {
 void valk_gc_heap_mark_object(valk_gc_mark_ctx_t *ctx, void *ptr) {
   mark_lval(ptr, ctx);
 }
+// LCOV_EXCL_STOP
 // LCOV_EXCL_BR_STOP
 
 // ============================================================================

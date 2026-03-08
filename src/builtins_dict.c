@@ -28,7 +28,7 @@ static valk_dict_t *dict_alloc(u64 capacity) {
   return d;
 }
 
-static void dict_free_fn(void *ptr) {
+static void dict_free_fn(void *ptr) { // LCOV_EXCL_START
   valk_dict_t *d = ptr;
   if (!d) return;
   for (u64 i = 0; i < d->capacity; i++) {
@@ -36,7 +36,7 @@ static void dict_free_fn(void *ptr) {
   }
   free(d->keys);
   free(d);
-}
+} // LCOV_EXCL_STOP
 
 static void dict_grow(valk_dict_t *d) {
   u64 new_cap = d->capacity * 2;

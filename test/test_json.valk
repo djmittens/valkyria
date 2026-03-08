@@ -1,0 +1,649 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+
+  (test "parse-integer"
+    {do
+    (= {result} (json/parse "42"))
+    (test/assert-eq 42 result "should parse integer")
+    true
+  })
+
+  (test "parse-negative-integer"
+    {do
+    (= {result} (json/parse "-7"))
+    (test/assert-eq -7 result "should parse negative integer")
+    true
+  })
+
+  (test "parse-decimal-truncates"
+    {do
+    (= {result} (json/parse "3.14"))
+    (test/assert-eq 3 result "should truncate decimal to integer")
+    true
+  })
+
+  (test "parse-zero"
+    {do
+    (= {result} (json/parse "0"))
+    (test/assert-eq 0 result "should parse zero")
+    true
+  })
+
+  (test "parse-simple-string"
+    {do
+    (= {result} (json/parse "\"hello\""))
+    (test/assert-eq "hello" result "should parse simple string")
+    true
+  })
+
+  (test "parse-string-escape-sequences"
+    {do
+    (= {result} (json/parse "\"a\\nb\\tc\""))
+    (= {expected} (str/concat "a" (str/concat "\n" (str/concat "b" (str/concat "\t" "c")))))
+    (test/assert-eq expected result "should parse \\n and \\t escapes")
+    true
+  })
+
+  (test "parse-string-more-escapes"
+    {do
+    (= {r1} (json/parse "\"a\\\\b\""))
+    (test/assert-eq "a\\b" r1 "should parse backslash escape")
+    (= {r2} (json/parse "\"a\\\"b\""))
+    (test/assert-eq "a\"b" r2 "should parse quote escape")
+    (= {r3} (json/parse "\"a\\/b\""))
+    (test/assert-eq "a/b" r3 "should parse slash escape")
+    true
+  })
+
+  (test "parse-string-control-escapes"
+    {do
+    (= {r1} (json/parse "\"a\\rb\""))
+    (test/assert-eq 3 (str/len r1) "\\r escape produces 3 chars")
+    (= {r2} (json/parse "\"a\\bb\""))
+    (test/assert-eq 3 (str/len r2) "\\b escape produces 3 chars")
+    (= {r3} (json/parse "\"a\\fb\""))
+    (test/assert-eq 3 (str/len r3) "\\f escape produces 3 chars")
+    true
+  })
+
+  (test "parse-string-unicode-escape"
+    {do
+    (= {result} (json/parse "\"\\u0041\""))
+    (test/assert-eq "A" result "\\u0041 should produce A")
+    (= {r2} (json/parse "\"\\u0048\\u0069\""))
+    (test/assert-eq "Hi" r2 "\\u0048\\u0069 should produce Hi")
+    true
+  })
+
+  (test "parse-string-unicode-high-codepoint"
+    {do
+    (= {result} (json/parse "\"\\u00FF\""))
+    (test/assert-eq "?" result "high codepoint >= 0x80 should produce ?")
+    true
+  })
+
+  (test "parse-string-unknown-escape"
+    {do
+    (= {result} (json/parse "\"\\q\""))
+    (test/assert-eq "q" result "unknown escape just passes char through")
+    true
+  })
+
+  (test "parse-long-string-triggers-realloc"
+    {do
+    (= {long-str} (str/concat "\"" (str/concat (str/repeat "x" 200) "\"")))
+    (= {result} (json/parse long-str))
+    (test/assert-eq 200 (str/len result) "long string should have 200 chars")
+    true
+  })
+
+  (test "parse-true"
+    {do
+    (= {result} (json/parse "true"))
+    (test/assert-eq 1 result "true should parse to 1")
+    true
+  })
+
+  (test "parse-false"
+    {do
+    (= {result} (json/parse "false"))
+    (test/assert-eq 0 result "false should parse to 0")
+    true
+  })
+
+  (test "parse-null"
+    {do
+    (= {result} (json/parse "null"))
+    (test/assert-eq (head result) (head {Option::None}) "null should parse to Option::None tag")
+    (test/assert-eq 1 (len result) "null should be single-element list")
+    true
+  })
+
+  (test "parse-empty-array"
+    {do
+    (= {result} (json/parse "[]"))
+    (test/assert-eq 0 (len result) "empty array should be empty list")
+    true
+  })
+
+  (test "parse-array-of-numbers"
+    {do
+    (= {result} (json/parse "[1,2,3]"))
+    (test/assert-eq 3 (len result) "array should have 3 elements")
+    (test/assert-eq 1 (nth 1 result) "first element")
+    (test/assert-eq 2 (nth 2 result) "second element")
+    (test/assert-eq 3 (nth 3 result) "third element")
+    true
+  })
+
+  (test "parse-array-with-whitespace"
+    {do
+    (= {result} (json/parse " [ 1 , 2 , 3 ] "))
+    (test/assert-eq 3 (len result) "whitespace should be skipped")
+    (test/assert-eq 1 (nth 1 result) "first element")
+    true
+  })
+
+  (test "parse-nested-array"
+    {do
+    (= {result} (json/parse "[[1,2],[3,4]]"))
+    (test/assert-eq 2 (len result) "outer array has 2 elements")
+    (= {inner1} (nth 1 result))
+    (test/assert-eq 2 (len inner1) "inner1 has 2 elements")
+    (test/assert-eq 1 (nth 1 inner1) "inner1 first")
+    (test/assert-eq 4 (nth 2 (nth 2 result)) "inner2 second")
+    true
+  })
+
+  (test "parse-large-array-triggers-realloc"
+    {do
+    (= {result} (json/parse "[1,2,3,4,5,6,7,8,9,10,11,12]"))
+    (test/assert-eq 12 (len result) "large array should have 12 elements")
+    (test/assert-eq 1 (nth 1 result) "first element")
+    (test/assert-eq 12 (nth 12 result) "last element")
+    true
+  })
+
+  (test "parse-empty-object"
+    {do
+    (= {result} (json/parse "{}"))
+    (test/assert-eq 0 (len result) "empty object should be empty plist")
+    true
+  })
+
+  (test "parse-simple-object"
+    {do
+    (= {result} (json/parse "{\"name\":\"alice\",\"age\":30}"))
+    (test/assert-eq 4 (len result) "object with 2 keys has 4 plist elements")
+    (test/assert-eq "alice" (plist/get result (head {:name})) "name value")
+    (test/assert-eq 30 (plist/get result (head {:age})) "age value")
+    true
+  })
+
+  (test "parse-nested-object"
+    {do
+    (= {result} (json/parse "{\"user\":{\"id\":1}}"))
+    (= {user} (plist/get result (head {:user})))
+    (test/assert-eq 1 (plist/get user (head {:id})) "nested object value")
+    true
+  })
+
+  (test "parse-large-object-triggers-realloc"
+    {do
+    (= {result} (json/parse "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":8,\"i\":9,\"j\":10}"))
+    (test/assert-eq 20 (len result) "10 keys = 20 plist elements")
+    (test/assert-eq 1 (plist/get result (head {:a})) "first key")
+    (test/assert-eq 10 (plist/get result (head {:j})) "last key")
+    true
+  })
+
+  (test "parse-mixed-types-in-array"
+    {do
+    (= {result} (json/parse "[1,\"hello\",true,false,null]"))
+    (test/assert-eq 5 (len result) "array has 5 elements")
+    (test/assert-eq 1 (nth 1 result) "number")
+    (test/assert-eq "hello" (nth 2 result) "string")
+    (test/assert-eq 1 (nth 3 result) "true")
+    (test/assert-eq 0 (nth 4 result) "false")
+    (= {null-val} (nth 5 result))
+    (test/assert-eq (head null-val) (head {Option::None}) "null becomes Option::None")
+    true
+  })
+
+  (test "parse-object-with-array-value"
+    {do
+    (= {result} (json/parse "{\"items\":[10,20,30]}"))
+    (= {items} (plist/get result (head {:items})))
+    (test/assert-eq 3 (len items) "array value has 3 elements")
+    (test/assert-eq 10 (nth 1 items) "first item")
+    (test/assert-eq 30 (nth 3 items) "third item")
+    true
+  })
+
+  (test "parse-deeply-nested"
+    {do
+    (= {result} (json/parse "{\"a\":{\"b\":{\"c\":42}}}"))
+    (= {a} (plist/get result (head {:a})))
+    (= {b} (plist/get a (head {:b})))
+    (test/assert-eq 42 (plist/get b (head {:c})) "deeply nested value")
+    true
+  })
+
+  (test "encode-number"
+    {do
+    (test/assert-eq "42" (json/encode 42) "encode positive integer")
+    (test/assert-eq "-7" (json/encode -7) "encode negative integer")
+    (test/assert-eq "0" (json/encode 0) "encode zero")
+    true
+  })
+
+  (test "encode-string"
+    {do
+    (test/assert-eq "\"hello\"" (json/encode "hello") "encode simple string")
+    (test/assert-eq "\"\"" (json/encode "") "encode empty string")
+    true
+  })
+
+  (test "encode-string-with-special-chars"
+    {do
+    (= {result} (json/encode "a\"b"))
+    (test/assert (str/contains? result "\\\"") "should escape double quote")
+    (= {r2} (json/encode "a\\b"))
+    (test/assert (str/contains? r2 "\\\\") "should escape backslash")
+    true
+  })
+
+  (test "encode-string-with-control-chars"
+    {do
+    (= {s} (str/concat "a" (str/concat "\n" "b")))
+    (= {result} (json/encode s))
+    (test/assert (str/contains? result "\\n") "should escape newline")
+    (= {s2} (str/concat "a" (str/concat "\t" "b")))
+    (= {r2} (json/encode s2))
+    (test/assert (str/contains? r2 "\\t") "should escape tab")
+    true
+  })
+
+  (test "encode-true-false-symbols"
+    {do
+    (test/assert-eq "true" (json/encode :true) "encode :true")
+    (test/assert-eq "false" (json/encode :false) "encode :false")
+    true
+  })
+
+  (test "encode-regular-symbol"
+    {do
+    (= {result} (json/encode :hello))
+    (test/assert-eq "\"hello\"" result "encode regular symbol as string (strips :)")
+    true
+  })
+
+  (test "encode-nil-as-empty-array"
+    {do
+    (test/assert-eq "[]" (json/encode nil) "nil encodes as empty array")
+    true
+  })
+
+  (test "encode-option-none-as-null"
+    {do
+    (= {none} {Option::None})
+    (test/assert-eq "null" (json/encode none) "Option::None encodes as null")
+    true
+  })
+
+  (test "encode-option-some-unwraps"
+    {do
+    (= {some-val} {Option::Some 42})
+    (test/assert-eq "42" (json/encode some-val) "Option::Some 42 encodes as 42")
+    (= {some-str} {Option::Some "hello"})
+    (test/assert-eq "\"hello\"" (json/encode some-str) "Option::Some string")
+    true
+  })
+
+  (test "encode-list-as-array"
+    {do
+    (test/assert-eq "[1,2,3]" (json/encode {1 2 3}) "encode list as array")
+    (test/assert-eq "[1]" (json/encode {1}) "encode single element list")
+    true
+  })
+
+  (test "encode-plist-as-object"
+    {do
+    (= {result} (json/encode {:name "alice" :age 30}))
+    (test/assert (str/contains? result "\"name\"") "object has name key")
+    (test/assert (str/contains? result "\"alice\"") "object has alice value")
+    (test/assert (str/contains? result "\"age\"") "object has age key")
+    (test/assert (str/contains? result "30") "object has 30 value")
+    true
+  })
+
+  (test "encode-nested-object"
+    {do
+    (= {result} (json/encode {:user {:id 1 :name "bob"}}))
+    (test/assert (str/contains? result "\"user\"") "has user key")
+    (test/assert (str/contains? result "\"id\"") "has nested id key")
+    (test/assert (str/contains? result "\"bob\"") "has nested name value")
+    true
+  })
+
+  (test "encode-nested-array"
+    {do
+    (= {result} (json/encode {{1 2} {3 4}}))
+    (test/assert-eq "[[1,2],[3,4]]" result "encode nested arrays")
+    true
+  })
+
+  (test "encode-mixed-array"
+    {do
+    (= {result} (json/encode {1 "two" :true}))
+    (test/assert-eq "[1,\"two\",true]" result "encode mixed type array")
+    true
+  })
+
+  (test "roundtrip-number"
+    {do
+    (= {original} 42)
+    (= {encoded} (json/encode original))
+    (= {decoded} (json/parse encoded))
+    (test/assert-eq original decoded "number roundtrip")
+    true
+  })
+
+  (test "roundtrip-string"
+    {do
+    (= {original} "hello world")
+    (= {encoded} (json/encode original))
+    (= {decoded} (json/parse encoded))
+    (test/assert-eq original decoded "string roundtrip")
+    true
+  })
+
+  (test "roundtrip-array"
+    {do
+    (= {encoded} (json/encode {1 2 3}))
+    (= {decoded} (json/parse encoded))
+    (test/assert-eq 3 (len decoded) "array roundtrip length")
+    (test/assert-eq 1 (nth 1 decoded) "array roundtrip first")
+    (test/assert-eq 3 (nth 3 decoded) "array roundtrip last")
+    true
+  })
+
+  (test "roundtrip-object"
+    {do
+    (= {encoded} (json/encode {:x 10 :y 20}))
+    (= {decoded} (json/parse encoded))
+    (test/assert-eq 10 (plist/get decoded (head {:x})) "object roundtrip x")
+    (test/assert-eq 20 (plist/get decoded (head {:y})) "object roundtrip y")
+    true
+  })
+
+  (test "parse-error-wrong-arg-count"
+    {do
+    (= {result} (error? (json/parse)))
+    (test/assert result "json/parse with no args should error")
+    (= {result2} (error? (json/parse "a" "b")))
+    (test/assert result2 "json/parse with 2 args should error")
+    true
+  })
+
+  (test "parse-error-wrong-type"
+    {do
+    (= {result} (error? (json/parse 42)))
+    (test/assert result "json/parse with number arg should error")
+    true
+  })
+
+  (test "encode-error-wrong-arg-count"
+    {do
+    (= {result} (error? (json/encode)))
+    (test/assert result "json/encode with no args should error")
+    (= {result2} (error? (json/encode 1 2)))
+    (test/assert result2 "json/encode with 2 args should error")
+    true
+  })
+
+  (test "encode-empty-plist"
+    {do
+    (= {result} (json/encode {}))
+    (test/assert-eq "[]" result "empty list encodes as empty array")
+    true
+  })
+
+  (test "parse-object-with-whitespace"
+    {do
+    (= {result} (json/parse "{ \"key\" : \"value\" }"))
+    (test/assert-eq "value" (plist/get result (head {:key})) "object with whitespace")
+    true
+  })
+
+  (test "encode-plist-odd-elements"
+    {do
+    (= {result} (json/encode {:only}))
+    (test/assert-eq "{}" result "plist with odd elements encodes as empty object")
+    true
+  })
+
+  (test "parse-empty-string-value"
+    {do
+    (= {result} (json/parse "\"\""))
+    (test/assert-eq "" result "should parse empty string")
+    true
+  })
+
+  (test "parse-array-of-strings"
+    {do
+    (= {result} (json/parse "[\"a\",\"b\",\"c\"]"))
+    (test/assert-eq 3 (len result) "3 strings")
+    (test/assert-eq "a" (nth 1 result) "first string")
+    (test/assert-eq "c" (nth 3 result) "third string")
+    true
+  })
+
+  (test "parse-object-with-null-value"
+    {do
+    (= {result} (json/parse "{\"x\":null}"))
+    (= {val} (plist/get result (head {:x})))
+    (test/assert-eq (head val) (head {Option::None}) "object null value")
+    true
+  })
+
+  (test "parse-object-with-bool-values"
+    {do
+    (= {result} (json/parse "{\"a\":true,\"b\":false}"))
+    (test/assert-eq 1 (plist/get result (head {:a})) "true value")
+    (test/assert-eq 0 (plist/get result (head {:b})) "false value")
+    true
+  })
+
+  (test "encode-long-string-triggers-realloc"
+    {do
+    (= {long-str} (str/repeat "abcdefghij" 30))
+    (= {result} (json/encode long-str))
+    (test/assert (> (str/len result) 300) "encoded long string is large")
+    (= {decoded} (json/parse result))
+    (test/assert-eq long-str decoded "long string roundtrip")
+    true
+  })
+
+  (test "parse-array-of-objects"
+    {do
+    (= {result} (json/parse "[{\"id\":1},{\"id\":2}]"))
+    (test/assert-eq 2 (len result) "2 objects in array")
+    (= {first} (nth 1 result))
+    (test/assert-eq 1 (plist/get first (head {:id})) "first object id")
+    (= {second} (nth 2 result))
+    (test/assert-eq 2 (plist/get second (head {:id})) "second object id")
+    true
+  })
+
+  (test "parse-unicode-hex-digits"
+    {do
+    (= {result} (json/parse "\"\\u004A\""))
+    (test/assert-eq "J" result "\\u004A should produce J")
+    (= {r2} (json/parse "\"\\u0061\""))
+    (test/assert-eq "a" r2 "\\u0061 should produce a (lowercase hex)")
+    true
+  })
+
+  (test "encode-option-none-in-list"
+    {do
+    (= {data} (list 1 {Option::None} 3))
+    (= {result} (json/encode data))
+    (test/assert-eq "[1,null,3]" result "Option::None in list encodes as null")
+    true
+  })
+
+  (test "encode-option-some-in-object"
+    {do
+    (= {data} {:val {Option::Some 99}})
+    (= {result} (json/encode data))
+    (test/assert (str/contains? result "99") "Option::Some unwrapped in object")
+    true
+  })
+
+  (test "parse-empty-input"
+    {do
+    (= {result} (json/parse ""))
+    (= {tag} (head result))
+    (test/assert-eq tag (head {Option::None}) "empty input parses as null")
+    true
+  })
+
+  (test "parse-garbage-input"
+    {do
+    (= {result} (json/parse "xyz"))
+    (= {tag} (head result))
+    (test/assert-eq tag (head {Option::None}) "garbage input parses as null")
+    true
+  })
+
+  (test "parse-unterminated-string"
+    {do
+    (= {result} (json/parse "\"hello"))
+    (test/assert-eq "hello" result "unterminated string still returns content")
+    true
+  })
+
+  (test "parse-truncated-array"
+    {do
+    (= {result} (json/parse "[1,2"))
+    (test/assert-eq 2 (len result) "truncated array has parsed elements")
+    (test/assert-eq 1 (nth 1 result) "first element")
+    (test/assert-eq 2 (nth 2 result) "second element")
+    true
+  })
+
+  (test "parse-truncated-object"
+    {do
+    (= {result} (json/parse "{\"a\":1"))
+    (test/assert-eq 1 (plist/get result (head {:a})) "truncated object still has parsed key")
+    true
+  })
+
+  (test "parse-object-bad-key"
+    {do
+    (= {result} (json/parse "{123:1}"))
+    (test/assert-eq 0 (len result) "object with non-string key is empty")
+    true
+  })
+
+  (test "encode-string-with-cr-bs-ff"
+    {do
+    (= {cr} (make-string 1 13))
+    (= {bs} (make-string 1 8))
+    (= {ff} (make-string 1 12))
+    (= {r1} (json/encode cr))
+    (test/assert (str/contains? r1 "\\r") "carriage return escaped")
+    (= {r2} (json/encode bs))
+    (test/assert (str/contains? r2 "\\b") "backspace escaped")
+    (= {r3} (json/encode ff))
+    (test/assert (str/contains? r3 "\\f") "form feed escaped")
+    true
+  })
+
+  (test "encode-string-with-control-char"
+    {do
+    (= {ctrl} (make-string 1 1))
+    (= {result} (json/encode ctrl))
+    (test/assert (str/contains? result "\\u0001") "control char encoded as \\uXXXX")
+    true
+  })
+
+  (test "encode-buf-realloc"
+    {do
+    (= {big-list} (list 1 2 3 4 5 6 7 8 9 10
+                        11 12 13 14 15 16 17 18 19 20
+                        21 22 23 24 25 26 27 28 29 30
+                        31 32 33 34 35 36 37 38 39 40
+                        41 42 43 44 45 46 47 48 49 50))
+    (= {result} (json/encode big-list))
+    (test/assert (str/contains? result "50") "large list encoding works")
+    (= {decoded} (json/parse result))
+    (test/assert-eq 50 (len decoded) "large list roundtrip length")
+    true
+  })
+
+  (test "is-plist-non-keyword-head"
+    {do
+    (= {data} (list "not-keyword" 1))
+    (= {result} (json/encode data))
+    (test/assert-eq "[\"not-keyword\",1]" result "list with string head is array not object")
+    true
+  })
+
+  (test "is-option-none-wrong-tag"
+    {do
+    (= {data} {NotOption::None})
+    (= {result} (json/encode data))
+    (test/assert-eq "[\"NotOption::None\"]" result "wrong tag is not Option::None")
+    true
+  })
+
+  (test "is-option-some-wrong-tag"
+    {do
+    (= {data} {NotOption::Some 42})
+    (= {result} (json/encode data))
+    (test/assert-eq "[\"NotOption::Some\",42]" result "wrong tag is not Option::Some")
+    true
+  })
+
+  (test "is-option-some-too-many-args"
+    {do
+    (= {data} {Option::Some 1 2})
+    (= {result} (json/encode data))
+    (test/assert-eq "[\"Option::Some\",1,2]" result "Some with too many args is plain list")
+    true
+  })
+
+  (test "is-option-none-with-extra"
+    {do
+    (= {data} {Option::None 1})
+    (= {result} (json/encode data))
+    (test/assert-eq "[\"Option::None\",1]" result "None with extra is plain list")
+    true
+  })
+
+  (test "encode-non-sym-non-str-head"
+    {do
+    (= {data} (list 42 43))
+    (= {result} (json/encode data))
+    (test/assert-eq "[42,43]" result "number-headed list is array")
+    true
+  })
+
+  (test "parse-string-realloc-boundary"
+    {do
+    (= {inner} (str/repeat "a" 63))
+    (= {json-str} (str/concat "\"" (str/concat inner "\"")))
+    (= {result} (json/parse json-str))
+    (test/assert-eq 63 (str/len result) "63 chars exactly at boundary")
+    (= {inner2} (str/repeat "b" 64))
+    (= {json-str2} (str/concat "\"" (str/concat inner2 "\"")))
+    (= {result2} (json/parse json-str2))
+    (test/assert-eq 64 (str/len result2) "64 chars triggers realloc")
+    true
+  })
+
+))

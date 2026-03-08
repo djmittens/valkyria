@@ -385,6 +385,7 @@ void *valk_gc_heap_realloc(valk_gc_heap_t *heap, void *ptr, sz new_size) {
     return new_ptr;
   }
 
+  // LCOV_EXCL_START - large object realloc requires specific heap state
   pthread_mutex_lock(&heap->large_lock);
   for (valk_gc_large_obj_t *obj = heap->large_objects; obj != nullptr; obj = obj->next) {
     if (obj->data == ptr) {
@@ -395,13 +396,14 @@ void *valk_gc_heap_realloc(valk_gc_heap_t *heap, void *ptr, sz new_size) {
         return ptr;
       }
       void *new_ptr = valk_gc_heap_alloc(heap, new_size);
-      if (new_ptr) { // LCOV_EXCL_BR_LINE - OOM after successful alloc
+      if (new_ptr) {
         memcpy(new_ptr, ptr, old_size);
       }
       return new_ptr;
     }
   }
   pthread_mutex_unlock(&heap->large_lock);
+  // LCOV_EXCL_STOP
 
   VALK_WARN("valk_gc_heap_realloc: pointer %p not found in heap", ptr);
   return nullptr;

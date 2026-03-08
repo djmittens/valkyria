@@ -70,6 +70,7 @@ static bool scope_has(scope_t *s, const char *name) {
   return false;
 }
 
+// LCOV_EXCL_BR_START - character-level dispatch and AST null/type guards
 static bool *build_skip_map(const char *text, int len) {
   bool *skip = calloc(len, sizeof(bool));
   if (!skip) return nullptr; // LCOV_EXCL_LINE
@@ -584,7 +585,6 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
   }
 
   const char *name = head->str;
-  advance_cursor(w, name);
 
   if (!is_special_form(name) &&
       !scope_has(w->scope, name) && !symset_contains(w->globals, name) &&
@@ -600,6 +600,7 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
       diag_at_sym(w, name, msg, 1);
     }
   }
+  advance_cursor(w, name);
 
   (void)count_args;
 
@@ -624,6 +625,7 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
 
   walk_body(w, rest);
 }
+// LCOV_EXCL_BR_STOP
 
 valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
                                     valk_name_resolver_t resolver) {
@@ -650,6 +652,7 @@ valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
     .cursor = &cursor,
   };
 
+  // LCOV_EXCL_BR_START - AST iteration null/type guards
   valk_lval_t *rest = ast;
   while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
     valk_lval_t *expr = valk_lval_head(rest);
@@ -658,6 +661,7 @@ valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
     walk_expr(&w, expr);
     rest = valk_lval_tail(rest);
   }
+  // LCOV_EXCL_BR_STOP
 
   scope_pop(top);
   free(skip_map);

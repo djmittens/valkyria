@@ -1,0 +1,330 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+  (test "list-dir-existing"
+    {do
+    (= {entries} (list-dir "test"))
+    (test/assert (list? entries) "list-dir returns list")
+    (test/assert (> (len entries) 0) "test dir has entries")
+    (= {first} (nth 1 entries))
+    (test/assert (str? (plist/get first :name)) "entry has string name")
+    (test/assert (str? (plist/get first :type)) "entry has string type")
+    true
+  })
+  (test "list-dir-nonexistent"
+    {do
+    (= {result} (list-dir "/nonexistent/dir"))
+    (test/assert (error? result) "list-dir on bad dir errors")
+    true
+  })
+  (test "file-fingerprint-existing"
+    {do
+    (= {fp} (file/fingerprint "Makefile"))
+    (test/assert (str? fp) "file/fingerprint returns string")
+    (test/assert (> (len fp) 0) "fingerprint is non-empty")
+    true
+  })
+  (test "file-fingerprint-nonexistent"
+    {do
+    (= {result} (file/fingerprint "/nonexistent/file"))
+    (test/assert (error? result) "file/fingerprint on missing file errors")
+    true
+  })
+  (test "file-size-existing"
+    {do
+    (= {sz} (file/size "Makefile"))
+    (test/assert (> sz 0) "file/size returns positive number")
+    true
+  })
+  (test "file-size-nonexistent"
+    {do
+    (= {result} (file/size "/nonexistent/file"))
+    (test/assert (error? result) "file/size on missing file errors")
+    true
+  })
+  (test "ref-predicate"
+    {do
+    (test/assert (== 0 (ref? 42)) "number is not ref")
+    (test/assert (== 0 (ref? "hello")) "string is not ref")
+    (test/assert (== 0 (ref? nil)) "nil is not ref")
+    (= {db} (sqlite/open ":memory:"))
+    (test/assert (== 1 (ref? db)) "sqlite db is ref")
+    (sqlite/close db)
+    true
+  })
+  (test "type-of-various"
+    {do
+    (test/assert-eq "Number" (type-of 42) "type-of number")
+    (test/assert-eq "String" (type-of "hello") "type-of string")
+    (test/assert-eq "Nil" (type-of nil) "type-of nil")
+    true
+  })
+  (test "type-predicates"
+    {do
+    (test/assert (== 1 (str? "hi")) "str? on string")
+    (test/assert (== 0 (str? 42)) "str? on number")
+    (test/assert (== 1 (num? 42)) "num? on number")
+    (test/assert (== 0 (num? "hi")) "num? on string")
+    (test/assert (== 1 (fun? +)) "fun? on builtin")
+    (test/assert (== 0 (fun? 42)) "fun? on number")
+    (test/assert (== 1 (sym? (head {x}))) "sym? on symbol")
+    true
+  })
+  (test "error-and-error-p"
+    {do
+    (= {e} (error "test error"))
+    (test/assert (error? e) "error creates error")
+    (test/assert (== 0 (error? 42)) "number is not error")
+    (test/assert (== 0 (error? "hi")) "string is not error")
+    true
+  })
+  (test "list-p-predicate"
+    {do
+    (test/assert (== 1 (list? (list 1 2))) "list is list")
+    (test/assert (== 1 (list? nil)) "nil is list")
+    (test/assert (== 0 (list? 42)) "number is not list")
+    (test/assert (== 0 (list? "hi")) "string is not list")
+    true
+  })
+  (test "read-file-existing"
+    {do
+    (= {content} (read-file "Makefile"))
+    (test/assert (str? content) "read-file returns string")
+    (test/assert (> (len content) 0) "read-file content is non-empty")
+    true
+  })
+  (test "read-file-nonexistent"
+    {do
+    (= {result} (read-file "/nonexistent/file"))
+    (test/assert (error? result) "read-file on missing file errors")
+    true
+  })
+  (test "quoted-predicate"
+    {do
+    (= {q} {1 2 3})
+    (test/assert (== 1 (quoted? q)) "quoted list is quoted")
+    (test/assert (== 0 (quoted? 42)) "number is not quoted")
+    true
+  })
+  (test "offset-to-line-col"
+    {do
+    (= {text} "hello\nworld\nfoo")
+    (= {r} (offset->line-col text 7))
+    (test/assert-eq 1 (nth 1 r) "line is 1 (0-based)")
+    (test/assert-eq 1 (nth 2 r) "col is 1")
+    true
+  })
+  (test "offset-to-line-col-start"
+    {do
+    (= {text} "abc\ndef")
+    (= {r} (offset->line-col text 0))
+    (test/assert-eq 0 (nth 1 r) "line 0 at start")
+    (test/assert-eq 0 (nth 2 r) "col 0 at start")
+    true
+  })
+  (test "sem-encode-deltas-basic"
+    {do
+    (= {text} "hello world")
+    (= {tokens} (list (list 0 5 1 0) (list 6 5 2 0)))
+    (= {result} (sem/encode-deltas text tokens))
+    (test/assert (list? result) "sem/encode-deltas returns list")
+    (test/assert-eq 10 (len result) "2 tokens * 5 fields = 10")
+    (test/assert-eq 0 (nth 1 result) "first token delta line 0")
+    (test/assert-eq 0 (nth 2 result) "first token delta col 0")
+    (test/assert-eq 5 (nth 3 result) "first token length 5")
+    true
+  })
+  (test "sem-encode-deltas-multiline"
+    {do
+    (= {text} "abc\ndef")
+    (= {tokens} (list (list 0 3 1 0) (list 4 3 1 0)))
+    (= {result} (sem/encode-deltas text tokens))
+    (test/assert-eq 10 (len result) "2 tokens = 10 fields")
+    (= {dl} (nth 6 result))
+    (test/assert-eq 1 dl "second token is on next line")
+    true
+  })
+  (test "sem-encode-deltas-backward-offset"
+    {do
+    (= {text} "abcdef")
+    (= {tokens} (list (list 3 2 1 0) (list 1 2 2 0)))
+    (= {result} (sem/encode-deltas text tokens))
+    (test/assert (list? result) "backward offset handled")
+    true
+  })
+  (test "offsets-to-lines-basic"
+    {do
+    (= {text} "hello\nworld\nfoo")
+    (= {offsets} (list 0 7 12))
+    (= {result} (offsets->line-cols text offsets))
+    (test/assert-eq 3 (len result) "3 offsets give 3 results")
+    (= {first} (nth 1 result))
+    (test/assert-eq 0 (nth 1 first) "first offset line 0")
+    (= {second} (nth 2 result))
+    (test/assert-eq 1 (nth 1 second) "second offset line 1")
+    true
+  })
+  (test "src-pos-basic"
+    {do
+    (= {v} (read "(+ 1 2)"))
+    (= {pos} (src-pos v))
+    (test/assert (num? pos) "src-pos returns a number")
+    true
+  })
+  (test "qcons-basic"
+    {do
+    (= {result} (qcons 1 (list 2 3)))
+    (test/assert-eq 3 (len result) "qcons adds to front")
+    (test/assert-eq 1 (head result) "qcons head is added element")
+    true
+  })
+  (test "parse-basic"
+    {do
+    (= {result} (parse "(+ 1 2)"))
+    (test/assert (list? result) "parse returns list")
+    true
+  })
+  (test "list-dir-with-dirs"
+    {do
+    (= {entries} (list-dir "src"))
+    (= {has-dir} 0)
+    (= {check-entries} (\ {lst} {
+      if (== lst nil)
+        {has-dir}
+        {do
+          (= {entry} (head lst))
+          (if (== "dir" (plist/get entry :type))
+            {= {has-dir} 1}
+            {nil})
+          (check-entries (tail lst))
+        }
+    }))
+    (check-entries entries)
+    (test/assert (== 1 has-dir) "src dir has subdirectories")
+    true
+  })
+  (test "sem-encode-deltas-empty-tokens"
+    {do
+    (= {result} (sem/encode-deltas "hello" nil))
+    (test/assert-eq nil result "empty tokens gives nil")
+    true
+  })
+  (test "sem-encode-deltas-single-token"
+    {do
+    (= {text} "abc")
+    (= {tokens} (list (list 0 3 0 0)))
+    (= {result} (sem/encode-deltas text tokens))
+    (test/assert-eq 5 (len result) "1 token = 5 fields")
+    (test/assert-eq 0 (nth 1 result) "delta line 0")
+    (test/assert-eq 0 (nth 2 result) "delta col 0")
+    (test/assert-eq 3 (nth 3 result) "token length 3")
+    true
+  })
+  (test "sem-encode-deltas-same-line"
+    {do
+    (= {text} "abc def ghi")
+    (= {tokens} (list (list 0 3 1 0) (list 4 3 2 0) (list 8 3 3 0)))
+    (= {result} (sem/encode-deltas text tokens))
+    (test/assert-eq 15 (len result) "3 tokens = 15 fields")
+    (= {dl2} (nth 6 result))
+    (test/assert-eq 0 dl2 "same line delta line 0")
+    true
+  })
+  (test "offsets-to-lines-empty"
+    {do
+    (= {result} (offsets->line-cols "hello" nil))
+    (test/assert-eq nil result "empty offsets gives nil")
+    true
+  })
+  (test "offsets-to-lines-multiline"
+    {do
+    (= {text} "line1\nline2\nline3")
+    (= {offsets} (list 0 3 6 9 12))
+    (= {result} (offsets->line-cols text offsets))
+    (test/assert-eq 5 (len result) "5 offsets give 5 results")
+    (= {r1} (nth 1 result))
+    (test/assert-eq 0 (nth 1 r1) "offset 0 is line 0")
+    (= {r3} (nth 3 result))
+    (test/assert-eq 1 (nth 1 r3) "offset 6 is line 1")
+    (= {r5} (nth 5 result))
+    (test/assert-eq 2 (nth 1 r5) "offset 12 is line 2")
+    true
+  })
+  (test "offsets-to-lines-single"
+    {do
+    (= {text} "no newlines here")
+    (= {offsets} (list 5))
+    (= {result} (offsets->line-cols text offsets))
+    (test/assert-eq 1 (len result) "1 offset = 1 result")
+    (= {r} (nth 1 result))
+    (test/assert-eq 0 (nth 1 r) "line 0")
+    (test/assert-eq 5 (nth 2 r) "col 5")
+    true
+  })
+  (test "sem-encode-deltas-backward-offset-detail"
+    {do
+    (= {text} "0123456789")
+    (= {tokens} (list (list 5 2 1 0) (list 2 2 2 0)))
+    (= {result} (sem/encode-deltas text tokens))
+    (test/assert-eq 10 (len result) "2 tokens = 10 fields")
+    true
+  })
+  (test "offset-to-line-col-at-newline"
+    {do
+    (= {text} "ab\ncd\nef")
+    (= {r1} (offset->line-col text 3))
+    (test/assert-eq 1 (nth 1 r1) "after first newline is line 1")
+    (test/assert-eq 0 (nth 2 r1) "at start of line col is 0")
+    (= {r2} (offset->line-col text 6))
+    (test/assert-eq 2 (nth 1 r2) "after second newline is line 2")
+    true
+  })
+  (test "read-and-eval"
+    {do
+    (= {expr} (read "(+ 10 20)"))
+    (= {result} (eval expr))
+    (test/assert-eq 30 result "read and eval works")
+    true
+  })
+  (test "sem-encode-deltas-incomplete-token-1"
+    {do
+    (= {result} (sem/encode-deltas "hello" (list 42)))
+    (test/assert (list? result) "incomplete token (not cons) handled")
+    true
+  })
+  (test "sem-encode-deltas-incomplete-token-2"
+    {do
+    (= {result} (sem/encode-deltas "hello" (list (list 0))))
+    (test/assert (list? result) "token with only offset handled")
+    true
+  })
+  (test "sem-encode-deltas-incomplete-token-3"
+    {do
+    (= {result} (sem/encode-deltas "hello" (list (list 0 3))))
+    (test/assert (list? result) "token with only offset+len handled")
+    true
+  })
+  (test "sem-encode-deltas-incomplete-token-4"
+    {do
+    (= {result} (sem/encode-deltas "hello" (list (list 0 3 1))))
+    (test/assert (list? result) "token with offset+len+type handled")
+    true
+  })
+  (test "offsets-to-lines-ascending"
+    {do
+    (= {text} "ab\ncd\nef\ngh")
+    (= {offsets} (list 0 1 3 4 6 7 9 10))
+    (= {result} (offsets->line-cols text offsets))
+    (test/assert-eq 8 (len result) "8 offsets give 8 results")
+    true
+  })
+  (test "sem-encode-deltas-three-tokens-multiline"
+    {do
+    (= {text} "line1\nline2\nline3")
+    (= {tokens} (list (list 0 5 1 0) (list 6 5 2 0) (list 12 5 3 0)))
+    (= {result} (sem/encode-deltas text tokens))
+    (test/assert-eq 15 (len result) "3 tokens = 15 fields")
+    true
+  })
+) (test/context-new))

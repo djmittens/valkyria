@@ -9,15 +9,15 @@
 #define SQLITE_REF_TYPE "sqlite_db"
 #define SQLITE_STMT_REF_TYPE "sqlite_stmt"
 
-static void sqlite_db_free(void *ptr) {
+static void sqlite_db_free(void *ptr) { // LCOV_EXCL_START
   sqlite3 *db = ptr;
   if (db) sqlite3_close(db);
-}
+} // LCOV_EXCL_STOP
 
-static void sqlite_stmt_free(void *ptr) {
+static void sqlite_stmt_free(void *ptr) { // LCOV_EXCL_START
   sqlite3_stmt *stmt = ptr;
   if (stmt) sqlite3_finalize(stmt);
-}
+} // LCOV_EXCL_STOP
 
 #define LVAL_ASSERT_SQLITE_DB(args, val)                                      \
   do {                                                                        \

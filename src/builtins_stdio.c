@@ -9,7 +9,7 @@ static valk_lval_t *valk_builtin_stdin_read_line(valk_lenv_t *e, valk_lval_t *a)
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 0);
 
-  size_t cap = 256;
+  size_t cap = 256; // LCOV_EXCL_START — requires interactive stdin
   char *buf = malloc(cap);
   size_t len = 0;
 
@@ -27,7 +27,7 @@ static valk_lval_t *valk_builtin_stdin_read_line(valk_lenv_t *e, valk_lval_t *a)
 
   valk_lval_t *result = valk_lval_str(buf);
   free(buf);
-  return result;
+  return result; // LCOV_EXCL_STOP
 }
 
 static valk_lval_t *valk_builtin_stdin_read_bytes(valk_lenv_t *e, valk_lval_t *a) {
@@ -36,9 +36,9 @@ static valk_lval_t *valk_builtin_stdin_read_bytes(valk_lenv_t *e, valk_lval_t *a
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
 
   long n = valk_lval_list_nth(a, 0)->num;
-  if (n <= 0) return valk_lval_str("");
+  if (n <= 0) return valk_lval_str(""); // LCOV_EXCL_BR_LINE — n>0 path requires interactive stdin
 
-  char *buf = malloc(n + 1);
+  char *buf = malloc(n + 1); // LCOV_EXCL_START — requires interactive stdin
   size_t total = 0;
   while (total < (size_t)n) {
     size_t got = fread(buf + total, 1, n - total, stdin);
@@ -54,7 +54,7 @@ static valk_lval_t *valk_builtin_stdin_read_bytes(valk_lenv_t *e, valk_lval_t *a
 
   valk_lval_t *result = valk_lval_str(buf);
   free(buf);
-  return result;
+  return result; // LCOV_EXCL_STOP
 }
 
 static valk_lval_t *valk_builtin_stdout_write(valk_lenv_t *e, valk_lval_t *a) {
@@ -90,7 +90,7 @@ static valk_lval_t *valk_builtin_stdin_has_data(valk_lenv_t *e, valk_lval_t *a) 
   LVAL_ASSERT_COUNT_EQ(a, a, 0);
   struct pollfd pfd = { .fd = fileno(stdin), .events = POLLIN };
   int ret = poll(&pfd, 1, 0);
-  return valk_lval_num(ret > 0 && (pfd.revents & POLLIN) ? 1 : 0);
+  return valk_lval_num(ret > 0 && (pfd.revents & POLLIN) ? 1 : 0); // LCOV_EXCL_BR_LINE — stdin data branch requires interactive stdin
 }
 
 void valk_register_stdio_builtins(valk_lenv_t *env) {

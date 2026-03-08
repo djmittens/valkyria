@@ -421,16 +421,18 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 (fun {symdb/sync-file-symbols db uri text hash} {do
   (= {path} (uri->path uri))
   (= {ast} (parse text))
-  (sqlite/exec db
-    "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
-    path hash)
-  (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
-  (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
-  (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
-  (= {syms} (symdb/extract-symbols-from-ast ast text))
-  (symdb/insert-symbols db file-id syms)
-  (= {refs} (symdb/extract-refs-from-ast ast text))
-  (symdb/insert-refs db file-id refs)
+  (if (error? ast) {}
+    {do
+      (sqlite/exec db
+        "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
+        path hash)
+      (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
+      (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
+      (= {syms} (symdb/extract-symbols-from-ast ast text))
+      (symdb/insert-symbols db file-id syms)
+      (= {refs} (symdb/extract-refs-from-ast ast text))
+      (symdb/insert-refs db file-id refs)})
 })
 
 (fun {symdb/insert-symbols db file-id syms} {
@@ -506,17 +508,17 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 (fun {symdb/all-symbol-names db} {
   sqlite/query db
-    "SELECT DISTINCT name, kind, doc FROM symbols ORDER BY name LIMIT 200" 
+    "SELECT s.name, s.kind, s.doc, s.line, s.col, f.path FROM symbols s JOIN files f ON s.file_id=f.id GROUP BY s.name ORDER BY s.name LIMIT 200"
 })
 
 (fun {symdb/completion-all db} {
   sqlite/query db
-    "SELECT name, kind, MAX(CASE WHEN sig LIKE '{->%' THEN sig END) as sig, MAX(doc) as doc FROM symbols GROUP BY name ORDER BY name LIMIT 200"
+    "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc FROM symbols GROUP BY name ORDER BY name LIMIT 200"
 })
 
 (fun {symdb/completion-symbols db prefix} {
   sqlite/query db
-    "SELECT name, kind, MAX(CASE WHEN sig LIKE '{->%' THEN sig END) as sig, MAX(doc) as doc FROM symbols WHERE name LIKE ?1 GROUP BY name ORDER BY name LIMIT 100"
+    "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc FROM symbols WHERE name LIKE ?1 GROUP BY name ORDER BY name LIMIT 100"
     (str prefix "%")
 })
 
@@ -556,6 +558,25 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
         :sig type-sig)
         :formals formals)
         :doc final-doc)})
+})
+
+; === Reference counting ===
+
+(fun {symdb/ref-count db name} {
+  sqlite/query-value db
+    "SELECT COUNT(*) FROM refs WHERE name=?1" name
+})
+
+; === Stale file cleanup ===
+
+(fun {symdb/all-indexed-paths db} {
+  sqlite/query db "SELECT id, path FROM files"
+})
+
+(fun {symdb/remove-file db file-id} {do
+  (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM files WHERE id=?1" file-id)
 })
 
 ; === LSP helpers ===
