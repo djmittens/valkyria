@@ -8,7 +8,7 @@
 - `make test-c` / `make test-valk` - C-only or Valk-only tests
 - `make lint` - Run clang-tidy (must pass before committing)
 - `make coverage` - Generate aggregated C+Valk coverage (HTML: `coverage-report/index.html`)
-- `python3 scripts/find-uncovered-branches.py <file.c>` - Find specific uncovered branches
+- `build/valk scripts/find-uncovered-branches.valk -- <file.c>` - Find specific uncovered branches
 - ASAN tests: `make test-c-asan`, `make test-valk-asan`
 - TSAN tests: `make test-c-tsan`, `make test-valk-tsan`
 
@@ -18,7 +18,7 @@ Track whether changes degrade codebase quality using structural metrics from the
 
 ### Commands
 - `build/valk --quality-snapshot .` — Emit JSON metrics for the whole workspace to stdout
-- `python3 scripts/quality-diff.py before.json after.json` — Diff two snapshots, report regressions
+- `build/valk scripts/quality-diff.valk -- before.json after.json` — Diff two snapshots, report regressions
 
 ### Workflow: Before/After Any Significant Change
 ```bash
@@ -31,7 +31,7 @@ build/valk --quality-snapshot . 2>/dev/null > /tmp/quality_before.json
 build/valk --quality-snapshot . 2>/dev/null > /tmp/quality_after.json
 
 # 4. Diff
-python3 scripts/quality-diff.py /tmp/quality_before.json /tmp/quality_after.json
+build/valk scripts/quality-diff.valk -- /tmp/quality_before.json /tmp/quality_after.json
 ```
 
 ### What the Diff Reports

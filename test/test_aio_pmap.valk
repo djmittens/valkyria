@@ -1,0 +1,57 @@
+; Test aio/pmap - parallel map across event loop threads
+
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+; Start with 4 event loop threads to test multi-threading
+(def {aio} (aio/await (aio/start {:num-threads 4})))
+
+(test/run (list
+
+  (test "aio/pmap with empty list"
+    {do
+    (= {h} (aio/pmap aio (\ {x} {(+ x 1)}) ()))
+    (= {result} (aio/await h))
+    (== result ())
+  })
+
+  (test "aio/pmap with single element"
+    {do
+    (= {h} (aio/pmap aio (\ {x} {(* x 2)}) (list 5)))
+    (= {result} (aio/await h))
+    (== result (list 10))
+  })
+
+  (test "aio/pmap with multiple elements"
+    {do
+    (= {h} (aio/pmap aio (\ {x} {(+ x 10)}) (list 1 2 3 4 5)))
+    (= {result} (aio/await h))
+    (== result (list 11 12 13 14 15))
+  })
+
+  (test "aio/pmap preserves order"
+    {do
+    (= {h} (aio/pmap aio (\ {x} {(* x x)}) (list 1 2 3 4)))
+    (= {result} (aio/await h))
+    (== result (list 1 4 9 16))
+  })
+
+  (test "aio/pmap with string transformation"
+    {do
+    (= {h} (aio/pmap aio (\ {x} {(str/upper x)}) (list "hello" "world" "test")))
+    (= {result} (aio/await h))
+    (== result (list "HELLO" "WORLD" "TEST"))
+  })
+
+  (test "aio/pmap with larger list across threads"
+    {do
+    (= {items} (range 1 51))
+    (= {h} (aio/pmap aio (\ {x} {(* x x)}) items))
+    (= {result} (aio/await h))
+    (= {expected} (map (\ {x} {(* x x)}) items))
+    (== result expected)
+  })
+
+) {:suite-name "aio/pmap Tests"})
+
+(aio/stop aio)

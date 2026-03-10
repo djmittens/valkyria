@@ -5,6 +5,9 @@
 (def {*test-default-timeout-ms*} 5000)       ; 5 seconds per test
 (def {*test-default-suite-timeout-ms*} 60000) ; 60 seconds for entire suite
 
+; JSON output mode (set VALK_TEST_JSON=1 env var)
+(def {*test-json-output*} (if (== (env/get "VALK_TEST_JSON") nil) {0} {1}))
+
 
 
 (fun {test/context-new} {
@@ -82,6 +85,20 @@
     (*test-pad-dots-helper* (- width (len str)))
 })
 
+(fun {*test-json-escape* s} {
+  (= {s} (str/replace s "\\" "\\\\"))
+  (= {s} (str/replace s "\"" "\\\""))
+  (= {s} (str/replace s "\n" "\\n"))
+  (= {s} (str/replace s "\r" "\\r"))
+  (= {s} (str/replace s "\t" "\\t"))
+  s
+})
+
+(fun {*test-json-result* test-name status elapsed-us suite-name} {
+  (printf "{\"test\":\"%s\",\"status\":\"%s\",\"us\":%ld,\"suite\":\"%s\"}\n"
+    (*test-json-escape* test-name) status elapsed-us (*test-json-escape* suite-name))
+})
+
 ; Suite timeout callback - called if suite takes too long
 (fun {*test-suite-timeout-cb* suite-name} {
   do
@@ -98,9 +115,12 @@
     (= {debug} (plist/get ctx :debug))
     (= {timeout-ms} (plist/get ctx :timeout-ms))
 
+    (= {suite-name} (plist/get ctx :suite-name))
     (if (== skip-suite 1)
       {do
-        (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")
+        (if (== *test-json-output* 1)
+          {(*test-json-result* test-name "skip" 0 suite-name)}
+          {do (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")})
         (plist/set ctx :skipped (+ (plist/get ctx :skipped) 1))}
       {do
         (if (== debug 1)
@@ -130,8 +150,11 @@
         ; Check if we timed out (cancel failed means timer already fired)
         (if (== cancelled :false)
           {do
-            (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
-            (*test-print-captured* test-name captured)
+            (if (== *test-json-output* 1)
+              {(*test-json-result* test-name "timeout" (* timeout-ms 1000) suite-name)}
+              {do
+                (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
+                (*test-print-captured* test-name captured)})
             (plist/set ctx :timed-out (+ (plist/get ctx :timed-out) 1))}
           {do
             (if (== debug 1)
@@ -145,10 +168,13 @@
 
             (= {passed} (if (== result true) {1} {0}))
 
-            (if (== passed 1)
-              {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
-              {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
-                  (*test-print-captured* test-name captured)})
+            (if (== *test-json-output* 1)
+              {(*test-json-result* test-name (if (== passed 1) {"pass"} {"fail"}) elapsed suite-name)}
+              {do
+                (if (== passed 1)
+                  {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+                  {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+                      (*test-print-captured* test-name captured)})})
 
             (if (== passed 1)
               {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
@@ -162,10 +188,13 @@
     (= {test-body} (head (tail test)))
     (= {skip-suite} (plist/get ctx :skip-suite))
     (= {debug} (plist/get ctx :debug))
+    (= {suite-name} (plist/get ctx :suite-name))
 
     (if (== skip-suite 1)
       {do
-        (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")
+        (if (== *test-json-output* 1)
+          {(*test-json-result* test-name "skip" 0 suite-name)}
+          {do (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")})
         (plist/set ctx :skipped (+ (plist/get ctx :skipped) 1))}
       {do
         (if (== debug 1)
@@ -195,10 +224,13 @@
 
         (= {passed} (if (== result true) {1} {0}))
 
-        (if (== passed 1)
-          {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
-          {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
-              (*test-print-captured* test-name captured)})
+        (if (== *test-json-output* 1)
+          {(*test-json-result* test-name (if (== passed 1) {"pass"} {"fail"}) elapsed suite-name)}
+          {do
+            (if (== passed 1)
+              {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+              {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+                  (*test-print-captured* test-name captured)})})
 
         (if (== passed 1)
           {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
@@ -326,13 +358,20 @@
         (= {skip-suite} (plist/get ctx :skip-suite))
         (= {skip-reason} (plist/get ctx :skip-reason))
 
-        (if (== skip-suite 1)
-          {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
-          {printf "🧪 [%ld/%ld] %s\n" total total suite-name})
+        (if (== *test-json-output* 0)
+          {(if (== skip-suite 1)
+            {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
+            {printf "🧪 [%ld/%ld] %s\n" total total suite-name})}
+          {true})
 
         (= {final-ctx} (foldl *test-run-one-ctx* ctx tests))
 
-        (*test-print-results-and-exit* final-ctx)})
+        (if (== *test-json-output* 1)
+          {do
+            (= {exit-code} (if (== (+ (plist/get final-ctx :failed) (plist/get final-ctx :timed-out)) 0) {0} {1}))
+            (= {expected-exit} (plist/get final-ctx :expected-exit))
+            (if (== exit-code expected-exit) {(shutdown 0)} {(shutdown exit-code)})}
+          {(*test-print-results-and-exit* final-ctx)})})
 })
 
 ; Sync test runner WITH timeout support (requires aio system)
@@ -360,9 +399,11 @@
         (= {skip-suite} (plist/get ctx :skip-suite))
         (= {skip-reason} (plist/get ctx :skip-reason))
 
-        (if (== skip-suite 1)
-          {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
-          {printf "🧪 [%ld/%ld] %s (timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms})
+        (if (== *test-json-output* 0)
+          {(if (== skip-suite 1)
+            {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
+            {printf "🧪 [%ld/%ld] %s (timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms})}
+          {true})
 
         ; Run all tests with individual timeouts, racing against suite timeout
         (= {test-handle} (aio/pure (foldl (\ {ctx test} {(*test-run-one-with-timeout* aio ctx test)}) ctx tests)))
@@ -376,7 +417,12 @@
 
         ; Stop aio and print results
         (aio/stop aio)
-        (*test-print-results-and-exit* final-ctx)})
+        (if (== *test-json-output* 1)
+          {do
+            (= {exit-code} (if (== (+ (plist/get final-ctx :failed) (plist/get final-ctx :timed-out)) 0) {0} {1}))
+            (= {expected-exit} (plist/get final-ctx :expected-exit))
+            (if (== exit-code expected-exit) {(shutdown 0)} {(shutdown exit-code)})}
+          {(*test-print-results-and-exit* final-ctx)})})
 })
 
 ; ============================================================================
@@ -410,9 +456,12 @@
     (= {debug} (plist/get ctx :debug))
     (= {timeout-ms} (plist/get ctx :timeout-ms))
 
+    (= {suite-name} (plist/get ctx :suite-name))
     (if (== skip-suite 1)
       {do
-        (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")
+        (if (== *test-json-output* 1)
+          {(*test-json-result* test-name "skip" 0 suite-name)}
+          {do (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")})
         (plist/set ctx :skipped (+ (plist/get ctx :skipped) 1))}
       {do
         (= {cap} (test/capture-start))
@@ -444,8 +493,11 @@
 
         (if (== result :timeout)
           {do
-            (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
-            (*test-print-captured* test-name captured)
+            (if (== *test-json-output* 1)
+              {(*test-json-result* test-name "timeout" (* timeout-ms 1000) suite-name)}
+              {do
+                (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
+                (*test-print-captured* test-name captured)})
             (plist/set ctx :timed-out (+ (plist/get ctx :timed-out) 1))}
           {do
             (= {passed} (if (== result true) {1}
@@ -456,10 +508,13 @@
                                 {0})}
                               {0})})}))
 
-            (if (== passed 1)
-              {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
-              {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
-                  (*test-print-captured* test-name captured)})
+            (if (== *test-json-output* 1)
+              {(*test-json-result* test-name (if (== passed 1) {"pass"} {"fail"}) elapsed suite-name)}
+              {do
+                (if (== passed 1)
+                  {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+                  {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+                      (*test-print-captured* test-name captured)})})
 
             (if (== passed 1)
               {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
@@ -532,13 +587,20 @@
           {(shutdown 0)}
           {(shutdown 1)})}
       {do
-        (printf "🧪 [%ld/%ld] %s (async, timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms)
+        (if (== *test-json-output* 0)
+          {printf "🧪 [%ld/%ld] %s (async, timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms}
+          {true})
 
         ; Run tests sequentially via recursion
         (= {ctx} (*test-run-async-loop* aio ctx tests))
 
         (aio/stop aio)
-        (*test-print-results-and-exit* ctx)})
+        (if (== *test-json-output* 1)
+          {do
+            (= {exit-code} (if (== (+ (plist/get ctx :failed) (plist/get ctx :timed-out)) 0) {0} {1}))
+            (= {expected-exit} (plist/get ctx :expected-exit))
+            (if (== exit-code expected-exit) {(shutdown 0)} {(shutdown exit-code)})}
+          {(*test-print-results-and-exit* ctx)})})
 })
 
 

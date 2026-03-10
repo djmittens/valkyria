@@ -212,6 +212,7 @@ void valk_register_math_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
   valk_lenv_put_builtin(env, "str->num", valk_builtin_str_to_num);
   valk_lenv_put_builtin(env, "%", valk_builtin_modulo);
+  valk_lenv_put_builtin(env, "mod", valk_builtin_modulo);
   valk_lenv_put_builtin(env, "rand", valk_builtin_rand);
   valk_lenv_put_builtin(env, "rand-seed", valk_builtin_rand_seed);
 }

@@ -420,7 +420,56 @@ static void valk_print_io(valk_test_t *test) {
   printf(">>>CAPTURED\n");
 }
 
+static void valk_json_escape(const char *s, FILE *out) {
+  for (; *s; s++) {
+    switch (*s) {
+      case '"':  fputs("\\\"", out); break;
+      case '\\': fputs("\\\\", out); break;
+      case '\n': fputs("\\n", out); break;
+      case '\r': fputs("\\r", out); break;
+      case '\t': fputs("\\t", out); break;
+      default:
+        if ((unsigned char)*s < 0x20)
+          fprintf(out, "\\u%04x", (unsigned char)*s);
+        else
+          fputc(*s, out);
+    }
+  }
+}
+
+static void valk_testsuite_print_json(valk_test_suite_t *suite) {
+  for (size_t i = 0; i < suite->tests.count; i++) {
+    valk_test_t *test = &suite->tests.items[i];
+    valk_test_result_t *result = &test->result;
+
+    const char *status;
+    switch (result->type) {
+      case VALK_TEST_PASS: status = "pass"; break;
+      case VALK_TEST_FAIL: status = "fail"; break;
+      case VALK_TEST_CRSH: status = "crash"; break;
+      case VALK_TEST_SKIP: status = "skip"; break;
+      default: status = "undefined"; break;
+    }
+
+    unsigned long long elapsed_us = result->stopTime - result->startTime;
+    if (result->timePrecision == VALK_MILLIS) elapsed_us *= 1000;
+    else if (result->timePrecision == VALK_NANOS) elapsed_us /= 1000;
+
+    printf("{\"test\":\"");
+    valk_json_escape(test->name, stdout);
+    printf("\",\"status\":\"%s\",\"us\":%llu,\"suite\":\"", status, elapsed_us);
+    valk_json_escape(suite->filename, stdout);
+    printf("\"}\n");
+  }
+  fflush(stdout);
+}
+
 void valk_testsuite_print(valk_test_suite_t *suite) {
+  if (getenv("VALK_TEST_JSON")) {
+    valk_testsuite_print_json(suite);
+    return;
+  }
+
   printf("[%zu/%zu] %s Suite Results: \n", suite->tests.count,
          suite->tests.count, suite->filename);
   for (size_t i = 0; i < suite->tests.count; i++) {

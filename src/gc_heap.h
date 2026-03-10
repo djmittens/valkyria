@@ -268,8 +268,10 @@ struct valk_gc_heap {
   sz soft_limit;
   u8 gc_threshold_pct;
   u8 gc_target_pct;
+  u8 gc_pacing_mul;
   u32 min_gc_interval_ms;
   u64 last_gc_time_us;
+  sz live_after_gc;
 
   _Atomic bool gc_in_progress;
 

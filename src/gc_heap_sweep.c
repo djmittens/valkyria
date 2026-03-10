@@ -139,7 +139,7 @@ sz valk_gc_sweep_page(valk_gc_page_t *page) {
             valk_lval_t *v = (valk_lval_t *)ptr;
             u64 flags = atomic_load_explicit(&v->flags, memory_order_acquire);
             if ((valk_ltype_e)(flags & LVAL_TYPE_MASK) == LVAL_REF && v->ref.free != nullptr) {
-              v->ref.free(v->ref.ptr);
+                v->ref.free(v->ref.ptr);
             }
           }
           // LCOV_EXCL_BR_STOP

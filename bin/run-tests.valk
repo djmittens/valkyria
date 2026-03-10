@@ -1,0 +1,445 @@
+(load "src/prelude.valk")
+
+; --- CLI argument parsing ---
+
+(fun {parse-args argv} {
+  (= {opts} {:build-dir "build" :timeout 120 :filter "" :no-stress 0
+             :stress-only 0 :only "" :examples 0 :sanitizer ""
+             :lsan-suppressions "" :junit-dir "" :jobs 0})
+  (= {i} 1)
+  (= {argc} (len argv))
+  (*parse-args-loop* opts argv i argc)
+})
+
+(fun {*parse-args-loop* opts argv i argc} {
+  (if (> i argc)
+    {opts}
+    {do
+      (= {arg} (nth i argv))
+      (= {next-i} (+ i 1))
+      (= {has-next} (<= next-i argc))
+      (select
+        {(or (== arg "-f") (== arg "--filter"))
+         (if has-next
+           {(*parse-args-loop* (plist/set opts :filter (nth next-i argv)) argv (+ i 2) argc)}
+           {opts})}
+        {(== arg "--build-dir")
+         (if has-next
+           {(*parse-args-loop* (plist/set opts :build-dir (nth next-i argv)) argv (+ i 2) argc)}
+           {opts})}
+        {(== arg "--timeout")
+         (if has-next
+           {(*parse-args-loop* (plist/set opts :timeout (str->num (nth next-i argv))) argv (+ i 2) argc)}
+           {opts})}
+        {(or (== arg "-j") (== arg "--jobs"))
+         (if has-next
+           {(*parse-args-loop* (plist/set opts :jobs (str->num (nth next-i argv))) argv (+ i 2) argc)}
+           {opts})}
+        {(== arg "--junit-dir")
+         (if has-next
+           {(*parse-args-loop* (plist/set opts :junit-dir (nth next-i argv)) argv (+ i 2) argc)}
+           {opts})}
+        {(== arg "--no-stress")
+         (*parse-args-loop* (plist/set opts :no-stress 1) argv next-i argc)}
+        {(== arg "--stress-only")
+         (*parse-args-loop* (plist/set opts :stress-only 1) argv next-i argc)}
+        {(== arg "--examples")
+         (*parse-args-loop* (plist/set opts :examples 1) argv next-i argc)}
+        {(== arg "--only")
+         (if has-next
+           {(*parse-args-loop* (plist/set opts :only (nth next-i argv)) argv (+ i 2) argc)}
+           {opts})}
+        {(== arg "--sanitizer")
+         (if has-next
+           {(*parse-args-loop* (plist/set opts :sanitizer (nth next-i argv)) argv (+ i 2) argc)}
+           {opts})}
+        {(== arg "--lsan-suppressions")
+         (if has-next
+           {(*parse-args-loop* (plist/set opts :lsan-suppressions (nth next-i argv)) argv (+ i 2) argc)}
+           {opts})}
+        {true (*parse-args-loop* opts argv next-i argc)})})
+})
+
+; --- Test discovery ---
+
+(fun {discover-c-tests build-dir} {
+  (= {entries} (list-dir build-dir))
+  (= {is-test} (\ {entry} {
+    (= {name} (plist/get entry :name))
+    (= {type} (plist/get entry :type))
+    (if (not (== type "file")) {false}
+      {(if (not (str/starts-with? name "test_")) {false}
+        {(if (== name "test_demo_server") {false}
+          {(if (str/contains? name ".") {false}
+            {true})})})})
+  }))
+  (= {filtered} (filter is-test entries))
+  (= {to-suite} (\ {entry} {
+    (= {name} (plist/get entry :name))
+    (list :name name :cmd (list (str build-dir "/" name)) :kind "c")
+  }))
+  (map to-suite filtered)
+})
+
+(fun {discover-valk-tests build-dir include-stress} {
+  (= {valk} (str build-dir "/valk"))
+  (= {suites} {})
+  (= {entries} (list-dir "test"))
+  (= {valk-tests} (filter (\ {e} {
+    (= {n} (plist/get e :name))
+    (if (not (str/starts-with? n "test_")) {false}
+      {(if (not (str/contains? n ".valk")) {false}
+        {(== (plist/get e :type) "file")})})
+  }) entries))
+  (= {suites} (map (\ {e} {
+    (= {n} (plist/get e :name))
+    (= {stem} (str/slice n 0 (- (len n) 5)))
+    (list :name stem :cmd (list valk (str "test/" n)) :kind "valk")
+  }) valk-tests))
+
+  (if (== include-stress 1)
+    {do
+      (if (file/exists? "test/stress")
+        {do
+          (= {stress-entries} (list-dir "test/stress"))
+          (= {stress-tests} (filter (\ {e} {
+            (= {n} (plist/get e :name))
+            (if (not (str/starts-with? n "test_")) {false}
+              {(if (not (str/contains? n ".valk")) {false}
+                {(== (plist/get e :type) "file")})})
+          }) stress-entries))
+          (= {stress-suites} (map (\ {e} {
+            (= {n} (plist/get e :name))
+            (= {stem} (str/slice n 0 (- (len n) 5)))
+            (list :name (str "stress/" stem) :cmd (list valk (str "test/stress/" n)) :kind "valk")
+          }) stress-tests))
+          (= {suites} (join suites stress-suites))}
+        {true})
+      suites}
+    {suites})
+})
+
+(fun {discover-examples build-dir} {
+  (= {valk} (str build-dir "/valk"))
+  (if (not (file/exists? "examples"))
+    {{}}
+    {do
+      (= {entries} (list-dir "examples"))
+      (= {examples} (filter (\ {e} {
+        (= {n} (plist/get e :name))
+        (if (not (str/contains? n ".valk")) {false}
+          {(if (== n "webserver_demo.valk") {false}
+            {(== (plist/get e :type) "file")})})
+      }) entries))
+      (map (\ {e} {
+        (= {n} (plist/get e :name))
+        (= {stem} (str/slice n 0 (- (len n) 5)))
+        (list :name (str "example/" stem) :cmd (list valk (str "examples/" n)) :kind "example")
+      }) examples)})
+})
+
+(fun {filter-suites suites pattern} {
+  (if (== pattern "")
+    {suites}
+    {do
+      (= {p} (str/lower pattern))
+      (filter (\ {s} {(str/contains? (str/lower (plist/get s :name)) p)}) suites)})
+})
+
+; --- XML escaping ---
+
+(fun {xml-escape s} {
+  (= {s} (str/replace s "&" "&amp;"))
+  (= {s} (str/replace s "<" "&lt;"))
+  (= {s} (str/replace s ">" "&gt;"))
+  (= {s} (str/replace s "\"" "&quot;"))
+  s
+})
+
+; --- Run one suite ---
+
+(fun {run-one-suite suite timeout-sec} {
+  (= {name} (plist/get suite :name))
+  (= {cmd} (plist/get suite :cmd))
+  (= {kind} (plist/get suite :kind))
+
+  (= {start-us} (time-us {}))
+  (= {result} (eval (cons exec cmd)))
+  (= {end-us} (time-us {}))
+  (= {wall-us} (- end-us start-us))
+
+  (= {exit-code} (plist/get result :exit-code))
+  (= {stdout} (plist/get result :stdout))
+  (= {stderr} (plist/get result :stderr))
+
+  (= {tests} (parse-jsonl-tests stdout))
+  (= {n-passed} (len (filter (\ {t} {(== (plist/get t :status) "pass")}) tests)))
+  (= {n-failed} (len (filter (\ {t} {
+    (= {s} (plist/get t :status))
+    (or (== s "fail") (or (== s "crash") (or (== s "timeout") (== s "undefined"))))
+  }) tests)))
+  (= {n-skipped} (len (filter (\ {t} {(== (plist/get t :status) "skip")}) tests)))
+
+  (list :name name :kind kind :passed (== exit-code 0)
+   :exit-code exit-code :wall-us wall-us
+   :test-count (len tests) :test-passed n-passed
+   :test-failed n-failed :test-skipped n-skipped
+   :tests tests :stdout stdout :stderr stderr)
+})
+
+(fun {parse-jsonl-tests output} {
+  (= {lines} (str/split output "\n"))
+  (= {parsed} (filter (\ {line} {
+    (if (== (len line) 0) {false}
+      {(str/starts-with? line "{")})
+  }) lines))
+  (map (\ {line} {
+    (= {obj} (json/parse line))
+    (if (error? obj)
+      {{:test "parse-error" :status "fail" :us 0}}
+      {obj})
+  }) parsed)
+})
+
+; --- JUnit XML generation ---
+
+(fun {write-junit suite-result junit-dir timeout-sec} {
+  (= {name} (plist/get suite-result :name))
+  (= {tests} (plist/get suite-result :tests))
+  (= {exit-code} (plist/get suite-result :exit-code))
+  (= {wall-s} (/ (plist/get suite-result :wall-us) 1000000))
+  (= {n-failures} 0)
+  (= {n-errors} 0)
+  (= {n-skipped} 0)
+
+  (= {testcases} "")
+  (= {tc-data} (foldl (\ {acc t} {
+    (= {tname} (xml-escape (plist/get t :test)))
+    (= {status} (plist/get t :status))
+    (= {us} (plist/get t :us))
+    (= {time-s} (/ us 1000000))
+    (= {time-frac} (mod (/ us 1000) 1000))
+    (= {tc-xml} (str "    <testcase classname=\"" (xml-escape name) "\" name=\"" tname
+                      "\" time=\"" time-s "." (if (< time-frac 100) {(if (< time-frac 10) {"00"} {"0"})} {""}) time-frac "\""  ))
+    (select
+      {(== status "pass")
+       (= {tc-xml} (str tc-xml "/>\n"))}
+      {(== status "skip")
+       (do (= {tc-xml} (str tc-xml "><skipped/></testcase>\n"))
+           (= {acc} (plist/set acc :skipped (+ (plist/get acc :skipped) 1))))}
+      {(== status "fail")
+       (do (= {tc-xml} (str tc-xml "><failure message=\"test failed\"/></testcase>\n"))
+           (= {acc} (plist/set acc :failures (+ (plist/get acc :failures) 1))))}
+      {(== status "crash")
+       (do (= {tc-xml} (str tc-xml "><error message=\"crashed\"/></testcase>\n"))
+           (= {acc} (plist/set acc :errors (+ (plist/get acc :errors) 1))))}
+      {(== status "timeout")
+       (do (= {tc-xml} (str tc-xml "><error message=\"timed out\"/></testcase>\n"))
+           (= {acc} (plist/set acc :errors (+ (plist/get acc :errors) 1))))}
+      {true
+       (do (= {tc-xml} (str tc-xml "><error message=\"unknown status\"/></testcase>\n"))
+           (= {acc} (plist/set acc :errors (+ (plist/get acc :errors) 1))))})
+    (plist/set acc :xml (str (plist/get acc :xml) tc-xml))
+  }) {:xml "" :failures 0 :errors 0 :skipped 0} tests))
+
+  (if (and (== exit-code 0) (== (len tests) 0))
+    {true}
+    {(if (and (!= exit-code 0) (== (len tests) 0))
+      {do
+        (= {tc-data} (plist/set tc-data :errors (+ (plist/get tc-data :errors) 1)))
+        (= {tc-data} (plist/set tc-data :xml (str (plist/get tc-data :xml)
+          "    <testcase classname=\"" (xml-escape name) "\" name=\"" (xml-escape name)
+          "\" time=\"" wall-s "\"><error message=\"exited with code " exit-code "\"/></testcase>\n")))}
+      {true})})
+
+  (= {n-tests} (if (== (len tests) 0) {1} {(len tests)}))
+  (= {xml} (str "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+    "<testsuites>\n"
+    "  <testsuite name=\"" (xml-escape name)
+    "\" tests=\"" n-tests
+    "\" failures=\"" (plist/get tc-data :failures)
+    "\" errors=\"" (plist/get tc-data :errors)
+    "\" skipped=\"" (plist/get tc-data :skipped)
+    "\" time=\"" wall-s "\">\n"
+    (plist/get tc-data :xml)
+    "  </testsuite>\n"
+    "</testsuites>\n"))
+
+  (= {safe-name} (str/replace name "/" "_"))
+  (write-file (str junit-dir "/" safe-name ".xml") xml)
+})
+
+; --- Summary printing ---
+
+(fun {print-summary results wall-us junit-dir} {
+  (= {total} (len results))
+  (= {failed-suites} (filter (\ {r} {(not (plist/get r :passed))}) results))
+  (= {total-tests} (foldl (\ {acc r} {(+ acc (plist/get r :test-count))}) 0 results))
+  (= {total-passed} (foldl (\ {acc r} {(+ acc (plist/get r :test-passed))}) 0 results))
+  (= {total-failed} (foldl (\ {acc r} {(+ acc (plist/get r :test-failed))}) 0 results))
+  (= {total-skipped} (foldl (\ {acc r} {(+ acc (plist/get r :test-skipped))}) 0 results))
+  (= {wall-s-whole} (/ wall-us 1000000))
+  (= {wall-s-frac} (/ (mod wall-us 1000000) 100000))
+
+  (print "")
+  (printf "======================================================================\n")
+  (if (== (len failed-suites) 0)
+    {printf "  ALL PASSED: %ld suites, %ld tests in %ld.%lds\n" total total-tests wall-s-whole wall-s-frac}
+    {printf "  FAILED: %ld/%ld suites, %ld test failures in %ld.%lds\n"
+            (len failed-suites) total total-failed wall-s-whole wall-s-frac})
+  (printf "  Tests: %ld passed, %ld failed, %ld skipped\n" total-passed total-failed total-skipped)
+  (printf "  JUnit: %s/\n" junit-dir)
+  (printf "======================================================================\n")
+
+  (if (> (len failed-suites) 0)
+    {do
+      (printf "\nFAILED SUITES:\n\n")
+      (map (\ {r} {
+        (= {wall-s} (/ (plist/get r :wall-us) 1000000))
+        (= {wall-frac} (/ (mod (plist/get r :wall-us) 1000000) 100000))
+        (printf "  [%s] %s - exit %ld (%ld.%lds)\n"
+          (plist/get r :kind) (plist/get r :name) (plist/get r :exit-code) wall-s wall-frac)
+      }) failed-suites)
+      (printf "\n----------------------------------------------------------------------\n")
+      (printf "FAILURE DETAILS:\n")
+      (printf "----------------------------------------------------------------------\n")
+      (map (\ {r} {
+        (printf "\n--- %s ---\n" (plist/get r :name))
+        (= {stderr} (plist/get r :stderr))
+        (if (> (len stderr) 0)
+          {do
+            (= {lines} (str/split stderr "\n"))
+            (= {n} (len lines))
+            (= {show} (if (> n 50) {50} {n}))
+            (printf "  stderr (%ld lines, last %ld):\n" n show)
+            (= {start} (- n show))
+            (*print-lines-from* lines start n)}
+          {true})
+      }) failed-suites)}
+    {true})
+
+  (== (len failed-suites) 0)
+})
+
+(fun {*print-lines-from* lines start end} {
+  (if (>= start end)
+    {true}
+    {do
+      (printf "    %s\n" (nth start lines))
+      (*print-lines-from* lines (+ start 1) end)})
+})
+
+; --- Main ---
+
+(= {opts} (parse-args sys/argv))
+(= {build-dir} (plist/get opts :build-dir))
+(= {timeout-sec} (plist/get opts :timeout))
+(= {filter-pat} (plist/get opts :filter))
+(= {only} (plist/get opts :only))
+(= {sanitizer} (plist/get opts :sanitizer))
+
+(if (not (file/exists? build-dir))
+  {do
+    (stderr/write (str "error: build directory '" build-dir "' does not exist\n"))
+    (stderr/write "hint: run 'make build' first\n")
+    (shutdown 1)}
+  {true})
+
+; Set up env vars
+(env/set "VALK_TEST_JSON" "1")
+(env/set "VALK_TEST_TIMEOUT_SECONDS" "30")
+
+(if (== sanitizer "asan")
+  {do
+    (env/set "ASAN_OPTIONS" "detect_leaks=1:halt_on_error=1:abort_on_error=1")
+    (= {lsan-opts} "verbosity=0:log_threads=1")
+    (= {lsan-supp} (plist/get opts :lsan-suppressions))
+    (if (> (len lsan-supp) 0)
+      {(env/set "LSAN_OPTIONS" (str lsan-opts ":suppressions=" lsan-supp))}
+      {(env/set "LSAN_OPTIONS" lsan-opts)})}
+  {true})
+(if (== sanitizer "tsan")
+  {do
+    (env/set "TSAN_OPTIONS" "halt_on_error=1:second_deadlock_stack=1")
+    (env/set "VALK_TEST_NO_FORK" "1")}
+  {true})
+
+; Discover suites
+(= {suites} {})
+(if (== (plist/get opts :stress-only) 1)
+  {do
+    (= {all-valk} (discover-valk-tests build-dir 1))
+    (= {suites} (filter (\ {s} {(str/starts-with? (plist/get s :name) "stress/")}) all-valk))}
+  {do
+    (if (!= only "valk")
+      {(= {suites} (join suites (discover-c-tests build-dir)))}
+      {true})
+    (if (!= only "c")
+      {(= {suites} (join suites (discover-valk-tests build-dir (if (== (plist/get opts :no-stress) 1) {0} {1}))))}
+      {true})
+    (if (== (plist/get opts :examples) 1)
+      {(= {suites} (join suites (discover-examples build-dir)))}
+      {true})})
+
+(if (== (len suites) 0)
+  {do (stderr/write "error: no test suites found\n") (shutdown 1)}
+  {true})
+
+(= {suites} (filter-suites suites filter-pat))
+(if (== (len suites) 0)
+  {do (stderr/write (str "error: no suites match filter '" filter-pat "'\n")) (shutdown 1)}
+  {true})
+
+; Set up JUnit directory
+(= {junit-dir} (plist/get opts :junit-dir))
+(if (== junit-dir "")
+  {do
+    (= {us} (time-us {}))
+    (= {junit-dir} (str "test-report/junit-run-" us))}
+  {true})
+(mkdir-p junit-dir)
+(mkdir-p "test-report")
+
+; Print header
+(= {c-count} (len (filter (\ {s} {(== (plist/get s :kind) "c")}) suites)))
+(= {v-count} (len (filter (\ {s} {(== (plist/get s :kind) "valk")}) suites)))
+(= {e-count} (len (filter (\ {s} {(== (plist/get s :kind) "example")}) suites)))
+(= {parts} {})
+(if (> c-count 0) {(= {parts} (join parts (list (str c-count " C"))))} {true})
+(if (> v-count 0) {(= {parts} (join parts (list (str v-count " Valk"))))} {true})
+(if (> e-count 0) {(= {parts} (join parts (list (str e-count " examples"))))} {true})
+
+(= {san-label} (if (> (len sanitizer) 0) {(str " [" (str/replace (str/replace (str/replace (str/replace sanitizer "a" "A") "s" "S") "t" "T") "n" "N") "]")} {""}))
+(printf "Running %ld suites (%s)%s\n" (len suites) (str/join parts ", ") san-label)
+(printf "JUnit output: %s/\n\n" junit-dir)
+
+; Run all suites sequentially
+(= {start-us} (time-us {}))
+(= {total-suites} (len suites))
+
+(= {results} (foldl (\ {acc suite} {
+  (= {idx} (+ (len acc) 1))
+  (= {result} (run-one-suite suite timeout-sec))
+  (write-junit result junit-dir timeout-sec)
+
+  (= {status} (if (plist/get result :passed) {"PASS"} {"FAIL"}))
+  (= {wall-s} (/ (plist/get result :wall-us) 1000000))
+  (= {wall-frac} (/ (mod (plist/get result :wall-us) 1000000) 100000))
+  (printf "[%ld/%ld] %s: %s (%ld.%lds)\n"
+    idx total-suites status (plist/get result :name) wall-s wall-frac)
+  (stdout/flush)
+
+  (join acc (list result))
+}) {} suites))
+
+(= {end-us} (time-us {}))
+(= {wall-us} (- end-us start-us))
+
+; Create latest symlink
+(= {latest-link} "test-report/latest")
+(= {rel-target} (last (str/split junit-dir "/")))
+(symlink rel-target latest-link)
+
+; Print summary and exit
+(= {all-passed} (print-summary results wall-us junit-dir))
+(if all-passed {(shutdown 0)} {(shutdown 1)})

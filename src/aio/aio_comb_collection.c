@@ -5,4 +5,5 @@ void valk_register_comb_collection(valk_lenv_t *env) {
   valk_register_comb_race(env);
   valk_register_comb_any(env);
   valk_register_comb_all_settled(env);
+  valk_register_comb_pmap(env);
 }

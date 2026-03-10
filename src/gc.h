@@ -218,6 +218,7 @@ typedef struct {
   pthread_mutex_t lock;
   valk_lval_t **slots;
   u32 *generations;
+  u32 *next_free;
   u32 capacity;
   u32 count;
   u32 free_head;
@@ -262,6 +263,9 @@ bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold);
 void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_heap_t* heap,
                      valk_lenv_t* root_env);
 valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v);
+valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+void valk_evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
 
 // ============================================================================
 // Parallel GC Infrastructure

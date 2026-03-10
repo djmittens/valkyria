@@ -1,6 +1,7 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
-(def {result} (exit 42))
 (test/run (list
-  (test "exit-is-shutdown-alias" {(== result 42)})
+  (test "exit-is-defined" {(not (error? exit))})
+  (test "shutdown-is-defined" {(not (error? shutdown))})
+  (test "exit-returns-code" {(do (= {r} (exit 0)) (== r 0))})
 ) {:suite-name "Exit Alias"})

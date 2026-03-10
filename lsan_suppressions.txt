@@ -68,3 +68,10 @@ leak:__ssl_realloc
 leak:__nghttp2_malloc
 leak:__nghttp2_realloc
 leak:__nghttp2_calloc
+
+# Dict native storage (keys/values arrays) freed by GC finalizer,
+# may not run before test exit
+leak:dict_alloc
+leak:dict_put
+leak:dict_set
+leak:dict_grow

@@ -1,0 +1,334 @@
+(load "src/prelude.valk")
+
+; --- Index builders ---
+
+; Build path -> file plist from files array
+(fun {file-index files} {
+  (foldl (\ {idx f} {
+    (plist/set idx (plist/get f :path) f)
+  }) {} files)
+})
+
+; Build file -> (name-list) from dead_symbols array
+(fun {dead-index dead-syms} {
+  (foldl (\ {idx d} {
+    (= {file} (plist/get d :file))
+    (= {name} (plist/get d :name))
+    (= {cur} (plist/get idx file))
+    (if (== cur nil)
+      {(plist/set idx file (list name))}
+      {(plist/set idx file (join cur (list name)))})
+  }) {} dead-syms)
+})
+
+; Build "source->target" -> refs from file_coupling array
+(fun {coupling-index couplings} {
+  (foldl (\ {idx c} {
+    (= {key} (str (plist/get c :source) "->" (plist/get c :target)))
+    (plist/set idx key (plist/get c :refs))
+  }) {} couplings)
+})
+
+; Build name -> refs from hotspots array
+(fun {hotspot-index hotspots} {
+  (foldl (\ {idx h} {
+    (plist/set idx (plist/get h :name) (plist/get h :refs))
+  }) {} hotspots)
+})
+
+; Build "name@file" -> deps from high_fan_out array
+(fun {fanout-index fanouts} {
+  (foldl (\ {idx f} {
+    (= {key} (str (plist/get f :name) "@" (plist/get f :file)))
+    (plist/set idx key (plist/get f :deps))
+  }) {} fanouts)
+})
+
+; Get plist value or default
+(fun {get-or obj key default} {
+  (= {v} (plist/get obj key))
+  (if (== v nil) {default} {v})
+})
+
+; Check if name is in list
+(fun {in-list? name lst} {
+  (if (== (len lst) 0) {false}
+    {(if (== (head lst) name) {true}
+      {(in-list? name (tail lst))})})
+})
+
+; Get all keys from a plist (every other element starting at index 1)
+(fun {plist-keys plist} {
+  (*plist-keys-helper* plist 1)
+})
+
+(fun {*plist-keys-helper* plist i} {
+  (if (> i (len plist)) {{}}
+    {(join (list (nth i plist)) (*plist-keys-helper* plist (+ i 2)))})
+})
+
+; --- Diff logic ---
+
+(fun {diff-snapshots before after} {
+  (= {sb} (plist/get before :summary))
+  (= {sa} (plist/get after :summary))
+  (= {regressions} {})
+  (= {improvements} {})
+
+  ; Dead symbols delta
+  (= {dead-delta} (- (plist/get sa :dead_symbols) (plist/get sb :dead_symbols)))
+  (if (> dead-delta 0)
+    {(= {regressions} (join regressions
+       (list (str "dead symbols: " (plist/get sb :dead_symbols)
+              " -> " (plist/get sa :dead_symbols) " (+" dead-delta ")"))))}
+    {(if (< dead-delta 0)
+      {(= {improvements} (join improvements
+         (list (str "dead symbols: " (plist/get sb :dead_symbols)
+                " -> " (plist/get sa :dead_symbols) " (" dead-delta ")"))))}
+      {true})})
+
+  ; Test coverage delta
+  (= {cov-b} (get-or sb :test_coverage_pct 0))
+  (= {cov-a} (get-or sa :test_coverage_pct 0))
+  (= {cov-delta} (- cov-a cov-b))
+  (if (< cov-delta -5)
+    {(= {regressions} (join regressions
+       (list (str "test coverage: " cov-b "% -> " cov-a "% (" cov-delta "%)"))))}
+    {(if (> cov-delta 5)
+      {(= {improvements} (join improvements
+         (list (str "test coverage: " cov-b "% -> " cov-a "% (+" cov-delta "%)"))))}
+      {true})})
+
+  ; Per-file deltas
+  (= {fb} (file-index (get-or before :files {})))
+  (= {fa} (file-index (get-or after :files {})))
+
+  (= {after-keys} (plist-keys fa))
+  (= {file-result} (foldl (\ {acc path} {
+    (= {regs} (nth 1 acc))
+    (= {imps} (nth 2 acc))
+    (= {af} (plist/get fa path))
+    (= {bf} (plist/get fb path))
+    (if (== bf nil)
+      {do
+        (if (> (plist/get af :symbols) 0)
+          {(= {imps} (join imps (list (str "new file: " path " (" (plist/get af :symbols) " symbols, " (plist/get af :lines) " lines)"))))}
+          {true})
+        (list regs imps)}
+      {do
+        ; Dead symbol increase per file
+        (= {dd} (- (plist/get af :dead) (plist/get bf :dead)))
+        (if (> dd 0)
+          {(= {regs} (join regs (list (str path " -- dead symbols: " (plist/get bf :dead) " -> " (plist/get af :dead) " (+" dd ")"))))}
+          {(if (< dd -1)
+            {(= {imps} (join imps (list (str path " -- dead symbols: " (plist/get bf :dead) " -> " (plist/get af :dead) " (" dd ")"))))}
+            {true})})
+
+        ; Fan-out spike
+        (= {fo-delta} (- (plist/get af :max_fan_out) (plist/get bf :max_fan_out)))
+        (if (> fo-delta 3)
+          {do
+            (= {fn} (get-or af :max_fan_out_fn "?"))
+            (= {regs} (join regs (list (str path " -- fan-out of `" fn "`: " (plist/get bf :max_fan_out) " -> " (plist/get af :max_fan_out) " (+" fo-delta ")"))))}
+          {true})
+
+        ; File size growth
+        (= {line-delta} (- (plist/get af :lines) (plist/get bf :lines)))
+        (if (and (> (plist/get bf :lines) 0) (> line-delta 50))
+          {do
+            (= {pct} (/ (* line-delta 100) (plist/get bf :lines)))
+            (if (> pct 20)
+              {(= {regs} (join regs (list (str path " -- lines: " (plist/get bf :lines) " -> " (plist/get af :lines) " (+" line-delta ", +" pct "%)"))))}
+              {true})}
+          {true})
+
+        ; Symbol count explosion
+        (= {sym-delta} (- (plist/get af :symbols) (plist/get bf :symbols)))
+        (if (> sym-delta 5)
+          {(= {regs} (join regs (list (str path " -- symbols: " (plist/get bf :symbols) " -> " (plist/get af :symbols) " (+" sym-delta ")"))))}
+          {true})
+
+        (list regs imps)})
+  }) (list regressions improvements) after-keys))
+
+  (= {regressions} (nth 1 file-result))
+  (= {improvements} (nth 2 file-result))
+
+  ; Removed files
+  (= {before-keys} (plist-keys fb))
+  (= {improvements} (foldl (\ {acc path} {
+    (if (== (plist/get fa path) nil)
+      {(join acc (list (str "removed file: " path)))}
+      {acc})
+  }) improvements before-keys))
+
+  ; Dead symbol specifics
+  (= {db} (dead-index (get-or before :dead_symbols {})))
+  (= {da} (dead-index (get-or after :dead_symbols {})))
+
+  (= {new-dead} {})
+  (= {da-keys} (plist-keys da))
+  (= {new-dead} (foldl (\ {acc file} {
+    (= {after-names} (plist/get da file))
+    (= {before-names} (get-or db file {}))
+    (foldl (\ {inner-acc n} {
+      (if (not (in-list? n before-names))
+        {(join inner-acc (list (str "  " file ": " n)))}
+        {inner-acc})
+    }) acc after-names)
+  }) {} da-keys))
+
+  (= {removed-dead} {})
+  (= {db-keys} (plist-keys db))
+  (= {removed-dead} (foldl (\ {acc file} {
+    (= {before-names} (plist/get db file))
+    (= {after-names} (get-or da file {}))
+    (foldl (\ {inner-acc n} {
+      (if (not (in-list? n after-names))
+        {(join inner-acc (list (str "  " file ": " n)))}
+        {inner-acc})
+    }) acc before-names)
+  }) {} db-keys))
+
+  ; Coupling changes
+  (= {cb} (coupling-index (get-or before :file_coupling {})))
+  (= {ca} (coupling-index (get-or after :file_coupling {})))
+
+  (= {ca-keys} (plist-keys ca))
+  (= {regressions} (foldl (\ {acc key} {
+    (= {refs-after} (plist/get ca key))
+    (= {refs-before} (get-or cb key 0))
+    (= {delta} (- refs-after refs-before))
+    (if (> delta 5)
+      {(join acc (list (str "coupling " key ": " refs-before " -> " refs-after " (+" delta " refs)")))}
+      {acc})
+  }) regressions ca-keys))
+
+  (= {cb-keys} (plist-keys cb))
+  (= {improvements} (foldl (\ {acc key} {
+    (if (== (plist/get ca key) nil)
+      {(join acc (list (str "decoupled: " key)))}
+      {acc})
+  }) improvements cb-keys))
+
+  ; New coupling edges
+  (= {regressions} (foldl (\ {acc key} {
+    (if (== (get-or cb key nil) nil)
+      {(join acc (list (str "new coupling: " key " (" (plist/get ca key) " refs)")))}
+      {acc})
+  }) regressions ca-keys))
+
+  ; Hotspot changes
+  (= {hb} (hotspot-index (get-or before :hotspots {})))
+  (= {ha} (hotspot-index (get-or after :hotspots {})))
+  (= {ha-keys} (plist-keys ha))
+  (= {regressions} (foldl (\ {acc name} {
+    (= {refs} (plist/get ha name))
+    (= {old} (get-or hb name 0))
+    (if (> (- refs old) 10)
+      {(join acc (list (str "hotspot `" name "`: " old " -> " refs " refs (+" (- refs old) ")")))}
+      {acc})
+  }) regressions ha-keys))
+
+  ; Fan-out changes
+  (= {fob} (fanout-index (get-or before :high_fan_out {})))
+  (= {foa} (fanout-index (get-or after :high_fan_out {})))
+  (= {foa-keys} (plist-keys foa))
+  (= {regressions} (foldl (\ {acc key} {
+    (= {deps} (plist/get foa key))
+    (= {old} (get-or fob key 0))
+    (if (> (- deps old) 5)
+      {(join acc (list (str "fan-out `" key "`: " old " -> " deps " deps (+" (- deps old) ")")))}
+      {acc})
+  }) regressions foa-keys))
+
+  (list regressions improvements new-dead removed-dead)
+})
+
+; Helper: print elements from idx start to end (1-indexed)
+(fun {*print-n-from* lst start end} {
+  (if (> start end) {true}
+    {do
+      (printf "%s\n" (nth start lst))
+      (*print-n-from* lst (+ start 1) end)})
+})
+
+; --- Main ---
+
+(= {argc} (len sys/argv))
+(= {args} (filter (\ {a} {(not (or (str/contains? a "valk") (== a "--")))}) sys/argv))
+(if (< (len args) 2)
+  {do
+    (stderr/write "Usage: quality-diff.valk before.json after.json\n")
+    (shutdown 2)}
+  {true})
+
+(= {before-path} (nth (- (len args) 1) args))
+(= {after-path} (nth (len args) args))
+
+(= {before-content} (read-file before-path))
+(= {after-content} (read-file after-path))
+(if (or (error? before-content) (error? after-content))
+  {do
+    (stderr/write "error: could not read input files\n")
+    (shutdown 1)}
+  {true})
+
+(= {before} (json/parse before-content))
+(= {after} (json/parse after-content))
+(if (or (error? before) (error? after))
+  {do
+    (stderr/write "error: could not parse JSON\n")
+    (shutdown 1)}
+  {true})
+
+(= {result} (diff-snapshots before after))
+(= {regressions} (nth 1 result))
+(= {improvements} (nth 2 result))
+(= {new-dead} (nth 3 result))
+(= {removed-dead} (nth 4 result))
+
+(= {total} (+ (len regressions) (len improvements)))
+(if (== total 0)
+  {do (printf "No quality changes detected.\n") (shutdown 0)}
+  {true})
+
+(printf "Quality delta: %ld regressions, %ld improvements\n\n" (len regressions) (len improvements))
+
+(if (> (len regressions) 0)
+  {do
+    (printf "REGRESSIONS:\n")
+    (map (\ {r} {(printf "  - %s\n" r)}) regressions)
+    (printf "\n")}
+  {true})
+
+(if (> (len new-dead) 0)
+  {do
+    (printf "New dead symbols (%ld):\n" (len new-dead))
+    (= {show} (if (> (len new-dead) 20) {20} {(len new-dead)}))
+    (*print-n-from* new-dead 1 show)
+    (if (> (len new-dead) 20)
+      {(printf "  ... and %ld more\n" (- (len new-dead) 20))}
+      {true})
+    (printf "\n")}
+  {true})
+
+(if (> (len improvements) 0)
+  {do
+    (printf "IMPROVEMENTS:\n")
+    (map (\ {i} {(printf "  + %s\n" i)}) improvements)
+    (printf "\n")}
+  {true})
+
+(if (> (len removed-dead) 0)
+  {do
+    (printf "Removed dead symbols (%ld):\n" (len removed-dead))
+    (= {show} (if (> (len removed-dead) 20) {20} {(len removed-dead)}))
+    (*print-n-from* removed-dead 1 show)
+    (if (> (len removed-dead) 20)
+      {(printf "  ... and %ld more\n" (- (len removed-dead) 20))}
+      {true})
+    (printf "\n")}
+  {true})
+
+(if (> (len regressions) 0) {(shutdown 1)} {(shutdown 0)})

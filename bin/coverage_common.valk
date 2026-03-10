@@ -1,0 +1,662 @@
+; coverage_common.valk — Shared coverage data parsing for Valkyria
+;
+; Loaded by check-coverage.valk and coverage-report.valk
+; All data structures use mutable dicts for O(1) access on large datasets.
+; All percentages are stored as integer tenths (923 = 92.3%).
+; Use (fmt-pct n) to format for display.
+;
+; Data model (all dicts):
+;   files-dict:     filepath -> fc-dict
+;   fc-dict keys:   "filename" "lines" "branch-data" "fn-found" "fn-hit"
+;     "lines"       -> lines-dict (key=str(line-no), value=lc-dict)
+;     "branch-data" -> bd-dict (key="line:branch_id", value=taken-num)
+;   lc-dict keys:   "hit" "exprs"
+;     "exprs"       -> flat list (col end-col hit ...)
+
+; --- Integer-scaled percentage helpers ---
+
+(fun {pct-tenths hit found} {
+  (if (== found 0) {0}
+    {(/ (* hit 1000) found)})
+})
+
+(fun {fmt-pct tenths} {
+  (= {whole} (/ tenths 10))
+  (= {frac} (mod tenths 10))
+  (if (< tenths 0)
+    {do
+      (= {tenths} (- 0 tenths))
+      (= {whole} (/ tenths 10))
+      (= {frac} (mod tenths 10))
+      (str "-" whole "." frac "%")}
+    {(str whole "." frac "%")})
+})
+
+; --- Recursive directory walk ---
+
+(fun {walk-dir dir} {
+  (= {entries} (list-dir dir))
+  (*walk-dir-loop* entries dir {})
+})
+
+(fun {*walk-dir-loop* entries dir acc} {
+  (if (== entries nil) {acc}
+    {do
+      (= {entry} (head entries))
+      (= {name} (plist/get entry :name))
+      (= {typ} (plist/get entry :type))
+      (= {path} (str dir "/" name))
+      (if (== typ "dir")
+        {(*walk-dir-loop* (tail entries) dir (join acc (walk-dir path)))}
+        {(*walk-dir-loop* (tail entries) dir (join acc (list path)))})})
+})
+
+; --- File coverage data structure (dict-based) ---
+
+(fun {make-file-cov filename} {
+  (= {fc} (dict/new))
+  (dict/set! fc "filename" filename)
+  (dict/set! fc "lines" (dict/new))
+  (dict/set! fc "branch-data" (dict/new))
+  (dict/set! fc "fn-found" 0)
+  (dict/set! fc "fn-hit" 0)
+  fc
+})
+
+(fun {make-line-cov hit} {
+  (= {lc} (dict/new))
+  (dict/set! lc "hit" hit)
+  (dict/set! lc "exprs" {})
+  lc
+})
+
+; --- Computed coverage stats for a file ---
+
+(fun {*count-lines* keys lines found-acc hit-acc} {
+  (if (== keys nil) {(list found-acc hit-acc)}
+    {do
+      (= {lc} (dict/get lines (head keys)))
+      (= {hit} (dict/get lc "hit"))
+      (if (>= hit 0)
+        {(if (> hit 0)
+          {(*count-lines* (tail keys) lines (+ found-acc 1) (+ hit-acc 1))}
+          {(*count-lines* (tail keys) lines (+ found-acc 1) hit-acc)})}
+        {(*count-lines* (tail keys) lines found-acc hit-acc)})})
+})
+
+(fun {*count-branches* keys bd acc} {
+  (if (== keys nil) {acc}
+    {do
+      (= {taken} (dict/get bd (head keys)))
+      (if (> taken 0)
+        {(*count-branches* (tail keys) bd (+ acc 1))}
+        {(*count-branches* (tail keys) bd acc)})})
+})
+
+(fun {*count-expr-hits-in-line* exprs found-acc hit-acc} {
+  (if (== exprs nil) {(list found-acc hit-acc)}
+    {do
+      (= {rest1} (tail exprs))
+      (if (== rest1 nil) {(list found-acc hit-acc)}
+        {do
+          (= {rest2} (tail rest1))
+          (if (== rest2 nil) {(list found-acc hit-acc)}
+            {do
+              (= {hit} (head rest2))
+              (if (> hit 0)
+                {(*count-expr-hits-in-line* (tail rest2) (+ found-acc 1) (+ hit-acc 1))}
+                {(*count-expr-hits-in-line* (tail rest2) (+ found-acc 1) hit-acc)})})})})
+})
+
+(fun {*count-exprs* keys lines found-acc hit-acc} {
+  (if (== keys nil) {(list found-acc hit-acc)}
+    {do
+      (= {lc} (dict/get lines (head keys)))
+      (= {exprs} (dict/get lc "exprs"))
+      (= {r} (*count-expr-hits-in-line* exprs 0 0))
+      (*count-exprs* (tail keys) lines (+ found-acc (nth 1 r)) (+ hit-acc (nth 2 r)))})
+})
+
+(fun {*finalize-all-files* keys files} {
+  (if (== keys nil) {}
+    {do
+      (fc/finalize! (dict/get files (head keys)))
+      (*finalize-all-files* (tail keys) files)})
+})
+
+(fun {fc/finalize! fc} {
+  (= {lines} (dict/get fc "lines"))
+  (= {keys} (dict/keys lines))
+  (= {lr} (*count-lines* keys lines 0 0))
+  (dict/set! fc "_lf" (nth 1 lr))
+  (dict/set! fc "_lh" (nth 2 lr))
+  (= {bd} (dict/get fc "branch-data"))
+  (= {bf} (dict/count bd))
+  (dict/set! fc "_bf" bf)
+  (dict/set! fc "_bh" (*count-branches* (dict/keys bd) bd 0))
+  (= {er} (*count-exprs* keys lines 0 0))
+  (dict/set! fc "_ef" (nth 1 er))
+  (dict/set! fc "_eh" (nth 2 er))
+})
+
+(fun {fc/lines-found fc} {(dict/get fc "_lf")})
+(fun {fc/lines-hit fc} {(dict/get fc "_lh")})
+(fun {fc/branches-found fc} {(dict/get fc "_bf")})
+(fun {fc/branches-hit fc} {(dict/get fc "_bh")})
+(fun {fc/exprs-found fc} {(dict/get fc "_ef")})
+(fun {fc/exprs-hit fc} {(dict/get fc "_eh")})
+
+(fun {fc/line-pct fc} {
+  (pct-tenths (dict/get fc "_lh") (dict/get fc "_lf"))
+})
+
+(fun {fc/branch-pct fc} {
+  (= {found} (dict/get fc "_bf"))
+  (if (== found 0) {1000} {(pct-tenths (dict/get fc "_bh") found)})
+})
+
+(fun {fc/expr-pct fc} {
+  (pct-tenths (dict/get fc "_eh") (dict/get fc "_ef"))
+})
+
+; --- LCOV parser (mutates files dict in place) ---
+
+(fun {parse-lcov-file path files source-root} {
+  (if (not (file/exists? path)) {}
+    {do
+      (= {st} (dict/new))
+      (dict/set! st "fc" nil)
+      (for-each-line path (\ {line} {
+        (select
+          {(str/starts-with? line "SF:")
+           (do
+             (= {fp} (str/slice line 3 (len line)))
+             (= {fp} (if (str/starts-with? fp "/") {fp} {(str source-root "/" fp)}))
+             (= {fc} (dict/get files fp))
+             (if (== fc nil)
+               {do
+                 (= {fc} (make-file-cov fp))
+                 (dict/set! files fp fc)}
+               {})
+             (dict/set! st "fc" fc))}
+          {(== line "end_of_record")
+           (dict/set! st "fc" nil)}
+          {true
+           (do
+             (= {fc} (dict/get st "fc"))
+             (if (!= fc nil) {(*lcov-apply-line* line fc)} {}))})
+      }))})
+})
+
+(fun {*lcov-apply-line* line fc} {
+  (select
+    {(str/starts-with? line "DA:")
+     (do
+       (= {parts} (str/split (str/slice line 3 (len line)) ","))
+       (if (< (len parts) 2) {}
+         {do
+           (= {line-no} (str->num (nth 1 parts)))
+           (= {hit} (str->num (nth 2 parts)))
+           (= {lkey} (str line-no))
+           (= {lines-d} (dict/get fc "lines"))
+           (= {existing} (dict/get lines-d lkey))
+           (if (== existing nil)
+             {(dict/set! lines-d lkey (make-line-cov hit))}
+             {do
+               (= {old-hit} (dict/get existing "hit"))
+               (if (> hit old-hit)
+                 {(dict/set! existing "hit" hit)}
+                 {})})}))}
+
+    {(str/starts-with? line "BRDA:")
+     (do
+       (= {parts} (str/split (str/slice line 5 (len line)) ","))
+       (if (< (len parts) 4) {}
+         {do
+           (= {line-no} (str->num (nth 1 parts)))
+           (= {branch-id} (str->num (nth 3 parts)))
+           (= {taken-str} (nth 4 parts))
+           (= {taken} (if (== taken-str "-") {0} {(str->num taken-str)}))
+           (= {bkey} (str line-no ":" branch-id))
+           (= {bd} (dict/get fc "branch-data"))
+           (= {old} (dict/get bd bkey))
+           (= {new-taken} (if (== old nil) {taken} {(if (> taken old) {taken} {old})}))
+           (dict/set! bd bkey new-taken)
+           (= {lkey} (str line-no))
+           (= {lines-d} (dict/get fc "lines"))
+           (if (== (dict/get lines-d lkey) nil)
+             {(dict/set! lines-d lkey (make-line-cov -1))}
+             {})}))}
+
+    {(str/starts-with? line "EXPRDATA:")
+     (do
+       (= {parts} (str/split (str/slice line 9 (len line)) ","))
+       (if (< (len parts) 4) {}
+         {do
+           (= {line-no} (str->num (nth 1 parts)))
+           (= {col} (str->num (nth 2 parts)))
+           (= {end-col} (str->num (nth 3 parts)))
+           (= {hit} (str->num (nth 4 parts)))
+           (= {lkey} (str line-no))
+           (= {lines-d} (dict/get fc "lines"))
+           (= {existing} (dict/get lines-d lkey))
+           (= {lc} (if (== existing nil)
+             {do
+               (= {new-lc} (make-line-cov -1))
+               (dict/set! lines-d lkey new-lc)
+               new-lc}
+             {existing}))
+           (= {exprs} (dict/get lc "exprs"))
+           (dict/set! lc "exprs" (join exprs (list col end-col hit)))}))}
+
+    {(str/starts-with? line "FNF:")
+     (do
+       (= {n} (str->num (str/slice line 4 (len line))))
+       (= {old} (dict/get fc "fn-found"))
+       (if (> n old) {(dict/set! fc "fn-found" n)} {}))}
+
+    {(str/starts-with? line "FNH:")
+     (do
+       (= {n} (str->num (str/slice line 4 (len line))))
+       (= {old} (dict/get fc "fn-hit"))
+       (if (> n old) {(dict/set! fc "fn-hit" n)} {}))}
+
+    {true {}})
+})
+
+; --- gcov parser (mutates files dict in place) ---
+
+(fun {is-macro-branch-line source} {
+  (or (or (or (or (or (or (or (or (or (or (or (or
+      (str/contains? source "VALK_ASSERT")
+      (str/contains? source "VALK_GC_SAFE_POINT"))
+      (str/contains? source "INHERIT_SOURCE_LOC"))
+      (str/contains? source "VALK_COVERAGE_RECORD_LVAL"))
+      (str/contains? source "LVAL_ASSERT_TYPE"))
+      (str/contains? source "LVAL_ASSERT_COUNT"))
+      (str/contains? source "LVAL_ASSERT_AIO_SYSTEM"))
+      (str/contains? source "LVAL_ASSERT"))
+      (str/contains? source "VALK_ERROR"))
+      (str/contains? source "VALK_WARN"))
+      (str/contains? source "VALK_INFO"))
+      (str/contains? source "VALK_DEBUG"))
+      (str/contains? source "VALK_TRACE"))
+})
+
+(fun {parse-gcov-file-streaming path files source-root} {
+  (= {st} (dict/new))
+  (dict/set! st "sf" nil)
+  (dict/set! st "ln" 0)
+  (dict/set! st "ie" 0)
+  (dict/set! st "ib" 0)
+  (dict/set! st "cb" 0)
+  (for-each-line path (\ {line} {
+    (*parse-gcov-one* line files source-root st)
+  }))
+})
+
+(fun {*gcov-update-source-line* count-str parsed-lineno files src-file} {
+  (if (== src-file nil) {}
+    {do
+      (= {fc} (dict/get files src-file))
+      (if (== fc nil) {}
+        {do
+          (= {hit-count}
+            (select
+              {(== count-str "-") -1}
+              {(== count-str "#####") 0}
+              {true (if (error? (str->num count-str)) {-1} {(str->num count-str)})}))
+          (= {lkey} (str parsed-lineno))
+          (= {lines-d} (dict/get fc "lines"))
+          (= {existing} (dict/get lines-d lkey))
+          (if (== existing nil)
+            {(dict/set! lines-d lkey (make-line-cov hit-count))}
+            {do
+              (= {old-hit} (dict/get existing "hit"))
+              (if (> hit-count old-hit)
+                {(dict/set! existing "hit" hit-count)}
+                {})})})})
+})
+
+(fun {*gcov-parse-source-line* line files st} {
+  (= {colon1} (str/index-of line ":"))
+  (if (== colon1 -1) {(dict/set! st "cb" 0)}
+    {do
+      (= {after1} (str/slice line (+ colon1 1) (len line)))
+      (= {colon2} (str/index-of after1 ":"))
+      (if (== colon2 -1) {(dict/set! st "cb" 0)}
+        {do
+          (= {count-str} (str/trim (str/slice line 0 colon1)))
+          (= {lineno-str} (str/trim (str/slice after1 0 colon2)))
+          (= {source} (str/slice after1 (+ colon2 1) (len after1)))
+          (if (str/contains? source "LCOV_EXCL_START") {(dict/set! st "ie" 1)} {})
+          (if (str/contains? source "LCOV_EXCL_STOP") {(dict/set! st "ie" 0)} {})
+          (if (str/contains? source "LCOV_EXCL_BR_START") {(dict/set! st "ib" 1)} {})
+          (if (str/contains? source "LCOV_EXCL_BR_STOP") {(dict/set! st "ib" 0)} {})
+          (dict/set! st "cb" (or (str/contains? source "LCOV_EXCL_BR_LINE")
+                                 (is-macro-branch-line source)))
+          (= {parsed-lineno} (if (error? (str->num lineno-str)) {0} {(str->num lineno-str)}))
+          (if (== parsed-lineno 0) {}
+            {do
+              (dict/set! st "ln" parsed-lineno)
+              (if (or (== (dict/get st "ie") 1) (str/contains? source "LCOV_EXCL_LINE"))
+                {}
+                {(*gcov-update-source-line* count-str parsed-lineno files (dict/get st "sf"))})})})})
+})
+
+(fun {*parse-gcov-one* line files source-root st} {
+  (select
+    {(str/starts-with? line "        -:    0:Source:")
+     (do
+       (= {filepath} (str/trim (nth 4 (str/split line ":"))))
+       (= {filepath} (if (str/starts-with? filepath "/") {filepath}
+                       {(str source-root "/" filepath)}))
+       (if (== (dict/get files filepath) nil)
+         {(dict/set! files filepath (make-file-cov filepath))}
+         {})
+       (dict/set! st "sf" filepath)
+       (dict/set! st "ln" 0)
+       (dict/set! st "ie" 0)
+       (dict/set! st "ib" 0)
+       (dict/set! st "cb" 0))}
+
+    {(str/starts-with? line "branch ")
+     (do
+       (= {src-file} (dict/get st "sf"))
+       (if (or (or (or (== src-file nil) (== (dict/get st "ie") 1)) (== (dict/get st "ib") 1)) (== (dict/get st "cb") 1))
+         {}
+         {do
+            (= {line-no} (dict/get st "ln"))
+            (= {parts} (filter (\ {p} {(!= p "")}) (str/split (str/trim line) " ")))
+            (= {branch-id} (str->num (nth 2 parts)))
+            (= {taken} (if (str/contains? line "taken")
+              {do
+                (= {tparts} (str/split line "taken "))
+                (if (> (len tparts) 1)
+                  {(str->num (str/replace (str/trim (nth 2 tparts)) "%" ""))}
+                  {0})}
+              {0}))
+           (= {bkey} (str line-no ":" branch-id))
+           (= {fc} (dict/get files src-file))
+           (= {bd} (dict/get fc "branch-data"))
+           (= {old} (dict/get bd bkey))
+           (= {new-taken} (if (== old nil) {taken} {(if (> taken old) {taken} {old})}))
+           (dict/set! bd bkey new-taken)
+           (= {lkey} (str line-no))
+           (= {lines-d} (dict/get fc "lines"))
+           (if (== (dict/get lines-d lkey) nil)
+             {(dict/set! lines-d lkey (make-line-cov -1))}
+             {})}))}
+
+    {(str/contains? line ":")
+     (*gcov-parse-source-line* line files st)}
+
+    {true nil})
+})
+
+; --- Find llvm-cov ---
+
+(fun {find-llvm-cov} {
+  (= {candidates} {"llvm-cov"
+                    "/opt/homebrew/opt/llvm/bin/llvm-cov"
+                    "/usr/local/opt/llvm/bin/llvm-cov"})
+  (*find-llvm-cov-loop* candidates)
+})
+
+(fun {*find-llvm-cov-loop* candidates} {
+  (if (== (len candidates) 0) {nil}
+    {do
+      (= {candidate} (head candidates))
+      (= {result} (exec candidate "--version"))
+      (if (== (plist/get result :exit-code) 0)
+        {candidate}
+        {(*find-llvm-cov-loop* (tail candidates))})})
+})
+
+(fun {*parse-gcov-local* entries dir source-root local-files} {
+  (if (== (len entries) 0) {}
+    {do
+      (= {path} (str dir "/" (plist/get (head entries) :name)))
+      (parse-gcov-file-streaming path local-files source-root)
+      (*parse-gcov-local* (tail entries) dir source-root local-files)})
+})
+
+; --- Run gcov on build directory ---
+
+(fun {parse-gcov-files-par build-dir source-root files nthreads aio} {
+  (= {gcda-dir} (str build-dir "/CMakeFiles/valkyria.dir/src"))
+  (if (not (file/exists? gcda-dir)) {}
+    {do
+      (= {llvm-cov} (find-llvm-cov))
+      (if (== llvm-cov nil)
+        {(print "Warning: llvm-cov not found, skipping C coverage")}
+        {do
+          (= {all-files} (walk-dir gcda-dir))
+          (= {gcda-files} (filter (\ {f} {str/ends-with? f ".gcda"}) all-files))
+          (= {local-dicts} (aio/await (aio/pmap aio
+            (\ {gcda} {(*run-gcov-and-parse* gcda llvm-cov source-root)})
+            gcda-files)))
+          (*merge-file-dicts* local-dicts files)
+          (= {build-gcovs} (filter (\ {f} {str/ends-with? f ".gcov"})
+            (if (file/exists? build-dir)
+              {(map (\ {e} {str build-dir "/" (plist/get e :name)}) (list-dir build-dir))}
+              {{}})))
+          (map (\ {f} {file/delete f}) build-gcovs)
+          (= {root-gcovs} (filter (\ {f} {str/ends-with? f ".gcov"})
+            (map (\ {e} {str source-root "/" (plist/get e :name)}) (list-dir source-root))))
+          (map (\ {f} {file/delete f}) root-gcovs)})})
+})
+
+(fun {*run-gcov-and-parse* gcda-file llvm-cov source-root} {
+  (= {tmpdir} (str/trim (plist/get (exec "mktemp" "-d") :stdout)))
+  (= {gcda-parent} (str/join (init (str/split gcda-file "/")) "/"))
+  (exec "sh" "-c" (str "cd " tmpdir " && " llvm-cov " gcov -b -o " gcda-parent " " gcda-file " 2>/dev/null"))
+  (= {local-files} (dict/new))
+  (= {entries} (if (file/exists? tmpdir) {(list-dir tmpdir)} {{}}))
+  (= {gcov-entries} (filter (\ {e} {str/ends-with? (plist/get e :name) ".gcov"}) entries))
+  (*parse-gcov-local* gcov-entries tmpdir source-root local-files)
+  (exec "rm" "-rf" tmpdir)
+  local-files
+})
+
+(fun {*merge-line-cov* dst-lc src-lc} {
+  (= {src-hit} (dict/get src-lc "hit"))
+  (= {dst-hit} (dict/get dst-lc "hit"))
+  (if (> src-hit dst-hit) {(dict/set! dst-lc "hit" src-hit)} {})
+  (= {src-exprs} (dict/get src-lc "exprs"))
+  (if (!= src-exprs nil)
+    {do
+      (= {dst-exprs} (dict/get dst-lc "exprs"))
+      (if (== dst-exprs nil)
+        {(dict/set! dst-lc "exprs" src-exprs)}
+        {(if (> (len src-exprs) (len dst-exprs))
+          {(dict/set! dst-lc "exprs" src-exprs)}
+          {})})}
+    {})
+})
+
+(fun {*merge-one-fc* dst-fc src-fc} {
+  (= {src-lines} (dict/get src-fc "lines"))
+  (= {dst-lines} (dict/get dst-fc "lines"))
+  (= {lkeys} (dict/keys src-lines))
+  (*merge-lines-loop* lkeys src-lines dst-lines)
+  (= {src-bd} (dict/get src-fc "branch-data"))
+  (= {dst-bd} (dict/get dst-fc "branch-data"))
+  (= {bkeys} (dict/keys src-bd))
+  (*merge-branches-loop* bkeys src-bd dst-bd)
+  (= {sf} (dict/get src-fc "fn-found"))
+  (if (> sf (dict/get dst-fc "fn-found")) {(dict/set! dst-fc "fn-found" sf)} {})
+  (= {sh} (dict/get src-fc "fn-hit"))
+  (if (> sh (dict/get dst-fc "fn-hit")) {(dict/set! dst-fc "fn-hit" sh)} {})
+})
+
+(fun {*merge-lines-loop* keys src-lines dst-lines} {
+  (if (== keys nil) {}
+    {do
+      (= {k} (head keys))
+      (= {src-lc} (dict/get src-lines k))
+      (= {dst-lc} (dict/get dst-lines k))
+      (if (== dst-lc nil)
+        {(dict/set! dst-lines k src-lc)}
+        {(*merge-line-cov* dst-lc src-lc)})
+      (*merge-lines-loop* (tail keys) src-lines dst-lines)})
+})
+
+(fun {*merge-branches-loop* keys src-bd dst-bd} {
+  (if (== keys nil) {}
+    {do
+      (= {k} (head keys))
+      (= {src-taken} (dict/get src-bd k))
+      (= {dst-taken} (dict/get dst-bd k))
+      (if (== dst-taken nil)
+        {(dict/set! dst-bd k src-taken)}
+        {(if (> src-taken dst-taken) {(dict/set! dst-bd k src-taken)} {})})
+      (*merge-branches-loop* (tail keys) src-bd dst-bd)})
+})
+
+(fun {*merge-file-dicts* local-dicts files} {
+  (if (== local-dicts nil) {}
+    {do
+      (= {local} (head local-dicts))
+      (if (!= local nil)
+        {do
+          (= {fkeys} (dict/keys local))
+          (*merge-file-keys* fkeys local files)}
+        {})
+      (*merge-file-dicts* (tail local-dicts) files)})
+})
+
+(fun {*merge-file-keys* keys local-files global-files} {
+  (if (== keys nil) {}
+    {do
+      (= {fp} (head keys))
+      (= {src-fc} (dict/get local-files fp))
+      (= {dst-fc} (dict/get global-files fp))
+      (if (== dst-fc nil)
+        {(dict/set! global-files fp src-fc)}
+        {(*merge-one-fc* dst-fc src-fc)})
+      (*merge-file-keys* (tail keys) local-files global-files)})
+})
+
+(fun {*parse-lcov-one* path source-root} {
+  (= {local-files} (dict/new))
+  (parse-lcov-file path local-files source-root)
+  local-files
+})
+
+; --- Collect all coverage data (returns files dict) ---
+
+(fun {collect-coverage raw-build-dir raw-source-root} {
+  (= {bdir} (realpath raw-build-dir))
+  (= {sroot} (realpath raw-source-root))
+  (= {files} (dict/new))
+  (= {ncpus-r} (exec "nproc"))
+  (= {ncpus} (if (== (plist/get ncpus-r :exit-code) 0)
+    {(str->num (str/trim (plist/get ncpus-r :stdout)))}
+    {4}))
+  (= {nthreads} (if (> ncpus 8) {8} {ncpus}))
+  (= {t0} (time-us))
+  (= {aio} (aio/await (aio/start {:num-threads nthreads})))
+  (parse-gcov-files-par bdir sroot files nthreads aio)
+  (= {t1} (time-us))
+  (printf "  gcov phase: %dms\n" (/ (- t1 t0) 1000))
+  (= {build-entries} (list-dir bdir))
+  (= {lcov-names} (filter (\ {e} {do (= {n} (plist/get e :name)) (and (str/starts-with? n "coverage-valk") (str/ends-with? n ".info"))}) build-entries))
+  (= {lcov-names} (if (== (len lcov-names) 0)
+    {(if (file/exists? (str bdir "/coverage-valk.info"))
+      {(list (list :name "coverage-valk.info" :type "file"))}
+      {()})}
+    {lcov-names}))
+  (= {lcov-paths} (map (\ {e} {(str bdir "/" (plist/get e :name))}) lcov-names))
+  (= {lcov-dicts} (aio/await (aio/pmap aio
+    (\ {path} {(*parse-lcov-one* path sroot)})
+    lcov-paths)))
+  (aio/stop aio)
+  (= {t2} (time-us))
+  (printf "  lcov phase: %dms\n" (/ (- t2 t1) 1000))
+  (*merge-file-dicts* lcov-dicts files)
+  (= {t3} (time-us))
+  (printf "  merge phase: %dms\n" (/ (- t3 t2) 1000))
+  (*finalize-all-files* (dict/keys files) files)
+  (= {t4} (time-us))
+  (printf "  finalize phase: %dms\n" (/ (- t4 t3) 1000))
+  (printf "  total collect: %dms\n" (/ (- t4 t0) 1000))
+  files
+})
+
+; --- Filters (return new dicts) ---
+
+(fun {filter-runtime-files files source-root} {
+  (= {keys} (dict/keys files))
+  (= {result} (dict/new))
+  (*filter-runtime* keys files source-root result)
+  result
+})
+
+(fun {*filter-runtime* keys files source-root result} {
+  (if (== keys nil) {}
+    {do
+      (= {filepath} (head keys))
+      (= {fc} (dict/get files filepath))
+      (= {rel} (if (str/starts-with? filepath source-root)
+        {(str/slice filepath (+ (len source-root) 1) (len filepath))}
+        {filepath}))
+      (if (not (str/starts-with? rel "src/")) {}
+        {(if (not (str/ends-with? rel ".c")) {}
+          {(if (str/starts-with? rel "src/test") {}
+            {(if (str/contains? rel "vendor") {}
+              {(if (<= (fc/lines-found fc) 0) {}
+                {(dict/set! result rel fc)})})})})})
+      (*filter-runtime* (tail keys) files source-root result)})
+})
+
+(fun {filter-stdlib-files files source-root} {
+  (= {keys} (dict/keys files))
+  (= {result} (dict/new))
+  (*filter-stdlib* keys files source-root result)
+  result
+})
+
+(fun {*filter-stdlib* keys files source-root result} {
+  (if (== keys nil) {}
+    {do
+      (= {filepath} (head keys))
+      (= {fc} (dict/get files filepath))
+      (= {rel} (if (str/starts-with? filepath source-root)
+        {(str/slice filepath (+ (len source-root) 1) (len filepath))}
+        {filepath}))
+      (if (not (str/starts-with? rel "src/")) {}
+        {(if (not (str/ends-with? rel ".valk")) {}
+          {(if (str/starts-with? rel "test/") {}
+            {(if (str/starts-with? rel "examples/") {}
+              {(if (> (fc/lines-found fc) 0) {(dict/set! result rel fc)}
+                {(if (> (fc/exprs-found fc) 0) {(dict/set! result rel fc)}
+                  {})})})})})})
+      (*filter-stdlib* (tail keys) files source-root result)})
+})
+
+; --- Aggregate stats ---
+
+(fun {sum-stat files stat-fn} {
+  (= {keys} (dict/keys files))
+  (*sum-stat-loop* keys files stat-fn 0)
+})
+
+(fun {*sum-stat-loop* keys files stat-fn acc} {
+  (if (== keys nil) {acc}
+    {do
+      (= {fc} (dict/get files (head keys)))
+      (*sum-stat-loop* (tail keys) files stat-fn (+ acc (stat-fn fc)))})
+})
+
+; --- XML escape ---
+
+(fun {xml-escape s} {
+  (= {s} (str/replace s "&" "&amp;"))
+  (= {s} (str/replace s "<" "&lt;"))
+  (= {s} (str/replace s ">" "&gt;"))
+  (= {s} (str/replace s "\"" "&quot;"))
+  s
+})
+
+(fun {html-escape s} {xml-escape s})

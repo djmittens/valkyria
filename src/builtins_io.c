@@ -1,11 +1,15 @@
 #include "builtins_internal.h"
 
 #include <dirent.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "coverage.h"
 #include "diag.h"
@@ -427,6 +431,303 @@ static valk_lval_t *valk_builtin_offsets_to_lines(valk_lenv_t *e,
   return reversed;
 }
 
+static valk_lval_t* valk_builtin_write_file(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+
+  const char* path = valk_lval_list_nth(a, 0)->str;
+  const char* content = valk_lval_list_nth(a, 1)->str;
+  u64 len = strlen(content);
+
+  FILE* f = fopen(path, "wb");
+  if (!f)
+    LVAL_RAISE(a, "write-file: could not open (%s): %s", path, strerror(errno));
+
+  if (len > 0) {
+    u64 written = fwrite(content, 1, len, f);
+    if (written != len) { // LCOV_EXCL_START
+      fclose(f);
+      LVAL_RAISE(a, "write-file: partial write (%s)", path);
+    } // LCOV_EXCL_STOP
+  }
+  fclose(f);
+  return valk_lval_num((long)len);
+}
+
+static valk_lval_t* valk_builtin_file_exists(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  struct stat st;
+  return valk_lval_num(stat(valk_lval_list_nth(a, 0)->str, &st) == 0 ? 1 : 0);
+}
+
+static valk_lval_t* valk_builtin_mkdir_p(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char* path = valk_lval_list_nth(a, 0)->str;
+  char tmp[4096];
+  snprintf(tmp, sizeof(tmp), "%s", path);
+
+  for (char* p = tmp + 1; *p; p++) {
+    if (*p == '/') {
+      *p = '\0';
+      if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+        LVAL_RAISE(a, "mkdir-p: failed at (%s): %s", tmp, strerror(errno));
+      *p = '/';
+    }
+  }
+  if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+    LVAL_RAISE(a, "mkdir-p: failed (%s): %s", tmp, strerror(errno));
+
+  return valk_lval_nil();
+}
+
+static valk_lval_t* valk_builtin_file_delete(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* path = valk_lval_list_nth(a, 0)->str;
+  if (unlink(path) != 0)
+    LVAL_RAISE(a, "file/delete: failed (%s): %s", path, strerror(errno));
+  return valk_lval_nil();
+}
+
+static valk_lval_t* valk_builtin_rmdir(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* path = valk_lval_list_nth(a, 0)->str;
+  if (rmdir(path) != 0)
+    LVAL_RAISE(a, "rmdir: failed (%s): %s", path, strerror(errno));
+  return valk_lval_nil();
+}
+
+static valk_lval_t* valk_builtin_symlink(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  const char* target = valk_lval_list_nth(a, 0)->str;
+  const char* link_path = valk_lval_list_nth(a, 1)->str;
+  unlink(link_path);
+  if (symlink(target, link_path) != 0)
+    LVAL_RAISE(a, "symlink: failed (%s -> %s): %s", link_path, target, strerror(errno));
+  return valk_lval_nil();
+}
+
+static valk_lval_t* valk_builtin_env_get(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* val = getenv(valk_lval_list_nth(a, 0)->str);
+  if (!val) return valk_lval_nil();
+  return valk_lval_str(val);
+}
+
+static valk_lval_t* valk_builtin_env_set(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  setenv(valk_lval_list_nth(a, 0)->str, valk_lval_list_nth(a, 1)->str, 1);
+  return valk_lval_nil();
+}
+
+static valk_lval_t* valk_builtin_realpath(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  char resolved[PATH_MAX];
+  if (!realpath(valk_lval_list_nth(a, 0)->str, resolved))
+    LVAL_RAISE(a, "realpath: failed (%s): %s",
+               valk_lval_list_nth(a, 0)->str, strerror(errno));
+  return valk_lval_str(resolved);
+}
+
+static valk_lval_t* valk_builtin_exec(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_GE(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  u64 nargs = valk_lval_list_count(a);
+  char** argv_exec = calloc(nargs + 1, sizeof(char*));
+  for (u64 i = 0; i < nargs; i++) {
+    valk_lval_t* arg = valk_lval_list_nth(a, i);
+    LVAL_ASSERT_TYPE(a, arg, LVAL_STR);
+    argv_exec[i] = (char*)arg->str;
+  }
+  argv_exec[nargs] = nullptr;
+
+  int stdout_pipe[2], stderr_pipe[2];
+  if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) { // LCOV_EXCL_START
+    free(argv_exec);
+    LVAL_RAISE(a, "exec: pipe() failed: %s", strerror(errno));
+  } // LCOV_EXCL_STOP
+
+  pid_t pid = fork();
+  if (pid < 0) { // LCOV_EXCL_START
+    free(argv_exec);
+    close(stdout_pipe[0]); close(stdout_pipe[1]);
+    close(stderr_pipe[0]); close(stderr_pipe[1]);
+    LVAL_RAISE(a, "exec: fork() failed: %s", strerror(errno));
+  } // LCOV_EXCL_STOP
+
+  if (pid == 0) {
+    close(stdout_pipe[0]);
+    close(stderr_pipe[0]);
+    dup2(stdout_pipe[1], STDOUT_FILENO);
+    dup2(stderr_pipe[1], STDERR_FILENO);
+    close(stdout_pipe[1]);
+    close(stderr_pipe[1]);
+    execvp(argv_exec[0], argv_exec);
+    _exit(127);
+  }
+
+  free(argv_exec);
+  close(stdout_pipe[1]);
+  close(stderr_pipe[1]);
+
+  size_t out_cap = 4096, out_len = 0;
+  char* out_buf = malloc(out_cap);
+  size_t err_cap = 4096, err_len = 0;
+  char* err_buf = malloc(err_cap);
+
+  ssize_t n;
+  while ((n = read(stdout_pipe[0], out_buf + out_len, out_cap - out_len)) > 0) {
+    out_len += n;
+    if (out_len >= out_cap) { out_cap *= 2; out_buf = realloc(out_buf, out_cap); }
+  }
+  close(stdout_pipe[0]);
+
+  while ((n = read(stderr_pipe[0], err_buf + err_len, err_cap - err_len)) > 0) {
+    err_len += n;
+    if (err_len >= err_cap) { err_cap *= 2; err_buf = realloc(err_buf, err_cap); }
+  }
+  close(stderr_pipe[0]);
+
+  out_buf[out_len] = '\0';
+  err_buf[err_len] = '\0';
+
+  int status = 0;
+  waitpid(pid, &status, 0);
+
+  valk_lval_t* out_str = valk_lval_str(out_buf);
+  valk_lval_t* err_str = valk_lval_str(err_buf);
+  free(out_buf);
+  free(err_buf);
+
+  long exit_code;
+  if (WIFEXITED(status)) {
+    exit_code = WEXITSTATUS(status);
+  } else if (WIFSIGNALED(status)) {
+    exit_code = -(long)WTERMSIG(status);
+  } else {
+    exit_code = -1; // LCOV_EXCL_LINE
+  }
+
+  valk_lval_t* fields[6] = {
+    valk_lval_sym(":exit-code"), valk_lval_num(exit_code),
+    valk_lval_sym(":stdout"),    out_str,
+    valk_lval_sym(":stderr"),    err_str,
+  };
+  return valk_lval_qlist(fields, 6);
+}
+
+static void file_handle_free(void *ptr) {
+  FILE *f = ptr;
+  if (f) fclose(f);
+}
+
+static valk_lval_t* valk_builtin_file_open(valk_lenv_t* e, valk_lval_t* a) {
+  (void)e;
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+
+  const char *path = valk_lval_list_nth(a, 0)->str;
+  const char *mode = valk_lval_list_nth(a, 1)->str;
+  FILE *f = fopen(path, mode);
+  if (f == nullptr) {
+    LVAL_RAISE(a, "file/open: could not open '%s' with mode '%s'", path, mode);
+  }
+  return valk_lval_ref("file_handle", f, file_handle_free);
+}
+
+static valk_lval_t* valk_builtin_file_write_str(valk_lenv_t* e, valk_lval_t* a) {
+  (void)e;
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  valk_lval_t *ref = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(ref) != LVAL_REF || ref->ref.ptr == nullptr) {
+    LVAL_RAISE(a, "file/write: first argument must be a file handle");
+  }
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+
+  FILE *f = ref->ref.ptr;
+  const char *s = valk_lval_list_nth(a, 1)->str;
+  u64 len = strlen(s);
+  fwrite(s, 1, len, f);
+  return valk_lval_num((long)len);
+}
+
+static valk_lval_t* valk_builtin_file_close(valk_lenv_t* e, valk_lval_t* a) {
+  (void)e;
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t *ref = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(ref) != LVAL_REF || ref->ref.ptr == nullptr) {
+    LVAL_RAISE(a, "file/close: argument must be a file handle");
+  }
+  FILE *f = ref->ref.ptr;
+  fclose(f);
+  ref->ref.ptr = nullptr;
+  ref->ref.free = nullptr;
+  return valk_lval_num(0);
+}
+
+static valk_lval_t* valk_builtin_for_each_line(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  valk_lval_t* fn = valk_lval_list_nth(a, 1);
+  if (LVAL_TYPE(fn) != LVAL_FUN) {
+    LVAL_RAISE(a, "for-each-line: second argument must be a function");
+  }
+
+  const char* filename = valk_lval_list_nth(a, 0)->str;
+  FILE* f = fopen(filename, "r");
+  if (f == nullptr) {
+    LVAL_RAISE(a, "for-each-line: could not open file (%s)", filename);
+  }
+
+  char *buf = nullptr;
+  size_t buf_cap = 0;
+  ssize_t len;
+  u64 lines_read = 0;
+
+  while ((len = getline(&buf, &buf_cap, f)) != -1) {
+    if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
+    valk_lval_t *line_str = valk_lval_str(buf);
+    valk_lval_t *call_args[] = {fn, line_str};
+    valk_lval_t *call_expr = valk_lval_list(call_args, 2);
+    valk_lval_t *result = valk_lval_eval(e, call_expr);
+    if (LVAL_TYPE(result) == LVAL_ERR) {
+      free(buf);
+      fclose(f);
+      return result;
+    }
+    lines_read++;
+    VALK_GC_SAFE_POINT();
+  }
+
+  free(buf);
+  fclose(f);
+  return valk_lval_num((long)lines_read);
+}
+
 void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
@@ -450,4 +751,18 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "file/fingerprint", valk_builtin_file_fingerprint);
   valk_lenv_put_builtin(env, "sem/encode-deltas", valk_builtin_sem_encode_deltas);
   valk_lenv_put_builtin(env, "offsets->line-cols", valk_builtin_offsets_to_lines);
+  valk_lenv_put_builtin(env, "write-file", valk_builtin_write_file);
+  valk_lenv_put_builtin(env, "file/exists?", valk_builtin_file_exists);
+  valk_lenv_put_builtin(env, "file/delete", valk_builtin_file_delete);
+  valk_lenv_put_builtin(env, "mkdir-p", valk_builtin_mkdir_p);
+  valk_lenv_put_builtin(env, "rmdir", valk_builtin_rmdir);
+  valk_lenv_put_builtin(env, "symlink", valk_builtin_symlink);
+  valk_lenv_put_builtin(env, "env/get", valk_builtin_env_get);
+  valk_lenv_put_builtin(env, "env/set", valk_builtin_env_set);
+  valk_lenv_put_builtin(env, "realpath", valk_builtin_realpath);
+  valk_lenv_put_builtin(env, "exec", valk_builtin_exec);
+  valk_lenv_put_builtin(env, "for-each-line", valk_builtin_for_each_line);
+  valk_lenv_put_builtin(env, "file/open", valk_builtin_file_open);
+  valk_lenv_put_builtin(env, "file/write", valk_builtin_file_write_str);
+  valk_lenv_put_builtin(env, "file/close", valk_builtin_file_close);
 }

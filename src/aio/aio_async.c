@@ -331,7 +331,11 @@ bool valk_async_handle_cancel(valk_async_handle_t *handle) {
 
   valk_aio_system_t *sys = handle->sys;
   if (sys) {
-    if (uv_thread_self() == sys->loopThread) {
+    bool on_loop = false;
+    for (u32 i = 0; i < sys->num_loops; i++) {
+      if (uv_thread_self() == sys->loops[i].thread) { on_loop = true; break; }
+    }
+    if (on_loop) {
       valk_async_cancel_task(handle);
     } else {
       valk_aio_enqueue_task(sys, valk_async_cancel_task, handle);
@@ -421,7 +425,12 @@ valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 ti
   if (!handle) return valk_lval_err("await: null handle");
   
   valk_aio_system_t *sys = handle->sys;
-  bool on_loop_thread = sys && uv_thread_self() == sys->loopThread;
+  bool on_loop_thread = false;
+  if (sys) {
+    for (u32 i = 0; i < sys->num_loops; i++) {
+      if (uv_thread_self() == sys->loops[i].thread) { on_loop_thread = true; break; }
+    }
+  }
   
   if (!sys || !sys->eventloop || !on_loop_thread) { // LCOV_EXCL_BR_LINE - on_loop_thread true only from HTTP handler callbacks
     u64 start = 0;

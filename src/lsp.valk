@@ -19,11 +19,6 @@
 
 (fun {strip-cr s} {str/replace (str/replace s "\r" "") "\n" ""})
 
-(fun {ends-with s suffix} {
-  if (< (len s) (len suffix)) {0}
-    {== (str/slice s (- (len s) (len suffix)) (len s)) suffix}
-})
-
 ; ---------------------------------------------------------------------------
 ; LSP I/O — Content-Length framing over stdin/stdout
 ; ---------------------------------------------------------------------------
@@ -273,7 +268,7 @@
       (= {acc} (if (== type "dir")
         {if (lsp/skip-dir? name) {acc}
           {lsp/scan-dir full acc}}
-        {if (ends-with name ".valk")
+        {if (str/ends-with? name ".valk")
           {qcons full acc}
           {acc}}))
       (lsp/scan-entries root (tail entries) acc)}

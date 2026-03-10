@@ -496,6 +496,14 @@ bool valk_gc_should_collect(valk_gc_heap_t* heap) {
   u8 pressure = committed_pct > usage_pct ? committed_pct : usage_pct;
 
   if (pressure < heap->gc_threshold_pct) return false;
+
+  if (heap->gc_pacing_mul > 0 && heap->live_after_gc > 0) {
+    sz used = valk_gc_heap_used_bytes(heap);
+    sz pace = heap->live_after_gc * heap->gc_pacing_mul;
+    if (pace < 128 * 1024 * 1024) pace = 128 * 1024 * 1024;
+    if (used < pace) return false;
+  }
+
   if (heap->min_gc_interval_ms > 0 && heap->last_gc_time_us > 0) {
     u64 now_us = uv_hrtime() / 1000;
     u64 elapsed_ms = (now_us - heap->last_gc_time_us) / 1000;
@@ -600,6 +608,7 @@ void valk_handle_table_init(valk_handle_table_t *table) {
   table->free_head = UINT32_MAX;
   table->slots = calloc(table->capacity, sizeof(valk_lval_t *));
   table->generations = calloc(table->capacity, sizeof(u32));
+  table->next_free = calloc(table->capacity, sizeof(u32));
 }
 
 void valk_handle_table_free(valk_handle_table_t *table) {
@@ -611,6 +620,10 @@ void valk_handle_table_free(valk_handle_table_t *table) {
   if (table->generations) {
     free(table->generations);
     table->generations = nullptr;
+  }
+  if (table->next_free) {
+    free(table->next_free);
+    table->next_free = nullptr;
   }
   table->capacity = 0;
   table->count = 0;
@@ -625,9 +638,10 @@ static void valk_handle_table_grow(valk_handle_table_t *table) {
 
   valk_lval_t **new_slots = realloc(table->slots, new_cap * sizeof(valk_lval_t *));
   u32 *new_gens = realloc(table->generations, new_cap * sizeof(u32));
+  u32 *new_free = realloc(table->next_free, new_cap * sizeof(u32));
 
   // LCOV_EXCL_BR_START - handle table realloc OOM
-  if (!new_slots || !new_gens) {
+  if (!new_slots || !new_gens || !new_free) {
     VALK_ERROR("Failed to grow handle table");
     return;
   }
@@ -635,10 +649,12 @@ static void valk_handle_table_grow(valk_handle_table_t *table) {
 
   table->slots = new_slots;
   table->generations = new_gens;
+  table->next_free = new_free;
 
   for (u32 i = old_cap; i < new_cap; i++) {
     table->slots[i] = nullptr;
     table->generations[i] = 0;
+    table->next_free[i] = 0;
   }
 
   table->capacity = new_cap;
@@ -650,7 +666,7 @@ valk_handle_t valk_handle_create(valk_handle_table_t *table, valk_lval_t *val) {
   u32 idx;
   if (table->free_head != UINT32_MAX) {
     idx = table->free_head;
-    table->free_head = (u32)(uptr)table->slots[idx];
+    table->free_head = table->next_free[idx];
   } else {
     if (table->count >= table->capacity) {
       valk_handle_table_grow(table);
@@ -679,7 +695,8 @@ valk_lval_t *valk_handle_resolve(valk_handle_table_t *table, valk_handle_t h) {
 void valk_handle_release(valk_handle_table_t *table, valk_handle_t h) {
   pthread_mutex_lock(&table->lock);
   if (h.index < table->capacity && table->generations[h.index] == h.generation) {
-    table->slots[h.index] = (valk_lval_t *)(uptr)table->free_head;
+    table->slots[h.index] = nullptr;
+    table->next_free[h.index] = table->free_head;
     table->free_head = h.index;
   }
   pthread_mutex_unlock(&table->lock);
@@ -692,7 +709,7 @@ void valk_handle_table_visit(valk_handle_table_t *table,
   pthread_mutex_lock(&table->lock);
   for (u32 i = 0; i < table->count; i++) {
     valk_lval_t *val = table->slots[i];
-    if (val != nullptr && ((uptr)val > table->capacity)) {
+    if (val != nullptr) {
       visitor(val, ctx);
     }
   }

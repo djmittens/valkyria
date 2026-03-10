@@ -55,6 +55,9 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
     if ((val = valk_plist_get(config_map, ":connection-idle-timeout-ms")) && LVAL_TYPE(val) == LVAL_NUM)
       config.connection_idle_timeout_ms = (u32)val->num;
+
+    if ((val = valk_plist_get(config_map, ":num-threads")) && LVAL_TYPE(val) == LVAL_NUM)
+      config.num_threads = (u32)val->num;
   }
   // LCOV_EXCL_BR_STOP
 
@@ -93,10 +96,13 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
     uv_sleep(100);
   }
 
-  if (!sys->threadJoined && // LCOV_EXCL_BR_LINE - shutdown guard: thread typically not yet joined
-      !valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
-    uv_thread_join(&sys->loopThread);
-    sys->threadJoined = true;
+  for (u32 i = 0; i < sys->num_loops; i++) { // LCOV_EXCL_BR_LINE - shutdown guard
+    valk_aio_loop_t *loop = &sys->loops[i];
+    if (!loop->thread_joined &&
+        !valk_thread_equal(valk_thread_self(), (valk_thread_t)loop->thread)) {
+      uv_thread_join(&loop->thread);
+      loop->thread_joined = true;
+    }
   }
 
   return valk_lval_nil();
@@ -122,7 +128,13 @@ static valk_lval_t* valk_builtin_aio_on_loop_thread(valk_lenv_t* e, valk_lval_t*
   // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
-  bool on_loop = uv_thread_self() == sys->loopThread;
+  bool on_loop = false;
+  for (u32 i = 0; i < sys->num_loops; i++) {
+    if (uv_thread_self() == sys->loops[i].thread) {
+      on_loop = true;
+      break;
+    }
+  }
   return valk_lval_num(on_loop ? 1 : 0);
 }
 

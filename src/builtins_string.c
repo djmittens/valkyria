@@ -1,67 +1,69 @@
 #include "builtins_internal.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 // LCOV_EXCL_BR_START - print_user: type dispatch covers all LVAL types
-static void valk_lval_print_user(valk_lval_t* val) {
+static void valk_lval_fprint_user(FILE *f, valk_lval_t* val) {
   if (val == nullptr) {
-    printf("nil");
+    fprintf(f, "nil");
     return;
   }
   switch (LVAL_TYPE(val)) {
     case LVAL_NUM:
-      printf("%li", val->num);
+      fprintf(f, "%li", val->num);
       break;
     case LVAL_SYM:
-      printf("%s", val->str);
+      fprintf(f, "%s", val->str);
       break;
     case LVAL_NIL:
-      printf("()");
+      fprintf(f, "()");
       break;
     case LVAL_CONS: {
       bool is_quoted = (val->flags & LVAL_FLAG_QUOTED) != 0;
-      printf(is_quoted ? "{" : "(");
+      fputc(is_quoted ? '{' : '(', f);
       valk_lval_t* curr = val;
       int first = 1;
       while (curr != nullptr && LVAL_TYPE(curr) == LVAL_CONS) {
-        if (!first) putchar(' ');
-        valk_lval_print_user(curr->cons.head);
+        if (!first) fputc(' ', f);
+        valk_lval_fprint_user(f, curr->cons.head);
         curr = curr->cons.tail;
         first = 0;
       }
       if (curr != nullptr && LVAL_TYPE(curr) != LVAL_NIL) {
-        printf(" . ");
-        valk_lval_print_user(curr);
+        fprintf(f, " . ");
+        valk_lval_fprint_user(f, curr);
       }
-      printf(is_quoted ? "}" : ")");
+      fputc(is_quoted ? '}' : ')', f);
       break;
     }
     case LVAL_ERR:
-      printf("Error: %s", val->str);
+      fprintf(f, "Error: %s", val->str);
       break;
     case LVAL_FUN:
       if (val->fun.builtin) {
-        printf("<builtin>");
+        fprintf(f, "<builtin>");
       } else {
-        printf("<lambda>");
+        fprintf(f, "<lambda>");
       }
       break;
     case LVAL_STR:
-      printf("%s", val->str);
+      fprintf(f, "%s", val->str);
       break;
     case LVAL_REF:
-      printf("<ref:%s>", val->ref.type);
+      fprintf(f, "<ref:%s>", val->ref.type);
       break;
     case LVAL_HANDLE:
-      printf("<handle>");
+      fprintf(f, "<handle>");
       break;
     case LVAL_UNDEFINED:
-      printf("<undefined>");
+      fprintf(f, "<undefined>");
       break;
   }
 }
+
 // LCOV_EXCL_BR_STOP
 
 static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
@@ -110,10 +112,7 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
         return result;
       }
 
-      FILE* old_stdout = stdout;
-      stdout = stream;
-      valk_lval_print_user(val);
-      stdout = old_stdout;
+      valk_lval_fprint_user(stream, val);
       fclose(stream);
 
       u64 written = strlen(buffer + offset);
@@ -432,6 +431,161 @@ static valk_lval_t* valk_builtin_str_slice(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_str_n(str + start, slice_len);
 }
 
+static valk_lval_t* valk_builtin_str_contains(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  const char* haystack = valk_lval_list_nth(a, 0)->str;
+  const char* needle = valk_lval_list_nth(a, 1)->str;
+  return valk_lval_num(strstr(haystack, needle) != NULL ? 1 : 0);
+}
+
+static valk_lval_t* valk_builtin_str_starts_with(valk_lenv_t* e,
+                                                  valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  const char* str = valk_lval_list_nth(a, 0)->str;
+  const char* prefix = valk_lval_list_nth(a, 1)->str;
+  u64 prefix_len = strlen(prefix);
+  return valk_lval_num(strncmp(str, prefix, prefix_len) == 0 ? 1 : 0);
+}
+
+static valk_lval_t* valk_builtin_str_ends_with(valk_lenv_t* e,
+                                                valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  const char* str = valk_lval_list_nth(a, 0)->str;
+  const char* suffix = valk_lval_list_nth(a, 1)->str;
+  u64 str_len = strlen(str);
+  u64 suffix_len = strlen(suffix);
+  if (suffix_len > str_len) return valk_lval_num(0);
+  return valk_lval_num(
+      memcmp(str + str_len - suffix_len, suffix, suffix_len) == 0 ? 1 : 0);
+}
+
+static valk_lval_t* valk_builtin_str_join(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  valk_lval_t* list_arg = valk_lval_list_nth(a, 0);
+  valk_lval_t* sep_arg = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, list_arg, LVAL_CONS, LVAL_NIL);
+  LVAL_ASSERT_TYPE(a, sep_arg, LVAL_STR);
+
+  u64 count = valk_lval_list_count(list_arg);
+  if (count == 0) return valk_lval_str("");
+
+  const char* sep = sep_arg->str;
+  u64 sep_len = strlen(sep);
+
+  u64 total = 0;
+  for (u64 i = 0; i < count; i++) {
+    valk_lval_t* item = valk_lval_list_nth(list_arg, i);
+    LVAL_ASSERT_TYPE(a, item, LVAL_STR);
+    total += strlen(item->str);
+  }
+  total += sep_len * (count - 1);
+
+  char* buf = malloc(total + 1);
+  if (!buf) return valk_lval_err("str/join: out of memory"); // LCOV_EXCL_LINE
+
+  char* ptr = buf;
+  for (u64 i = 0; i < count; i++) {
+    if (i > 0) {
+      memcpy(ptr, sep, sep_len);
+      ptr += sep_len;
+    }
+    const char* s = valk_lval_list_nth(list_arg, i)->str;
+    u64 len = strlen(s);
+    memcpy(ptr, s, len);
+    ptr += len;
+  }
+  *ptr = '\0';
+
+  valk_lval_t* result = valk_lval_str(buf);
+  free(buf);
+  return result;
+}
+
+static valk_lval_t* valk_builtin_str_index_of(valk_lenv_t* e,
+                                               valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  const char* haystack = valk_lval_list_nth(a, 0)->str;
+  const char* needle = valk_lval_list_nth(a, 1)->str;
+  const char* found = strstr(haystack, needle);
+  if (!found) return valk_lval_num(-1);
+  return valk_lval_num(found - haystack);
+}
+
+static valk_lval_t* valk_builtin_str_lower(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* src = valk_lval_list_nth(a, 0)->str;
+  u64 len = strlen(src);
+  char* buf = malloc(len + 1);
+  if (!buf) return valk_lval_err("str/lower: out of memory"); // LCOV_EXCL_LINE
+  for (u64 i = 0; i < len; i++) buf[i] = (char)tolower((unsigned char)src[i]);
+  buf[len] = '\0';
+  valk_lval_t* result = valk_lval_str(buf);
+  free(buf);
+  return result;
+}
+
+static valk_lval_t* valk_builtin_str_upper(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* src = valk_lval_list_nth(a, 0)->str;
+  u64 len = strlen(src);
+  char* buf = malloc(len + 1);
+  if (!buf) return valk_lval_err("str/upper: out of memory"); // LCOV_EXCL_LINE
+  for (u64 i = 0; i < len; i++) buf[i] = (char)toupper((unsigned char)src[i]);
+  buf[len] = '\0';
+  valk_lval_t* result = valk_lval_str(buf);
+  free(buf);
+  return result;
+}
+
+static valk_lval_t* valk_builtin_str_trim(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* src = valk_lval_list_nth(a, 0)->str;
+  while (*src && isspace((unsigned char)*src)) src++;
+  u64 len = strlen(src);
+  while (len > 0 && isspace((unsigned char)src[len - 1])) len--;
+  return valk_lval_str_n(src, len);
+}
+
+static valk_lval_t* valk_builtin_str_trim_left(valk_lenv_t* e,
+                                                valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* src = valk_lval_list_nth(a, 0)->str;
+  while (*src && isspace((unsigned char)*src)) src++;
+  return valk_lval_str(src);
+}
+
+static valk_lval_t* valk_builtin_str_trim_right(valk_lenv_t* e,
+                                                 valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char* src = valk_lval_list_nth(a, 0)->str;
+  u64 len = strlen(src);
+  while (len > 0 && isspace((unsigned char)src[len - 1])) len--;
+  return valk_lval_str_n(src, len);
+}
+
 void valk_register_string_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "print", valk_builtin_print);
   valk_lenv_put_builtin(env, "printf", valk_builtin_printf);
@@ -441,4 +595,14 @@ void valk_register_string_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "str/split", valk_builtin_str_split);
   valk_lenv_put_builtin(env, "str/replace", valk_builtin_str_replace);
   valk_lenv_put_builtin(env, "str/slice", valk_builtin_str_slice);
+  valk_lenv_put_builtin(env, "str/contains?", valk_builtin_str_contains);
+  valk_lenv_put_builtin(env, "str/starts-with?", valk_builtin_str_starts_with);
+  valk_lenv_put_builtin(env, "str/ends-with?", valk_builtin_str_ends_with);
+  valk_lenv_put_builtin(env, "str/join", valk_builtin_str_join);
+  valk_lenv_put_builtin(env, "str/index-of", valk_builtin_str_index_of);
+  valk_lenv_put_builtin(env, "str/lower", valk_builtin_str_lower);
+  valk_lenv_put_builtin(env, "str/upper", valk_builtin_str_upper);
+  valk_lenv_put_builtin(env, "str/trim", valk_builtin_str_trim);
+  valk_lenv_put_builtin(env, "str/trim-left", valk_builtin_str_trim_left);
+  valk_lenv_put_builtin(env, "str/trim-right", valk_builtin_str_trim_right);
 }

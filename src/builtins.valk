@@ -161,6 +161,10 @@
 
 ; Read entire file contents as string.
 (sig 'read-file {-> Str Str})
+(sig 'for-each-line {-> Str Fun Num})
+(sig 'file/open {-> Str Str Ref})
+(sig 'file/write {-> Ref Str Num})
+(sig 'file/close {-> Ref Num})
 
 ; === Async core ===
 
@@ -369,6 +373,10 @@
 (sig 'mem/gc/set-threshold {-> Num Num})
 ; Set minimum GC interval, returns old value.
 (sig 'mem/gc/set-min-interval {-> Num Num})
+; Set GC pacing multiplier, returns old value.
+(sig 'mem/gc/set-pacing {-> Num Num})
+; Get current GC pacing multiplier.
+(sig 'mem/gc/pacing {-> Num})
 ; Set heap hard limit, returns old value.
 (sig 'mem/heap/set-hard-limit {-> Num Num})
 
@@ -573,6 +581,12 @@
 (sig 'dict/new {-> & Num Ref})
 ; Insert a key into a dict (mutating). Returns the dict.
 (sig 'dict/put! {-> Ref Str Ref})
+; Set a key-value pair in a dict (mutating). Returns the dict.
+(sig 'dict/set! {-> Ref Str A Ref})
+; Get value for key, or nil/default if missing.
+(sig 'dict/get {-> Ref Str & A A})
+; Remove a key from a dict (mutating). Returns the dict.
+(sig 'dict/remove! {-> Ref Str Ref})
 ; Test if a dict contains a key. Returns 1 or 0.
 (sig 'dict/has? {-> Ref Str Num})
 ; Create a dict from a Q-expression of keys.
@@ -581,6 +595,10 @@
 (sig 'dict/count {-> Ref Num})
 ; Return all keys of a dict as a Q-expression.
 (sig 'dict/keys {-> Ref (List Str)})
+; Return all values of a dict as a Q-expression.
+(sig 'dict/values {-> Ref (List A)})
+; Return all entries as a list of {key value} pairs.
+(sig 'dict/entries {-> Ref (List (List A))})
 
 ; === Stdio extras ===
 

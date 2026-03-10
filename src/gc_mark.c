@@ -60,40 +60,54 @@ static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
 }
 
 static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
-  if (obj == nullptr) return;
-  switch (LVAL_TYPE(obj)) {
-    case LVAL_CONS:
-      mark_lval(obj->cons.head, ctx);
-      mark_lval(obj->cons.tail, ctx);
-      break;
-    case LVAL_FUN:
-      if (obj->fun.builtin == nullptr) {
-        mark_lval(obj->fun.formals, ctx);
-        mark_lval(obj->fun.body, ctx);
-        if (obj->fun.env) mark_env(obj->fun.env, ctx);
-      }
-      mark_ptr_only(obj->fun.name, ctx);
-      break;
-    case LVAL_HANDLE:
-      if (obj->async.handle) {
-        mark_lval(obj->async.handle->on_complete, ctx);
-        mark_lval(obj->async.handle->on_error, ctx);
-        mark_lval(obj->async.handle->on_cancel, ctx);
-        mark_lval(atomic_load_explicit(&obj->async.handle->result, memory_order_acquire), ctx);
-        mark_lval(atomic_load_explicit(&obj->async.handle->error, memory_order_acquire), ctx);
-        if (obj->async.handle->env) mark_env(obj->async.handle->env, ctx);
-      }
-      break;
-    case LVAL_SYM:
-    case LVAL_STR:
-    case LVAL_ERR:
-      mark_ptr_only(obj->str, ctx);
-      break;
-    case LVAL_REF:
-      mark_ptr_only(obj->ref.type, ctx);
-      break;
-    default:
-      break;
+  while (obj != nullptr) {
+    switch (LVAL_TYPE(obj)) {
+      case LVAL_CONS:
+        mark_lval(obj->cons.head, ctx);
+        obj = obj->cons.tail;
+        if (obj == nullptr) return;
+        {
+          valk_gc_ptr_location_t loc;
+          if (valk_gc_ptr_to_location(ctx->heap, obj, &loc)) {
+            if (valk_gc_page_try_mark(loc.page, loc.slot))
+              valk_gc_mark_queue_push(ctx->queue, obj);
+            return;
+          }
+          if (valk_gc_mark_large_object(ctx->heap, obj))
+            return;
+        }
+        continue;
+      case LVAL_FUN:
+        if (obj->fun.builtin == nullptr) {
+          mark_lval(obj->fun.formals, ctx);
+          mark_lval(obj->fun.body, ctx);
+          if (obj->fun.env) mark_env(obj->fun.env, ctx);
+        }
+        mark_ptr_only(obj->fun.name, ctx);
+        return;
+      case LVAL_HANDLE:
+        if (obj->async.handle) {
+          mark_lval(obj->async.handle->on_complete, ctx);
+          mark_lval(obj->async.handle->on_error, ctx);
+          mark_lval(obj->async.handle->on_cancel, ctx);
+          mark_lval(atomic_load_explicit(&obj->async.handle->result, memory_order_acquire), ctx);
+          mark_lval(atomic_load_explicit(&obj->async.handle->error, memory_order_acquire), ctx);
+          if (obj->async.handle->env) mark_env(obj->async.handle->env, ctx);
+        }
+        return;
+      case LVAL_SYM:
+      case LVAL_STR:
+      case LVAL_ERR:
+        mark_ptr_only(obj->str, ctx);
+        return;
+      case LVAL_REF:
+        mark_ptr_only(obj->ref.type, ctx);
+        if (obj->ref.mark)
+          obj->ref.mark(obj->ref.ptr, ctx);
+        return;
+      default:
+        return;
+    }
   }
 }
 
@@ -259,6 +273,15 @@ void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
 
   if (my_id == 0) {
     valk_gc_visit_global_roots(mark_root_visitor2, &ctx);
+
+    for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
+      if (valk_sys->threads[i].active && valk_sys->threads[i].ctx != nullptr) {
+        valk_thread_context_t *tc = valk_sys->threads[i].ctx;
+        if (tc->root_env != nullptr) {
+          mark_env(tc->root_env, &ctx);
+        }
+      }
+    }
   }
 
   valk_barrier_wait(&valk_sys->barrier);
@@ -462,11 +485,14 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
     reclaimed = bytes_before - bytes_after;
   }
 
+  heap->live_after_gc = bytes_after;
+
   atomic_fetch_add(&heap->bytes_reclaimed_total, reclaimed);
   atomic_store(&heap->gc_in_progress, false);
 
   u64 end_ns = uv_hrtime();
   u64 pause_us = (end_ns - start_ns) / 1000;
+  heap->last_gc_time_us = end_ns / 1000;
 
   atomic_fetch_add(&heap->runtime_metrics.cycles_total, 1);
   atomic_fetch_add(&heap->runtime_metrics.pause_us_total, pause_us);
@@ -479,6 +505,28 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
     if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_us_max, &current_max, pause_us)) { // LCOV_EXCL_BR_LINE
       break;
     }
+  }
+
+  if (pause_us < 1000)
+    atomic_fetch_add(&heap->runtime_metrics.pause_0_1ms, 1);
+  else if (pause_us < 5000)
+    atomic_fetch_add(&heap->runtime_metrics.pause_1_5ms, 1);
+  else if (pause_us < 10000)
+    atomic_fetch_add(&heap->runtime_metrics.pause_5_10ms, 1);
+  else if (pause_us < 16000)
+    atomic_fetch_add(&heap->runtime_metrics.pause_10_16ms, 1);
+  else
+    atomic_fetch_add(&heap->runtime_metrics.pause_16ms_plus, 1);
+
+  if (pause_us > 50000) {
+    u64 cycles = atomic_load(&heap->runtime_metrics.cycles_total);
+    fprintf(stderr, "[gc] slow cycle #%llu: %llu.%03llums (reclaimed %llu bytes, %llu -> %llu)\n",
+            (unsigned long long)cycles,
+            (unsigned long long)(pause_us / 1000),
+            (unsigned long long)(pause_us % 1000),
+            (unsigned long long)reclaimed,
+            (unsigned long long)bytes_before,
+            (unsigned long long)bytes_after);
   }
 
   atomic_fetch_add(&valk_sys->parallel_cycles, 1);

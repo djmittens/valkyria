@@ -57,7 +57,7 @@ jobs:
       
       - name: Run Tests (with JUnit XML output)
         run: |
-          python3 bin/run-tests.py --build-dir build-coverage --timeout 60 --junit-dir build/junit --no-stress --examples
+          build-coverage/valk bin/run-tests.valk -- --build-dir build-coverage --timeout 60 --junit-dir build/junit --no-stress --examples
       
       - name: Generate Coverage Report
         run: |
@@ -65,11 +65,11 @@ jobs:
       
       - name: Check Global Mutation Lint
         run: |
-          python3 bin/check-no-globals.py
+          build/valk bin/check-no-globals.valk
       
       - name: Check Runtime Coverage Requirements
         run: |
-          python3 bin/check-coverage.py --build-dir build-coverage
+          build-coverage/valk bin/check-coverage.valk -- --build-dir build-coverage
       
       - name: Remove expected-failure JUnit
         if: always()

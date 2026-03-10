@@ -134,6 +134,9 @@ struct valk_lval_t {
       char *type;
       void *ptr;
       void (*free)(void *);
+      void (*mark)(void *, void *);
+      void (*evacuate)(void *, void *);
+      void (*retain)(void *);
     } ref;
     struct {
       valk_async_handle_t *handle;  // Pointer to the async handle struct
