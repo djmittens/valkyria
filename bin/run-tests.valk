@@ -173,7 +173,7 @@
   (= {stderr} (plist/get result :stderr))
 
   (= {tests} (parse-jsonl-tests stdout))
-  (= {n-passed} (len (filter (\ {t} {(== (plist/get t :status) "pass")}) tests)))
+  (= {n-passed} (len (filter (\ {t} {(= {s} (plist/get t :status)) (or (== s "pass") (== s "xfail"))}) tests)))
   (= {n-failed} (len (filter (\ {t} {
     (= {s} (plist/get t :status))
     (or (== s "fail") (or (== s "crash") (or (== s "timeout") (== s "undefined"))))
@@ -222,7 +222,7 @@
     (= {tc-xml} (str "    <testcase classname=\"" (xml-escape name) "\" name=\"" tname
                       "\" time=\"" time-s "." (if (< time-frac 100) {(if (< time-frac 10) {"00"} {"0"})} {""}) time-frac "\""  ))
     (select
-      {(== status "pass")
+      {(or (== status "pass") (== status "xfail"))
        (= {tc-xml} (str tc-xml "/>\n"))}
       {(== status "skip")
        (do (= {tc-xml} (str tc-xml "><skipped/></testcase>\n"))

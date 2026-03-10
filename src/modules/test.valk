@@ -167,16 +167,17 @@
               {true})
 
             (= {passed} (if (== result true) {1} {0}))
+            (= {xfail} (if (and (== passed 0) (!= (plist/get ctx :expected-exit) 0)) {1} {0}))
 
             (if (== *test-json-output* 1)
-              {(*test-json-result* test-name (if (== passed 1) {"pass"} {"fail"}) elapsed suite-name)}
+              {(*test-json-result* test-name (if (== passed 1) {"pass"} {(if (== xfail 1) {"xfail"} {"fail"})}) elapsed suite-name)}
               {do
                 (if (== passed 1)
                   {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
                   {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
                       (*test-print-captured* test-name captured)})})
 
-            (if (== passed 1)
+            (if (or (== passed 1) (== xfail 1))
               {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
               {(plist/set ctx :failed (+ (plist/get ctx :failed) 1))})})})
 })
@@ -223,16 +224,17 @@
           {true})
 
         (= {passed} (if (== result true) {1} {0}))
+        (= {xfail} (if (and (== passed 0) (!= (plist/get ctx :expected-exit) 0)) {1} {0}))
 
         (if (== *test-json-output* 1)
-          {(*test-json-result* test-name (if (== passed 1) {"pass"} {"fail"}) elapsed suite-name)}
+          {(*test-json-result* test-name (if (== passed 1) {"pass"} {(if (== xfail 1) {"xfail"} {"fail"})}) elapsed suite-name)}
           {do
             (if (== passed 1)
               {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
               {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
                   (*test-print-captured* test-name captured)})})
 
-        (if (== passed 1)
+        (if (or (== passed 1) (== xfail 1))
           {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
           {(plist/set ctx :failed (+ (plist/get ctx :failed) 1))})})
 })
@@ -508,15 +510,17 @@
                                 {0})}
                               {0})})}))
 
+            (= {xfail} (if (and (== passed 0) (!= (plist/get ctx :expected-exit) 0)) {1} {0}))
+
             (if (== *test-json-output* 1)
-              {(*test-json-result* test-name (if (== passed 1) {"pass"} {"fail"}) elapsed suite-name)}
+              {(*test-json-result* test-name (if (== passed 1) {"pass"} {(if (== xfail 1) {"xfail"} {"fail"})}) elapsed suite-name)}
               {do
                 (if (== passed 1)
                   {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
                   {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
                       (*test-print-captured* test-name captured)})})
 
-            (if (== passed 1)
+            (if (or (== passed 1) (== xfail 1))
               {(plist/set ctx :passed (+ (plist/get ctx :passed) 1))}
               {(plist/set ctx :failed (+ (plist/get ctx :failed) 1))})})})
 })

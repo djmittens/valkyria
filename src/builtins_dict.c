@@ -22,11 +22,11 @@ static inline u64 dict_hash(const char *key) {
 }
 
 static valk_dict_t *dict_alloc(u64 capacity) {
-  valk_dict_t *d = calloc(1, sizeof(valk_dict_t));
+  valk_dict_t *d = valk_mem_calloc(1, sizeof(valk_dict_t));
   d->capacity = capacity;
   d->count = 0;
-  d->keys = calloc(capacity, sizeof(char *));
-  d->values = calloc(capacity, sizeof(valk_lval_t *));
+  d->keys = valk_mem_calloc(capacity, sizeof(char *));
+  d->values = valk_mem_calloc(capacity, sizeof(valk_lval_t *));
   return d;
 }
 
@@ -34,11 +34,11 @@ static void dict_free_fn(void *ptr) {
   valk_dict_t *d = ptr;
   if (!d) return;
   for (u64 i = 0; i < d->capacity; i++) {
-    if (d->keys[i] != NULL) free(d->keys[i]);
+    if (d->keys[i] != NULL) valk_mem_free(d->keys[i]);
   }
-  free(d->keys);
-  free(d->values);
-  free(d);
+  valk_mem_free(d->keys);
+  valk_mem_free(d->values);
+  valk_mem_free(d);
 }
 
 static void dict_mark_fn(void *ptr, void *gc_ctx) {
@@ -55,25 +55,49 @@ static void dict_evacuate_fn(void **ptr_ref, void *evac_ctx) {
   valk_dict_t *d = *ptr_ref;
   if (!d) return;
   valk_evacuation_ctx_t *ctx = evac_ctx;
-  bool in_scratch = ctx->scratch && valk_ptr_in_arena(ctx->scratch, d);
 
-  if (in_scratch) {
-    valk_dict_t *nd = calloc(1, sizeof(valk_dict_t));
-    nd->capacity = d->capacity;
-    nd->count = d->count;
-    nd->keys = calloc(d->capacity, sizeof(char *));
-    nd->values = calloc(d->capacity, sizeof(valk_lval_t *));
-    for (u64 i = 0; i < d->capacity; i++) {
-      if (d->keys[i]) {
-        u64 len = strlen(d->keys[i]) + 1;
-        nd->keys[i] = malloc(len);
-        memcpy(nd->keys[i], d->keys[i], len);
-      }
+  if (ctx->scratch && valk_ptr_in_arena(ctx->scratch, d)) {
+    valk_dict_t *nd;
+    VALK_WITH_ALLOC((void *)ctx->heap) {
+      nd = valk_mem_calloc(1, sizeof(valk_dict_t));
     }
-    memcpy(nd->values, d->values, d->capacity * sizeof(valk_lval_t *));
+    *nd = *d;
     *ptr_ref = nd;
     d = nd;
-    ctx->bytes_copied += sizeof(valk_dict_t) + d->capacity * (sizeof(char *) + sizeof(valk_lval_t *));
+    ctx->bytes_copied += sizeof(valk_dict_t);
+  }
+
+  if (d->keys && ctx->scratch && valk_ptr_in_arena(ctx->scratch, d->keys)) {
+    char **new_keys;
+    VALK_WITH_ALLOC((void *)ctx->heap) {
+      new_keys = valk_mem_calloc(d->capacity, sizeof(char *));
+    }
+    memcpy(new_keys, d->keys, d->capacity * sizeof(char *));
+    d->keys = new_keys;
+    ctx->bytes_copied += d->capacity * sizeof(char *);
+  }
+
+  if (d->values && ctx->scratch && valk_ptr_in_arena(ctx->scratch, d->values)) {
+    valk_lval_t **new_values;
+    VALK_WITH_ALLOC((void *)ctx->heap) {
+      new_values = valk_mem_calloc(d->capacity, sizeof(valk_lval_t *));
+    }
+    memcpy(new_values, d->values, d->capacity * sizeof(valk_lval_t *));
+    d->values = new_values;
+    ctx->bytes_copied += d->capacity * sizeof(valk_lval_t *);
+  }
+
+  for (u64 i = 0; i < d->capacity; i++) {
+    if (d->keys[i] && ctx->scratch && valk_ptr_in_arena(ctx->scratch, d->keys[i])) {
+      u64 len = strlen(d->keys[i]) + 1;
+      char *new_key;
+      VALK_WITH_ALLOC((void *)ctx->heap) {
+        new_key = valk_mem_alloc(len);
+      }
+      memcpy(new_key, d->keys[i], len);
+      d->keys[i] = new_key;
+      ctx->bytes_copied += len;
+    }
   }
 
   for (u64 i = 0; i < d->capacity; i++) {
@@ -91,8 +115,8 @@ static void dict_evacuate_fn(void **ptr_ref, void *evac_ctx) {
 
 static void dict_grow(valk_dict_t *d) {
   u64 new_cap = d->capacity * 2;
-  char **new_keys = calloc(new_cap, sizeof(char *));
-  valk_lval_t **new_values = calloc(new_cap, sizeof(valk_lval_t *));
+  char **new_keys = valk_mem_calloc(new_cap, sizeof(char *));
+  valk_lval_t **new_values = valk_mem_calloc(new_cap, sizeof(valk_lval_t *));
   u64 mask = new_cap - 1;
 
   for (u64 i = 0; i < d->capacity; i++) {
@@ -105,8 +129,8 @@ static void dict_grow(valk_dict_t *d) {
     }
   }
 
-  free(d->keys);
-  free(d->values);
+  valk_mem_free(d->keys);
+  valk_mem_free(d->values);
   d->keys = new_keys;
   d->values = new_values;
   d->capacity = new_cap;
@@ -123,7 +147,7 @@ static bool dict_put(valk_dict_t *d, const char *key) {
     u64 slot = (idx + i) & mask;
     if (d->keys[slot] == NULL) {
       u64 len = strlen(key);
-      d->keys[slot] = malloc(len + 1);
+      d->keys[slot] = valk_mem_alloc(len + 1);
       memcpy(d->keys[slot], key, len + 1);
       d->count++;
       return true;
@@ -145,7 +169,7 @@ static void dict_set(valk_dict_t *d, const char *key, valk_lval_t *value) {
     u64 slot = (idx + i) & mask;
     if (d->keys[slot] == NULL) {
       u64 len = strlen(key);
-      d->keys[slot] = malloc(len + 1);
+      d->keys[slot] = valk_mem_alloc(len + 1);
       memcpy(d->keys[slot], key, len + 1);
       d->values[slot] = value;
       d->count++;
@@ -190,7 +214,7 @@ static bool dict_remove(valk_dict_t *d, const char *key) {
     u64 slot = (idx + i) & mask;
     if (d->keys[slot] == NULL) return false;
     if (strcmp(d->keys[slot], key) == 0) {
-      free(d->keys[slot]);
+      valk_mem_free(d->keys[slot]);
       d->keys[slot] = NULL;
       d->values[slot] = nullptr;
       d->count--;
