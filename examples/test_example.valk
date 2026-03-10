@@ -18,7 +18,7 @@
   (test "lists-work"
     {(do
     (test/assert-eq 3 (len {a b c}) "list should have 3 elements")
-    (test/assert-eq (quote a) (fst {a b c}) "first element should be a"))})
+    (test/assert-eq (fst {a}) (fst {a b c}) "first element should be a"))})
   (test "comparisons"
     {(do
     (test/assert (> 5 3) "5 should be greater than 3")
