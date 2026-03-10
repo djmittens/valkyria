@@ -290,6 +290,7 @@ typedef enum {
 typedef valk_chase_lev_deque_t valk_gc_mark_queue_t;
 
 void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q);
+void valk_gc_mark_queue_reset(valk_gc_mark_queue_t* q);
 void valk_gc_mark_queue_destroy(valk_gc_mark_queue_t* q);
 void valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val);
 valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q);

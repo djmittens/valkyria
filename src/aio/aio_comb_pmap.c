@@ -40,6 +40,7 @@ static void __pmap_worker(void *arg) {
   valk_pmap_ctx_t *ctx = task->pmap_ctx;
 
   if (valk_async_handle_is_terminal(valk_async_handle_get_status(ctx->pmap_handle))) {
+    valk_handle_release(&valk_sys->handle_table, task->arg_handle);
     free(task);
     return;
   }
@@ -71,6 +72,7 @@ static void __pmap_worker(void *arg) {
 
     if (!valk_async_handle_try_transition(ctx->pmap_handle,
         VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED)) {
+      valk_handle_release(&valk_sys->handle_table, task->arg_handle);
       free(task);
       return;
     }

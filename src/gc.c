@@ -309,6 +309,10 @@ void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q) {
   valk_chase_lev_init(q, VALK_GC_MARK_QUEUE_INITIAL_SIZE);
 }
 
+void valk_gc_mark_queue_reset(valk_gc_mark_queue_t* q) {
+  valk_chase_lev_reset(q);
+}
+
 void valk_gc_mark_queue_destroy(valk_gc_mark_queue_t* q) {
   valk_chase_lev_destroy(q);
 }

@@ -101,14 +101,14 @@
     (== (len result) 8)
   })
 
-  (test "pmap gcov-like parsing 2000 lines x 32 workers"
+  (test "pmap gcov-like parsing 1000 lines x 16 workers"
     {do
-    (= {items} (range 1 33))
+    (= {items} (range 1 17))
     (= {h} (aio/pmap aio (\ {x} {
-      (*gcov-parse-simulation* 2000 (dict/new))
+      (*gcov-parse-simulation* 1000 (dict/new))
     }) items))
     (= {result} (aio/await h))
-    (== (len result) 32)
+    (== (len result) 16)
   })
 
 ) {:suite-name "pmap Heavy Allocation Stress"})

@@ -195,8 +195,15 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     }
   }
 
-  valk_mem_allocator_t *env_alloc = valk_thread_ctx.allocator;
-  
+  valk_mem_allocator_t *env_alloc;
+  if (valk_thread_ctx.heap != NULL) {
+    env_alloc = valk_thread_ctx.heap;
+  } else if (env->allocator != NULL) {
+    env_alloc = (valk_mem_allocator_t*)env->allocator;
+  } else {
+    env_alloc = valk_thread_ctx.allocator;
+  }
+
   VALK_WITH_ALLOC(env_alloc) {
     u64 slen = strlen(key->str);
     char* new_symbol = valk_mem_alloc(slen + 1);

@@ -552,14 +552,15 @@ static valk_lval_t* valk_builtin_realpath(valk_lenv_t* e, valk_lval_t* a) {
 static valk_lval_t* valk_builtin_exec(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_GE(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
 
   u64 nargs = valk_lval_list_count(a);
+  for (u64 i = 0; i < nargs; i++) {
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, i), LVAL_STR);
+  }
+
   char** argv_exec = calloc(nargs + 1, sizeof(char*));
   for (u64 i = 0; i < nargs; i++) {
-    valk_lval_t* arg = valk_lval_list_nth(a, i);
-    LVAL_ASSERT_TYPE(a, arg, LVAL_STR);
-    argv_exec[i] = (char*)arg->str;
+    argv_exec[i] = (char*)valk_lval_list_nth(a, i)->str;
   }
   argv_exec[nargs] = nullptr;
 

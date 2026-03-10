@@ -135,7 +135,7 @@ struct valk_lval_t {
       void *ptr;
       void (*free)(void *);
       void (*mark)(void *, void *);
-      void (*evacuate)(void *, void *);
+      void (*evacuate)(void **, void *);
       void (*retain)(void *);
     } ref;
     struct {

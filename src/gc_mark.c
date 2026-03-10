@@ -261,7 +261,7 @@ void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
   u64 my_id = valk_thread_ctx.gc_thread_id;
   valk_gc_mark_queue_t *my_queue = &valk_sys->threads[my_id].mark_queue;
 
-  valk_gc_mark_queue_init(my_queue);
+  valk_gc_mark_queue_reset(my_queue);
 
   valk_gc_mark_ctx_t ctx = {
     .heap = heap,

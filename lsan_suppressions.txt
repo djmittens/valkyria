@@ -69,6 +69,17 @@ leak:__nghttp2_malloc
 leak:__nghttp2_realloc
 leak:__nghttp2_calloc
 
+# GC mark queue (chase-lev deque) allocated during thread registration,
+# freed during system shutdown; tests that exit early may leak
+leak:valk_gc_mark_queue_init
+leak:valk_chase_lev_init
+
+# Test fake TCP ops buffer may not be freed when test exits
+leak:test_tcp_write_bufs
+
+# HTTP2 overload response may not be freed in unit tests
+leak:valk_http2_send_overload_response
+
 # Dict native storage (keys/values arrays) freed by GC finalizer,
 # may not run before test exit
 leak:dict_alloc

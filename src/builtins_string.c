@@ -245,11 +245,11 @@ static valk_lval_t* valk_builtin_make_string(valk_lenv_t* e, valk_lval_t* a) {
   const char* pattern;
   u64 pattern_len;
 
+  char char_buf[2];
   if (LVAL_TYPE(pattern_val) == LVAL_STR) {
     pattern = pattern_val->str;
     pattern_len = strlen(pattern);
   } else if (LVAL_TYPE(pattern_val) == LVAL_NUM) {
-    static char char_buf[2];
     char_buf[0] = (char)pattern_val->num;
     char_buf[1] = '\0';
     pattern = char_buf;

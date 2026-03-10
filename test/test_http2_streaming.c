@@ -307,9 +307,10 @@ static void test_http2_concurrent_requests_same_connection(VALK_TEST_ARGS()) {
   #define NUM_CONCURRENT_REQUESTS 10
   valk_async_handle_t *request_handles[NUM_CONCURRENT_REQUESTS];
 
+  alignas(max_align_t) u8 req_bufs[NUM_CONCURRENT_REQUESTS][sizeof(valk_mem_arena_t) + 4096];
+
   for (int i = 0; i < NUM_CONCURRENT_REQUESTS; i++) {
-    alignas(max_align_t) u8 req_buf[sizeof(valk_mem_arena_t) + 4096];
-    valk_mem_arena_t *req_arena = (void *)req_buf;
+    valk_mem_arena_t *req_arena = (void *)req_bufs[i];
     valk_mem_arena_init(req_arena, 4096);
 
     valk_http2_request_t *req;

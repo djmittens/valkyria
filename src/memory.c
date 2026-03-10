@@ -168,7 +168,6 @@ void valk_mem_arena_init(valk_mem_arena_t *self, sz capacity) {
   self->capacity = capacity;
   self->offset = __alignment_adjustment(&self->heap, alignof(max_align_t));
   self->warned_overflow = false;
-
   // Initialize statistics to zero
   atomic_store_explicit(&self->stats.total_allocations, 0, memory_order_relaxed);
   atomic_store_explicit(&self->stats.total_bytes_allocated, 0, memory_order_relaxed);
