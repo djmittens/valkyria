@@ -606,18 +606,21 @@ static valk_lval_t* valk_builtin_exec(valk_lenv_t* e, valk_lval_t* a) {
   int open_fds = 2;
   while (open_fds > 0) {
     int ret = poll(fds, 2, -1);
-    if (ret < 0) break; // LCOV_EXCL_LINE
+    if (ret < 0) {
+      if (errno == EINTR) continue;
+      break; // LCOV_EXCL_LINE
+    }
     for (int fi = 0; fi < 2; fi++) {
       if (fds[fi].fd < 0) continue;
       if (!(fds[fi].revents & (POLLIN | POLLHUP))) continue;
       char **buf = fi == 0 ? &out_buf : &err_buf;
       size_t *len = fi == 0 ? &out_len : &err_len;
       size_t *cap = fi == 0 ? &out_cap : &err_cap;
+      if (*len >= *cap) { *cap *= 2; *buf = realloc(*buf, *cap); }
       ssize_t n = read(fds[fi].fd, *buf + *len, *cap - *len);
       if (n > 0) {
         *len += n;
-        if (*len >= *cap) { *cap *= 2; *buf = realloc(*buf, *cap); }
-      } else {
+      } else if (n == 0 || (n < 0 && errno != EINTR)) {
         close(fds[fi].fd);
         fds[fi].fd = -1;
         open_fds--;
@@ -703,9 +706,9 @@ static valk_lval_t* valk_builtin_file_close(valk_lenv_t* e, valk_lval_t* a) {
     LVAL_RAISE(a, "file/close: argument must be a file handle");
   }
   FILE *f = ref->ref.ptr;
-  fclose(f);
   ref->ref.ptr = nullptr;
   ref->ref.free = nullptr;
+  fclose(f);
   return valk_lval_num(0);
 }
 
@@ -717,6 +720,7 @@ static valk_lval_t* valk_builtin_for_each_line(valk_lenv_t* e, valk_lval_t* a) {
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     LVAL_RAISE(a, "for-each-line: second argument must be a function");
   }
+  VALK_GC_ROOT(fn);
 
   const char* filename = valk_lval_list_nth(a, 0)->str;
   FILE* f = fopen(filename, "r");

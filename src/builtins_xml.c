@@ -1,4 +1,5 @@
 #include "builtins_internal.h"
+#include "gc.h"
 
 #include <expat.h>
 #include <limits.h>
@@ -8,7 +9,9 @@
 
 typedef struct xml_node {
   char* tag;
-  valk_lval_t* attrs;
+  char** attr_keys;
+  char** attr_values;
+  int attr_count;
   struct xml_node** children;
   int child_count;
   int child_cap;
@@ -37,18 +40,14 @@ static xml_node_t* xml_node_new(const char* tag, const XML_Char** attr) {
   int attr_count = 0;
   for (int i = 0; attr[i]; i += 2) attr_count++;
 
-  if (attr_count == 0) {
-    node->attrs = valk_lval_nil();
-  } else {
-    valk_lval_t** items = malloc(attr_count * 2 * sizeof(valk_lval_t*));
+  node->attr_count = attr_count;
+  if (attr_count > 0) {
+    node->attr_keys = malloc(attr_count * sizeof(char*));
+    node->attr_values = malloc(attr_count * sizeof(char*));
     for (int i = 0; i < attr_count; i++) {
-      char kw[256];
-      snprintf(kw, sizeof(kw), ":%s", attr[i * 2]);
-      items[i * 2] = valk_lval_sym(kw);
-      items[i * 2 + 1] = valk_lval_str(attr[i * 2 + 1]);
+      node->attr_keys[i] = strdup(attr[i * 2]);
+      node->attr_values[i] = strdup(attr[i * 2 + 1]);
     }
-    node->attrs = valk_lval_qlist(items, attr_count * 2);
-    free(items);
   }
   return node;
 }
@@ -80,9 +79,25 @@ static void xml_node_append_text(xml_node_t* node, const char* s, int len) {
 
 static valk_lval_t* xml_node_to_lval(xml_node_t* node) {
   valk_lval_t* children_list = valk_lval_nil();
+  VALK_GC_ROOT(children_list);
   for (int i = node->child_count - 1; i >= 0; i--) {
     valk_lval_t* child = xml_node_to_lval(node->children[i]);
     children_list = valk_lval_cons(child, children_list);
+  }
+
+  valk_lval_t* attrs;
+  if (node->attr_count == 0) {
+    attrs = valk_lval_nil();
+  } else {
+    valk_lval_t** attr_items = malloc(node->attr_count * 2 * sizeof(valk_lval_t*));
+    for (int i = 0; i < node->attr_count; i++) {
+      char kw[256];
+      snprintf(kw, sizeof(kw), ":%s", node->attr_keys[i]);
+      attr_items[i * 2] = valk_lval_sym(kw);
+      attr_items[i * 2 + 1] = valk_lval_str(node->attr_values[i]);
+    }
+    attrs = valk_lval_qlist(attr_items, node->attr_count * 2);
+    free(attr_items);
   }
 
   int item_count = 6;
@@ -93,7 +108,7 @@ static valk_lval_t* xml_node_to_lval(xml_node_t* node) {
   items[0] = valk_lval_sym(":tag");
   items[1] = valk_lval_str(node->tag);
   items[2] = valk_lval_sym(":attrs");
-  items[3] = node->attrs;
+  items[3] = attrs;
   items[4] = valk_lval_sym(":children");
   items[5] = children_list;
   if (has_text) {
@@ -109,6 +124,12 @@ static valk_lval_t* xml_node_to_lval(xml_node_t* node) {
 static void xml_node_free(xml_node_t* node) {
   free(node->tag);
   free(node->text);
+  for (int i = 0; i < node->attr_count; i++) {
+    free(node->attr_keys[i]);
+    free(node->attr_values[i]);
+  }
+  free(node->attr_keys);
+  free(node->attr_values);
   for (int i = 0; i < node->child_count; i++) xml_node_free(node->children[i]);
   free(node->children);
   free(node);

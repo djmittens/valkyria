@@ -3,6 +3,7 @@
 typedef struct {
   valk_async_handle_t *pmap_handle;
   valk_handle_t *result_handles;
+  _Atomic(bool) *result_ready;
   u64 total;
   _Atomic(u64) completed;
   valk_handle_t fn_handle;
@@ -25,10 +26,11 @@ static void valk_pmap_ctx_cleanup(void *ctx) {
   }
   if (pmap_ctx->result_handles) {
     for (u64 i = 0; i < pmap_ctx->total; i++) {
-      if (pmap_ctx->result_handles[i].generation != 0)
+      if (atomic_load_explicit(&pmap_ctx->result_ready[i], memory_order_acquire))
         valk_handle_release(&valk_sys->handle_table, pmap_ctx->result_handles[i]);
     }
     free(pmap_ctx->result_handles);
+    free(pmap_ctx->result_ready);
   }
   free(pmap_ctx);
 }
@@ -85,6 +87,7 @@ static void __pmap_worker(void *arg) {
   if (scratch) valk_mem_arena_reset(scratch);
   ctx->result_handles[task->index] =
       valk_handle_create(&valk_sys->handle_table, heap_result);
+  atomic_store_explicit(&ctx->result_ready[task->index], true, memory_order_release);
   u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
 
   if (new_completed == ctx->total) {
@@ -102,7 +105,7 @@ static void __pmap_worker(void *arg) {
                                                 ctx->result_handles[i - 1]);
         result_list = valk_lval_cons(val, result_list);
         valk_handle_release(&valk_sys->handle_table, ctx->result_handles[i - 1]);
-        ctx->result_handles[i - 1] = (valk_handle_t){0, 0};
+        atomic_store_explicit(&ctx->result_ready[i - 1], false, memory_order_release);
       }
     }
     atomic_store_explicit(&ctx->pmap_handle->result, result_list, memory_order_release);
@@ -137,8 +140,7 @@ static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
   if (count == 0) {
     valk_async_handle_t *handle = valk_async_handle_new(sys, e);
     atomic_store_explicit(&handle->result, valk_lval_nil(), memory_order_release);
-    atomic_store_explicit(&handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
-    valk_async_handle_finish(handle);
+    valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_COMPLETED);
     return valk_lval_handle(handle);
   }
 
@@ -154,6 +156,7 @@ static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
   }
   ctx->pmap_handle = pmap_handle;
   ctx->result_handles = calloc(count, sizeof(valk_handle_t));
+  ctx->result_ready = calloc(count, sizeof(_Atomic(bool)));
   ctx->total = count;
   atomic_store(&ctx->completed, 0);
   ctx->fn_released = false;
