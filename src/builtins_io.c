@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -598,18 +599,33 @@ static valk_lval_t* valk_builtin_exec(valk_lenv_t* e, valk_lval_t* a) {
   size_t err_cap = 4096, err_len = 0;
   char* err_buf = malloc(err_cap);
 
-  ssize_t n;
-  while ((n = read(stdout_pipe[0], out_buf + out_len, out_cap - out_len)) > 0) {
-    out_len += n;
-    if (out_len >= out_cap) { out_cap *= 2; out_buf = realloc(out_buf, out_cap); }
+  struct pollfd fds[2] = {
+    {.fd = stdout_pipe[0], .events = POLLIN},
+    {.fd = stderr_pipe[0], .events = POLLIN},
+  };
+  int open_fds = 2;
+  while (open_fds > 0) {
+    int ret = poll(fds, 2, -1);
+    if (ret < 0) break; // LCOV_EXCL_LINE
+    for (int fi = 0; fi < 2; fi++) {
+      if (fds[fi].fd < 0) continue;
+      if (!(fds[fi].revents & (POLLIN | POLLHUP))) continue;
+      char **buf = fi == 0 ? &out_buf : &err_buf;
+      size_t *len = fi == 0 ? &out_len : &err_len;
+      size_t *cap = fi == 0 ? &out_cap : &err_cap;
+      ssize_t n = read(fds[fi].fd, *buf + *len, *cap - *len);
+      if (n > 0) {
+        *len += n;
+        if (*len >= *cap) { *cap *= 2; *buf = realloc(*buf, *cap); }
+      } else {
+        close(fds[fi].fd);
+        fds[fi].fd = -1;
+        open_fds--;
+      }
+    }
   }
-  close(stdout_pipe[0]);
-
-  while ((n = read(stderr_pipe[0], err_buf + err_len, err_cap - err_len)) > 0) {
-    err_len += n;
-    if (err_len >= err_cap) { err_cap *= 2; err_buf = realloc(err_buf, err_cap); }
-  }
-  close(stderr_pipe[0]);
+  if (fds[0].fd >= 0) close(fds[0].fd);
+  if (fds[1].fd >= 0) close(fds[1].fd);
 
   out_buf[out_len] = '\0';
   err_buf[err_len] = '\0';
@@ -671,7 +687,11 @@ static valk_lval_t* valk_builtin_file_write_str(valk_lenv_t* e, valk_lval_t* a) 
   FILE *f = ref->ref.ptr;
   const char *s = valk_lval_list_nth(a, 1)->str;
   u64 len = strlen(s);
-  fwrite(s, 1, len, f);
+  if (len > 0) {
+    u64 written = fwrite(s, 1, len, f);
+    if (written != len) // LCOV_EXCL_BR_LINE
+      LVAL_RAISE(a, "file/write: partial write (%zu of %zu bytes)", written, len); // LCOV_EXCL_LINE
+  }
   return valk_lval_num((long)len);
 }
 

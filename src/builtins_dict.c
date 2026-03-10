@@ -22,12 +22,23 @@ static inline u64 dict_hash(const char *key) {
 }
 
 static valk_dict_t *dict_alloc(u64 capacity) {
-  valk_dict_t *d = valk_mem_calloc(1, sizeof(valk_dict_t));
+  valk_dict_t *d = calloc(1, sizeof(valk_dict_t));
   d->capacity = capacity;
   d->count = 0;
-  d->keys = valk_mem_calloc(capacity, sizeof(char *));
-  d->values = valk_mem_calloc(capacity, sizeof(valk_lval_t *));
+  d->keys = calloc(capacity, sizeof(char *));
+  d->values = calloc(capacity, sizeof(valk_lval_t *));
   return d;
+}
+
+static void dict_free_fn(void *ptr) {
+  valk_dict_t *d = ptr;
+  if (!d) return;
+  for (u64 i = 0; i < d->capacity; i++) {
+    if (d->keys[i] != NULL) free(d->keys[i]);
+  }
+  free(d->keys);
+  free(d->values);
+  free(d);
 }
 
 static void dict_mark_fn(void *ptr, void *gc_ctx) {
@@ -47,19 +58,16 @@ static void dict_evacuate_fn(void **ptr_ref, void *evac_ctx) {
   bool in_scratch = ctx->scratch && valk_ptr_in_arena(ctx->scratch, d);
 
   if (in_scratch) {
-    valk_dict_t *nd;
-    VALK_WITH_ALLOC((void *)ctx->heap) {
-      nd = valk_mem_calloc(1, sizeof(valk_dict_t));
-      nd->capacity = d->capacity;
-      nd->count = d->count;
-      nd->keys = valk_mem_calloc(d->capacity, sizeof(char *));
-      nd->values = valk_mem_calloc(d->capacity, sizeof(valk_lval_t *));
-      for (u64 i = 0; i < d->capacity; i++) {
-        if (d->keys[i]) {
-          u64 len = strlen(d->keys[i]) + 1;
-          nd->keys[i] = valk_mem_alloc(len);
-          memcpy(nd->keys[i], d->keys[i], len);
-        }
+    valk_dict_t *nd = calloc(1, sizeof(valk_dict_t));
+    nd->capacity = d->capacity;
+    nd->count = d->count;
+    nd->keys = calloc(d->capacity, sizeof(char *));
+    nd->values = calloc(d->capacity, sizeof(valk_lval_t *));
+    for (u64 i = 0; i < d->capacity; i++) {
+      if (d->keys[i]) {
+        u64 len = strlen(d->keys[i]) + 1;
+        nd->keys[i] = malloc(len);
+        memcpy(nd->keys[i], d->keys[i], len);
       }
     }
     memcpy(nd->values, d->values, d->capacity * sizeof(valk_lval_t *));
@@ -83,8 +91,8 @@ static void dict_evacuate_fn(void **ptr_ref, void *evac_ctx) {
 
 static void dict_grow(valk_dict_t *d) {
   u64 new_cap = d->capacity * 2;
-  char **new_keys = valk_mem_calloc(new_cap, sizeof(char *));
-  valk_lval_t **new_values = valk_mem_calloc(new_cap, sizeof(valk_lval_t *));
+  char **new_keys = calloc(new_cap, sizeof(char *));
+  valk_lval_t **new_values = calloc(new_cap, sizeof(valk_lval_t *));
   u64 mask = new_cap - 1;
 
   for (u64 i = 0; i < d->capacity; i++) {
@@ -97,8 +105,8 @@ static void dict_grow(valk_dict_t *d) {
     }
   }
 
-  valk_mem_free(d->keys);
-  valk_mem_free(d->values);
+  free(d->keys);
+  free(d->values);
   d->keys = new_keys;
   d->values = new_values;
   d->capacity = new_cap;
@@ -115,7 +123,7 @@ static bool dict_put(valk_dict_t *d, const char *key) {
     u64 slot = (idx + i) & mask;
     if (d->keys[slot] == NULL) {
       u64 len = strlen(key);
-      d->keys[slot] = valk_mem_alloc(len + 1);
+      d->keys[slot] = malloc(len + 1);
       memcpy(d->keys[slot], key, len + 1);
       d->count++;
       return true;
@@ -137,7 +145,7 @@ static void dict_set(valk_dict_t *d, const char *key, valk_lval_t *value) {
     u64 slot = (idx + i) & mask;
     if (d->keys[slot] == NULL) {
       u64 len = strlen(key);
-      d->keys[slot] = valk_mem_alloc(len + 1);
+      d->keys[slot] = malloc(len + 1);
       memcpy(d->keys[slot], key, len + 1);
       d->values[slot] = value;
       d->count++;
@@ -182,7 +190,7 @@ static bool dict_remove(valk_dict_t *d, const char *key) {
     u64 slot = (idx + i) & mask;
     if (d->keys[slot] == NULL) return false;
     if (strcmp(d->keys[slot], key) == 0) {
-      valk_mem_free(d->keys[slot]);
+      free(d->keys[slot]);
       d->keys[slot] = NULL;
       d->values[slot] = nullptr;
       d->count--;
@@ -222,7 +230,7 @@ static inline const char *dict_key_str(valk_lval_t *v) {
               "Expected dict, got ref<%s>", v->ref.type)
 
 static valk_lval_t *dict_make_ref(valk_dict_t *d) {
-  valk_lval_t *ref = valk_lval_ref("dict", d, nullptr);
+  valk_lval_t *ref = valk_lval_ref("dict", d, dict_free_fn);
   ref->ref.mark = dict_mark_fn;
   ref->ref.evacuate = dict_evacuate_fn;
   ref->ref.retain = nullptr;

@@ -336,8 +336,6 @@ void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
       break;
 
     case LVAL_REF:
-      if (v->ref.evacuate)
-        v->ref.evacuate(&v->ref.ptr, ctx);
       break;
 
     default:
@@ -513,8 +511,6 @@ void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
       break;
 
     case LVAL_REF:
-      if (v->ref.evacuate)
-        v->ref.evacuate(&v->ref.ptr, ctx);
       break;
 
     default:

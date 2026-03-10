@@ -1,6 +1,7 @@
 #include "builtins_internal.h"
 
 #include <expat.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -160,7 +161,9 @@ static valk_lval_t* valk_builtin_xml_parse(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
 
   const char* input = valk_lval_list_nth(a, 0)->str;
-  u64 input_len = strlen(input);
+  size_t input_len = strlen(input);
+  if (input_len > (size_t)INT_MAX)
+    return valk_lval_err("xml/parse: input too large (%zu bytes)", input_len);
 
   XML_Parser parser = XML_ParserCreate(NULL);
   if (!parser) // LCOV_EXCL_BR_LINE - OOM
@@ -177,7 +180,7 @@ static valk_lval_t* valk_builtin_xml_parse(valk_lenv_t* e, valk_lval_t* a) {
   XML_SetElementHandler(parser, on_start, on_end);
   XML_SetCharacterDataHandler(parser, on_chardata);
 
-  enum XML_Status status = XML_Parse(parser, input, input_len, XML_TRUE);
+  enum XML_Status status = XML_Parse(parser, input, (int)input_len, XML_TRUE);
 
   valk_lval_t* result;
   if (status == XML_STATUS_ERROR) {

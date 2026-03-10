@@ -19,11 +19,7 @@ static int loop_init(valk_aio_system_t *sys) {
 }
 
 static void loop_destroy(valk_aio_system_t *sys) {
-  if (sys->eventloop) {  // LCOV_EXCL_BR_LINE - defensive double-destroy guard
-    uv_loop_close(sys->eventloop);
-    free(sys->eventloop);
-    sys->eventloop = nullptr;
-  }
+  sys->eventloop = nullptr;
 }
 
 static int loop_run(valk_aio_system_t *sys, valk_io_run_mode_e mode) {

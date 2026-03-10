@@ -52,6 +52,32 @@
     (== result expected)
   })
 
+  (test "aio/pmap propagates error from lambda"
+    {do
+    (= {h} (aio/pmap aio (\ {x} {(if (== x 3) (error "bad value") (* x x))}) (list 1 2 3 4 5)))
+    (= {result} (aio/await h))
+    (error? result)
+  })
+
+  (test "aio/pmap error on single element"
+    {do
+    (= {h} (aio/pmap aio (\ {x} {(error "always fail")}) (list 42)))
+    (= {result} (aio/await h))
+    (error? result)
+  })
+
+  (test "aio/pmap as child of aio/all"
+    {do
+    (= {h1} (aio/pmap aio (\ {x} {(+ x 1)}) (list 1 2 3)))
+    (= {h2} (aio/pmap aio (\ {x} {(* x 2)}) (list 10 20 30)))
+    (= {all-h} (aio/all (list h1 h2)))
+    (= {results} (aio/await all-h))
+    (= {first} (nth 1 results))
+    (= {second} (nth 2 results))
+    (and (== first (list 2 3 4))
+         (== second (list 20 40 60)))
+  })
+
 ) {:suite-name "aio/pmap Tests"})
 
 (aio/stop aio)

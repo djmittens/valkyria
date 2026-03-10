@@ -155,6 +155,10 @@ void __loop_thread_fn(void *arg) {
     free(loop->scratch);
     loop->scratch = nullptr;
   }
+
+  uv_loop_close(loop->uv_loop);
+  free(loop->uv_loop);
+  loop->uv_loop = nullptr;
 }
 
 static void __uv_handle_closed_cb(uv_handle_t *handle) {

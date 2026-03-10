@@ -72,7 +72,6 @@ static void __pmap_worker(void *arg) {
 
     if (!valk_async_handle_try_transition(ctx->pmap_handle,
         VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED)) {
-      valk_handle_release(&valk_sys->handle_table, task->arg_handle);
       free(task);
       return;
     }
@@ -136,10 +135,11 @@ static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
   }
 
   if (count == 0) {
-    valk_async_handle_t *result = valk_async_handle_new(sys, e);
-    atomic_store_explicit(&result->status, VALK_ASYNC_COMPLETED, memory_order_release);
-    atomic_store_explicit(&result->result, valk_lval_nil(), memory_order_release);
-    return valk_lval_handle(result);
+    valk_async_handle_t *handle = valk_async_handle_new(sys, e);
+    atomic_store_explicit(&handle->result, valk_lval_nil(), memory_order_release);
+    atomic_store_explicit(&handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
+    valk_async_handle_finish(handle);
+    return valk_lval_handle(handle);
   }
 
   valk_async_handle_t *pmap_handle = valk_async_handle_new(sys, e);
