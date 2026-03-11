@@ -391,6 +391,7 @@ typedef struct valk_gc_mark_ctx {
 } valk_gc_mark_ctx_t;
 
 void valk_gc_heap_mark_object(valk_gc_mark_ctx_t *ctx, void *ptr);
+void valk_gc_heap_mark_raw(valk_gc_mark_ctx_t *ctx, void *ptr);
 void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap);
 void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap);
 bool valk_gc_heap_request_stw(valk_gc_heap_t *heap);

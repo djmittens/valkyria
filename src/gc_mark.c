@@ -178,6 +178,10 @@ static void mark_root_visitor2(valk_lval_t *val, void *user) {
 void valk_gc_heap_mark_object(valk_gc_mark_ctx_t *ctx, void *ptr) {
   mark_lval(ptr, ctx);
 }
+
+void valk_gc_heap_mark_raw(valk_gc_mark_ctx_t *ctx, void *ptr) {
+  mark_ptr_only(ptr, ctx);
+}
 // LCOV_EXCL_STOP
 // LCOV_EXCL_BR_STOP
 
