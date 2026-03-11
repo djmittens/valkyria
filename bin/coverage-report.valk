@@ -487,3 +487,133 @@
 (printf "  Branches: %s (%d/%d)\n" (fmt-pct (pct-tenths all-bh all-bf)) all-bh all-bf)
 (print "============================================================")
 (printf "\nOpen %s/latest/index.html in a browser to view the report.\n" output-base)
+
+; --- Coverage Gate Check ---
+
+(def {REQ_LINE} 900)
+(def {REQ_BRANCH} 850)
+(def {REQ_EXPR} 900)
+
+(def {KNOWN_BLOCKED} (list
+  (list "src/http_api.valk" "stdlib utility library - many functions not exercised by tests")
+  (list "src/modules/test.valk" "test framework - error/timeout/skip paths not exercised in normal runs")))
+
+(fun {is-blocked rel-path} {
+  (*is-blocked-loop* KNOWN_BLOCKED rel-path)
+})
+
+(fun {*is-blocked-loop* blocked rel-path} {
+  (if (== blocked nil) {nil}
+    {do
+      (= {entry} (head blocked))
+      (if (== (nth 1 entry) rel-path)
+        {(nth 2 entry)}
+        {(*is-blocked-loop* (tail blocked) rel-path)})})
+})
+
+(print "")
+(print "================================================================================")
+(print "COVERAGE GATE CHECK")
+(print "================================================================================")
+(printf "Runtime (src/*.c):    %s line, %s branch\n" (fmt-pct REQ_LINE) (fmt-pct REQ_BRANCH))
+(printf "Stdlib (src/*.valk):  %s expr, %s branch\n" (fmt-pct REQ_EXPR) (fmt-pct REQ_BRANCH))
+(print "")
+
+(= {gate-results} (dict/new))
+(dict/set! gate-results "failures" {})
+(dict/set! gate-results "passes" {})
+(dict/set! gate-results "blocked" {})
+
+(fun {gate-add! bucket line} {
+  (dict/set! gate-results bucket (join (dict/get gate-results bucket) (list line)))
+})
+
+(fun {*check-runtime* keys} {
+  (if (== keys nil) {}
+    {do
+      (= {rel} (head keys))
+      (= {fc} (dict/get rt rel))
+      (= {filename} (if (str/starts-with? rel "src/") {(str/slice rel 4 (len rel))} {rel}))
+      (= {line-pct} (fc/line-pct fc))
+      (= {branch-pct} (fc/branch-pct fc))
+      (= {line-pass} (>= line-pct REQ_LINE))
+      (= {branch-pass} (>= branch-pct REQ_BRANCH))
+      (= {status} (if (and line-pass branch-pass) {"V"} {"X"}))
+      (= {line} (str "  " filename " " status "  " (fmt-pct line-pct) " line, " (fmt-pct branch-pct) " branch"))
+      (if (or (not line-pass) (not branch-pass))
+        {do
+          (= {gaps} "")
+          (if (not line-pass)
+            {(= {gaps} (str gaps (fmt-pct (- REQ_LINE line-pct)) " line"))}
+            {})
+          (if (not branch-pass)
+            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
+            {})
+          (= {line} (str line "  (-" gaps ")"))
+          (gate-add! "failures" line)}
+        {(gate-add! "passes" line)})
+      (*check-runtime* (tail keys))})
+})
+(*check-runtime* (dict/keys rt))
+
+(fun {*check-stdlib* keys} {
+  (if (== keys nil) {}
+    {do
+      (= {rel} (head keys))
+      (= {fc} (dict/get sl rel))
+      (= {filename} (if (str/starts-with? rel "src/") {(str/slice rel 4 (len rel))} {rel}))
+      (= {expr-pct} (fc/expr-pct fc))
+      (= {branch-pct} (fc/branch-pct fc))
+      (= {expr-pass} (>= expr-pct REQ_EXPR))
+      (= {branch-pass} (>= branch-pct REQ_BRANCH))
+      (= {status} (if (and expr-pass branch-pass) {"V"} {"X"}))
+      (= {line} (str "  " filename " " status "  " (fmt-pct expr-pct) " expr, " (fmt-pct branch-pct) " branch"))
+      (if (or (not expr-pass) (not branch-pass))
+        {do
+          (= {gaps} "")
+          (if (not expr-pass)
+            {(= {gaps} (str gaps (fmt-pct (- REQ_EXPR expr-pct)) " expr"))}
+            {})
+          (if (not branch-pass)
+            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
+            {})
+          (= {line} (str line "  (-" gaps ")"))
+          (= {reason} (is-blocked rel))
+          (if (!= reason nil)
+            {do
+              (= {line} (str line "  [BLOCKED: " reason "]"))
+              (gate-add! "blocked" line)}
+            {(gate-add! "failures" line)})}
+        {(gate-add! "passes" line)})
+      (*check-stdlib* (tail keys))})
+})
+(*check-stdlib* (dict/keys sl))
+
+(= {gate-failures} (dict/get gate-results "failures"))
+(= {gate-passes} (dict/get gate-results "passes"))
+(= {gate-blocked} (dict/get gate-results "blocked"))
+
+(if (> (len gate-failures) 0)
+  {do (print "FAILING FILES:")
+      (map (\ {l} {println l}) gate-failures)
+      (print "")}
+  {})
+
+(if (> (len gate-blocked) 0)
+  {do (print "BLOCKED FILES (documented exceptions):")
+      (map (\ {l} {println l}) gate-blocked)
+      (print "")}
+  {})
+
+(print "================================================================================")
+(= {blocked-msg} (if (> (len gate-blocked) 0) {(str ", " (len gate-blocked) " blocked")} {""}))
+(printf "Results: %d passing, %d failing%s\n" (len gate-passes) (len gate-failures) blocked-msg)
+
+(if (== (len gate-failures) 0)
+  {(print "V ALL COVERAGE REQUIREMENTS MET")}
+  {do
+    (print "X COVERAGE REQUIREMENTS NOT MET")
+    (printf "\nAll runtime code in src/ requires %s line, %s branch.\n" (fmt-pct REQ_LINE) (fmt-pct REQ_BRANCH))})
+(print "================================================================================")
+
+(if (> (len gate-failures) 0) {(exit 1)} {})

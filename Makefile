@@ -310,7 +310,7 @@ coverage-report: build
 	@echo "Coverage reports: coverage-report/latest/index.html"
 
 .PHONY: coverage
-coverage: build-coverage coverage-tests coverage-report coverage-check
+coverage: build-coverage coverage-tests coverage-report
 	@echo "=== Coverage collection complete ==="
 
 .PHONY: coverage-check
