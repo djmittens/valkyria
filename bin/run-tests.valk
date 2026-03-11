@@ -445,6 +445,20 @@
 (= {rel-target} (last (str/split junit-dir "/")))
 (symlink rel-target latest-link)
 
+; Prune old test report directories (keep max 10)
+(fun {prune-old-dirs base-dir max-keep} {
+  (if (not (file/exists? base-dir)) {}
+    {do
+      (= {r} (exec "sh" "-c"
+        (str "find '" base-dir "' -maxdepth 1 -mindepth 1 -type d -printf '%T@ %f\\n' | sort -n | head -n -" (str max-keep) " | cut -d' ' -f2-")))
+      (if (!= (plist/get r :exit-code) 0) {}
+        {do
+          (= {to-rm} (filter (\ {s} {(> (len s) 0)}) (str/split (plist/get r :stdout) "\n")))
+          (map (\ {d} {(exec "rm" "-rf" (str base-dir "/" d))}) to-rm)})})
+})
+
+(prune-old-dirs "test-report" 10)
+
 ; Print summary and exit
 (= {all-passed} (print-summary results wall-us junit-dir))
 (if all-passed {(shutdown 0)} {(shutdown 1)})

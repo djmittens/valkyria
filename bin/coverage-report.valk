@@ -441,21 +441,12 @@
 (fun {prune-old-runs base-dir max-keep} {
   (if (not (file/exists? base-dir)) {}
     {do
-      (= {entries} (list-dir base-dir))
-      (= {dirs} (filter (\ {e} {
-        (and (== (plist/get e :type) "dir")
-             (str/starts-with? (plist/get e :name) "1"))
-      }) entries))
-      (= {sorted} (map (\ {e} {(plist/get e :name)}) dirs))
-      (*prune-loop* sorted base-dir max-keep)})
-})
-
-(fun {*prune-loop* dirs base-dir max-keep} {
-  (if (<= (len dirs) max-keep) {}
-    {do
-      (= {old} (head dirs))
-      (exec "rm" "-rf" (str base-dir "/" old))
-      (*prune-loop* (tail dirs) base-dir max-keep)})
+      (= {r} (exec "sh" "-c"
+        (str "find '" base-dir "' -maxdepth 1 -mindepth 1 -type d -printf '%T@ %f\\n' | sort -n | head -n -" (str max-keep) " | cut -d' ' -f2-")))
+      (if (!= (plist/get r :exit-code) 0) {}
+        {do
+          (= {to-rm} (filter (\ {s} {(> (len s) 0)}) (str/split (plist/get r :stdout) "\n")))
+          (map (\ {d} {(exec "rm" "-rf" (str base-dir "/" d))}) to-rm)})})
 })
 
 ; --- Main ---
