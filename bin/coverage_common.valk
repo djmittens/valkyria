@@ -569,7 +569,7 @@
     {4}))
   (= {nthreads} (if (> ncpus 8) {8} {ncpus}))
   (= {t0} (time-us))
-  (= {aio} (aio/await (aio/start {:num-threads nthreads})))
+   (= {aio} (aio/await (aio/start (list :num-threads nthreads))))
   (parse-gcov-files-par bdir sroot files nthreads aio)
   (= {t1} (time-us))
   (printf "  gcov phase: %dms\n" (/ (- t1 t0) 1000))
