@@ -23,6 +23,8 @@
 #define DICT_INITIAL_STRINGS    256
 #define DICT_EMPTY              UINT32_MAX
 
+#define DICT_ALIGN_UP(x, a) (((x) + (a) - 1) & ~((a) - 1))
+
 typedef struct {
   u64 hash;
   u32 key_offset;
@@ -43,20 +45,22 @@ static inline u32 *dict_buckets(valk_dict_t *d) {
   return (u32 *)((u8 *)d + sizeof(valk_dict_t));
 }
 
+static inline u64 dict_cells_offset(u32 num_buckets) {
+  return DICT_ALIGN_UP(sizeof(valk_dict_t) + num_buckets * sizeof(u32),
+                       alignof(valk_dict_cell_t));
+}
+
 static inline valk_dict_cell_t *dict_cells(valk_dict_t *d) {
-  return (valk_dict_cell_t *)((u8 *)d + sizeof(valk_dict_t)
-         + d->num_buckets * sizeof(u32));
+  return (valk_dict_cell_t *)((u8 *)d + dict_cells_offset(d->num_buckets));
 }
 
 static inline char *dict_strings(valk_dict_t *d) {
-  return (char *)((u8 *)d + sizeof(valk_dict_t)
-         + d->num_buckets * sizeof(u32)
+  return (char *)((u8 *)d + dict_cells_offset(d->num_buckets)
          + d->capacity * sizeof(valk_dict_cell_t));
 }
 
 static inline u64 dict_block_size(u32 num_buckets, u32 capacity, u64 strings_cap) {
-  return sizeof(valk_dict_t)
-       + num_buckets * sizeof(u32)
+  return dict_cells_offset(num_buckets)
        + capacity * sizeof(valk_dict_cell_t)
        + strings_cap;
 }
