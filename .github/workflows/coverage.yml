@@ -60,6 +60,8 @@ jobs:
           build-coverage/valk bin/run-tests.valk -- --build-dir build-coverage --timeout 60 --junit-dir build/junit --no-stress --examples
       
       - name: Generate Coverage Report
+        env:
+          VALK_HEAP_HARD_LIMIT: "2147483648"
         run: |
           make coverage-report
       
@@ -68,6 +70,8 @@ jobs:
           build/valk bin/check-no-globals.valk
       
       - name: Check Runtime Coverage Requirements
+        env:
+          VALK_HEAP_HARD_LIMIT: "2147483648"
         run: |
           build-coverage/valk bin/check-coverage.valk -- --build-dir build-coverage
       
