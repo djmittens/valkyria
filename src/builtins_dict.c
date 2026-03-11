@@ -3,66 +3,66 @@
 #include <string.h>
 
 // ==========================================================================
-// Flat, single-allocation open-addressing hash map.
+// Flat, single-allocation hash map with separate chaining.
 //
 // Layout (one contiguous block):
-//   valk_dict_t header
-//   u64           hashes[capacity]
-//   u32           key_offsets[capacity]   (byte offset into string pool)
-//   valk_lval_t*  values[capacity]
-//   char          strings[strings_cap]
+//   valk_dict_t       header
+//   u32               buckets[num_buckets]   (index into cells, EMPTY=end)
+//   valk_dict_cell_t  cells[capacity]         (entry pool + embedded freelist)
+//   char              strings[strings_cap]    (packed key strings)
 //
-// - hash == 0 means empty slot.  We set bit 63 on every stored hash so
-//   a real hash can never be 0.
-// - Grow / string-pool exhaustion: allocate a whole new block, rehash.
-// - Evacuation: single memcpy of the block, then fixup value pointers.
+// - Fixed bucket count (set at creation, never rehashed).
+// - Cells are a pool: used cells form per-bucket chains via `next`,
+//   free cells form a freelist via `next`.
+// - When cell pool is exhausted, allocate a new larger block, copy
+//   cells + strings, rebuild bucket heads from chains.
 // ==========================================================================
 
-#define DICT_INITIAL_CAPACITY 16
-#define DICT_INITIAL_STRINGS  256
-#define DICT_LOAD_FACTOR_PCT  75
-#define DICT_OCCUPIED_BIT     (1ULL << 63)
+#define DICT_DEFAULT_BUCKETS    16
+#define DICT_INITIAL_CAPACITY   16
+#define DICT_INITIAL_STRINGS    256
+#define DICT_EMPTY              UINT32_MAX
 
 typedef struct {
-  u64 capacity;
-  u64 count;
+  u64 hash;
+  u32 key_offset;
+  u32 next;
+  valk_lval_t *value;
+} valk_dict_cell_t;
+
+typedef struct {
+  u32 num_buckets;
+  u32 capacity;
+  u32 count;
+  u32 free_head;
   u64 strings_used;
   u64 strings_cap;
-  // Flexible-array members are laid out immediately after this header
-  // via the accessor macros below.
 } valk_dict_t;
 
-static inline u64 *dict_hashes(valk_dict_t *d) {
-  return (u64 *)((u8 *)d + sizeof(valk_dict_t));
+static inline u32 *dict_buckets(valk_dict_t *d) {
+  return (u32 *)((u8 *)d + sizeof(valk_dict_t));
 }
 
-static inline u32 *dict_key_offsets(valk_dict_t *d) {
-  return (u32 *)((u8 *)d + sizeof(valk_dict_t) + d->capacity * sizeof(u64));
-}
-
-static inline valk_lval_t **dict_values(valk_dict_t *d) {
-  return (valk_lval_t **)((u8 *)d + sizeof(valk_dict_t)
-         + d->capacity * sizeof(u64)
-         + d->capacity * sizeof(u32));
+static inline valk_dict_cell_t *dict_cells(valk_dict_t *d) {
+  return (valk_dict_cell_t *)((u8 *)d + sizeof(valk_dict_t)
+         + d->num_buckets * sizeof(u32));
 }
 
 static inline char *dict_strings(valk_dict_t *d) {
   return (char *)((u8 *)d + sizeof(valk_dict_t)
-         + d->capacity * sizeof(u64)
-         + d->capacity * sizeof(u32)
-         + d->capacity * sizeof(valk_lval_t *));
+         + d->num_buckets * sizeof(u32)
+         + d->capacity * sizeof(valk_dict_cell_t));
 }
 
-static inline u64 dict_block_size(u64 capacity, u64 strings_cap) {
+static inline u64 dict_block_size(u32 num_buckets, u32 capacity, u64 strings_cap) {
   return sizeof(valk_dict_t)
-       + capacity * sizeof(u64)
-       + capacity * sizeof(u32)
-       + capacity * sizeof(valk_lval_t *)
+       + num_buckets * sizeof(u32)
+       + capacity * sizeof(valk_dict_cell_t)
        + strings_cap;
 }
 
-static inline const char *dict_key_at(valk_dict_t *d, u64 slot) {
-  return dict_strings(d) + dict_key_offsets(d)[slot];
+static inline const char *dict_key_at(valk_dict_t *d, u32 cell_idx) {
+  return dict_strings(d) + dict_cells(d)[cell_idx].key_offset;
 }
 
 // ---------- FNV-1a hash ----------
@@ -73,18 +73,30 @@ static inline u64 dict_hash(const char *key) {
     h ^= *p;
     h *= 0x100000001b3ULL;
   }
-  return h | DICT_OCCUPIED_BIT;
+  return h;
 }
 
 // ---------- Allocation ----------
 
-static valk_dict_t *dict_alloc(u64 capacity, u64 strings_cap) {
-  u64 sz = dict_block_size(capacity, strings_cap);
+static valk_dict_t *dict_alloc(u32 num_buckets, u32 capacity, u64 strings_cap) {
+  u64 sz = dict_block_size(num_buckets, capacity, strings_cap);
   valk_dict_t *d = valk_mem_calloc(1, sz);
+  d->num_buckets = num_buckets;
   d->capacity = capacity;
   d->count = 0;
   d->strings_used = 0;
   d->strings_cap = strings_cap;
+
+  u32 *buckets = dict_buckets(d);
+  for (u32 i = 0; i < num_buckets; i++)
+    buckets[i] = DICT_EMPTY;
+
+  valk_dict_cell_t *cells = dict_cells(d);
+  for (u32 i = 0; i < capacity - 1; i++)
+    cells[i].next = i + 1;
+  cells[capacity - 1].next = DICT_EMPTY;
+  d->free_head = 0;
+
   return d;
 }
 
@@ -101,11 +113,15 @@ static void dict_mark_fn(void *ptr, void *gc_ctx) {
   if (!d) return; // LCOV_EXCL_LINE
   valk_gc_mark_ctx_t *ctx = gc_ctx;
   valk_gc_heap_mark_raw(ctx, d);
-  u64 *hashes = dict_hashes(d);
-  valk_lval_t **vals = dict_values(d);
-  for (u64 i = 0; i < d->capacity; i++) {
-    if (hashes[i] && vals[i] != nullptr)
-      valk_gc_heap_mark_object(ctx, vals[i]);
+  valk_dict_cell_t *cells = dict_cells(d);
+  u32 *buckets = dict_buckets(d);
+  for (u32 b = 0; b < d->num_buckets; b++) {
+    u32 ci = buckets[b];
+    while (ci != DICT_EMPTY) {
+      if (cells[ci].value != nullptr)
+        valk_gc_heap_mark_object(ctx, cells[ci].value);
+      ci = cells[ci].next;
+    }
   }
 }
 
@@ -117,7 +133,7 @@ static void dict_evacuate_fn(void **ptr_ref, void *evac_ctx) {
   valk_evacuation_ctx_t *ctx = evac_ctx;
 
   if (ctx->scratch && valk_ptr_in_arena(ctx->scratch, d)) {
-    u64 sz = dict_block_size(d->capacity, d->strings_cap);
+    u64 sz = dict_block_size(d->num_buckets, d->capacity, d->strings_cap);
     valk_dict_t *nd;
     VALK_WITH_ALLOC((void *)ctx->heap) {
       nd = valk_mem_alloc(sz);
@@ -128,16 +144,20 @@ static void dict_evacuate_fn(void **ptr_ref, void *evac_ctx) {
     ctx->bytes_copied += sz;
   }
 
-  valk_lval_t **vals = dict_values(d);
-  u64 *hashes = dict_hashes(d);
-  for (u64 i = 0; i < d->capacity; i++) {
-    if (hashes[i] && vals[i] != nullptr) {
-      valk_lval_t *old_val = vals[i];
-      valk_lval_t *new_val = valk_evacuate_value(ctx, old_val);
-      if (new_val != old_val) {
-        vals[i] = new_val;
-        if (new_val != nullptr) valk_evac_worklist_push(ctx, new_val);
+  valk_dict_cell_t *cells = dict_cells(d);
+  u32 *buckets = dict_buckets(d);
+  for (u32 b = 0; b < d->num_buckets; b++) {
+    u32 ci = buckets[b];
+    while (ci != DICT_EMPTY) {
+      if (cells[ci].value != nullptr) {
+        valk_lval_t *old_val = cells[ci].value;
+        valk_lval_t *new_val = valk_evacuate_value(ctx, old_val);
+        if (new_val != old_val) {
+          cells[ci].value = new_val;
+          if (new_val != nullptr) valk_evac_worklist_push(ctx, new_val);
+        }
       }
+      ci = cells[ci].next;
     }
   }
 }
@@ -151,142 +171,160 @@ static u32 dict_intern_key(valk_dict_t *d, const char *key, u64 len) {
   return off;
 }
 
-// ---------- Rehash into a new block (grow or string-pool full) ----------
+// ---------- Grow cell pool (and optionally string pool) ----------
 
-static valk_dict_t *dict_rehash(valk_dict_t *d, u64 new_cap, u64 new_str_cap) {
-  valk_dict_t *nd = dict_alloc(new_cap, new_str_cap);
+static valk_dict_t *dict_grow(valk_dict_t *d, u64 need_str) {
+  u32 new_cap = d->capacity * 2;
+  u64 new_str = d->strings_cap;
+  while (new_str < need_str)
+    new_str *= 2;
 
-  u64 *old_h = dict_hashes(d);
-  u32 *old_ko = dict_key_offsets(d);
-  valk_lval_t **old_v = dict_values(d);
-  char *old_s = dict_strings(d);
+  valk_dict_t *nd = valk_mem_calloc(1, dict_block_size(d->num_buckets, new_cap, new_str));
+  nd->num_buckets = d->num_buckets;
+  nd->capacity = new_cap;
+  nd->count = d->count;
+  nd->strings_used = d->strings_used;
+  nd->strings_cap = new_str;
 
-  u64 mask = new_cap - 1;
-  u64 *new_h = dict_hashes(nd);
-  u32 *new_ko = dict_key_offsets(nd);
-  valk_lval_t **new_v = dict_values(nd);
+  u32 *new_buckets = dict_buckets(nd);
+  for (u32 i = 0; i < nd->num_buckets; i++)
+    new_buckets[i] = DICT_EMPTY;
 
-  for (u64 i = 0; i < d->capacity; i++) {
-    if (old_h[i] == 0) continue;
-    const char *key = old_s + old_ko[i];
-    u64 len = strlen(key);
-    u64 idx = old_h[i] & mask;
-    while (new_h[idx]) idx = (idx + 1) & mask;
-    new_h[idx] = old_h[i];
-    new_ko[idx] = dict_intern_key(nd, key, len);
-    new_v[idx] = old_v[i];
-    nd->count++;
+  valk_dict_cell_t *old_cells = dict_cells(d);
+  valk_dict_cell_t *new_cells = dict_cells(nd);
+
+  memcpy(dict_strings(nd), dict_strings(d), d->strings_used);
+
+  u32 *old_buckets = dict_buckets(d);
+  u32 new_used = 0;
+  for (u32 b = 0; b < d->num_buckets; b++) {
+    u32 ci = old_buckets[b];
+    u32 *chain_tail = &new_buckets[b];
+    while (ci != DICT_EMPTY) {
+      u32 slot = new_used++;
+      new_cells[slot].hash = old_cells[ci].hash;
+      new_cells[slot].key_offset = old_cells[ci].key_offset;
+      new_cells[slot].value = old_cells[ci].value;
+      new_cells[slot].next = DICT_EMPTY;
+      *chain_tail = slot;
+      chain_tail = &new_cells[slot].next;
+      ci = old_cells[ci].next;
+    }
   }
+
+  for (u32 i = new_used; i < new_cap - 1; i++)
+    new_cells[i].next = i + 1;
+  new_cells[new_cap - 1].next = DICT_EMPTY;
+  nd->free_head = new_used < new_cap ? new_used : DICT_EMPTY;
 
   valk_mem_free(d);
   return nd;
 }
 
-// ---------- Ensure capacity for one more entry + key bytes ----------
+// ---------- Ensure space for one entry + key bytes ----------
 
 static valk_dict_t *dict_ensure(valk_dict_t *d, u64 key_len) {
-  bool need_grow = d->count * 100 >= d->capacity * DICT_LOAD_FACTOR_PCT;
-  bool need_str = d->strings_used + key_len + 1 > d->strings_cap;
-  if (!need_grow && !need_str) return d;
-
-  u64 new_cap = need_grow ? d->capacity * 2 : d->capacity;
-  u64 new_str = d->strings_cap;
-  if (need_str) {
-    while (new_str < d->strings_used + key_len + 1)
-      new_str *= 2;
-  }
-  return dict_rehash(d, new_cap, new_str);
+  bool need_cell = d->free_head == DICT_EMPTY;
+  u64 need_str = d->strings_used + key_len + 1;
+  bool need_str_grow = need_str > d->strings_cap;
+  if (!need_cell && !need_str_grow) return d;
+  return dict_grow(d, need_str_grow ? need_str : d->strings_cap);
 }
 
-// ---------- Lookup helpers ----------
+// ---------- Lookup: returns cell index or DICT_EMPTY ----------
 
-static inline u64 dict_find_slot(valk_dict_t *d, const char *key, u64 h) {
-  u64 mask = d->capacity - 1;
-  u64 *hashes = dict_hashes(d);
-  u64 idx = h & mask;
-  for (u64 i = 0; i < d->capacity; i++) {
-    u64 slot = (idx + i) & mask;
-    if (hashes[slot] == 0) return slot;
-    if (hashes[slot] == h && strcmp(dict_key_at(d, slot), key) == 0)
-      return slot;
+static u32 dict_find(valk_dict_t *d, const char *key, u64 h) {
+  u32 bucket = (u32)(h % d->num_buckets);
+  valk_dict_cell_t *cells = dict_cells(d);
+  u32 ci = dict_buckets(d)[bucket];
+  while (ci != DICT_EMPTY) {
+    if (cells[ci].hash == h && strcmp(dict_strings(d) + cells[ci].key_offset, key) == 0)
+      return ci;
+    ci = cells[ci].next;
   }
-  return (u64)-1;
+  return DICT_EMPTY;
 }
 
 // ---------- Public operations ----------
 
 static void dict_set(valk_dict_t **dp, const char *key, valk_lval_t *value) {
+  u64 h = dict_hash(key);
+  u32 ci = dict_find(*dp, key, h);
+  if (ci != DICT_EMPTY) {
+    dict_cells(*dp)[ci].value = value;
+    return;
+  }
+
   u64 len = strlen(key);
   *dp = dict_ensure(*dp, len);
   valk_dict_t *d = *dp;
-  u64 h = dict_hash(key);
-  u64 slot = dict_find_slot(d, key, h);
-  u64 *hashes = dict_hashes(d);
-  if (hashes[slot] == 0) {
-    hashes[slot] = h;
-    dict_key_offsets(d)[slot] = dict_intern_key(d, key, len);
-    d->count++;
-  }
-  dict_values(d)[slot] = value;
+
+  u32 slot = d->free_head;
+  valk_dict_cell_t *cells = dict_cells(d);
+  d->free_head = cells[slot].next;
+
+  u32 bucket = (u32)(h % d->num_buckets);
+  cells[slot].hash = h;
+  cells[slot].key_offset = dict_intern_key(d, key, len);
+  cells[slot].value = value;
+  cells[slot].next = dict_buckets(d)[bucket];
+  dict_buckets(d)[bucket] = slot;
+  d->count++;
 }
 
 static bool dict_put(valk_dict_t **dp, const char *key) {
+  u64 h = dict_hash(key);
+  if (dict_find(*dp, key, h) != DICT_EMPTY) return false;
+
   u64 len = strlen(key);
   *dp = dict_ensure(*dp, len);
   valk_dict_t *d = *dp;
-  u64 h = dict_hash(key);
-  u64 slot = dict_find_slot(d, key, h);
-  u64 *hashes = dict_hashes(d);
-  if (hashes[slot] != 0) return false;
-  hashes[slot] = h;
-  dict_key_offsets(d)[slot] = dict_intern_key(d, key, len);
+
+  u32 slot = d->free_head;
+  valk_dict_cell_t *cells = dict_cells(d);
+  d->free_head = cells[slot].next;
+
+  u32 bucket = (u32)(h % d->num_buckets);
+  cells[slot].hash = h;
+  cells[slot].key_offset = dict_intern_key(d, key, len);
+  cells[slot].value = nullptr;
+  cells[slot].next = dict_buckets(d)[bucket];
+  dict_buckets(d)[bucket] = slot;
   d->count++;
   return true;
 }
 
 static valk_lval_t *dict_get(valk_dict_t *d, const char *key) {
   u64 h = dict_hash(key);
-  u64 slot = dict_find_slot(d, key, h);
-  if (dict_hashes(d)[slot] == 0) return nullptr;
-  return dict_values(d)[slot];
+  u32 ci = dict_find(d, key, h);
+  if (ci == DICT_EMPTY) return nullptr;
+  return dict_cells(d)[ci].value;
 }
 
 static bool dict_has(valk_dict_t *d, const char *key) {
-  u64 h = dict_hash(key);
-  u64 slot = dict_find_slot(d, key, h);
-  return dict_hashes(d)[slot] != 0;
+  return dict_find(d, key, dict_hash(key)) != DICT_EMPTY;
 }
 
 static bool dict_remove(valk_dict_t *d, const char *key) {
   u64 h = dict_hash(key);
-  u64 mask = d->capacity - 1;
-  u64 *hashes = dict_hashes(d);
-  u64 slot = dict_find_slot(d, key, h);
-  if (hashes[slot] == 0) return false;
+  u32 bucket = (u32)(h % d->num_buckets);
+  valk_dict_cell_t *cells = dict_cells(d);
+  u32 *prev = &dict_buckets(d)[bucket];
+  u32 ci = *prev;
 
-  hashes[slot] = 0;
-  dict_values(d)[slot] = nullptr;
-  d->count--;
-
-  // Robin Hood backward-shift deletion
-  u64 j = (slot + 1) & mask;
-  while (hashes[j] != 0) {
-    u64 natural = hashes[j] & mask;
-    // Check if j is displaced past slot
-    bool displaced = (j >= slot)
-      ? (natural <= slot || natural > j)
-      : (natural <= slot && natural > j);
-    if (displaced) {
-      hashes[slot] = hashes[j];
-      dict_key_offsets(d)[slot] = dict_key_offsets(d)[j];
-      dict_values(d)[slot] = dict_values(d)[j];
-      hashes[j] = 0;
-      dict_values(d)[j] = nullptr;
-      slot = j;
+  while (ci != DICT_EMPTY) {
+    if (cells[ci].hash == h && strcmp(dict_strings(d) + cells[ci].key_offset, key) == 0) {
+      *prev = cells[ci].next;
+      cells[ci].value = nullptr;
+      cells[ci].next = d->free_head;
+      d->free_head = ci;
+      d->count--;
+      return true;
     }
-    j = (j + 1) & mask;
+    prev = &cells[ci].next;
+    ci = cells[ci].next;
   }
-  return true;
+  return false;
 }
 
 // ---------- Builtin glue ----------
@@ -310,7 +348,6 @@ static valk_lval_t *dict_make_ref(valk_dict_t *d) {
   return ref;
 }
 
-// Mutating operations may rehash, so they need to update ref.ptr.
 static inline void dict_update_ref(valk_lval_t *ref, valk_dict_t *d) {
   ref->ref.ptr = d;
 }
@@ -320,16 +357,16 @@ static valk_lval_t *valk_builtin_dict_new(valk_lenv_t *e, valk_lval_t *a) {
   u64 n = valk_lval_list_count(a);
   LVAL_ASSERT(a, n <= 1, "dict/new takes 0 or 1 arguments, got %zu", n);
 
-  u64 cap = DICT_INITIAL_CAPACITY;
+  u32 cap = DICT_INITIAL_CAPACITY;
   if (n == 1) {
     valk_lval_t *hint = valk_lval_list_nth(a, 0);
     LVAL_ASSERT_TYPE(a, hint, LVAL_NUM);
-    u64 want = (u64)hint->num;
-    while (cap * DICT_LOAD_FACTOR_PCT / 100 < want)
+    u32 want = (u32)hint->num;
+    while (cap < want)
       cap *= 2;
   }
 
-  return dict_make_ref(dict_alloc(cap, DICT_INITIAL_STRINGS));
+  return dict_make_ref(dict_alloc(DICT_DEFAULT_BUCKETS, cap, DICT_INITIAL_STRINGS));
 }
 
 static valk_lval_t *valk_builtin_dict_put(valk_lenv_t *e, valk_lval_t *a) {
@@ -417,11 +454,11 @@ static valk_lval_t *valk_builtin_dict_from_keys(valk_lenv_t *e, valk_lval_t *a) 
   valk_lval_t *list = valk_lval_list_nth(a, 0);
 
   u64 count = valk_lval_list_count(list);
-  u64 cap = DICT_INITIAL_CAPACITY;
-  while (cap * DICT_LOAD_FACTOR_PCT / 100 < count)
+  u32 cap = DICT_INITIAL_CAPACITY;
+  while (cap < count)
     cap *= 2;
 
-  valk_dict_t *d = dict_alloc(cap, DICT_INITIAL_STRINGS);
+  valk_dict_t *d = dict_alloc(DICT_DEFAULT_BUCKETS, cap, DICT_INITIAL_STRINGS);
 
   valk_lval_t *curr = list;
   while (curr && !valk_lval_list_is_empty(curr)) {
@@ -450,12 +487,16 @@ static valk_lval_t *valk_builtin_dict_keys(valk_lenv_t *e, valk_lval_t *a) {
   DICT_ASSERT_REF(a, d_ref);
 
   valk_dict_t *d = d_ref->ref.ptr;
-  u64 *hashes = dict_hashes(d);
+  valk_dict_cell_t *cells = dict_cells(d);
+  u32 *buckets = dict_buckets(d);
   valk_lval_t *result = valk_lval_nil();
 
-  for (u64 i = d->capacity; i > 0; i--) {
-    if (hashes[i - 1])
-      result = valk_lval_qcons(valk_lval_str(dict_key_at(d, i - 1)), result);
+  for (u32 b = d->num_buckets; b > 0; b--) {
+    u32 ci = buckets[b - 1];
+    while (ci != DICT_EMPTY) {
+      result = valk_lval_qcons(valk_lval_str(dict_key_at(d, ci)), result);
+      ci = cells[ci].next;
+    }
   }
 
   return result;
@@ -468,14 +509,16 @@ static valk_lval_t *valk_builtin_dict_values(valk_lenv_t *e, valk_lval_t *a) {
   DICT_ASSERT_REF(a, d_ref);
 
   valk_dict_t *d = d_ref->ref.ptr;
-  u64 *hashes = dict_hashes(d);
-  valk_lval_t **vals = dict_values(d);
+  valk_dict_cell_t *cells = dict_cells(d);
+  u32 *buckets = dict_buckets(d);
   valk_lval_t *result = valk_lval_nil();
 
-  for (u64 i = d->capacity; i > 0; i--) {
-    if (hashes[i - 1]) {
-      valk_lval_t *v = vals[i - 1];
+  for (u32 b = d->num_buckets; b > 0; b--) {
+    u32 ci = buckets[b - 1];
+    while (ci != DICT_EMPTY) {
+      valk_lval_t *v = cells[ci].value;
       result = valk_lval_qcons(v ? v : valk_lval_nil(), result);
+      ci = cells[ci].next;
     }
   }
 
@@ -489,17 +532,19 @@ static valk_lval_t *valk_builtin_dict_entries(valk_lenv_t *e, valk_lval_t *a) {
   DICT_ASSERT_REF(a, d_ref);
 
   valk_dict_t *d = d_ref->ref.ptr;
-  u64 *hashes = dict_hashes(d);
-  valk_lval_t **vals = dict_values(d);
+  valk_dict_cell_t *cells = dict_cells(d);
+  u32 *buckets = dict_buckets(d);
   valk_lval_t *result = valk_lval_nil();
 
-  for (u64 i = d->capacity; i > 0; i--) {
-    if (hashes[i - 1]) {
-      valk_lval_t *v = vals[i - 1];
+  for (u32 b = d->num_buckets; b > 0; b--) {
+    u32 ci = buckets[b - 1];
+    while (ci != DICT_EMPTY) {
+      valk_lval_t *v = cells[ci].value;
       valk_lval_t *pair = valk_lval_qcons(
-          valk_lval_str(dict_key_at(d, i - 1)),
+          valk_lval_str(dict_key_at(d, ci)),
           valk_lval_qcons(v ? v : valk_lval_nil(), valk_lval_nil()));
       result = valk_lval_qcons(pair, result);
+      ci = cells[ci].next;
     }
   }
 
