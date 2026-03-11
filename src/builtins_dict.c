@@ -179,7 +179,17 @@ static valk_dict_t *dict_grow(valk_dict_t *d, u64 need_str) {
   while (new_str < need_str)
     new_str *= 2;
 
-  valk_dict_t *nd = valk_mem_calloc(1, dict_block_size(d->num_buckets, new_cap, new_str));
+  bool on_heap = !valk_thread_ctx.scratch ||
+                 !valk_ptr_in_arena(valk_thread_ctx.scratch, d);
+  valk_dict_t *nd;
+  u64 sz = dict_block_size(d->num_buckets, new_cap, new_str);
+  if (on_heap) {
+    VALK_WITH_ALLOC((void *)valk_thread_ctx.heap) {
+      nd = valk_mem_calloc(1, sz);
+    }
+  } else {
+    nd = valk_mem_calloc(1, sz);
+  }
   nd->num_buckets = d->num_buckets;
   nd->capacity = new_cap;
   nd->count = d->count;

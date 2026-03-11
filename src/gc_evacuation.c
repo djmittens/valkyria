@@ -233,6 +233,7 @@ valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
       }
       if (new_val->ref.evacuate)
         new_val->ref.evacuate(&new_val->ref.ptr, ctx);
+      v->ref.ptr = new_val->ref.ptr;
       if (new_val->ref.retain) new_val->ref.retain(new_val->ref.ptr);
       break;
 
