@@ -12,11 +12,15 @@ static _Atomic size_t __nghttp2_bytes_used = 0;
 static _Atomic size_t __libuv_bytes_used = 0;
 
 // Allocation header to track size (prepended to each allocation)
+// Padded to max_align_t so returned pointers preserve malloc's alignment.
+// Without this, ARM64 gets SIGBUS from misaligned pthread_mutex_t in libuv.
 typedef struct {
   size_t size;
 } alloc_header_t;
 
-#define HEADER_SIZE sizeof(alloc_header_t)
+#define HEADER_SIZE                                                             \
+  (sizeof(alloc_header_t) < _Alignof(max_align_t) ? _Alignof(max_align_t)     \
+                                                   : sizeof(alloc_header_t))
 
 // =============================================================================
 // OpenSSL tracking allocator
