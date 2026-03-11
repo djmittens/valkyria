@@ -57,9 +57,7 @@
 (= {source-root} (realpath source-root))
 
 ; Create timestamped output directory
-(= {ts-us} (time-us))
-(= {ts-s} (/ ts-us 1000000))
-(= {ts} (str ts-s))
+(= {ts} (str/trim (plist/get (exec "date" "+%Y-%m-%d_%H-%M-%S") :stdout)))
 (= {output-dir} (str output-base "/" ts))
 (mkdir-p output-dir)
 

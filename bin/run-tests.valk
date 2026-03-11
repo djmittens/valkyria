@@ -390,8 +390,8 @@
 (= {junit-dir} (plist/get opts :junit-dir))
 (if (== junit-dir "")
   {do
-    (= {us} (time-us {}))
-    (= {junit-dir} (str "test-report/junit-run-" us))}
+    (= {ts} (str/trim (plist/get (exec "date" "+%Y-%m-%d_%H-%M-%S") :stdout)))
+    (= {junit-dir} (str "test-report/" ts))}
   {true})
 (mkdir-p junit-dir)
 (mkdir-p "test-report")
