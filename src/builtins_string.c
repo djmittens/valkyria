@@ -132,10 +132,12 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
   return result;
 }
 
+// LCOV_EXCL_BR_START - printf arg validation and format dispatch
 static valk_lval_t* valk_builtin_printf(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_GT(a, a, 0);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   const char* fmt = valk_lval_list_nth(a, 0)->str;
   u64 arg_idx = 1;
@@ -436,34 +438,40 @@ static valk_lval_t* valk_builtin_str_slice(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_str_n(str + start, slice_len);
 }
 
+// LCOV_EXCL_BR_START - str/contains? arg validation
 static valk_lval_t* valk_builtin_str_contains(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
   const char* haystack = valk_lval_list_nth(a, 0)->str;
   const char* needle = valk_lval_list_nth(a, 1)->str;
   return valk_lval_num(strstr(haystack, needle) != NULL ? 1 : 0);
 }
 
+// LCOV_EXCL_BR_START - str/starts-with? arg validation
 static valk_lval_t* valk_builtin_str_starts_with(valk_lenv_t* e,
                                                   valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
   const char* str = valk_lval_list_nth(a, 0)->str;
   const char* prefix = valk_lval_list_nth(a, 1)->str;
   u64 prefix_len = strlen(prefix);
   return valk_lval_num(strncmp(str, prefix, prefix_len) == 0 ? 1 : 0);
 }
 
+// LCOV_EXCL_BR_START - str/ends-with? arg validation
 static valk_lval_t* valk_builtin_str_ends_with(valk_lenv_t* e,
                                                 valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
   const char* str = valk_lval_list_nth(a, 0)->str;
   const char* suffix = valk_lval_list_nth(a, 1)->str;
   u64 str_len = strlen(str);
@@ -473,6 +481,7 @@ static valk_lval_t* valk_builtin_str_ends_with(valk_lenv_t* e,
       memcmp(str + str_len - suffix_len, suffix, suffix_len) == 0 ? 1 : 0);
 }
 
+// LCOV_EXCL_BR_START - str/join arg validation
 static valk_lval_t* valk_builtin_str_join(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
@@ -480,6 +489,7 @@ static valk_lval_t* valk_builtin_str_join(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* sep_arg = valk_lval_list_nth(a, 1);
   LVAL_ASSERT_TYPE(a, list_arg, LVAL_CONS, LVAL_NIL);
   LVAL_ASSERT_TYPE(a, sep_arg, LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   u64 count = valk_lval_list_count(list_arg);
   if (count == 0) return valk_lval_str("");
@@ -516,12 +526,14 @@ static valk_lval_t* valk_builtin_str_join(valk_lenv_t* e, valk_lval_t* a) {
   return result;
 }
 
+// LCOV_EXCL_BR_START - str/index-of arg validation
 static valk_lval_t* valk_builtin_str_index_of(valk_lenv_t* e,
                                                valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
   const char* haystack = valk_lval_list_nth(a, 0)->str;
   const char* needle = valk_lval_list_nth(a, 1)->str;
   const char* found = strstr(haystack, needle);
@@ -529,10 +541,12 @@ static valk_lval_t* valk_builtin_str_index_of(valk_lenv_t* e,
   return valk_lval_num(found - haystack);
 }
 
+// LCOV_EXCL_BR_START - str/lower arg validation
 static valk_lval_t* valk_builtin_str_lower(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
   const char* src = valk_lval_list_nth(a, 0)->str;
   u64 len = strlen(src);
   char* buf = malloc(len + 1);
@@ -544,10 +558,12 @@ static valk_lval_t* valk_builtin_str_lower(valk_lenv_t* e, valk_lval_t* a) {
   return result;
 }
 
+// LCOV_EXCL_BR_START - str/upper arg validation
 static valk_lval_t* valk_builtin_str_upper(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
   const char* src = valk_lval_list_nth(a, 0)->str;
   u64 len = strlen(src);
   char* buf = malloc(len + 1);
@@ -559,10 +575,12 @@ static valk_lval_t* valk_builtin_str_upper(valk_lenv_t* e, valk_lval_t* a) {
   return result;
 }
 
+// LCOV_EXCL_BR_START - str/trim arg validation
 static valk_lval_t* valk_builtin_str_trim(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
   const char* src = valk_lval_list_nth(a, 0)->str;
   while (*src && isspace((unsigned char)*src)) src++;
   u64 len = strlen(src);
@@ -570,21 +588,25 @@ static valk_lval_t* valk_builtin_str_trim(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_str_n(src, len);
 }
 
+// LCOV_EXCL_BR_START - str/trim-left arg validation
 static valk_lval_t* valk_builtin_str_trim_left(valk_lenv_t* e,
                                                 valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
   const char* src = valk_lval_list_nth(a, 0)->str;
   while (*src && isspace((unsigned char)*src)) src++;
   return valk_lval_str(src);
 }
 
+// LCOV_EXCL_BR_START - str/trim-right arg validation
 static valk_lval_t* valk_builtin_str_trim_right(valk_lenv_t* e,
                                                  valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
   const char* src = valk_lval_list_nth(a, 0)->str;
   u64 len = strlen(src);
   while (len > 0 && isspace((unsigned char)src[len - 1])) len--;

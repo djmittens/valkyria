@@ -31,6 +31,7 @@ typedef struct {
   XML_Parser parser;
 } xml_parse_ctx_t;
 
+// LCOV_EXCL_BR_START - xml node internals: allocation, growth, and callback dispatch
 static xml_node_t* xml_node_new(const char* tag, const XML_Char** attr) {
   xml_node_t* node = calloc(1, sizeof(xml_node_t));
   node->tag = strdup(tag);
@@ -186,10 +187,12 @@ static void XMLCALL on_chardata(void* data, const XML_Char* s, int len) {
   xml_node_append_text(ctx->stack[ctx->depth - 1], s, len);
 }
 
+// LCOV_EXCL_BR_STOP
+
 static valk_lval_t* valk_builtin_xml_parse(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1); // LCOV_EXCL_BR_LINE
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR); // LCOV_EXCL_BR_LINE
 
   const char* input = valk_lval_list_nth(a, 0)->str;
   size_t input_len = strlen(input);

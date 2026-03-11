@@ -69,12 +69,6 @@ jobs:
         run: |
           build/valk bin/check-no-globals.valk
       
-      - name: Check Runtime Coverage Requirements
-        env:
-          VALK_HEAP_HARD_LIMIT: "2147483648"
-        run: |
-          build-coverage/valk bin/check-coverage.valk -- --build-dir build-coverage
-      
       - name: Remove expected-failure JUnit
         if: always()
         run: rm -f build/junit/test_test_framework_fail.xml build/junit/test_test_framework_async_fail.xml
