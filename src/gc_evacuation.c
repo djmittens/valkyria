@@ -166,6 +166,12 @@ valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   if (v->flags & LVAL_FLAG_IMMORTAL) return v;
   if (LVAL_ALLOC(v) != LVAL_ALLOC_SCRATCH) return v;
 
+  if (v->flags & LVAL_FLAG_FORWARDED) {
+    valk_lval_t *fwd = v->gc_next;
+    valk_ptr_map_put(&ctx->ptr_map, v, fwd);
+    return fwd;
+  }
+
   void *existing = valk_ptr_map_get(&ctx->ptr_map, v);
   if (existing != nullptr) return (valk_lval_t *)existing;
 
@@ -244,6 +250,9 @@ valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   evac_add_evacuated(ctx, new_val);
   ctx->values_copied++;
   ctx->bytes_copied += sizeof(valk_lval_t);
+
+  v->flags |= LVAL_FLAG_FORWARDED;
+  v->gc_next = new_val;
 
   return new_val;
 }

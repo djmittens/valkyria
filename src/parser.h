@@ -39,6 +39,13 @@
 // Used to preserve round-trip fidelity for quoted expressions
 #define LVAL_FLAG_QUOTED    (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 1))
 
+// Forwarding pointer flag - set on scratch LVALs after evacuation to heap.
+// When set, gc_next contains a pointer to the heap copy.  This prevents
+// a second evacuation context (e.g. checkpoint) from creating a duplicate
+// heap copy of the same scratch value.  gc_next is safe to reuse because
+// scratch LVALs are never on the GC heap linked list.
+#define LVAL_FLAG_FORWARDED (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 2))
+
 #define LVAL_GC_GEN(lval) (((lval)->flags & LVAL_GC_GEN_MASK) >> LVAL_GC_GEN_SHIFT)
 #define LVAL_GC_GEN_SET(lval, gen) do { \
   (lval)->flags = ((lval)->flags & ~LVAL_GC_GEN_MASK) | \
