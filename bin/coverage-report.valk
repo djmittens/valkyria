@@ -102,10 +102,10 @@
     "<coverage version=\"1.0\""
     " lines-valid=\"" total-lf "\""
     " lines-covered=\"" total-lh "\""
-    " line-rate=\"0." (/ line-rate 10) "\""
+    " line-rate=\"" (fmt-rate line-rate) "\""
     " branches-valid=\"" total-bf "\""
     " branches-covered=\"" total-bh "\""
-    " branch-rate=\"0." (/ branch-rate 10) "\""
+    " branch-rate=\"" (fmt-rate branch-rate) "\""
     " complexity=\"0\">\n"
     "  <sources>\n"
     "    <source>" (xml-escape source-root) "</source>\n"
@@ -140,8 +140,8 @@
           (= {br} (fc/branch-pct fc))
           (file/write fh (str "        <class name=\"" (xml-escape name)
             "\" filename=\"" (xml-escape rel)
-            "\" line-rate=\"0." (/ lr 10)
-            "\" branch-rate=\"0." (/ br 10)
+            "\" line-rate=\"" (fmt-rate lr)
+            "\" branch-rate=\"" (fmt-rate br)
             "\" complexity=\"0\">\n"
             "          <methods/>\n"
             "          <lines>\n"))

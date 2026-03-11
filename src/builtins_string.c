@@ -75,49 +75,54 @@ static valk_lval_t* valk_builtin_str(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_str("");
   }
 
-  u64 total_size = 0;
+  u64 cap = 256;
   for (u64 i = 0; i < count; i++) {
     valk_lval_t* val = valk_lval_list_nth(a, i);
     if (LVAL_TYPE(val) == LVAL_STR) {
-      total_size += strlen(val->str);
+      cap += strlen(val->str);
     } else {
-      total_size += 256;
+      cap += 256;
     }
   }
 
-  total_size += 1;
-
-  char* buffer = malloc(total_size);
+  char* buffer = malloc(cap);
   if (!buffer) { // LCOV_EXCL_BR_LINE - OOM
-    return valk_lval_err("str: out of memory allocating %zu bytes", total_size); // LCOV_EXCL_LINE
+    return valk_lval_err("str: out of memory allocating %zu bytes", cap); // LCOV_EXCL_LINE
   }
 
   u64 offset = 0;
-  u64 remaining = total_size;
 
   for (u64 i = 0; i < count; i++) {
     valk_lval_t* val = valk_lval_list_nth(a, i);
 
     if (LVAL_TYPE(val) == LVAL_STR) {
       u64 len = strlen(val->str);
+      if (offset + len >= cap) {
+        cap = (offset + len) * 2 + 1;
+        buffer = realloc(buffer, cap);
+      }
       memcpy(buffer + offset, val->str, len);
       offset += len;
-      remaining -= len;
     } else {
-      FILE* stream = fmemopen(buffer + offset, remaining, "w");
+      char tmp[4096];
+      FILE* stream = fmemopen(tmp, sizeof(tmp), "w");
       if (!stream) { // LCOV_EXCL_BR_LINE - platform failure
-        buffer[offset] = '\0';
-        valk_lval_t* result = valk_lval_str(buffer);
-        free(buffer);
-        return result;
+        buffer[offset] = '\0'; // LCOV_EXCL_LINE
+        valk_lval_t* result = valk_lval_str(buffer); // LCOV_EXCL_LINE
+        free(buffer); // LCOV_EXCL_LINE
+        return result; // LCOV_EXCL_LINE
       }
 
       valk_lval_fprint_user(stream, val);
       fclose(stream);
 
-      u64 written = strlen(buffer + offset);
+      u64 written = strlen(tmp);
+      if (offset + written >= cap) {
+        cap = (offset + written) * 2 + 1;
+        buffer = realloc(buffer, cap);
+      }
+      memcpy(buffer + offset, tmp, written);
       offset += written;
-      remaining -= written;
     }
   }
 

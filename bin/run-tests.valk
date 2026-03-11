@@ -3,9 +3,9 @@
 ; --- CLI argument parsing ---
 
 (fun {parse-args argv} {
-  (= {opts} {:build-dir "build" :timeout 120 :filter "" :no-stress 0
+  (= {opts} {:build-dir "build" :filter "" :no-stress 0
              :stress-only 0 :only "" :examples 0 :sanitizer ""
-             :lsan-suppressions "" :junit-dir "" :jobs 0})
+             :lsan-suppressions "" :junit-dir ""})
   (= {i} 1)
   (= {argc} (len argv))
   (*parse-args-loop* opts argv i argc)
@@ -26,14 +26,6 @@
         {(== arg "--build-dir")
          (if has-next
            {(*parse-args-loop* (plist/set opts :build-dir (nth next-i argv)) argv (+ i 2) argc)}
-           {opts})}
-        {(== arg "--timeout")
-         (if has-next
-           {(*parse-args-loop* (plist/set opts :timeout (str->num (nth next-i argv))) argv (+ i 2) argc)}
-           {opts})}
-        {(or (== arg "-j") (== arg "--jobs"))
-         (if has-next
-           {(*parse-args-loop* (plist/set opts :jobs (str->num (nth next-i argv))) argv (+ i 2) argc)}
            {opts})}
         {(== arg "--junit-dir")
          (if has-next
@@ -57,7 +49,12 @@
          (if has-next
            {(*parse-args-loop* (plist/set opts :lsan-suppressions (nth next-i argv)) argv (+ i 2) argc)}
            {opts})}
-        {true (*parse-args-loop* opts argv next-i argc)})})
+        {true
+         (do
+           (if (and (str/starts-with? arg "-") (!= arg "--"))
+             {(stderr/write (str "warning: unknown option '" arg "'\n"))}
+             {})
+           (*parse-args-loop* opts argv next-i argc))})})
 })
 
 ; --- Test discovery ---
@@ -158,7 +155,7 @@
 
 ; --- Run one suite ---
 
-(fun {run-one-suite suite timeout-sec} {
+(fun {run-one-suite suite} {
   (= {name} (plist/get suite :name))
   (= {cmd} (plist/get suite :cmd))
   (= {kind} (plist/get suite :kind))
@@ -203,7 +200,7 @@
 
 ; --- JUnit XML generation ---
 
-(fun {write-junit suite-result junit-dir timeout-sec} {
+(fun {write-junit suite-result junit-dir} {
   (= {name} (plist/get suite-result :name))
   (= {tests} (plist/get suite-result :tests))
   (= {exit-code} (plist/get suite-result :exit-code))
@@ -333,7 +330,6 @@
 
 (= {opts} (parse-args sys/argv))
 (= {build-dir} (plist/get opts :build-dir))
-(= {timeout-sec} (plist/get opts :timeout))
 (= {filter-pat} (plist/get opts :filter))
 (= {only} (plist/get opts :only))
 (= {sanitizer} (plist/get opts :sanitizer))
@@ -409,7 +405,7 @@
 (if (> v-count 0) {(= {parts} (join parts (list (str v-count " Valk"))))} {true})
 (if (> e-count 0) {(= {parts} (join parts (list (str e-count " examples"))))} {true})
 
-(= {san-label} (if (> (len sanitizer) 0) {(str " [" (str/replace (str/replace (str/replace (str/replace sanitizer "a" "A") "s" "S") "t" "T") "n" "N") "]")} {""}))
+(= {san-label} (if (> (len sanitizer) 0) {(str " [" (str/upper sanitizer) "]")} {""}))
 (printf "Running %ld suites (%s)%s\n" (len suites) (str/join parts ", ") san-label)
 (printf "JUnit output: %s/\n\n" junit-dir)
 
@@ -419,8 +415,8 @@
 
 (= {results} (foldl (\ {acc suite} {
   (= {idx} (+ (len acc) 1))
-  (= {result} (run-one-suite suite timeout-sec))
-  (write-junit result junit-dir timeout-sec)
+  (= {result} (run-one-suite suite))
+  (write-junit result junit-dir)
 
   (= {status} (if (plist/get result :passed) {"PASS"} {"FAIL"}))
   (= {wall-s} (/ (plist/get result :wall-us) 1000000))

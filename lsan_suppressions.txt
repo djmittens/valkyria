@@ -24,9 +24,6 @@ leak:valk_builtin_aio_any
 leak:valk_slab_init
 leak:valk_slab_new
 
-# GC heap allocations may leak when tests exit without full cleanup
-leak:valk_gc_heap_alloc
-
 # Memory allocator allocations during timer callbacks may leak on exit
 leak:valk_mem_allocator_alloc
 
@@ -79,10 +76,3 @@ leak:test_tcp_write_bufs
 
 # HTTP2 overload response may not be freed in unit tests
 leak:valk_http2_send_overload_response
-
-# Dict native storage (keys/values arrays) freed by GC finalizer,
-# may not run before test exit
-leak:dict_alloc
-leak:dict_put
-leak:dict_set
-leak:dict_grow

@@ -88,8 +88,8 @@ void valk_aio_loop_task_queue_shutdown(valk_aio_loop_t *loop) {
   tq->initialized = false;
 }
 
-void valk_aio_loop_enqueue_task(valk_aio_loop_t *loop, valk_aio_task_fn fn, void *ctx) {
-  if (!loop || !fn) return;
+bool valk_aio_loop_enqueue_task(valk_aio_loop_t *loop, valk_aio_task_fn fn, void *ctx) {
+  if (!loop || !fn) return false;
 
   valk_aio_task_item_t *task = malloc(sizeof(valk_aio_task_item_t));
   task->fn = fn;
@@ -98,9 +98,10 @@ void valk_aio_loop_enqueue_task(valk_aio_loop_t *loop, valk_aio_task_fn fn, void
   if (!valk_mpmc_push(&loop->task_queue.queue, task)) {
     VALK_ERROR("Loop %u task queue full, dropping task", loop->id); // LCOV_EXCL_LINE
     free(task); // LCOV_EXCL_LINE
-    return; // LCOV_EXCL_LINE
+    return false; // LCOV_EXCL_LINE
   }
   uv_async_send(&loop->task_queue.notify);
+  return true;
 }
 
 // Backward-compat: system-level wrappers delegate to loop 0

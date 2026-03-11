@@ -6,8 +6,9 @@ typedef struct {
   _Atomic(bool) *result_ready;
   u64 total;
   _Atomic(u64) completed;
+  _Atomic(u64) finished;
   valk_handle_t fn_handle;
-  bool fn_released;
+  _Atomic(bool) fn_released;
 } valk_pmap_ctx_t;
 
 typedef struct {
@@ -17,22 +18,28 @@ typedef struct {
   u64 index;
 } valk_pmap_task_t;
 
+static void valk_pmap_ctx_free(valk_pmap_ctx_t *ctx) {
+  if (!ctx) return;
+  if (!atomic_exchange(&ctx->fn_released, true))
+    valk_handle_release(&valk_sys->handle_table, ctx->fn_handle);
+  if (ctx->result_handles) {
+    for (u64 i = 0; i < ctx->total; i++) {
+      if (atomic_load_explicit(&ctx->result_ready[i], memory_order_acquire))
+        valk_handle_release(&valk_sys->handle_table, ctx->result_handles[i]);
+    }
+    free(ctx->result_handles);
+    free(ctx->result_ready);
+  }
+  free(ctx);
+}
+
 static void valk_pmap_ctx_cleanup(void *ctx) {
   valk_pmap_ctx_t *pmap_ctx = (valk_pmap_ctx_t *)ctx;
   if (!pmap_ctx) return; // LCOV_EXCL_LINE
-  if (!pmap_ctx->fn_released) {
-    valk_handle_release(&valk_sys->handle_table, pmap_ctx->fn_handle);
-    pmap_ctx->fn_released = true;
+  u64 done = atomic_load_explicit(&pmap_ctx->finished, memory_order_acquire);
+  if (done >= pmap_ctx->total) {
+    valk_pmap_ctx_free(pmap_ctx);
   }
-  if (pmap_ctx->result_handles) {
-    for (u64 i = 0; i < pmap_ctx->total; i++) {
-      if (atomic_load_explicit(&pmap_ctx->result_ready[i], memory_order_acquire))
-        valk_handle_release(&valk_sys->handle_table, pmap_ctx->result_handles[i]);
-    }
-    free(pmap_ctx->result_handles);
-    free(pmap_ctx->result_ready);
-  }
-  free(pmap_ctx);
 }
 
 static void __pmap_worker(void *arg) {
@@ -44,6 +51,8 @@ static void __pmap_worker(void *arg) {
   if (valk_async_handle_is_terminal(valk_async_handle_get_status(ctx->pmap_handle))) {
     valk_handle_release(&valk_sys->handle_table, task->arg_handle);
     free(task);
+    u64 fin = atomic_fetch_add(&ctx->finished, 1) + 1;
+    if (fin >= ctx->total) valk_pmap_ctx_free(ctx);
     return;
   }
 
@@ -72,14 +81,14 @@ static void __pmap_worker(void *arg) {
     valk_lval_t *heap_err = valk_evacuate_to_heap(result);
     if (scratch) valk_mem_arena_reset(scratch);
 
-    if (!valk_async_handle_try_transition(ctx->pmap_handle,
+    if (valk_async_handle_try_transition(ctx->pmap_handle,
         VALK_ASYNC_RUNNING, VALK_ASYNC_FAILED)) {
-      free(task);
-      return;
+      atomic_store_explicit(&ctx->pmap_handle->error, heap_err, memory_order_release);
+      valk_async_handle_finish(ctx->pmap_handle);
     }
-    atomic_store_explicit(&ctx->pmap_handle->error, heap_err, memory_order_release);
-    valk_async_handle_finish(ctx->pmap_handle);
     free(task);
+    u64 fin = atomic_fetch_add(&ctx->finished, 1) + 1;
+    if (fin >= ctx->total) valk_pmap_ctx_free(ctx);
     return;
   }
 
@@ -94,6 +103,8 @@ static void __pmap_worker(void *arg) {
     if (!valk_async_handle_try_transition(ctx->pmap_handle,
         VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED)) {
       free(task); // LCOV_EXCL_LINE
+      u64 fin = atomic_fetch_add(&ctx->finished, 1) + 1; // LCOV_EXCL_LINE
+      if (fin >= ctx->total) valk_pmap_ctx_free(ctx); // LCOV_EXCL_LINE
       return; // LCOV_EXCL_LINE
     }
 
@@ -113,6 +124,8 @@ static void __pmap_worker(void *arg) {
   }
 
   free(task);
+  u64 fin = atomic_fetch_add(&ctx->finished, 1) + 1;
+  if (fin >= ctx->total) valk_pmap_ctx_free(ctx);
 }
 
 static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
@@ -139,8 +152,7 @@ static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
 
   if (count == 0) {
     valk_async_handle_t *handle = valk_async_handle_new(sys, e);
-    atomic_store_explicit(&handle->result, valk_lval_nil(), memory_order_release);
-    valk_async_handle_try_transition(handle, VALK_ASYNC_PENDING, VALK_ASYNC_COMPLETED);
+    valk_async_handle_complete(handle, valk_lval_nil());
     return valk_lval_handle(handle);
   }
 
@@ -157,9 +169,16 @@ static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
   ctx->pmap_handle = pmap_handle;
   ctx->result_handles = calloc(count, sizeof(valk_handle_t));
   ctx->result_ready = calloc(count, sizeof(_Atomic(bool)));
+  if (!ctx->result_handles || !ctx->result_ready) { // LCOV_EXCL_BR_LINE
+    free(ctx->result_handles); // LCOV_EXCL_LINE
+    free(ctx->result_ready); // LCOV_EXCL_LINE
+    free(ctx); // LCOV_EXCL_LINE
+    return valk_lval_err("aio/pmap: failed to allocate result arrays"); // LCOV_EXCL_LINE
+  }
   ctx->total = count;
   atomic_store(&ctx->completed, 0);
-  ctx->fn_released = false;
+  atomic_store(&ctx->finished, 0);
+  atomic_store(&ctx->fn_released, false);
 
   valk_lval_t *heap_fn = valk_evacuate_to_heap(fn_arg);
   ctx->fn_handle = valk_handle_create(&valk_sys->handle_table, heap_fn);
@@ -177,13 +196,25 @@ static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
     valk_handle_t arg_handle = valk_handle_create(&valk_sys->handle_table, heap_item);
 
     valk_pmap_task_t *task = malloc(sizeof(valk_pmap_task_t));
+    if (!task) { // LCOV_EXCL_BR_LINE
+      valk_handle_release(&valk_sys->handle_table, arg_handle); // LCOV_EXCL_LINE
+      valk_async_handle_fail(pmap_handle, // LCOV_EXCL_LINE
+          valk_lval_err("aio/pmap: failed to allocate task")); // LCOV_EXCL_LINE
+      return valk_lval_handle(pmap_handle); // LCOV_EXCL_LINE
+    }
     task->pmap_ctx = ctx;
     task->fn_handle = fn_handle;
     task->arg_handle = arg_handle;
     task->index = i;
 
     valk_aio_loop_t *loop = &sys->loops[i % num_loops];
-    valk_aio_loop_enqueue_task(loop, __pmap_worker, task);
+    if (!valk_aio_loop_enqueue_task(loop, __pmap_worker, task)) { // LCOV_EXCL_BR_LINE
+      valk_handle_release(&valk_sys->handle_table, arg_handle); // LCOV_EXCL_LINE
+      free(task); // LCOV_EXCL_LINE
+      valk_async_handle_fail(pmap_handle, // LCOV_EXCL_LINE
+          valk_lval_err("aio/pmap: task queue full")); // LCOV_EXCL_LINE
+      return valk_lval_handle(pmap_handle); // LCOV_EXCL_LINE
+    }
 
     iter = valk_lval_tail(iter);
   }

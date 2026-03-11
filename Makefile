@@ -168,8 +168,8 @@ TEST_RUN_ONLY =
 ifneq ($(ONLY),)
   TEST_RUN_ONLY = --only $(ONLY)
 endif
-TEST_RUN_BASE = --jobs $(J) $(TEST_RUN_FILTER) $(TEST_RUN_ONLY)
-TEST_RUN_ARGS = --timeout $(TIMEOUT) $(TEST_RUN_BASE)
+TEST_RUN_BASE = $(TEST_RUN_FILTER) $(TEST_RUN_ONLY)
+TEST_RUN_ARGS = $(TEST_RUN_BASE)
 
 # Default test target (all C + Valk + stress)
 .PHONY: test
@@ -215,14 +215,13 @@ test-valk-tsan: build-tsan
 # Example demos as tests
 .PHONY: test-examples
 test-examples: build
-	$(TEST_RUN) --build-dir build --examples --filter "^example/" --timeout $(TIMEOUT) --jobs $(J)
+	$(TEST_RUN) --build-dir build --examples --filter "^example/"
 
 # Examples with ASAN
 .PHONY: test-examples-asan
 test-examples-asan: build-asan
 	$(TEST_RUN) --build-dir build-asan --examples --filter "^example/" \
-		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt \
-		--timeout $(TIMEOUT) --jobs $(J)
+		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt
 
 # Comprehensive: all tests + ASAN + examples
 .PHONY: test-all
@@ -297,7 +296,7 @@ coverage-reset:
 
 .PHONY: coverage-tests
 coverage-tests: build-coverage coverage-reset
-	$(TEST_RUN) --build-dir build-coverage --timeout 60 --examples $(TEST_RUN_BASE)
+	$(TEST_RUN) --build-dir build-coverage --examples $(TEST_RUN_BASE)
 
 .PHONY: coverage-report
 coverage-report: build
@@ -322,7 +321,7 @@ coverage-check: build
 # Stress tests
 .PHONY: test-stress
 test-stress: build
-	$(TEST_RUN) --build-dir build --stress-only --timeout 300 $(TEST_RUN_BASE)
+	$(TEST_RUN) --build-dir build --stress-only $(TEST_RUN_BASE)
 
 # Stress tests with TSAN - redirects sanitizer output to file per AGENTS.md
 .ONESHELL:
@@ -331,7 +330,7 @@ test-stress-tsan: build-tsan
 	set -e
 	export TSAN_OPTIONS="log_path=build/tsan-stress.log:halt_on_error=0:second_deadlock_stack=1"
 	export VALK_TEST_NO_FORK=1
-	$(TEST_RUN) --build-dir build-tsan --stress-only --timeout 300 $(TEST_RUN_BASE) 2>&1 | tee build/tsan-stress-stdout.log
+	$(TEST_RUN) --build-dir build-tsan --stress-only $(TEST_RUN_BASE) 2>&1 | tee build/tsan-stress-stdout.log
 	@echo ""
 	@echo "=== TSAN Summary ==="
 	@echo "Races found: $$(grep -c 'WARNING: ThreadSanitizer' build/tsan-stress.log* 2>/dev/null || echo 0)"
@@ -347,7 +346,7 @@ test-stress-asan: build-asan
 	set -e
 	export ASAN_OPTIONS="log_path=build/asan-stress.log:detect_leaks=1:halt_on_error=0:abort_on_error=0"
 	export LSAN_OPTIONS="verbosity=0:log_threads=1:suppressions=$(CURDIR)/lsan_suppressions.txt"
-	$(TEST_RUN) --build-dir build-asan --stress-only --timeout 300 $(TEST_RUN_BASE) 2>&1 | tee build/asan-stress-stdout.log
+	$(TEST_RUN) --build-dir build-asan --stress-only $(TEST_RUN_BASE) 2>&1 | tee build/asan-stress-stdout.log
 	@echo ""
 	@echo "=== ASAN Summary ==="
 	@echo "Errors found: $$(grep -c 'ERROR: AddressSanitizer' build/asan-stress.log* 2>/dev/null || echo 0)"

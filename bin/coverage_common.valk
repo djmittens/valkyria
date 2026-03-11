@@ -20,6 +20,15 @@
     {(/ (* hit 1000) found)})
 })
 
+(fun {fmt-rate tenths} {
+  (= {whole} (/ tenths 1000))
+  (= {frac} (mod tenths 1000))
+  (= {d1} (/ frac 100))
+  (= {d2} (/ (mod frac 100) 10))
+  (= {d3} (mod frac 10))
+  (str whole "." d1 d2 d3)
+})
+
 (fun {fmt-pct tenths} {
   (= {whole} (/ tenths 10))
   (= {frac} (mod tenths 10))
@@ -447,10 +456,14 @@
           (map (\ {f} {file/delete f}) root-gcovs)})})
 })
 
+(fun {shell-quote s} {
+  (str "'" (str/replace s "'" "'\\''") "'")
+})
+
 (fun {*run-gcov-and-parse* gcda-file llvm-cov source-root} {
   (= {tmpdir} (str/trim (plist/get (exec "mktemp" "-d") :stdout)))
   (= {gcda-parent} (str/join (init (str/split gcda-file "/")) "/"))
-  (exec "sh" "-c" (str "cd " tmpdir " && " llvm-cov " gcov -b -o " gcda-parent " " gcda-file " 2>/dev/null"))
+  (exec "sh" "-c" (str "cd " (shell-quote tmpdir) " && " (shell-quote llvm-cov) " gcov -b -o " (shell-quote gcda-parent) " " (shell-quote gcda-file) " 2>/dev/null"))
   (= {local-files} (dict/new))
   (= {entries} (if (file/exists? tmpdir) {(list-dir tmpdir)} {{}}))
   (= {gcov-entries} (filter (\ {e} {str/ends-with? (plist/get e :name) ".gcov"}) entries))

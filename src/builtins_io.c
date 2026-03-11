@@ -229,7 +229,7 @@ static valk_lval_t* valk_builtin_error(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
-  valk_lval_t* err = valk_lval_err(valk_lval_list_nth(a, 0)->str);
+  valk_lval_t* err = valk_lval_err("%s", valk_lval_list_nth(a, 0)->str);
   return err;
 }
 
@@ -328,11 +328,11 @@ static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
 
   const char *text = valk_lval_list_nth(a, 0)->str;
   valk_lval_t *tokens = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, tokens, LVAL_CONS, LVAL_NIL);
 
   int text_len = (int)strlen(text);
   int prev_line = 0, prev_col = 0, scan_pos = 0;
   valk_lval_t *result = valk_lval_nil();
-  int count = 0;
 
   valk_lval_t *cur = tokens;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
@@ -378,9 +378,6 @@ static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
     result = valk_lval_qcons(valk_lval_num(tok_len), result);
     result = valk_lval_qcons(valk_lval_num(tok_type), result);
     result = valk_lval_qcons(valk_lval_num(tok_mods), result);
-    (void)count;
-    count++;
-
     prev_line = line;
     prev_col = col;
     cur = cur->cons.tail;
@@ -403,6 +400,7 @@ static valk_lval_t *valk_builtin_offsets_to_lines(valk_lenv_t *e,
 
   const char *text = valk_lval_list_nth(a, 0)->str;
   valk_lval_t *offsets = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, offsets, LVAL_CONS, LVAL_NIL);
   int text_len = (int)strlen(text);
 
   int scan_pos = 0, line = 0, col = 0;
@@ -630,7 +628,9 @@ static valk_lval_t* valk_builtin_exec(valk_lenv_t* e, valk_lval_t* a) {
   if (fds[0].fd >= 0) close(fds[0].fd);
   if (fds[1].fd >= 0) close(fds[1].fd);
 
+  if (out_len >= out_cap) { out_cap = out_len + 1; out_buf = realloc(out_buf, out_cap); }
   out_buf[out_len] = '\0';
+  if (err_len >= err_cap) { err_cap = err_len + 1; err_buf = realloc(err_buf, err_cap); }
   err_buf[err_len] = '\0';
 
   int status = 0;

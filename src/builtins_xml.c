@@ -20,12 +20,15 @@ typedef struct xml_node {
   int text_cap;
 } xml_node_t;
 
+#define XML_MAX_DEPTH 1024
+
 typedef struct {
   xml_node_t** stack;
   int depth;
   int cap;
   bool error;
   char error_msg[256];
+  XML_Parser parser;
 } xml_parse_ctx_t;
 
 static xml_node_t* xml_node_new(const char* tag, const XML_Char** attr) {
@@ -85,10 +88,9 @@ static valk_lval_t* xml_node_to_lval(xml_node_t* node) {
     children_list = valk_lval_cons(child, children_list);
   }
 
-  valk_lval_t* attrs;
-  if (node->attr_count == 0) {
-    attrs = valk_lval_nil();
-  } else {
+  valk_lval_t* attrs = valk_lval_nil();
+  VALK_GC_ROOT(attrs);
+  if (node->attr_count > 0) {
     valk_lval_t** attr_items = malloc(node->attr_count * 2 * sizeof(valk_lval_t*));
     for (int i = 0; i < node->attr_count; i++) {
       char kw[256];
@@ -148,6 +150,14 @@ static void XMLCALL on_start(void* data, const XML_Char* name,
   xml_parse_ctx_t* ctx = data;
   if (ctx->error) return;
 
+  if (ctx->depth >= XML_MAX_DEPTH) {
+    ctx->error = true;
+    snprintf(ctx->error_msg, sizeof(ctx->error_msg),
+             "xml/parse: nesting depth exceeds %d", XML_MAX_DEPTH);
+    XML_StopParser(ctx->parser, XML_FALSE);
+    return;
+  }
+
   xml_node_t* node = xml_node_new(name, atts);
   if (ctx->depth > 0) {
     xml_node_add_child(ctx->stack[ctx->depth - 1], node);
@@ -197,6 +207,8 @@ static valk_lval_t* valk_builtin_xml_parse(valk_lenv_t* e, valk_lval_t* a) {
       .error = false,
   };
 
+  ctx.parser = parser;
+
   XML_SetUserData(parser, &ctx);
   XML_SetElementHandler(parser, on_start, on_end);
   XML_SetCharacterDataHandler(parser, on_chardata);
@@ -204,10 +216,12 @@ static valk_lval_t* valk_builtin_xml_parse(valk_lenv_t* e, valk_lval_t* a) {
   enum XML_Status status = XML_Parse(parser, input, (int)input_len, XML_TRUE);
 
   valk_lval_t* result;
-  if (status == XML_STATUS_ERROR) {
-    snprintf(ctx.error_msg, sizeof(ctx.error_msg), "xml/parse: %s at line %lu",
-             XML_ErrorString(XML_GetErrorCode(parser)),
-             XML_GetCurrentLineNumber(parser));
+  if (status == XML_STATUS_ERROR || ctx.error) {
+    if (!ctx.error) {
+      snprintf(ctx.error_msg, sizeof(ctx.error_msg), "xml/parse: %s at line %lu",
+               XML_ErrorString(XML_GetErrorCode(parser)),
+               XML_GetCurrentLineNumber(parser));
+    }
     result = valk_lval_err("%s", ctx.error_msg);
   } else if (ctx.depth <= 0) {
     result = valk_lval_err("xml/parse: empty document");
