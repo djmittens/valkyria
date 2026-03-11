@@ -57,7 +57,7 @@ jobs:
       
       - name: Run Tests (with JUnit XML output)
         run: |
-          build-coverage/valk bin/run-tests.valk -- --build-dir build-coverage --timeout 60 --junit-dir build/junit --no-stress --examples
+          build-coverage/valk bin/run-tests.valk -- --build-dir build-coverage --junit-dir build/junit --examples
       
       - name: Generate Coverage Report
         env:
