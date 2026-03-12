@@ -215,8 +215,8 @@ typedef struct {
 
 typedef struct {
   _Atomic u64 cycles_total;
-  _Atomic u64 pause_us_total;
-  _Atomic u64 pause_us_max;
+  _Atomic u64 pause_ns_total;
+  _Atomic u64 pause_ns_max;
   _Atomic sz reclaimed_bytes_total;
   _Atomic sz allocated_bytes_total;
   _Atomic u64 objects_marked;
@@ -268,8 +268,8 @@ struct valk_gc_heap {
   sz soft_limit;
   u8 gc_threshold_pct;
   u8 gc_target_pct;
-  u32 min_gc_interval_ms;
   u64 last_gc_time_us;
+  sz live_after_gc;
 
   _Atomic bool gc_in_progress;
 

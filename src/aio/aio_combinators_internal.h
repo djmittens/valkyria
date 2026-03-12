@@ -55,5 +55,6 @@ void valk_register_comb_all_settled(valk_lenv_t *env);
 void valk_register_comb_resource(valk_lenv_t *env);
 void valk_register_comb_timeout(valk_lenv_t *env);
 void valk_register_comb_util(valk_lenv_t *env);
+void valk_register_comb_pmap(valk_lenv_t *env);
 
 #endif

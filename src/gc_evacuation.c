@@ -134,6 +134,10 @@ valk_lval_t* evac_worklist_pop(valk_evacuation_ctx_t* ctx) {
   if (ctx->worklist_count == 0) return nullptr; // LCOV_EXCL_BR_LINE
   return ctx->worklist[--ctx->worklist_count];
 }
+
+void valk_evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
+  evac_worklist_push(ctx, v);
+}
 // LCOV_EXCL_BR_STOP
 
 // ============================================================================
@@ -181,7 +185,8 @@ valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   new_val->flags = (new_val->flags & ~LVAL_ALLOC_MASK) | LVAL_ALLOC_HEAP;
   new_val->origin_allocator = ctx->heap;
 
-  bool needs_string_copy = (ctx->scratch == nullptr);
+  bool needs_string_copy = (ctx->scratch == nullptr) ||
+                           !valk_ptr_in_arena(ctx->scratch, v);
 
   switch (LVAL_TYPE(new_val)) {
     case LVAL_SYM:
@@ -226,6 +231,10 @@ valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
           ctx->bytes_copied += len;
         }
       }
+      if (new_val->ref.evacuate)
+        new_val->ref.evacuate(&new_val->ref.ptr, ctx);
+      v->ref.ptr = new_val->ref.ptr;
+      if (new_val->ref.retain) new_val->ref.retain(new_val->ref.ptr);
       break;
 
     default:
@@ -325,6 +334,9 @@ void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
           ctx->bytes_copied += len;
         }
       }
+      break;
+
+    case LVAL_REF:
       break;
 
     default:
@@ -499,6 +511,9 @@ void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
       }
       break;
 
+    case LVAL_REF:
+      break;
+
     default:
       break;
   }
@@ -637,6 +652,9 @@ valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v) {
       new_val->fun.builtin == nullptr && new_val->fun.env != nullptr) {
     valk_evacuate_env(&ctx, new_val->fun.env);
   }
+
+  if (new_val != nullptr && new_val != v)
+    evac_worklist_push(&ctx, new_val);
 
   while (ctx.worklist_count > 0) {
     valk_lval_t* val = evac_worklist_pop(&ctx);

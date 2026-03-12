@@ -264,7 +264,7 @@ typedef struct {
   valk_mutex_t registry_lock;
 
   // Snapshot interval tracking
-  u64 last_snapshot_time;
+  _Atomic u64 last_snapshot_time;
   u64 snapshot_interval_us;  // Default: 1000000 (1s)
 
   // Eviction configuration

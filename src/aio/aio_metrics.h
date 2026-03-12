@@ -19,8 +19,8 @@ struct uv_loop_s;
 
 typedef struct {
   u64 gc_cycles;
-  u64 gc_pause_us_total;
-  u64 gc_pause_us_max;
+  u64 gc_pause_ns_total;
+  u64 gc_pause_ns_max;
   u64 gc_reclaimed_bytes;
   u64 gc_allocated_bytes;
   u8 gc_efficiency_pct;

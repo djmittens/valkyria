@@ -118,6 +118,9 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   res->ref.type[tlen] = '\0';
   res->ref.ptr = ptr;
   res->ref.free = free;
+  res->ref.mark = nullptr;
+  res->ref.evacuate = nullptr;
+  res->ref.retain = nullptr;
 
   return res;
 }
@@ -518,6 +521,10 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
       res->ref.type[tlen] = '\0';
       res->ref.ptr = lval->ref.ptr;
       res->ref.free = lval->ref.free;
+      res->ref.mark = lval->ref.mark;
+      res->ref.evacuate = lval->ref.evacuate;
+      res->ref.retain = lval->ref.retain;
+      if (lval->ref.retain) lval->ref.retain(lval->ref.ptr);
       break;
     }
     // LCOV_EXCL_START - LVAL_UNDEFINED is an invariant violation, should never happen

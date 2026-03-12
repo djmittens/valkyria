@@ -141,35 +141,35 @@ asan: build-asan
 	build-asan/valk src/prelude.valk test/test_prelude.valk && echo "exit code = $$?"
 
 # ============================================================================
-# Unified Test Runner (bin/run-tests.py)
+# Unified Test Runner (bin/run-tests.valk)
 # ============================================================================
 # All test targets use the unified runner which auto-discovers tests, runs them
 # in parallel, and produces JUnit XML. No hardcoded test lists needed.
 #
 # Common options (pass via Makefile variables):
-#   F=pattern          Regex filter for suite names
+#   F=pattern          Substring filter for suite names
 #   ONLY=c|valk        Only C or Valk tests
-#   J=N                Parallel job count (0 = auto)
-#   TEST=name          Shorthand for F=^name$$ (single test)
+#   J=N                Parallel job count (0 = auto, currently ignored)
+#   TEST=name          Shorthand for F=name (single test)
 
 F ?=
 ONLY ?=
 J ?= 0
 TIMEOUT ?= 120
 
-TEST_RUN = python3 bin/run-tests.py
+TEST_RUN = build/valk bin/run-tests.valk --
 TEST_RUN_FILTER =
 ifdef F
   TEST_RUN_FILTER = --filter "$(F)"
 else ifdef TEST
-  TEST_RUN_FILTER = --filter "^$(TEST)$$"
+  TEST_RUN_FILTER = --filter "$(TEST)"
 endif
 TEST_RUN_ONLY =
 ifneq ($(ONLY),)
   TEST_RUN_ONLY = --only $(ONLY)
 endif
-TEST_RUN_BASE = --jobs $(J) $(TEST_RUN_FILTER) $(TEST_RUN_ONLY)
-TEST_RUN_ARGS = --timeout $(TIMEOUT) $(TEST_RUN_BASE)
+TEST_RUN_BASE = $(TEST_RUN_FILTER) $(TEST_RUN_ONLY)
+TEST_RUN_ARGS = $(TEST_RUN_BASE)
 
 # Default test target (all C + Valk + stress)
 .PHONY: test
@@ -215,14 +215,13 @@ test-valk-tsan: build-tsan
 # Example demos as tests
 .PHONY: test-examples
 test-examples: build
-	$(TEST_RUN) --build-dir build --examples --filter "^example/" --timeout $(TIMEOUT) --jobs $(J)
+	$(TEST_RUN) --build-dir build --examples --filter "^example/"
 
 # Examples with ASAN
 .PHONY: test-examples-asan
 test-examples-asan: build-asan
 	$(TEST_RUN) --build-dir build-asan --examples --filter "^example/" \
-		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt \
-		--timeout $(TIMEOUT) --jobs $(J)
+		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt
 
 # Comprehensive: all tests + ASAN + examples
 .PHONY: test-all
@@ -297,12 +296,12 @@ coverage-reset:
 
 .PHONY: coverage-tests
 coverage-tests: build-coverage coverage-reset
-	$(TEST_RUN) --build-dir build-coverage --timeout 60 --examples $(TEST_RUN_BASE)
+	$(TEST_RUN) --build-dir build-coverage --examples $(TEST_RUN_BASE)
 
 .PHONY: coverage-report
-coverage-report:
+coverage-report: build
 	@echo "=== Generating unified coverage reports ==="
-	python3 bin/coverage-report.py \
+	build/valk bin/coverage-report.valk -- \
 		--build-dir build-coverage \
 		--source-root . \
 		--output coverage-report \
@@ -311,18 +310,18 @@ coverage-report:
 	@echo "Coverage reports: coverage-report/latest/index.html"
 
 .PHONY: coverage
-coverage: build-coverage coverage-tests coverage-report coverage-check
+coverage: build-coverage coverage-tests coverage-report
 	@echo "=== Coverage collection complete ==="
 
 .PHONY: coverage-check
-coverage-check:
+coverage-check: build
 	@echo "=== Checking runtime coverage requirements ==="
-	@python3 bin/check-coverage.py --build-dir build-coverage
+	@build/valk bin/check-coverage.valk -- --build-dir build-coverage
 
 # Stress tests
 .PHONY: test-stress
 test-stress: build
-	$(TEST_RUN) --build-dir build --stress-only --timeout 300 $(TEST_RUN_BASE)
+	$(TEST_RUN) --build-dir build --stress-only $(TEST_RUN_BASE)
 
 # Stress tests with TSAN - redirects sanitizer output to file per AGENTS.md
 .ONESHELL:
@@ -331,7 +330,7 @@ test-stress-tsan: build-tsan
 	set -e
 	export TSAN_OPTIONS="log_path=build/tsan-stress.log:halt_on_error=0:second_deadlock_stack=1"
 	export VALK_TEST_NO_FORK=1
-	$(TEST_RUN) --build-dir build-tsan --stress-only --timeout 300 $(TEST_RUN_BASE) 2>&1 | tee build/tsan-stress-stdout.log
+	$(TEST_RUN) --build-dir build-tsan --stress-only $(TEST_RUN_BASE) 2>&1 | tee build/tsan-stress-stdout.log
 	@echo ""
 	@echo "=== TSAN Summary ==="
 	@echo "Races found: $$(grep -c 'WARNING: ThreadSanitizer' build/tsan-stress.log* 2>/dev/null || echo 0)"
@@ -347,7 +346,7 @@ test-stress-asan: build-asan
 	set -e
 	export ASAN_OPTIONS="log_path=build/asan-stress.log:detect_leaks=1:halt_on_error=0:abort_on_error=0"
 	export LSAN_OPTIONS="verbosity=0:log_threads=1:suppressions=$(CURDIR)/lsan_suppressions.txt"
-	$(TEST_RUN) --build-dir build-asan --stress-only --timeout 300 $(TEST_RUN_BASE) 2>&1 | tee build/asan-stress-stdout.log
+	$(TEST_RUN) --build-dir build-asan --stress-only $(TEST_RUN_BASE) 2>&1 | tee build/asan-stress-stdout.log
 	@echo ""
 	@echo "=== ASAN Summary ==="
 	@echo "Errors found: $$(grep -c 'ERROR: AddressSanitizer' build/asan-stress.log* 2>/dev/null || echo 0)"

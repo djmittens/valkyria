@@ -261,7 +261,7 @@ grep -c "ERROR: AddressSanitizer" build/asan.log 2>/dev/null || echo "0 errors"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 build-asan/test_memory
 
 # Find uncovered branches (for improving test coverage)
-python3 scripts/find-uncovered-branches.py src/memory.c
+build/valk scripts/find-uncovered-branches.valk -- src/memory.c
 ```
 
 ## Combining with Debugger

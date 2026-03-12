@@ -81,21 +81,8 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       {uri}}
 })
 
-(fun {starts-with s prefix} {
-  if (< (len s) (len prefix)) {0}
-    {== (str/slice s 0 (len prefix)) prefix}
-})
-
 (fun {clean-name s} {
   str/replace (str/replace (str/replace s "}" "") ")" "") "(" ""
-})
-
-; === String utilities ===
-
-(fun {str/join parts sep} {
-  if (nil? parts) {""}
-  {if (== (len parts) 1) {str (head parts)}
-    {str (head parts) sep (str/join (tail parts) sep)}}
 })
 
 ; === Doc comment extraction ===
@@ -139,12 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
     {append-all (tail items) (qcons (head items) acc)}
 })
 
-; Find byte offset of first occurrence of needle in haystack, or -1
-(fun {str/index-of haystack needle} {do
-  (= {parts} (str/split haystack needle))
-  (if (<= (len parts) 1) {-1}
-    {len (head parts)})
-})
+
 
 ; === Position utilities ===
 

@@ -291,17 +291,30 @@ typedef struct valk_aio_task_queue {
   bool initialized;
 } valk_aio_task_queue_t;
 
+typedef struct valk_aio_loop {
+  uv_loop_t *uv_loop;
+  uv_thread_t thread;
+  uv_async_t stopper;
+  uv_async_t gc_wakeup;
+  uv_timer_t maintenance_timer;
+  valk_aio_task_queue_t task_queue;
+  valk_chase_lev_deque_t work_deque;
+  struct valk_aio_system *sys;
+  void *scratch;
+  u32 id;
+  bool thread_joined;
+  uv_sem_t ready_sem;
+} valk_aio_loop_t;
+
 struct valk_aio_system {
   valk_aio_system_config_t config;
   char name[64];
   const valk_aio_ops_t *ops;
 
-  uv_sem_t startup_sem;
-
   uv_loop_t *eventloop;
-  uv_thread_t loopThread;
 
-  valk_aio_handle_t *stopperHandle;
+  valk_aio_loop_t *loops;
+  u32 num_loops;
 
   valk_slab_t *httpServers;
   valk_aio_http_server *serverList;
@@ -315,12 +328,7 @@ struct valk_aio_system {
   valk_region_t system_region;
 
   _Atomic bool shuttingDown;
-  bool threadJoined;
   bool cleanedUp;
-
-
-
-  uv_timer_t maintenance_timer;
 
   valk_http_queue_t http_queue;
 
@@ -329,10 +337,6 @@ struct valk_aio_system {
 
   char (*port_strs)[8];
   u64 port_str_idx;
-
-  valk_aio_task_queue_t task_queue;
-
-  uv_async_t gc_wakeup;
 
   valk_aio_metrics_state_t *metrics_state;
   valk_owner_registry_t owner_registry;
@@ -472,4 +476,15 @@ void valk_aio_task_queue_init(valk_aio_system_t *sys);
 void valk_aio_task_queue_shutdown(valk_aio_system_t *sys);
 void valk_aio_enqueue_task(valk_aio_system_t *sys, valk_aio_task_fn fn, void *ctx);
 bool valk_aio_task_queue_empty(valk_aio_system_t *sys);
+
+// Per-loop task queue API
+void valk_aio_loop_task_queue_init(valk_aio_loop_t *loop);
+void valk_aio_loop_task_queue_shutdown(valk_aio_loop_t *loop);
+bool valk_aio_loop_enqueue_task(valk_aio_loop_t *loop, valk_aio_task_fn fn, void *ctx);
+
+// Per-loop event loop thread (implemented in aio_uv.c)
+void __loop_thread_fn(void *arg);
+
+// Maintenance timer callback (implemented in aio_maintenance.c)
+void __loop_maintenance_timer_cb(uv_timer_t *timer);
 i64 valk_aio_task_queue_size(valk_aio_system_t *sys);

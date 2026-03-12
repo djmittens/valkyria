@@ -64,7 +64,7 @@ void valk_gc_set_root(valk_gc_heap_t* heap, valk_lenv_t* root_env);
 bool valk_gc_should_collect(valk_gc_heap_t* heap);
 u8 valk_gc_heap_usage_pct(valk_gc_heap_t* heap);
 void valk_gc_set_thresholds(valk_gc_heap_t* heap,
-                            u8 threshold_pct, u8 target_pct, u32 min_interval_ms);
+                            u8 threshold_pct, u8 target_pct);
 void valk_gc_print_stats(valk_gc_heap_t* heap);
 void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_heap_t* heap, FILE* out);
 
@@ -73,8 +73,8 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_heap_t* heap, FI
 // ============================================================================
 
 void valk_gc_get_runtime_metrics(valk_gc_heap_t* heap,
-                                  u64* cycles, u64* pause_us_total,
-                                  u64* pause_us_max, sz* reclaimed,
+                                  u64* cycles, u64* pause_ns_total,
+                                  u64* pause_ns_max, sz* reclaimed,
                                   sz* heap_used, sz* heap_total);
 sz valk_gc_get_allocated_bytes_total(valk_gc_heap_t* heap);
 u8 valk_gc_get_last_efficiency(valk_gc_heap_t* heap);
@@ -218,6 +218,7 @@ typedef struct {
   pthread_mutex_t lock;
   valk_lval_t **slots;
   u32 *generations;
+  u32 *next_free;
   u32 capacity;
   u32 count;
   u32 free_head;
@@ -262,6 +263,9 @@ bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold);
 void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_heap_t* heap,
                      valk_lenv_t* root_env);
 valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v);
+valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+void valk_evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
 
 // ============================================================================
 // Parallel GC Infrastructure
@@ -286,6 +290,7 @@ typedef enum {
 typedef valk_chase_lev_deque_t valk_gc_mark_queue_t;
 
 void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q);
+void valk_gc_mark_queue_reset(valk_gc_mark_queue_t* q);
 void valk_gc_mark_queue_destroy(valk_gc_mark_queue_t* q);
 void valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val);
 valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q);
@@ -339,7 +344,7 @@ typedef struct valk_system {
   valk_gc_thread_info_t threads[VALK_SYSTEM_MAX_THREADS];
 
   _Atomic u64 parallel_cycles;
-  _Atomic u64 parallel_pause_us_total;
+  _Atomic u64 parallel_pause_ns_total;
 
   pthread_mutex_t subsystems_lock;
   valk_subsystem_t subsystems[VALK_SYSTEM_MAX_SUBSYSTEMS];
@@ -386,6 +391,7 @@ typedef struct valk_gc_mark_ctx {
 } valk_gc_mark_ctx_t;
 
 void valk_gc_heap_mark_object(valk_gc_mark_ctx_t *ctx, void *ptr);
+void valk_gc_heap_mark_raw(valk_gc_mark_ctx_t *ctx, void *ptr);
 void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap);
 void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap);
 bool valk_gc_heap_request_stw(valk_gc_heap_t *heap);

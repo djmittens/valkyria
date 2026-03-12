@@ -56,6 +56,9 @@ int main(int argc, char* argv[]) {
 
   valk_gc_heap_t* gc_heap = sys->heap;
 
+  // Note: valk_system_create() already registers the calling thread for GC.
+  // We just need to set up scratch arena and override the allocator.
+
   valk_mem_arena_t* scratch = malloc(scratch_bytes);
   valk_mem_arena_init(scratch, scratch_bytes - sizeof(*scratch));
 
@@ -72,6 +75,14 @@ int main(int argc, char* argv[]) {
   
   valk_lenv_t* env = valk_lenv_empty();
   valk_lenv_builtins(env);
+
+  VALK_WITH_ALLOC((void*)gc_heap) {
+    valk_lval_t** argv_items = malloc(argc * sizeof(valk_lval_t*));
+    for (int i = 0; i < argc; i++)
+      argv_items[i] = valk_lval_str(argv[i]);
+    valk_lenv_def(env, valk_lval_sym("sys/argv"), valk_lval_qlist(argv_items, argc));
+    free(argv_items);
+  }
 
   // Set root environment for GC marking and checkpoint evacuation
   valk_gc_set_root(gc_heap, env);
@@ -146,6 +157,9 @@ int main(int argc, char* argv[]) {
         force_repl = true;
         continue;
       }
+      if (strcmp(argv[i], "--") == 0) {
+        break;
+      }
       script_mode = true;  // Any file argument implies script mode
       valk_lval_t* res;
       // Parse into GC heap (persistent - AST must survive checkpoints)
@@ -176,6 +190,7 @@ int main(int argc, char* argv[]) {
             valk_lval_println(x);
             break;
           }
+          if (atomic_load(&sys->shutting_down)) break;
 
           VALK_GC_SAFE_POINT();
           if (valk_gc_should_collect(gc_heap)) {
@@ -200,6 +215,7 @@ int main(int argc, char* argv[]) {
       valk_coverage_reset();
     }
 
+    valk_system_unregister_thread(sys);
     free(scratch);
     valk_system_shutdown(sys, 5000);
     valk_system_destroy(sys);
@@ -265,6 +281,7 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  valk_system_unregister_thread(sys);
   free(scratch);
   valk_system_shutdown(sys, 5000);
   valk_system_destroy(sys);

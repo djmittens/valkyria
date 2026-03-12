@@ -1,0 +1,116 @@
+(load "src/prelude.valk")
+(load "src/modules/test.valk")
+
+(test/run (list
+
+  (test "parse-self-closing"
+    {do
+    (= {doc} (xml/parse "<root/>"))
+    (test/assert-eq "root" (plist/get doc :tag) "tag name")
+    (test/assert-eq 0 (len (plist/get doc :children)) "no children")
+    true
+  })
+
+  (test "parse-with-children"
+    {do
+    (= {doc} (xml/parse "<root><a/><b/></root>"))
+    (= {children} (plist/get doc :children))
+    (test/assert-eq 2 (len children) "two children")
+    (test/assert-eq "a" (plist/get (nth 1 children) :tag) "first child")
+    (test/assert-eq "b" (plist/get (nth 2 children) :tag) "second child")
+    true
+  })
+
+  (test "parse-attributes"
+    {do
+    (= {xml} "<item name=\"hello\" count=\"42\"/>")
+    (= {doc} (xml/parse xml))
+    (= {attrs} (plist/get doc :attrs))
+    (test/assert-eq "hello" (plist/get attrs :name) "string attr")
+    (test/assert-eq "42" (plist/get attrs :count) "number-valued attr is string")
+    true
+  })
+
+  (test "parse-text-content"
+    {do
+    (= {doc} (xml/parse "<msg>hello world</msg>"))
+    (test/assert-eq "hello world" (plist/get doc :text) "text content")
+    true
+  })
+
+  (test "parse-nested-structure"
+    {do
+    (= {xml} "<root><parent><child val=\"1\"/></parent></root>")
+    (= {doc} (xml/parse xml))
+    (= {parent} (head (plist/get doc :children)))
+    (= {child} (head (plist/get parent :children)))
+    (test/assert-eq "child" (plist/get child :tag) "nested tag")
+    (test/assert-eq "1" (plist/get (plist/get child :attrs) :val) "nested attr")
+    true
+  })
+
+  (test "parse-no-attrs-gives-nil"
+    {do
+    (= {doc} (xml/parse "<bare/>"))
+    (= {attrs} (plist/get doc :attrs))
+    (test/assert-eq 0 (len attrs) "no attrs is empty")
+    true
+  })
+
+  (test "parse-cobertura-like"
+    {do
+    (= {xml} (str
+      "<coverage line-rate=\"0.95\">"
+        "<packages>"
+          "<package name=\"src\">"
+            "<classes>"
+              "<class filename=\"src/foo.c\" line-rate=\"1.0\">"
+                "<lines>"
+                  "<line number=\"10\" hits=\"5\" branch=\"true\" condition-coverage=\"100% (2/2)\"/>"
+                  "<line number=\"20\" hits=\"3\" branch=\"true\" condition-coverage=\"50% (1/2)\"/>"
+                "</lines>"
+              "</class>"
+            "</classes>"
+          "</package>"
+        "</packages>"
+      "</coverage>"))
+    (= {doc} (xml/parse xml))
+    (test/assert-eq "coverage" (plist/get doc :tag) "root tag")
+    (= {pkgs} (plist/get doc :children))
+    (= {pkg} (head (plist/get (head pkgs) :children)))
+    (= {cls} (head (plist/get (head (plist/get pkg :children)) :children)))
+    (test/assert-eq "src/foo.c" (plist/get (plist/get cls :attrs) :filename) "class filename")
+    (= {lines-elem} (head (plist/get cls :children)))
+    (= {lines} (plist/get lines-elem :children))
+    (test/assert-eq 2 (len lines) "two line elements")
+    (= {line1} (nth 1 lines))
+    (test/assert-eq "10" (plist/get (plist/get line1 :attrs) :number) "line number")
+    (test/assert-eq "5" (plist/get (plist/get line1 :attrs) :hits) "hit count")
+    (= {line2} (nth 2 lines))
+    (test/assert-eq "50% (1/2)" (plist/get (plist/get line2 :attrs) :condition-coverage) "condition coverage")
+    true
+  })
+
+  (test "parse-error-invalid-xml"
+    {do
+    (test/assert (error? (xml/parse "<unclosed>")) "unclosed tag should error")
+    true
+  })
+
+  (test "parse-error-wrong-type"
+    {do
+    (test/assert (error? (xml/parse 42)) "number arg should error")
+    true
+  })
+
+  (test "parse-ignores-whitespace-text"
+    {do
+    (= {xml} (str "<root>\n  <child/>\n</root>"))
+    (= {doc} (xml/parse xml))
+    (= {children} (plist/get doc :children))
+    (test/assert-eq 1 (len children) "whitespace-only text nodes ignored")
+    (test/assert-eq "child" (plist/get (head children) :tag) "child tag")
+    true
+  })
+
+) {:suite-name "XML Builtin Tests"})

@@ -1,0 +1,129 @@
+(load "src/prelude.valk")
+
+; Allowed globals: file + var-name pairs that are permitted
+(fun {is-allowed? rel var} {
+  (if (== rel "src/modules/test.valk")
+    {(or (== var "*test-default-timeout-ms*")
+         (or (== var "*test-default-suite-timeout-ms*")
+             (== var "*test-json-output*")))}
+    {false})
+})
+
+; Check if line contains (atom ...)
+(fun {is-atom-creation? line} {
+  (str/contains? line "(atom ")
+})
+
+; Check if line defines a global: (def {*name*} ...)
+; Returns var name including stars, or "" if not a def-global pattern
+(fun {extract-def-global line} {
+  (= {trimmed} (str/trim-left line))
+  (if (str/starts-with? trimmed ";") {""}
+    {(if (not (str/contains? trimmed "(def {*")) {""}
+      {do
+        (= {idx} (*find-substr* trimmed "(def {*" 0))
+        (if (< idx 0) {""}
+          {do
+            (= {start} (+ idx 6))
+            (= {rest} (str/slice trimmed start (len trimmed)))
+            (= {end} (*find-char* rest "}" 0))
+            (if (< end 0) {""}
+              {(str/slice rest 0 end)})})})})
+})
+
+(fun {*find-substr* s sub pos} {
+  (if (> (+ pos (len sub)) (len s)) {-1}
+    {(if (== (str/slice s pos (+ pos (len sub))) sub)
+      {pos}
+      {(*find-substr* s sub (+ pos 1))})})
+})
+
+(fun {*find-char* s ch pos} {
+  (if (>= pos (len s)) {-1}
+    {(if (== (str/slice s pos (+ pos 1)) ch)
+      {pos}
+      {(*find-char* s ch (+ pos 1))})})
+})
+
+; Recursively collect .valk files from a directory
+(fun {collect-valk-files dir prefix} {
+  (if (not (file/exists? dir)) {{}}
+    {do
+      (= {entries} (list-dir dir))
+      (foldl (\ {acc entry} {
+        (= {name} (plist/get entry :name))
+        (= {type} (plist/get entry :type))
+        (= {rel} (if (== prefix "") {name} {(str prefix "/" name)}))
+        (= {full} (str dir "/" name))
+        (if (== type "dir")
+          {(join acc (collect-valk-files full rel))}
+          {(if (str/contains? name ".valk")
+            {(join acc (list (list :path full :rel rel)))}
+            {acc})})
+      }) {} entries)})
+})
+
+; Scan lines of one file for violations
+(fun {scan-lines lines rel line-num violations} {
+  (if (== (len lines) 0)
+    {violations}
+    {do
+      (= {line} (head lines))
+      (= {var-name} (extract-def-global line))
+      (= {new-violations}
+        (if (== var-name "")
+          {violations}
+          {(if (is-allowed? rel var-name)
+            {violations}
+            {(if (is-atom-creation? line)
+              {violations}
+              {(join violations
+                 (list (list :file rel :line line-num :var var-name :text line)))})})}))
+      (scan-lines (tail lines) rel (+ line-num 1) new-violations)})
+})
+
+; Scan one file
+(fun {scan-file file-info} {
+  (= {path} (plist/get file-info :path))
+  (= {rel} (plist/get file-info :rel))
+  (= {content} (read-file path))
+  (if (error? content)
+    {{}}
+    {(scan-lines (str/split content "\n") rel 1 {})})
+})
+
+; --- Main ---
+
+(printf "================================================================================\n")
+(printf "VALKYRIA GLOBAL MUTATION LINT\n")
+(printf "================================================================================\n\n")
+
+(= {src-files} (collect-valk-files "src" "src"))
+(= {test-files} (collect-valk-files "test" "test"))
+(= {all-files} (join src-files test-files))
+
+(printf "Scanning %ld .valk files for global mutations...\n\n" (len all-files))
+
+(= {all-violations} (foldl (\ {acc f} {(join acc (scan-file f))}) {} all-files))
+
+(if (> (len all-violations) 0)
+  {do
+    (printf "VIOLATIONS FOUND:\n\n")
+    (map (\ {v} {
+      (printf "  %s:\n" (plist/get v :file))
+      (printf "    Line %ld: %s\n" (plist/get v :line) (plist/get v :var))
+      (= {text} (plist/get v :text))
+      (= {show} (if (> (len text) 70) {(str (str/slice text 0 70) "...")} {text}))
+      (printf "      %s\n\n" show)
+    }) all-violations)
+    (printf "================================================================================\n")
+    (printf "FAILED: %ld global mutation(s)\n\n" (len all-violations))
+    (printf "Global mutable state causes data races in concurrent code.\n")
+    (printf "Use atoms for thread-safe state, or pass state explicitly.\n")
+    (printf "================================================================================\n")
+    (shutdown 1)}
+  {do
+    (printf "================================================================================\n")
+    (printf "PASSED: No global mutation violations found in %ld files\n" (len all-files))
+    (printf "================================================================================\n")
+    (shutdown 0)})

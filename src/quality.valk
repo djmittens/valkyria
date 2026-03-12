@@ -1,5 +1,5 @@
 ; Quality Snapshot — pure Valk implementation
-; Produces JSON metrics compatible with scripts/quality-diff.py
+; Produces JSON metrics compatible with scripts/quality-diff.valk
 ;
 ; Usage: build/valk --quality-snapshot [dir]
 
@@ -7,11 +7,6 @@
 (load "src/symdb.valk")
 
 ; === File discovery ===
-
-(fun {ends-with s suffix} {
-  if (< (len s) (len suffix)) {0}
-    {== (str/slice s (- (len s) (len suffix)) (len s)) suffix}
-})
 
 (fun {quality/find-valk-files dir} {do
   (= {entries} (list-dir dir))
@@ -28,8 +23,8 @@
     (= {path} (str dir "/" name))
     (= {rest} (tail entries))
     (if (== etype "file")
-      {if (ends-with name ".valk")
-        {if (ends-with name ".test.valk")
+      {if (str/ends-with? name ".valk")
+        {if (str/ends-with? name ".test.valk")
           {quality/collect-files rest dir acc}
           {quality/collect-files rest dir (qcons path acc)}}
         {quality/collect-files rest dir acc}}

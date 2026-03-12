@@ -129,5 +129,118 @@
     (= {result} (error? (str->num "abc")))
     (test/assert result "non-numeric string should error")
     true
+  })
+
+  (test "str-contains-found"
+    {do
+    (test/assert (str/contains? "hello world" "world") "should find substring")
+    (test/assert (str/contains? "hello world" "hello") "should find at start")
+    (test/assert (str/contains? "hello" "hello") "should find exact match")
+    true
+  })
+  (test "str-contains-not-found"
+    {do
+    (test/assert (not (str/contains? "hello world" "xyz")) "should not find missing")
+    (test/assert (not (str/contains? "" "a")) "empty string contains nothing")
+    true
+  })
+  (test "str-contains-empty-needle"
+    {do
+    (test/assert (str/contains? "hello" "") "empty needle always found")
+    true
+  })
+
+  (test "str-starts-with-true"
+    {do
+    (test/assert (str/starts-with? "hello world" "hello") "starts with hello")
+    (test/assert (str/starts-with? "hello" "hello") "exact match")
+    (test/assert (str/starts-with? "hello" "") "empty prefix always matches")
+    true
+  })
+  (test "str-starts-with-false"
+    {do
+    (test/assert (not (str/starts-with? "hello" "world")) "does not start with world")
+    (test/assert (not (str/starts-with? "hi" "hello")) "prefix longer than string")
+    true
+  })
+
+  (test "str-ends-with-true"
+    {do
+    (test/assert (str/ends-with? "hello world" "world") "ends with world")
+    (test/assert (str/ends-with? "hello" "hello") "exact match")
+    (test/assert (str/ends-with? "hello" "") "empty suffix always matches")
+    true
+  })
+  (test "str-ends-with-false"
+    {do
+    (test/assert (not (str/ends-with? "hello" "world")) "does not end with world")
+    (test/assert (not (str/ends-with? "hi" "hello")) "suffix longer than string")
+    true
+  })
+
+  (test "str-join-basic"
+    {do
+    (test/assert-eq "a, b, c" (str/join {"a" "b" "c"} ", ") "join with comma-space")
+    (test/assert-eq "abc" (str/join {"a" "b" "c"} "") "join with empty sep")
+    (test/assert-eq "hello" (str/join {"hello"} ", ") "single element")
+    (test/assert-eq "" (str/join {} ", ") "empty list")
+    true
+  })
+  (test "str-join-wrong-type"
+    {do
+    (test/assert (error? (str/join 42 ",")) "number as list should error")
+    (test/assert (error? (str/join {"a" "b"} 42)) "number as sep should error")
+    true
+  })
+
+  (test "str-index-of-found"
+    {do
+    (test/assert-eq 6 (str/index-of "hello world" "world") "found at index 6")
+    (test/assert-eq 0 (str/index-of "hello" "hello") "found at start")
+    (test/assert-eq 0 (str/index-of "hello" "") "empty needle at 0")
+    true
+  })
+  (test "str-index-of-not-found"
+    {do
+    (test/assert-eq -1 (str/index-of "hello" "xyz") "not found returns -1")
+    (test/assert-eq -1 (str/index-of "" "a") "empty haystack returns -1")
+    true
+  })
+
+  (test "str-lower"
+    {do
+    (test/assert-eq "hello world" (str/lower "Hello WORLD") "mixed case to lower")
+    (test/assert-eq "hello" (str/lower "hello") "already lower")
+    (test/assert-eq "" (str/lower "") "empty string")
+    (test/assert-eq "abc123" (str/lower "ABC123") "letters only, numbers unchanged")
+    true
+  })
+  (test "str-upper"
+    {do
+    (test/assert-eq "HELLO WORLD" (str/upper "Hello World") "mixed case to upper")
+    (test/assert-eq "HELLO" (str/upper "HELLO") "already upper")
+    (test/assert-eq "" (str/upper "") "empty string")
+    true
+  })
+
+  (test "str-trim"
+    {do
+    (test/assert-eq "hello" (str/trim "  hello  ") "trim both sides")
+    (test/assert-eq "hello" (str/trim "hello") "nothing to trim")
+    (test/assert-eq "" (str/trim "   ") "all whitespace")
+    (test/assert-eq "" (str/trim "") "empty string")
+    true
+  })
+  (test "str-trim-left"
+    {do
+    (test/assert-eq "hello  " (str/trim-left "  hello  ") "trim left only")
+    (test/assert-eq "hello" (str/trim-left "hello") "nothing to trim")
+    true
+  })
+  (test "str-trim-right"
+    {do
+    (test/assert-eq "  hello" (str/trim-right "  hello  ") "trim right only")
+    (test/assert-eq "hello" (str/trim-right "hello") "nothing to trim")
+    true
   }))
   {:suite-name "String Builtin Tests"})

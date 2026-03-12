@@ -42,6 +42,19 @@ void valk_chase_lev_init(valk_chase_lev_deque_t *deque, int64_t initial_size) {
   deque->garbage = NULL;
 }
 
+void valk_chase_lev_reset(valk_chase_lev_deque_t *deque) {
+  atomic_store_explicit(&deque->top, 0, memory_order_relaxed);
+  atomic_store_explicit(&deque->bottom, 0, memory_order_relaxed);
+  valk_chase_lev_garbage_t *g = deque->garbage;
+  while (g) {
+    valk_chase_lev_garbage_t *next = g->next;
+    valk_chase_lev_array_free(g->array);
+    free(g);
+    g = next;
+  }
+  deque->garbage = NULL;
+}
+
 void valk_chase_lev_destroy(valk_chase_lev_deque_t *deque) {
   valk_chase_lev_array_t *arr = atomic_load_explicit(&deque->array, memory_order_relaxed);
   valk_chase_lev_array_free(arr);

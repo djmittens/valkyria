@@ -11,13 +11,13 @@ static void __maintenance_timer_close_cb(uv_handle_t *handle) {
 
 void valk_maintenance_check_orphaned_streams(valk_aio_system_t *sys);
 
-static void __maintenance_timer_cb(uv_timer_t *timer) {
+void __loop_maintenance_timer_cb(uv_timer_t *timer) {
   valk_aio_system_t *sys = timer->data;
   if (!sys || sys->shuttingDown) return; // LCOV_EXCL_BR_LINE
-  
+
   VALK_GC_SAFE_POINT();
 
-  u64 now = sys->ops->loop->now(sys);
+  u64 now = uv_now(timer->loop);
 
   valk_maintenance_check_connection_timeouts(sys, now);
   valk_maintenance_check_backpressure_timeouts(sys, now);
@@ -27,12 +27,12 @@ static void __maintenance_timer_cb(uv_timer_t *timer) {
 }
 
 void valk_maintenance_timer_init(valk_aio_system_t *sys) {
-  uv_timer_init(sys->eventloop, &sys->maintenance_timer);
-  sys->maintenance_timer.data = sys;
+  uv_timer_init(sys->eventloop, &sys->loops[0].maintenance_timer);
+  sys->loops[0].maintenance_timer.data = sys;
 }
 
 void valk_maintenance_timer_start(valk_aio_system_t *sys) {
-  uv_timer_start(&sys->maintenance_timer, __maintenance_timer_cb,
+  uv_timer_start(&sys->loops[0].maintenance_timer, __loop_maintenance_timer_cb,
                  sys->config.maintenance_interval_ms,
                  sys->config.maintenance_interval_ms);
   VALK_INFO("Started maintenance timer (interval: %u ms)",
@@ -40,12 +40,12 @@ void valk_maintenance_timer_start(valk_aio_system_t *sys) {
 }
 
 void valk_maintenance_timer_stop(valk_aio_system_t *sys) {
-  uv_timer_stop(&sys->maintenance_timer);
+  uv_timer_stop(&sys->loops[0].maintenance_timer);
 }
 
 void valk_maintenance_timer_close(valk_aio_system_t *sys) {
-  if (!uv_is_closing((uv_handle_t *)&sys->maintenance_timer)) { // LCOV_EXCL_BR_LINE
-    uv_close((uv_handle_t *)&sys->maintenance_timer, __maintenance_timer_close_cb);
+  if (!uv_is_closing((uv_handle_t *)&sys->loops[0].maintenance_timer)) { // LCOV_EXCL_BR_LINE
+    uv_close((uv_handle_t *)&sys->loops[0].maintenance_timer, __maintenance_timer_close_cb);
   }
 }
 

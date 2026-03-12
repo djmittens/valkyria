@@ -19,9 +19,20 @@ static void task_with_context(void *ctx) {
 }
 
 static void drain_loop(uv_loop_t *loop, valk_aio_system_t *sys) {
-  uv_ref((uv_handle_t*)&sys->task_queue.notify);
+  uv_ref((uv_handle_t*)&sys->loops[0].task_queue.notify);
   uv_run(loop, UV_RUN_NOWAIT);
-  uv_unref((uv_handle_t*)&sys->task_queue.notify);
+  uv_unref((uv_handle_t*)&sys->loops[0].task_queue.notify);
+}
+
+static void setup_sys_with_loop(valk_aio_system_t *sys, valk_aio_loop_t *loop, uv_loop_t *uv_loop) {
+  memset(sys, 0, sizeof(*sys));
+  memset(loop, 0, sizeof(*loop));
+  sys->loops = loop;
+  sys->num_loops = 1;
+  sys->eventloop = uv_loop;
+  loop->uv_loop = uv_loop;
+  loop->sys = sys;
+  loop->id = 0;
 }
 
 void test_task_queue_empty_null(VALK_TEST_ARGS()) {
@@ -65,16 +76,17 @@ void test_task_queue_init_shutdown(VALK_TEST_ARGS()) {
   uv_loop_t loop;
   uv_loop_init(&loop);
 
-  valk_aio_system_t sys = {0};
-  sys.eventloop = &loop;
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
 
   valk_aio_task_queue_init(&sys);
-  ASSERT_TRUE(sys.task_queue.initialized);
+  ASSERT_TRUE(sys.loops[0].task_queue.initialized);
   ASSERT_TRUE(valk_aio_task_queue_empty(&sys));
   ASSERT_EQ(valk_aio_task_queue_size(&sys), 0);
 
   valk_aio_task_queue_shutdown(&sys);
-  ASSERT_FALSE(sys.task_queue.initialized);
+  ASSERT_FALSE(sys.loops[0].task_queue.initialized);
 
   uv_run(&loop, UV_RUN_DEFAULT);
   uv_loop_close(&loop);
@@ -87,14 +99,15 @@ void test_task_queue_double_init(VALK_TEST_ARGS()) {
   uv_loop_t loop;
   uv_loop_init(&loop);
 
-  valk_aio_system_t sys = {0};
-  sys.eventloop = &loop;
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
 
   valk_aio_task_queue_init(&sys);
-  ASSERT_TRUE(sys.task_queue.initialized);
+  ASSERT_TRUE(sys.loops[0].task_queue.initialized);
 
   valk_aio_task_queue_init(&sys);
-  ASSERT_TRUE(sys.task_queue.initialized);
+  ASSERT_TRUE(sys.loops[0].task_queue.initialized);
 
   valk_aio_task_queue_shutdown(&sys);
 
@@ -106,11 +119,16 @@ void test_task_queue_double_init(VALK_TEST_ARGS()) {
 void test_task_queue_shutdown_not_initialized(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_aio_system_t sys = {0};
-  sys.task_queue.initialized = false;
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  uv_loop_t loop;
+  uv_loop_init(&loop);
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
+  sys.loops[0].task_queue.initialized = false;
 
   valk_aio_task_queue_shutdown(&sys);
 
+  uv_loop_close(&loop);
   VALK_PASS();
 }
 
@@ -120,8 +138,9 @@ void test_task_queue_enqueue_single(VALK_TEST_ARGS()) {
   uv_loop_t loop;
   uv_loop_init(&loop);
 
-  valk_aio_system_t sys = {0};
-  sys.eventloop = &loop;
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
 
   valk_aio_task_queue_init(&sys);
 
@@ -148,8 +167,9 @@ void test_task_queue_enqueue_multiple(VALK_TEST_ARGS()) {
   uv_loop_t loop;
   uv_loop_init(&loop);
 
-  valk_aio_system_t sys = {0};
-  sys.eventloop = &loop;
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
 
   valk_aio_task_queue_init(&sys);
 
@@ -178,8 +198,9 @@ void test_task_queue_with_context(VALK_TEST_ARGS()) {
   uv_loop_t loop;
   uv_loop_init(&loop);
 
-  valk_aio_system_t sys = {0};
-  sys.eventloop = &loop;
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
 
   valk_aio_task_queue_init(&sys);
 
@@ -206,8 +227,9 @@ void test_task_queue_shutdown_drains(VALK_TEST_ARGS()) {
   uv_loop_t loop;
   uv_loop_init(&loop);
 
-  valk_aio_system_t sys = {0};
-  sys.eventloop = &loop;
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
 
   valk_aio_task_queue_init(&sys);
 
@@ -219,7 +241,7 @@ void test_task_queue_shutdown_drains(VALK_TEST_ARGS()) {
 
   valk_aio_task_queue_shutdown(&sys);
 
-  ASSERT_FALSE(sys.task_queue.initialized);
+  ASSERT_FALSE(sys.loops[0].task_queue.initialized);
 
   uv_run(&loop, UV_RUN_DEFAULT);
   uv_loop_close(&loop);
@@ -232,8 +254,9 @@ void test_task_queue_shuttingdown_flag(VALK_TEST_ARGS()) {
   uv_loop_t loop;
   uv_loop_init(&loop);
 
-  valk_aio_system_t sys = {0};
-  sys.eventloop = &loop;
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
   sys.shuttingDown = false;
 
   valk_aio_task_queue_init(&sys);

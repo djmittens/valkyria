@@ -209,8 +209,9 @@ u64 valk_delta_snapshot_collect(valk_delta_snapshot_t *snap,
   u64 now = valk_metrics_now_us();
 
   snap->timestamp_us = now;
-  snap->prev_timestamp_us = registry->last_snapshot_time;
-  snap->interval_us = now - registry->last_snapshot_time;
+  u64 last_time = atomic_load_explicit(&registry->last_snapshot_time, memory_order_relaxed);
+  snap->prev_timestamp_us = last_time;
+  snap->interval_us = now - last_time;
   snap->delta_count = 0;
   snap->counters_changed = 0;
   snap->gauges_changed = 0;
@@ -293,7 +294,7 @@ u64 valk_delta_snapshot_collect(valk_delta_snapshot_t *snap,
     }
   }
 
-  registry->last_snapshot_time = now;
+  atomic_store_explicit(&registry->last_snapshot_time, now, memory_order_relaxed);
   return snap->delta_count;
 }
 

@@ -1,0 +1,92 @@
+(load "src/prelude.valk")
+
+; --- Arg parsing ---
+
+(= {args} (filter (\ {a} {(not (or (str/contains? a "valk") (== a "--")))}) sys/argv))
+(if (< (len args) 1)
+  {do
+    (printf "Usage: find-uncovered-branches.valk <filename>\n")
+    (printf "Example: find-uncovered-branches.valk memory.c\n")
+    (shutdown 1)}
+  {true})
+
+(= {target} (nth (len args) args))
+(= {xml-path} "coverage-report/coverage.xml")
+
+(if (not (file/exists? xml-path))
+  {do
+    (printf "error: %s not found\n" xml-path)
+    (printf "hint: run 'make coverage' first\n")
+    (shutdown 1)}
+  {true})
+
+; --- Parse XML ---
+
+(= {xml-str} (read-file xml-path))
+(= {doc} (xml/parse xml-str))
+
+; Format "0.9645" as "96.5%" (multiply by 100, round to 1 decimal)
+(fun {format-rate rate-str} {
+  (if (str/starts-with? rate-str "1")
+    {"100.0%"}
+    {do
+      (= {parts} (str/split rate-str "."))
+      (if (< (len parts) 2) {(str rate-str "%")}
+        {do
+          (= {digits} (nth 2 parts))
+          (= {padded} (str digits "0000"))
+          (= {d0} (str->num (str/slice padded 0 1)))
+          (= {d1} (str->num (str/slice padded 1 2)))
+          (= {d2} (str->num (str/slice padded 2 3)))
+          (= {d3} (str->num (str/slice padded 3 4)))
+          (= {tenths} (+ (* (+ (* d0 100) (* d1 10)) 1) d2))
+          (= {rounded} (if (>= d3 5) {(+ tenths 1)} {tenths}))
+          (= {whole} (/ rounded 10))
+          (= {frac} (mod rounded 10))
+          (str whole "." frac "%")})})
+})
+
+; --- Find matching classes and print uncovered branches ---
+
+(fun {process-line line-elem} {do
+  (= {attrs} (plist/get line-elem :attrs))
+  (if (!= (plist/get attrs :branch) "true") {0}
+    {do
+      (= {cond-cov} (plist/get attrs :condition-coverage))
+      (if (str/contains? cond-cov "100%") {0}
+        {do
+          (printf "  Line %s: %s (hits: %s)\n"
+            (plist/get attrs :number) cond-cov (plist/get attrs :hits))
+          1})})
+})
+
+(fun {process-class cls} {do
+  (= {attrs} (plist/get cls :attrs))
+  (= {filename} (plist/get attrs :filename))
+  (if (not (str/contains? filename target)) {0}
+    {do
+      (= {lr} (plist/get attrs :line-rate))
+      (= {br} (plist/get attrs :branch-rate))
+      (printf "File: %s\n" filename)
+      (printf "Line rate: %s\n" (format-rate lr))
+      (printf "Branch rate: %s\n" (format-rate br))
+      (printf "\nUncovered/partial branches:\n")
+      (printf "------------------------------------------------------------\n")
+      (= {lines-elem} (filter (\ {c} {(== (plist/get c :tag) "lines")}) (plist/get cls :children)))
+      (= {lines} (if (nil? lines-elem) {nil} {(plist/get (head lines-elem) :children)}))
+      (foldl (\ {count line-elem} {(+ count (process-line line-elem))}) 0 lines)})
+})
+
+(fun {find-classes node} {
+  (if (== (plist/get node :tag) "class")
+    {(list node)}
+    {(foldl (\ {acc child} {(join acc (find-classes child))})
+            {} (plist/get node :children))})
+})
+
+(= {classes} (find-classes doc))
+(= {total} (foldl (\ {count cls} {(+ count (process-class cls))}) 0 classes))
+
+(if (== total 0)
+  {(printf "  (none found - all branches covered or file not found)\n")}
+  {true})

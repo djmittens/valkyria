@@ -21,7 +21,7 @@ valk_lenv_t* valk_lenv_empty(void) {
   }
   memset(res, 0, sizeof(valk_lenv_t));
   valk_lenv_init(res);
-  
+
   if (valk_thread_ctx.heap != NULL) {
     res->allocator = valk_thread_ctx.heap;
   }
@@ -195,7 +195,6 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     }
   }
 
-  // LCOV_EXCL_BR_START - allocator selection logic
   valk_mem_allocator_t *env_alloc;
   if (valk_thread_ctx.heap != NULL) {
     env_alloc = valk_thread_ctx.heap;
@@ -204,8 +203,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   } else {
     env_alloc = valk_thread_ctx.allocator;
   }
-  // LCOV_EXCL_BR_STOP
-  
+
   VALK_WITH_ALLOC(env_alloc) {
     u64 slen = strlen(key->str);
     char* new_symbol = valk_mem_alloc(slen + 1);

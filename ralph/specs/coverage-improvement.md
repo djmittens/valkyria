@@ -17,7 +17,7 @@ Achieve comprehensive test coverage across the Valk codebase to ensure reliabili
 
 Coverage is measured using:
 - `make coverage` - Generates HTML coverage report
-- `python3 scripts/find-uncovered-branches.py <file.c>` - Lists uncovered branches in a file
+- `build/valk scripts/find-uncovered-branches.valk -- <file.c>` - Lists uncovered branches in a file
 
 ### Coverage Report Location
 
@@ -26,7 +26,7 @@ Reports are generated to `coverage-report/` directory. Open `coverage-report/ind
 ### Strategy
 
 1. **Identify gaps**: Run `make coverage` and identify files below targets
-2. **Find uncovered branches**: Use `find-uncovered-branches.py` to locate specific untested code paths
+2. **Find uncovered branches**: Use `find-uncovered-branches.valk` to locate specific untested code paths
 3. **Analyze conditions**: Read source code at uncovered lines to understand what condition is not being hit
 4. **Write targeted tests**: Create tests that specifically exercise the UNTESTED branch
 5. **Verify improvement**: Re-run `make coverage` to confirm branch coverage increased

@@ -41,6 +41,9 @@ typedef struct valk_aio_system_config {
   // CONNECTION TIMEOUT SETTINGS
   u32 connection_idle_timeout_ms;  // Default: 60000 (60s) - close idle connections
   u32 maintenance_interval_ms;     // Default: 1000 (1s) - timer for timeout checks
+
+  // THREADING
+  u32 num_threads;                   // Default: 1 - number of event loop threads
 } valk_aio_system_config_t;
 
 // Default system configuration

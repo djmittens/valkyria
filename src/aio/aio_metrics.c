@@ -34,7 +34,7 @@ void valk_vm_metrics_collect(valk_vm_metrics_t* out,
   if (heap) {
     sz reclaimed, heap_used, heap_total;
     valk_gc_get_runtime_metrics(heap,
-      &out->gc_cycles, &out->gc_pause_us_total, &out->gc_pause_us_max,
+      &out->gc_cycles, &out->gc_pause_ns_total, &out->gc_pause_ns_max,
       &reclaimed, &heap_used, &heap_total);
     out->gc_reclaimed_bytes = reclaimed;
     out->gc_heap_used = heap_used;
@@ -95,9 +95,9 @@ char* valk_vm_metrics_to_json(const valk_vm_metrics_t* m,
     "\"efficiency_pct\":%u,\"heap_used_bytes\":%llu,"
     "\"heap_total_bytes\":%llu,\"heap_utilization_pct\":%.2f,\"large_object_bytes\":%llu,",
     (unsigned long long)m->gc_cycles,
-    (unsigned long long)m->gc_pause_us_total,
-    (unsigned long long)m->gc_pause_us_max,
-    m->gc_cycles > 0 ? (double)m->gc_pause_us_total / m->gc_cycles / 1000.0 : 0.0,
+    (unsigned long long)(m->gc_pause_ns_total / 1000),
+    (unsigned long long)(m->gc_pause_ns_max / 1000),
+    m->gc_cycles > 0 ? (double)m->gc_pause_ns_total / m->gc_cycles / 1e6 : 0.0,
     (unsigned long long)m->gc_reclaimed_bytes,
     (unsigned long long)m->gc_allocated_bytes,
     m->gc_efficiency_pct,
@@ -282,8 +282,8 @@ char* valk_vm_metrics_to_prometheus(const valk_vm_metrics_t* m,
     "# TYPE valk_loop_idle_seconds_total counter\n"
     "valk_loop_idle_seconds_total %.6f\n",
     m->gc_cycles,
-    (double)m->gc_pause_us_total / 1e6,
-    (double)m->gc_pause_us_max / 1e6,
+    (double)m->gc_pause_ns_total / 1e9,
+    (double)m->gc_pause_ns_max / 1e9,
     m->gc_reclaimed_bytes,
     m->gc_heap_used,
     m->gc_heap_total,

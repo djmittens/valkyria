@@ -35,7 +35,7 @@ static void __system_init_coordinator(valk_system_t *sys) {
   }
 
   atomic_store(&sys->parallel_cycles, 0);
-  atomic_store(&sys->parallel_pause_us_total, 0);
+  atomic_store(&sys->parallel_pause_ns_total, 0);
 }
 
 // LCOV_EXCL_BR_START - system create/destroy defensive checks
@@ -309,6 +309,10 @@ void valk_gc_mark_queue_init(valk_gc_mark_queue_t* q) {
   valk_chase_lev_init(q, VALK_GC_MARK_QUEUE_INITIAL_SIZE);
 }
 
+void valk_gc_mark_queue_reset(valk_gc_mark_queue_t* q) {
+  valk_chase_lev_reset(q);
+}
+
 void valk_gc_mark_queue_destroy(valk_gc_mark_queue_t* q) {
   valk_chase_lev_destroy(q);
 }
@@ -475,35 +479,16 @@ u8 valk_gc_heap_usage_pct(valk_gc_heap_t* heap) {
 
 void valk_gc_set_thresholds(valk_gc_heap_t* heap,
                             u8 threshold_pct,
-                            u8 target_pct,
-                            u32 min_interval_ms) {
+                            u8 target_pct) {
   if (!heap) return;
   heap->gc_threshold_pct = threshold_pct > 0 ? threshold_pct : 75;
   heap->gc_target_pct = target_pct > 0 ? target_pct : 50;
-  heap->min_gc_interval_ms = min_interval_ms;
 }
 
-// LCOV_EXCL_BR_START - rate limiting branches depend on timing state
 bool valk_gc_should_collect(valk_gc_heap_t* heap) {
   if (!heap) return false;
-
-  sz committed = atomic_load(&heap->committed_bytes) +
-                 atomic_load(&heap->large_object_bytes);
-  u8 committed_pct = heap->hard_limit > 0
-    ? (u8)((committed * 100) / heap->hard_limit) : 0;
-
-  u8 usage_pct = valk_gc_heap_usage_pct(heap);
-  u8 pressure = committed_pct > usage_pct ? committed_pct : usage_pct;
-
-  if (pressure < heap->gc_threshold_pct) return false;
-  if (heap->min_gc_interval_ms > 0 && heap->last_gc_time_us > 0) {
-    u64 now_us = uv_hrtime() / 1000;
-    u64 elapsed_ms = (now_us - heap->last_gc_time_us) / 1000;
-    if (elapsed_ms < heap->min_gc_interval_ms) return false;
-  }
-  return true;
+  return valk_gc_heap_usage_pct(heap) >= heap->gc_threshold_pct;
 }
-// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Pointer Map - hashmap for src->dst tracking during evacuation
@@ -600,6 +585,7 @@ void valk_handle_table_init(valk_handle_table_t *table) {
   table->free_head = UINT32_MAX;
   table->slots = calloc(table->capacity, sizeof(valk_lval_t *));
   table->generations = calloc(table->capacity, sizeof(u32));
+  table->next_free = calloc(table->capacity, sizeof(u32));
 }
 
 void valk_handle_table_free(valk_handle_table_t *table) {
@@ -611,6 +597,10 @@ void valk_handle_table_free(valk_handle_table_t *table) {
   if (table->generations) {
     free(table->generations);
     table->generations = nullptr;
+  }
+  if (table->next_free) {
+    free(table->next_free);
+    table->next_free = nullptr;
   }
   table->capacity = 0;
   table->count = 0;
@@ -625,9 +615,10 @@ static void valk_handle_table_grow(valk_handle_table_t *table) {
 
   valk_lval_t **new_slots = realloc(table->slots, new_cap * sizeof(valk_lval_t *));
   u32 *new_gens = realloc(table->generations, new_cap * sizeof(u32));
+  u32 *new_free = realloc(table->next_free, new_cap * sizeof(u32));
 
   // LCOV_EXCL_BR_START - handle table realloc OOM
-  if (!new_slots || !new_gens) {
+  if (!new_slots || !new_gens || !new_free) {
     VALK_ERROR("Failed to grow handle table");
     return;
   }
@@ -635,10 +626,12 @@ static void valk_handle_table_grow(valk_handle_table_t *table) {
 
   table->slots = new_slots;
   table->generations = new_gens;
+  table->next_free = new_free;
 
   for (u32 i = old_cap; i < new_cap; i++) {
     table->slots[i] = nullptr;
     table->generations[i] = 0;
+    table->next_free[i] = 0;
   }
 
   table->capacity = new_cap;
@@ -650,7 +643,7 @@ valk_handle_t valk_handle_create(valk_handle_table_t *table, valk_lval_t *val) {
   u32 idx;
   if (table->free_head != UINT32_MAX) {
     idx = table->free_head;
-    table->free_head = (u32)(uptr)table->slots[idx];
+    table->free_head = table->next_free[idx];
   } else {
     if (table->count >= table->capacity) {
       valk_handle_table_grow(table);
@@ -679,7 +672,8 @@ valk_lval_t *valk_handle_resolve(valk_handle_table_t *table, valk_handle_t h) {
 void valk_handle_release(valk_handle_table_t *table, valk_handle_t h) {
   pthread_mutex_lock(&table->lock);
   if (h.index < table->capacity && table->generations[h.index] == h.generation) {
-    table->slots[h.index] = (valk_lval_t *)(uptr)table->free_head;
+    table->slots[h.index] = nullptr;
+    table->next_free[h.index] = table->free_head;
     table->free_head = h.index;
   }
   pthread_mutex_unlock(&table->lock);
@@ -692,7 +686,7 @@ void valk_handle_table_visit(valk_handle_table_t *table,
   pthread_mutex_lock(&table->lock);
   for (u32 i = 0; i < table->count; i++) {
     valk_lval_t *val = table->slots[i];
-    if (val != nullptr && ((uptr)val > table->capacity)) {
+    if (val != nullptr) {
       visitor(val, ctx);
     }
   }

@@ -25,6 +25,7 @@ typedef struct valk_chase_lev_deque {
 #define VALK_CHASE_LEV_ABORT ((void *)1)
 
 void valk_chase_lev_init(valk_chase_lev_deque_t *deque, int64_t initial_size);
+void valk_chase_lev_reset(valk_chase_lev_deque_t *deque);
 void valk_chase_lev_destroy(valk_chase_lev_deque_t *deque);
 
 void valk_chase_lev_push(valk_chase_lev_deque_t *deque, void *item);

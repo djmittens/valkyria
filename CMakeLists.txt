@@ -67,6 +67,7 @@ set (WITH_WOLFSSL off)
 add_subdirectory(vendor/nghttp2)
 
 pkg_check_modules(EDITLINE REQUIRED IMPORTED_TARGET libedit)
+pkg_check_modules(EXPAT REQUIRED IMPORTED_TARGET expat)
 
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -104,6 +105,7 @@ set(VALKYRIA_SOURCES
   src/builtins_stdio.c
   src/builtins_sqlite.c
   src/builtins_dict.c
+  src/builtins_xml.c
   src/memory.c
   src/slab.c
   src/memory_os.c
@@ -135,6 +137,7 @@ set(VALKYRIA_SOURCES
   src/aio/aio_comb_chain.c
   src/aio/aio_comb_collection.c
   src/aio/aio_comb_all.c
+  src/aio/aio_comb_pmap.c
   src/aio/aio_comb_race.c
   src/aio/aio_comb_any.c
   src/aio/aio_comb_all_settled.c
@@ -240,6 +243,7 @@ target_link_libraries(valkyria PRIVATE
   ${LIBUV_LIBRARIES}
   OpenSSL::SSL
   OpenSSL::Crypto
+  PkgConfig::EXPAT
   m
   dl
   pthread)

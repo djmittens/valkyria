@@ -64,6 +64,41 @@ static valk_lval_t* valk_builtin_gc_stats(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_nil();
 }
 
+static valk_lval_t* valk_builtin_gc_metrics(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
+  if (!heap) return valk_lval_nil();
+
+  u64 cycles, pause_total, pause_max;
+  sz reclaimed, used, total;
+  valk_gc_get_runtime_metrics(heap, &cycles, &pause_total, &pause_max,
+                              &reclaimed, &used, &total);
+
+  u64 p0, p1, p5, p10, p16;
+  valk_gc_get_pause_histogram(heap, &p0, &p1, &p5, &p10, &p16);
+
+  valk_lval_t *r = valk_lval_nil();
+
+#define KV(key, val) r = valk_lval_cons(valk_lval_sym(":" key), valk_lval_cons((val), r))
+
+  KV("pause-16ms+",    valk_lval_num((long)p16));
+  KV("pause-10-16ms",  valk_lval_num((long)p10));
+  KV("pause-5-10ms",   valk_lval_num((long)p5));
+  KV("pause-1-5ms",    valk_lval_num((long)p1));
+  KV("pause-0-1ms",    valk_lval_num((long)p0));
+  KV("heap-total",     valk_lval_num((long)total));
+  KV("heap-used",      valk_lval_num((long)used));
+  KV("reclaimed-bytes", valk_lval_num((long)reclaimed));
+  KV("pause-us-max",   valk_lval_num((long)pause_max));
+  KV("pause-us-total", valk_lval_num((long)pause_total));
+  KV("cycles",         valk_lval_num((long)cycles));
+
+#undef KV
+
+  return r;
+}
+
 static valk_lval_t* valk_builtin_gc_collect(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
@@ -131,29 +166,6 @@ static valk_lval_t* valk_builtin_gc_usage_pct(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(a);
   valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
   return valk_lval_num((long)valk_gc_heap_usage_pct(heap));
-}
-
-static valk_lval_t* valk_builtin_gc_min_interval(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  UNUSED(a);
-  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
-  return valk_lval_num((long)heap->min_gc_interval_ms);
-}
-
-static valk_lval_t* valk_builtin_set_gc_min_interval(valk_lenv_t* e,
-                                                      valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-
-  long new_ms = valk_lval_list_nth(a, 0)->num;
-  if (new_ms < 0) new_ms = 0;
-
-  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
-
-  u32 old_ms = heap->min_gc_interval_ms;
-  heap->min_gc_interval_ms = (u32)new_ms;
-  return valk_lval_num((long)old_ms);
 }
 
 static valk_lval_t* valk_builtin_set_log_level(valk_lenv_t* e, valk_lval_t* a) {
@@ -232,14 +244,12 @@ void valk_register_mem_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "mem/heap/set-hard-limit",
                         valk_builtin_set_heap_hard_limit);
   valk_lenv_put_builtin(env, "mem/gc/stats", valk_builtin_gc_stats);
+  valk_lenv_put_builtin(env, "mem/gc/metrics", valk_builtin_gc_metrics);
   valk_lenv_put_builtin(env, "mem/gc/collect", valk_builtin_gc_collect);
   valk_lenv_put_builtin(env, "mem/gc/threshold", valk_builtin_gc_threshold_pct);
   valk_lenv_put_builtin(env, "mem/gc/set-threshold",
                         valk_builtin_set_gc_threshold_pct);
   valk_lenv_put_builtin(env, "mem/gc/usage", valk_builtin_gc_usage_pct);
-  valk_lenv_put_builtin(env, "mem/gc/min-interval", valk_builtin_gc_min_interval);
-  valk_lenv_put_builtin(env, "mem/gc/set-min-interval",
-                        valk_builtin_set_gc_min_interval);
   valk_lenv_put_builtin(env, "mem/arena/usage", valk_builtin_arena_usage);
   valk_lenv_put_builtin(env, "mem/arena/capacity", valk_builtin_arena_capacity);
   valk_lenv_put_builtin(env, "mem/arena/high-water",

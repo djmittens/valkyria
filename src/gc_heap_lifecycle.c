@@ -20,6 +20,7 @@ valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
   heap->soft_limit = heap->hard_limit * 3 / 4;
   heap->gc_threshold_pct = 75;
 
+
   heap->reserved = VALK_GC_VIRTUAL_RESERVE;
   heap->base = mmap(nullptr, heap->reserved, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (heap->base == MAP_FAILED) {

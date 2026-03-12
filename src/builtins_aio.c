@@ -20,43 +20,34 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
   valk_aio_system_t* sys;
   valk_aio_system_config_t config = valk_aio_system_config_default();
 
-  // LCOV_EXCL_BR_START - config parsing: optional keys may be absent or wrong type
   if (argc >= 1 && LVAL_TYPE(valk_lval_list_nth(a, 0)) == LVAL_QEXPR) {
     valk_lval_t* config_map = valk_lval_list_nth(a, 0);
 
     valk_lval_t* val;
 
-    if ((val = valk_plist_get(config_map, ":max-connections")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.max_connections = (u32)val->num;
-
-    if ((val = valk_plist_get(config_map, ":max-concurrent-streams")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.max_concurrent_streams = (u32)val->num;
-
-    if ((val = valk_plist_get(config_map, ":tcp-buffer-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.tcp_buffer_pool_size = (u32)val->num;
-
-    if ((val = valk_plist_get(config_map, ":arena-pool-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.arena_pool_size = (u32)val->num;
-
-    if ((val = valk_plist_get(config_map, ":arena-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.arena_size = (u64)val->num;
-
-    if ((val = valk_plist_get(config_map, ":max-request-body-size")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.max_request_body_size = (u64)val->num;
-
-    if ((val = valk_plist_get(config_map, ":backpressure-timeout-ms")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.backpressure_timeout_ms = (u32)val->num;
-
-    if ((val = valk_plist_get(config_map, ":backpressure-list-max")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.backpressure_list_max = (u32)val->num;
-
-    if ((val = valk_plist_get(config_map, ":maintenance-interval-ms")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.maintenance_interval_ms = (u32)val->num;
-
-    if ((val = valk_plist_get(config_map, ":connection-idle-timeout-ms")) && LVAL_TYPE(val) == LVAL_NUM)
-      config.connection_idle_timeout_ms = (u32)val->num;
+#define AIO_CONFIG_NUM(key, field, cast)                                       \
+  if ((val = valk_plist_get(config_map, key))) {                               \
+    if (LVAL_TYPE(val) != LVAL_NUM)                                            \
+      return valk_lval_err(                                                    \
+          "aio/start: '%s' expected Number, got %s", key,                      \
+          valk_ltype_name(LVAL_TYPE(val)));                                    \
+    config.field = (cast)val->num;                                             \
   }
-  // LCOV_EXCL_BR_STOP
+
+    AIO_CONFIG_NUM(":max-connections", max_connections, u32)
+    AIO_CONFIG_NUM(":max-concurrent-streams", max_concurrent_streams, u32)
+    AIO_CONFIG_NUM(":tcp-buffer-pool-size", tcp_buffer_pool_size, u32)
+    AIO_CONFIG_NUM(":arena-pool-size", arena_pool_size, u32)
+    AIO_CONFIG_NUM(":arena-size", arena_size, u64)
+    AIO_CONFIG_NUM(":max-request-body-size", max_request_body_size, u64)
+    AIO_CONFIG_NUM(":backpressure-timeout-ms", backpressure_timeout_ms, u32)
+    AIO_CONFIG_NUM(":backpressure-list-max", backpressure_list_max, u32)
+    AIO_CONFIG_NUM(":maintenance-interval-ms", maintenance_interval_ms, u32)
+    AIO_CONFIG_NUM(":connection-idle-timeout-ms", connection_idle_timeout_ms, u32)
+    AIO_CONFIG_NUM(":num-threads", num_threads, u32)
+
+#undef AIO_CONFIG_NUM
+  }
 
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     sys = valk_aio_start_with_config(&config);
@@ -93,10 +84,13 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
     uv_sleep(100);
   }
 
-  if (!sys->threadJoined && // LCOV_EXCL_BR_LINE - shutdown guard: thread typically not yet joined
-      !valk_thread_equal(valk_thread_self(), (valk_thread_t)sys->loopThread)) {
-    uv_thread_join(&sys->loopThread);
-    sys->threadJoined = true;
+  for (u32 i = 0; i < sys->num_loops; i++) { // LCOV_EXCL_BR_LINE - shutdown guard
+    valk_aio_loop_t *loop = &sys->loops[i];
+    if (!loop->thread_joined &&
+        !valk_thread_equal(valk_thread_self(), (valk_thread_t)loop->thread)) {
+      uv_thread_join(&loop->thread);
+      loop->thread_joined = true;
+    }
   }
 
   return valk_lval_nil();
@@ -122,7 +116,13 @@ static valk_lval_t* valk_builtin_aio_on_loop_thread(valk_lenv_t* e, valk_lval_t*
   // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
-  bool on_loop = uv_thread_self() == sys->loopThread;
+  bool on_loop = false;
+  for (u32 i = 0; i < sys->num_loops; i++) {
+    if (uv_thread_self() == sys->loops[i].thread) {
+      on_loop = true;
+      break;
+    }
+  }
   return valk_lval_num(on_loop ? 1 : 0);
 }
 
