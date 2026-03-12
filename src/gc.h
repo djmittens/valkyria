@@ -64,7 +64,7 @@ void valk_gc_set_root(valk_gc_heap_t* heap, valk_lenv_t* root_env);
 bool valk_gc_should_collect(valk_gc_heap_t* heap);
 u8 valk_gc_heap_usage_pct(valk_gc_heap_t* heap);
 void valk_gc_set_thresholds(valk_gc_heap_t* heap,
-                            u8 threshold_pct, u8 target_pct, u32 min_interval_ms);
+                            u8 threshold_pct, u8 target_pct);
 void valk_gc_print_stats(valk_gc_heap_t* heap);
 void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_heap_t* heap, FILE* out);
 
@@ -73,8 +73,8 @@ void valk_memory_print_stats(valk_mem_arena_t* scratch, valk_gc_heap_t* heap, FI
 // ============================================================================
 
 void valk_gc_get_runtime_metrics(valk_gc_heap_t* heap,
-                                  u64* cycles, u64* pause_us_total,
-                                  u64* pause_us_max, sz* reclaimed,
+                                  u64* cycles, u64* pause_ns_total,
+                                  u64* pause_ns_max, sz* reclaimed,
                                   sz* heap_used, sz* heap_total);
 sz valk_gc_get_allocated_bytes_total(valk_gc_heap_t* heap);
 u8 valk_gc_get_last_efficiency(valk_gc_heap_t* heap);
@@ -344,7 +344,7 @@ typedef struct valk_system {
   valk_gc_thread_info_t threads[VALK_SYSTEM_MAX_THREADS];
 
   _Atomic u64 parallel_cycles;
-  _Atomic u64 parallel_pause_us_total;
+  _Atomic u64 parallel_pause_ns_total;
 
   pthread_mutex_t subsystems_lock;
   valk_subsystem_t subsystems[VALK_SYSTEM_MAX_SUBSYSTEMS];

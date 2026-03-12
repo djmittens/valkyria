@@ -428,12 +428,22 @@
 (= {results} (aio/await (aio/pmap aio (\ {suite} {
   (= {result} (run-one-suite suite))
   (write-junit result junit-dir)
-  (= {status} (if (plist/get result :passed) {"PASS"} {"FAIL"}))
+  (= {passed} (plist/get result :passed))
+  (= {status} (if passed {"PASS"} {"FAIL"}))
   (= {wall-s} (/ (plist/get result :wall-us) 1000000))
   (= {wall-frac} (/ (mod (plist/get result :wall-us) 1000000) 100000))
   (printf "[%ld/%ld] %s: %s (%ld.%lds)\n"
     (plist/get suite :idx) total-suites status (plist/get result :name) wall-s wall-frac)
-  result
+  ; Return trimmed result: drop stdout/tests (JUnit already written).
+  ; Keep stderr only for failed suites (print-summary needs it).
+  (list :name (plist/get result :name) :kind (plist/get result :kind)
+        :passed passed :exit-code (plist/get result :exit-code)
+        :wall-us (plist/get result :wall-us)
+        :test-count (plist/get result :test-count)
+        :test-passed (plist/get result :test-passed)
+        :test-failed (plist/get result :test-failed)
+        :test-skipped (plist/get result :test-skipped)
+        :stderr (if passed {""} {(plist/get result :stderr)}))
 }) indexed-suites)))
 (aio/stop aio)
 

@@ -103,10 +103,9 @@ void test_gc_set_thresholds(VALK_TEST_ARGS()) {
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
 
-  valk_gc_set_thresholds(heap, 80, 60, 500);
+  valk_gc_set_thresholds(heap, 80, 60);
   VALK_TEST_ASSERT(heap->gc_threshold_pct == 80, "threshold_pct should be 80");
   VALK_TEST_ASSERT(heap->gc_target_pct == 60, "target_pct should be 60");
-  VALK_TEST_ASSERT(heap->min_gc_interval_ms == 500, "min_interval should be 500");
 
   valk_gc_heap_destroy(heap);
 
@@ -295,10 +294,10 @@ void test_gc_thresholds_boundary(VALK_TEST_ARGS()) {
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
 
-  valk_gc_set_thresholds(heap, 1, 1, 0);
+  valk_gc_set_thresholds(heap, 1, 1);
   VALK_TEST_ASSERT(heap->gc_threshold_pct == 1, "threshold can be 1");
 
-  valk_gc_set_thresholds(heap, 100, 100, 0xFFFFFFFF);
+  valk_gc_set_thresholds(heap, 100, 100);
   VALK_TEST_ASSERT(heap->gc_threshold_pct == 100, "threshold can be 100");
 
   valk_gc_heap_destroy(heap);
@@ -309,7 +308,7 @@ void test_gc_thresholds_boundary(VALK_TEST_ARGS()) {
 void test_gc_set_thresholds_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_gc_set_thresholds(nullptr, 80, 60, 500);
+  valk_gc_set_thresholds(nullptr, 80, 60);
 
   VALK_PASS();
 }
@@ -319,10 +318,9 @@ void test_gc_set_thresholds_zero_defaults(VALK_TEST_ARGS()) {
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
 
-  valk_gc_set_thresholds(heap, 0, 0, 0);
+  valk_gc_set_thresholds(heap, 0, 0);
   VALK_TEST_ASSERT(heap->gc_threshold_pct == 75, "zero threshold should use default 75");
   VALK_TEST_ASSERT(heap->gc_target_pct == 50, "zero target should use default 50");
-  VALK_TEST_ASSERT(heap->min_gc_interval_ms == 0, "zero interval should be 0");
 
   valk_gc_heap_destroy(heap);
 
@@ -560,19 +558,17 @@ void test_gc_should_collect_rate_limiting(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
 
-  valk_gc_set_thresholds(heap, 1, 1, 10000);
+  valk_gc_set_thresholds(heap, 1, 1);
 
   for (int i = 0; i < 100; i++) {
     valk_gc_heap_alloc(heap, 1024);
   }
 
-  valk_gc_heap_collect(heap);
-
   bool should = valk_gc_should_collect(heap);
+  VALK_TEST_ASSERT(should == true, "should collect when above threshold");
 
   valk_gc_thread_unregister();
   valk_gc_heap_destroy(heap);
-  (void)should;
 
   VALK_PASS();
 }
@@ -582,7 +578,7 @@ void test_gc_should_collect_above_threshold(VALK_TEST_ARGS()) {
 
   valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
 
-  valk_gc_set_thresholds(heap, 1, 1, 0);
+  valk_gc_set_thresholds(heap, 1, 1);
 
   u8 usage = valk_gc_heap_usage_pct(heap);
   bool should = valk_gc_should_collect(heap);

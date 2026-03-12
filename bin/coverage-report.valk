@@ -7,11 +7,7 @@
 (load "src/prelude.valk")
 (load "bin/coverage_common.valk")
 
-; Tune GC for batch processing: high pacing multiplier means GC only triggers
-; when used bytes reach 8x the live set after the last collection. This script
-; generates ~3GB of temp strings but only ~50MB is live — pacing avoids the
-; ~127 useless GC cycles that otherwise waste ~15s on fragmented pages.
-(mem/gc/set-pacing 8)
+
 
 (def {MAX_COVERAGE_DIRS} 10)
 

@@ -6,7 +6,6 @@
 (load "src/prelude.valk")
 (load "bin/coverage_common.valk")
 
-(mem/gc/set-pacing 8)
 
 ; Requirements in tenths of percent
 (def {REQ_LINE} 900)

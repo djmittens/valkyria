@@ -359,8 +359,6 @@
 (sig 'mem/gc/usage {-> Num})
 ; GC collection threshold in bytes.
 (sig 'mem/gc/threshold {-> Num})
-; Minimum interval between GC runs in microseconds.
-(sig 'mem/gc/min-interval {-> Num})
 ; Force a garbage collection, returns bytes freed.
 (sig 'mem/gc/collect {-> Num})
 ; Print GC statistics.
@@ -371,12 +369,6 @@
 (sig 'mem/checkpoint/stats {-> (List Num)})
 ; Set GC collection threshold, returns old value.
 (sig 'mem/gc/set-threshold {-> Num Num})
-; Set minimum GC interval, returns old value.
-(sig 'mem/gc/set-min-interval {-> Num Num})
-; Set GC pacing multiplier, returns old value.
-(sig 'mem/gc/set-pacing {-> Num Num})
-; Get current GC pacing multiplier.
-(sig 'mem/gc/pacing {-> Num})
 ; Set heap hard limit, returns old value.
 (sig 'mem/heap/set-hard-limit {-> Num Num})
 

@@ -35,7 +35,7 @@ static void __system_init_coordinator(valk_system_t *sys) {
   }
 
   atomic_store(&sys->parallel_cycles, 0);
-  atomic_store(&sys->parallel_pause_us_total, 0);
+  atomic_store(&sys->parallel_pause_ns_total, 0);
 }
 
 // LCOV_EXCL_BR_START - system create/destroy defensive checks
@@ -479,43 +479,16 @@ u8 valk_gc_heap_usage_pct(valk_gc_heap_t* heap) {
 
 void valk_gc_set_thresholds(valk_gc_heap_t* heap,
                             u8 threshold_pct,
-                            u8 target_pct,
-                            u32 min_interval_ms) {
+                            u8 target_pct) {
   if (!heap) return;
   heap->gc_threshold_pct = threshold_pct > 0 ? threshold_pct : 75;
   heap->gc_target_pct = target_pct > 0 ? target_pct : 50;
-  heap->min_gc_interval_ms = min_interval_ms;
 }
 
-// LCOV_EXCL_BR_START - rate limiting branches depend on timing state
 bool valk_gc_should_collect(valk_gc_heap_t* heap) {
   if (!heap) return false;
-
-  sz committed = atomic_load(&heap->committed_bytes) +
-                 atomic_load(&heap->large_object_bytes);
-  u8 committed_pct = heap->hard_limit > 0
-    ? (u8)((committed * 100) / heap->hard_limit) : 0;
-
-  u8 usage_pct = valk_gc_heap_usage_pct(heap);
-  u8 pressure = committed_pct > usage_pct ? committed_pct : usage_pct;
-
-  if (pressure < heap->gc_threshold_pct) return false;
-
-  if (heap->gc_pacing_mul > 0 && heap->live_after_gc > 0) {
-    sz used = valk_gc_heap_used_bytes(heap);
-    sz pace = heap->live_after_gc * heap->gc_pacing_mul;
-    if (pace < 128 * 1024 * 1024) pace = 128 * 1024 * 1024;
-    if (used < pace) return false;
-  }
-
-  if (heap->min_gc_interval_ms > 0 && heap->last_gc_time_us > 0) {
-    u64 now_us = uv_hrtime() / 1000;
-    u64 elapsed_ms = (now_us - heap->last_gc_time_us) / 1000;
-    if (elapsed_ms < heap->min_gc_interval_ms) return false;
-  }
-  return true;
+  return valk_gc_heap_usage_pct(heap) >= heap->gc_threshold_pct;
 }
-// LCOV_EXCL_BR_STOP
 
 // ============================================================================
 // Pointer Map - hashmap for src->dst tracking during evacuation

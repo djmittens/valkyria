@@ -168,53 +168,6 @@ static valk_lval_t* valk_builtin_gc_usage_pct(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num((long)valk_gc_heap_usage_pct(heap));
 }
 
-static valk_lval_t* valk_builtin_gc_min_interval(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  UNUSED(a);
-  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
-  return valk_lval_num((long)heap->min_gc_interval_ms);
-}
-
-static valk_lval_t* valk_builtin_set_gc_min_interval(valk_lenv_t* e,
-                                                      valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-
-  long new_ms = valk_lval_list_nth(a, 0)->num;
-  if (new_ms < 0) new_ms = 0;
-
-  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
-
-  u32 old_ms = heap->min_gc_interval_ms;
-  heap->min_gc_interval_ms = (u32)new_ms;
-  return valk_lval_num((long)old_ms);
-}
-
-static valk_lval_t* valk_builtin_gc_pacing(valk_lenv_t* e, valk_lval_t* a) {
-  UNUSED(e);
-  UNUSED(a);
-  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
-  return valk_lval_num((long)heap->gc_pacing_mul);
-}
-
-static valk_lval_t* valk_builtin_set_gc_pacing(valk_lenv_t* e,
-                                                valk_lval_t* a) {
-  UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
-
-  long new_mul = valk_lval_list_nth(a, 0)->num;
-  if (new_mul < 0) new_mul = 0;
-  if (new_mul > 255) new_mul = 255;
-
-  valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
-
-  u8 old_mul = heap->gc_pacing_mul;
-  heap->gc_pacing_mul = (u8)new_mul;
-  return valk_lval_num((long)old_mul);
-}
-
 static valk_lval_t* valk_builtin_set_log_level(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -297,11 +250,6 @@ void valk_register_mem_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "mem/gc/set-threshold",
                         valk_builtin_set_gc_threshold_pct);
   valk_lenv_put_builtin(env, "mem/gc/usage", valk_builtin_gc_usage_pct);
-  valk_lenv_put_builtin(env, "mem/gc/min-interval", valk_builtin_gc_min_interval);
-  valk_lenv_put_builtin(env, "mem/gc/set-min-interval",
-                        valk_builtin_set_gc_min_interval);
-  valk_lenv_put_builtin(env, "mem/gc/pacing", valk_builtin_gc_pacing);
-  valk_lenv_put_builtin(env, "mem/gc/set-pacing", valk_builtin_set_gc_pacing);
   valk_lenv_put_builtin(env, "mem/arena/usage", valk_builtin_arena_usage);
   valk_lenv_put_builtin(env, "mem/arena/capacity", valk_builtin_arena_capacity);
   valk_lenv_put_builtin(env, "mem/arena/high-water",
