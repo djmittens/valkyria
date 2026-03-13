@@ -19,6 +19,14 @@ static bool env_has_name(const char *name, void *ctx) {
       if (strcmp(env->symbols.items[i], name) == 0) return true;
     env = env->parent;
   }
+  valk_type_env_t *tenv = valk_type_env_global();
+  if (valk_type_env_find_constructor(tenv, name)) return true;
+  for (u64 i = 0; i < tenv->constructor_count; i++) {
+    const char *full = tenv->constructors[i]->name;
+    const char *sep = strstr(full, "::");
+    if (sep && strcmp(sep + 2, name) == 0) return true;
+  }
+  if (valk_type_env_find_type(tenv, name)) return true;
   return false;
 }
 
