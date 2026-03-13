@@ -341,6 +341,7 @@ valk_lval_t *valk_lval_find_error(valk_lval_t *ast) {
     case LVAL_FUN:
     case LVAL_NUM:
     case LVAL_REF:
+    case LVAL_DICT:
     case LVAL_SYM:
     case LVAL_UNDEFINED:
     case LVAL_HANDLE:

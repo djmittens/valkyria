@@ -68,6 +68,7 @@ struct valk_lenv_t;
 typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
 typedef struct valk_async_handle_t valk_async_handle_t;  // Async handle (defined in aio_uv.c)
+typedef struct valk_dict_t valk_dict_t;  // Dict data (defined in dict.h)
 valk_lval_t *valk_parse_file(const char *filename);
 valk_lval_t *valk_parse_text(const char *text);
 
@@ -82,6 +83,7 @@ typedef enum {
   LVAL_CONS,   // Cons cell (list) - use LVAL_FLAG_QUOTED for {} vs () printing
   LVAL_ERR,
   LVAL_HANDLE,   // Async operation handle (cancellable promise)
+  LVAL_DICT,     // Dict (hash map) - first-class value type
 } valk_ltype_e;
 
 // LVAL_QEXPR is now an alias for LVAL_CONS (deprecated, use LVAL_CONS)
@@ -148,6 +150,9 @@ struct valk_lval_t {
     struct {
       valk_async_handle_t *handle;  // Pointer to the async handle struct
     } async;  // LVAL_HANDLE - async operation handle
+    struct {
+      valk_dict_t *data;
+    } dict;  // LVAL_DICT - hash map data
     long num;
     char *str;
   };
@@ -188,6 +193,9 @@ valk_lval_t *valk_lval_tail(valk_lval_t *cons);                     // Get tail 
 
 // Async handle constructor (implemented in aio_uv.c)
 valk_lval_t *valk_lval_handle(valk_async_handle_t *handle);
+
+// Dict constructor
+valk_lval_t *valk_lval_dict(valk_dict_t *data);
 
 //// END Constructors ////
 

@@ -1,6 +1,7 @@
 #include "builtins_internal.h"
 
 #include <fcntl.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -32,7 +33,7 @@ static void valk_capture_state_free(void *ptr) {
   if (s->saved_stderr >= 0) close(s->saved_stderr);
   if (s->capture_stdout >= 0) close(s->capture_stdout);
   if (s->capture_stderr >= 0) close(s->capture_stderr);
-  valk_mem_free(s);
+  free(s);
 }
 // LCOV_EXCL_STOP
 
@@ -65,7 +66,7 @@ static valk_lval_t *valk_builtin_capture_start(valk_lenv_t *e,
   dup2(fd_out, STDOUT_FILENO);
   dup2(fd_err, STDERR_FILENO);
 
-  valk_capture_state_t *state = valk_mem_alloc(sizeof(valk_capture_state_t));
+  valk_capture_state_t *state = malloc(sizeof(valk_capture_state_t));
   state->saved_stdout = saved_out;
   state->saved_stderr = saved_err;
   state->capture_stdout = fd_out;

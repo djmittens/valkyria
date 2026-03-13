@@ -1,4 +1,5 @@
 #include "builtins_internal.h"
+#include "dict.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -54,6 +55,9 @@ static void valk_lval_fprint_user(FILE *f, valk_lval_t* val) {
       break;
     case LVAL_REF:
       fprintf(f, "<ref:%s>", val->ref.type);
+      break;
+    case LVAL_DICT:
+      fprintf(f, "<dict:%u>", val->dict.data ? val->dict.data->count : 0);
       break;
     case LVAL_HANDLE:
       fprintf(f, "<handle>");

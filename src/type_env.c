@@ -464,7 +464,8 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_lval_t *expr) {
 
   // LCOV_EXCL_BR_START — FUN/REF/HANDLE are runtime-only types, never in pre-eval AST
   if (type == LVAL_NUM || type == LVAL_STR || type == LVAL_ERR ||
-      type == LVAL_FUN || type == LVAL_REF || type == LVAL_HANDLE) {
+      type == LVAL_FUN || type == LVAL_REF || type == LVAL_HANDLE ||
+      type == LVAL_DICT) {
     return expr;
   }
   // LCOV_EXCL_BR_STOP

@@ -38,7 +38,8 @@
 (fun {aio/debug-parse-param config param}
   {(= {kv} (str/split param "="))
    (if (== (len kv) 2)
-     {(= {k} (head kv))
+     {do
+      (= {k} (head kv))
       (= {v} (head (tail kv)))
       (select
         {(== k "slab") (plist/set config :slab v)}

@@ -219,8 +219,7 @@
     (def {result} (retry-backoff sys 1 1 (\ {} {
       (aio/fail "transient-error")
     })))
-    (aio/run sys 10)
-    (aio/stop sys)
+    (= {_} (aio/stop sys))
     true
   })
   (test "retry-backoff with n>0 and success returns immediately"

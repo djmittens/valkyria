@@ -139,7 +139,7 @@
 
         (= {cap} (test/capture-start))
         (= {start-time} (time-us {}))
-        (= {result} (eval test-body))
+        (= {result} ((\ {__body} {eval __body}) test-body))
         (= {end-time} (time-us {}))
         (= {elapsed} (- end-time start-time))
         (= {captured} (test/capture-stop cap))
@@ -209,7 +209,7 @@
 
         (= {cap} (test/capture-start))
         (= {start-time} (time-us {}))
-        (= {result} (eval test-body))
+        (= {result} ((\ {__body} {eval __body}) test-body))
         (= {end-time} (time-us {}))
         (= {elapsed} (- end-time start-time))
         (= {captured} (test/capture-stop cap))

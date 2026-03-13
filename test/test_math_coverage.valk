@@ -73,7 +73,7 @@
   (test "str->num-empty"
     {do
     (= {result} (str->num ""))
-    (test/assert (error? result) "empty string errors")
+    (test/assert-eq 0 result "empty string returns 0")
     true
   })
   (test "str->num-partial"
@@ -159,6 +159,25 @@
     {do
     (= {result} (rand 1 2 3))
     (test/assert (error? result) "rand with 3 args errors")
+    true
+  })
+  (test "modulo-basic"
+    {do
+    (test/assert-eq 1 (mod 10 3) "10 mod 3 = 1")
+    (test/assert-eq 0 (mod 9 3) "9 mod 3 = 0")
+    (test/assert-eq 2 (mod 7 5) "7 mod 5 = 2")
+    true
+  })
+  (test "modulo-by-zero"
+    {do
+    (= {result} (mod 10 0))
+    (test/assert (error? result) "modulo by zero errors")
+    true
+  })
+  (test "ord-string-vs-number"
+    {do
+    (= {result} (ord "hello" 42))
+    (test/assert (error? result) "ord string vs number errors")
     true
   })
 ) (test/context-new))

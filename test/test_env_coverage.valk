@@ -17,7 +17,7 @@
   })
   (test "def-shorthand"
     {do
-    (def test-env-sh 99)
+    (def {test-env-sh} 99)
     (test/assert-eq 99 test-env-sh "def shorthand binds")
     true
   })
@@ -36,14 +36,14 @@
   })
   (test "def-with-symbol-resolution"
     {do
-    (def test-env-src 77)
-    (def test-env-dst test-env-src)
+    (def {test-env-src} 77)
+    (def {test-env-dst} test-env-src)
     (test/assert-eq 77 test-env-dst "def resolves symbol value")
     true
   })
   (test "def-with-keyword"
     {do
-    (def test-env-kw :hello)
+    (def {test-env-kw} :hello)
     (test/assert-eq :hello test-env-kw "def with keyword preserves it")
     true
   })
@@ -98,10 +98,10 @@
   })
   (test "def-various-types"
     {do
-    (def test-env-num 42)
-    (def test-env-str "hello")
-    (def test-env-lst (list 1 2 3))
-    (def test-env-fn (\ {x} {x}))
+    (def {test-env-num} 42)
+    (def {test-env-str} "hello")
+    (def {test-env-lst} (list 1 2 3))
+    (def {test-env-fn} (\ {x} {x}))
     (test/assert-eq 42 test-env-num "def with number")
     (test/assert-eq "hello" test-env-str "def with string")
     (test/assert-eq 3 (len test-env-lst) "def with list")

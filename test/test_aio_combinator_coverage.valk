@@ -282,9 +282,17 @@
     (error? result)
   })
 
-  (test "sleep: arg validation - wrong type"
+  (test "sleep: arg validation - wrong type for sys"
     {do
     (= {result} (aio/sleep 42 100))
+    (error? result)
+  })
+
+  (test "sleep: arg validation - wrong type for ms"
+    {do
+    (= {sys} (aio/await (aio/start)))
+    (= {result} (aio/sleep sys "not-a-number"))
+    (aio/stop sys)
     (error? result)
   })
 
@@ -397,10 +405,9 @@
 
   (test-async "all-settled: cancelled child" (\ {} {
     (= {never-h} (aio/never aio))
-    (aio/cancel never-h)
-    (aio/await (aio/sleep aio 30))
     (= {h} (aio/all-settled (list (aio/pure 1) never-h (aio/fail "err"))))
-    (aio/then (aio/sleep aio 30) (\ {_} {
+    (aio/cancel never-h)
+    (aio/then (aio/sleep aio 100) (\ {_} {
       (== (aio/status h) :completed)
     }))
   }))
@@ -443,6 +450,11 @@
     (= {h} (aio/schedule aio 10 (\ {} {(error "schedule err")})))
     (= {caught} (aio/catch h (\ {e} {:caught})))
     (aio/then caught (\ {result} {true}))
+  }))
+
+  (test-async "on-loop-thread: returns true from event loop" (\ {} {
+    (= {h} (aio/schedule aio 1 (\ {} {(aio/on-loop-thread? aio)})))
+    (aio/then h (\ {result} {(== result 1)}))
   }))
 
 ) {:suite-name "AIO Combinator Coverage - Async Tests" :timeout-ms 5000})

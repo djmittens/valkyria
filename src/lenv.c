@@ -262,6 +262,8 @@ void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   while (env->parent) {
     env = env->parent;
   }
+  if (val && LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH)
+    val = valk_evacuate_to_heap(val);
   valk_lenv_put(env, key, val);
 }
 

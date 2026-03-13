@@ -296,7 +296,7 @@ coverage-reset:
 
 .PHONY: coverage-tests
 coverage-tests: build-coverage coverage-reset
-	$(TEST_RUN) --build-dir build-coverage --examples $(TEST_RUN_BASE)
+	$(TEST_RUN) --build-dir build-coverage --examples --no-stress $(TEST_RUN_BASE)
 
 .PHONY: coverage-report
 coverage-report: build

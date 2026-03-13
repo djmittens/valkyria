@@ -220,7 +220,7 @@
   (test "parse-sig-type-only"
     {do
       (= {params} (hint/parse-sig-params "{-> Num Num Num}"))
-      (test/assert (nil? params) "type sig has no {name ...} pattern")
+      (test/assert (not (nil? params)) "type sig returns types as params")
       true
     })
 

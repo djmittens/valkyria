@@ -1,4 +1,5 @@
 #include "parser.h"
+#include "dict.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -97,6 +98,8 @@ const char* valk_ltype_name(valk_ltype_e type) {
       return "Reference";
     case LVAL_HANDLE:
       return "Handle";
+    case LVAL_DICT:
+      return "Dict";
     case LVAL_UNDEFINED:
       return "UNDEFINED";
   }
@@ -122,6 +125,17 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   res->ref.evacuate = nullptr;
   res->ref.retain = nullptr;
 
+  return res;
+}
+
+valk_lval_t* valk_lval_dict(valk_dict_t* data) {
+  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  res->flags =
+      LVAL_DICT | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+  VALK_SET_ORIGIN_ALLOCATOR(res);
+  res->src_pos = -1;
+  LVAL_INIT_SOURCE_LOC(res);
+  res->dict.data = data;
   return res;
 }
 
@@ -534,6 +548,9 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     case LVAL_HANDLE:
       res->async.handle = lval->async.handle;
       break;
+    case LVAL_DICT:
+      res->dict.data = lval->dict.data;
+      break;
   }
   return res;
 }
@@ -576,6 +593,8 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
              valk_lval_eq(x->cons.tail, y->cons.tail);
     case LVAL_REF:
       return (x->ref.ptr == y->ref.ptr) && (x->ref.free == y->ref.free);
+    case LVAL_DICT:
+      return x->dict.data == y->dict.data;
     case LVAL_HANDLE:
       return x == y;
     // LCOV_EXCL_START - invariant violation, should never happen
@@ -728,6 +747,9 @@ void valk_lval_print(valk_lval_t* val) {
     }
     case LVAL_REF:
       printf("Reference[%s:%p]", val->ref.type, val->ref.ptr);
+      break;
+    case LVAL_DICT:
+      printf("<dict:%u>", val->dict.data ? val->dict.data->count : 0);
       break;
     case LVAL_HANDLE:
       printf("<handle>");

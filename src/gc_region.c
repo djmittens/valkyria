@@ -1,5 +1,6 @@
 #include "gc.h"
 #include "parser.h"
+#include "dict.h"
 #include "memory.h"
 #include "log.h"
 #include <stdlib.h>
@@ -275,6 +276,31 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
         if (copy->str) memcpy(copy->str, src->str, len); // LCOV_EXCL_BR_LINE - OOM
       }
       break;
+
+    // LCOV_EXCL_START - dict promotion requires dict allocated in region; only reachable via HTTP request handlers
+    case LVAL_DICT: {
+      valk_dict_t *d = src->dict.data;
+      if (d) {
+        u64 sz = dict_block_size(d->num_buckets, d->capacity, d->strings_cap);
+        valk_dict_t *nd = valk_region_alloc(target, sz);
+        if (nd) {
+          memcpy(nd, d, sz);
+          copy->dict.data = nd;
+          valk_dict_cell_t *cells = dict_cells(nd);
+          u32 *buckets = dict_buckets(nd);
+          for (u32 b = 0; b < nd->num_buckets; b++) {
+            u32 ci = buckets[b];
+            while (ci != DICT_EMPTY) {
+              if (cells[ci].value != nullptr)
+                cells[ci].value = region_copy_lval_recursive(target, cells[ci].value, copied);
+              ci = cells[ci].next;
+            }
+          }
+        }
+      }
+      break;
+    }
+    // LCOV_EXCL_STOP
 
     default:
       break;

@@ -246,7 +246,7 @@
 ; ---------------------------------------------------------------------------
 
 (fun {lsp/seed-file db path} {do
-  (= {path} (if (starts-with path "/") {path}
+  (= {path} (if (str/starts-with? path "/") {path}
                {str lsp/root-path "/" path}))
   (lsp/sync-file db path)
 })
@@ -534,7 +534,7 @@
   {do
     (= {s} (head snippets))
     (= {label} (plist/get s :label))
-    (if (starts-with label prefix)
+    (if (str/starts-with? label prefix)
       {qcons (make-snippet-item s) (filter-snippets prefix (tail snippets))}
       {filter-snippets prefix (tail snippets)})}
 })
@@ -573,7 +573,7 @@
         {do
           (= {word} (word-at-position text line col))
           (= {prefix} (if (nil? word) {""} {word}))
-          (= {snippet-items} (if (starts-with prefix ":")
+          (= {snippet-items} (if (str/starts-with? prefix ":")
             {nil}
             {if (== prefix "")
               {map make-snippet-item lsp/form-snippets}
@@ -897,7 +897,7 @@
         (= {lc} (offset->line-col text pos))
         (= {line} (head lc))
         (= {col} (head (tail lc)))
-        (= {full-path} (if (starts-with path "/") {path}
+        (= {full-path} (if (str/starts-with? path "/") {path}
           {str root "/" path}))
         (qcons (list :range (list
           :start (list :line line :character col)
@@ -1098,8 +1098,8 @@
 })
 
 (fun {ca/check-undefined msg d uri} {
-  if (not (starts-with msg "Symbol '")) {
-    if (not (starts-with msg "Function '")) {nil}
+  if (not (str/starts-with? msg "Symbol '")) {
+    if (not (str/starts-with? msg "Function '")) {nil}
     {ca/suggest-similar msg d uri}}
   {ca/suggest-similar msg d uri}
 })
@@ -1181,7 +1181,7 @@
 })
 
 (fun {lsp/count-quotes text limit pos count} {
-  if (>= pos limit) {== (% count 2) 1}
+  if (>= pos limit) {== (mod count 2) 1}
   {do
     (= {ch} (str/slice text pos (+ pos 1)))
     (if (== ch "\"")
@@ -1360,6 +1360,3 @@
   (lsp/loop 0 nil)
   (if (not (nil? lsp/db)) {symdb/close lsp/db} {})
   (stderr/write "[valk-lsp] shutdown\n")})
-
-; Entry point
-(lsp/main)

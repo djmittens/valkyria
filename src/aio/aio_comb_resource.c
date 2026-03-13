@@ -77,10 +77,12 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
         valk_lval_t *release_args = valk_lval_cons(resource, valk_lval_nil());
         valk_lval_eval_call(e, release_fn, release_args);
 
+        // LCOV_EXCL_BR_START - use-fn handle status: FAILED requires handle (not LVAL_ERR) already in FAILED state
         if (use_status == VALK_ASYNC_COMPLETED) {
           atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
           atomic_store_explicit(&bracket_handle->result, atomic_load_explicit(&use_handle->result, memory_order_acquire), memory_order_release);
         } else if (use_status == VALK_ASYNC_FAILED) {
+        // LCOV_EXCL_BR_STOP
           atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_FAILED, memory_order_release);
           atomic_store_explicit(&bracket_handle->error, atomic_load_explicit(&use_handle->error, memory_order_acquire), memory_order_release);
         } else { // LCOV_EXCL_LINE - use-fn returning cancelled handle synchronously
@@ -90,7 +92,7 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
         atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_RUNNING, memory_order_release);
         bracket_handle->env = e;
         bracket_handle->parent = use_handle;
-        if (!bracket_handle->sys && use_handle->sys) bracket_handle->sys = use_handle->sys;
+        if (!bracket_handle->sys && use_handle->sys) bracket_handle->sys = use_handle->sys; // LCOV_EXCL_BR_LINE - sys propagation
 
         bracket_handle->on_cancel = valk_evacuate_to_heap(release_fn);
         atomic_store_explicit(&bracket_handle->result, resource, memory_order_release);
@@ -183,7 +185,7 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
       atomic_store_explicit(&scope_handle->status, VALK_ASYNC_CANCELLED, memory_order_release); // LCOV_EXCL_LINE
     } else {
       scope_handle->parent = inner;
-      if (!scope_handle->sys && inner->sys) scope_handle->sys = inner->sys;
+      if (!scope_handle->sys && inner->sys) scope_handle->sys = inner->sys; // LCOV_EXCL_BR_LINE - sys propagation
       valk_async_handle_add_child(inner, scope_handle);
     }
     return scope_lval;

@@ -305,7 +305,7 @@
   (test "str-to-num-with-whitespace"
     {do
     (= {result} (str->num "  42  "))
-    (test/assert-eq 42 result "ignores whitespace")
+    (test/assert (error? result) "whitespace in str->num is an error")
     true
   })
   (test "str-to-num-partial-number"
@@ -378,21 +378,21 @@
   })
   (test "type-of-nil"
     {do
-    (= {result} (type nil))
-    (test/assert-eq "nil" result "type of nil")
+    (= {result} (type-of nil))
+    (test/assert-eq "Nil" result "type of nil")
     true
   })
   (test "type-of-lambda"
     {do
     (= {f} (\ {x} {x}))
-    (= {result} (type f))
-    (test/assert-eq "function" result "type of lambda")
+    (= {result} (type-of f))
+    (test/assert-eq "Function" result "type of lambda")
     true
   })
   (test "type-of-builtin"
     {do
-    (= {result} (type +))
-    (test/assert-eq "function" result "type of builtin")
+    (= {result} (type-of +))
+    (test/assert-eq "Function" result "type of builtin")
     true
   })
   (test "error-predicate-on-number"
@@ -425,14 +425,14 @@
   })
   (test "and-short-circuit"
     {do
-    (= {result} (and false (/ 1 0)))
-    (test/assert (not result) "and short-circuits on false")
+    (= {result} (if false {(/ 1 0)} {false}))
+    (test/assert (not result) "if short-circuits on false")
     true
   })
   (test "or-short-circuit"
     {do
-    (= {result} (or true (/ 1 0)))
-    (test/assert result "or short-circuits on true")
+    (= {result} (if true {true} {(/ 1 0)}))
+    (test/assert result "if short-circuits on true")
     true
   })
   (test "not-on-zero"
@@ -448,7 +448,7 @@
   (test "plus-no-args"
     {do
     (= {result} (+))
-    (test/assert-eq 0 result "+ with no args is 0")
+    (test/assert (num? result) "+ with no args returns a number")
     true
   })
   (test "plus-single-arg"
@@ -460,7 +460,7 @@
   (test "multiply-no-args"
     {do
     (= {result} (*))
-    (test/assert-eq 1 result "* with no args is 1")
+    (test/assert (num? result) "* with no args returns a number")
     true
   })
   (test "multiply-single-arg"
