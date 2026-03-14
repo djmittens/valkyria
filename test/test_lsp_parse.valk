@@ -41,7 +41,7 @@
     (load "src/lsp-validate.valk")
     (load "src/lsp-hints.valk")
     (load "src/lsp.valk")
-    (test/assert (not (nil? lsp/main)) "lsp/main should be defined after load")
+    (test/assert (not (nil? lsp/start)) "lsp/start should be defined after load")
     true
   })
 ))

@@ -106,6 +106,7 @@ set(VALKYRIA_SOURCES
   src/builtins_sqlite.c
   src/builtins_dict.c
   src/builtins_xml.c
+  src/builtins_pipe.c
   src/memory.c
   src/slab.c
   src/memory_os.c
@@ -417,6 +418,10 @@ include_directories(test_aio_uv_coverage src/)
 add_executable(test_aio_combinators test/test_aio_combinators.c test/testing.c)
 target_link_libraries(test_aio_combinators PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_aio_combinators src/)
+
+add_executable(test_pipe_builtins test/test_pipe_builtins.c test/testing.c)
+target_link_libraries(test_pipe_builtins PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_pipe_builtins src/)
 
 add_executable(test_aio_backpressure test/unit/test_aio_backpressure.c test/testing.c)
 target_link_libraries(test_aio_backpressure PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})

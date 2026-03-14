@@ -296,12 +296,12 @@ coverage-reset:
 
 .PHONY: coverage-tests
 coverage-tests: build-coverage coverage-reset
-	$(TEST_RUN) --build-dir build-coverage --examples --no-stress $(TEST_RUN_BASE)
+	VALK_HEAP_HARD_LIMIT=8589934592 $(TEST_RUN) --build-dir build-coverage --examples --no-stress $(TEST_RUN_BASE)
 
 .PHONY: coverage-report
 coverage-report: build
 	@echo "=== Generating unified coverage reports ==="
-	build/valk bin/coverage-report.valk -- \
+	VALK_HEAP_HARD_LIMIT=8589934592 build/valk bin/coverage-report.valk -- \
 		--build-dir build-coverage \
 		--source-root . \
 		--output coverage-report \

@@ -14,40 +14,16 @@
 (load "src/lsp-hints.valk")
 
 ; ---------------------------------------------------------------------------
-; Helpers
+; LSP I/O — Content-Length framing over uv_pipe_t
 ; ---------------------------------------------------------------------------
 
-(fun {strip-cr s} {str/replace (str/replace s "\r" "") "\n" ""})
-
-; ---------------------------------------------------------------------------
-; LSP I/O — Content-Length framing over stdin/stdout
-; ---------------------------------------------------------------------------
-
-(fun {lsp/read-content-length} {do
-  (= {line} (stdin/read-line))
-  (if (== line nil) {-1}
-    {if (<= (len line) 2) {-1}
-      {do
-        (= {parts} (str/split line ": "))
-        (if (< (len parts) 2) {-1}
-          {do
-            (= {val} (strip-cr (nth 2 parts)))
-            (= {next} (stdin/read-line))
-            (str->num val)})}})})
-
-(fun {lsp/read-message} {do
-  (= {content-length} (lsp/read-content-length))
-  (if (<= content-length 0) {nil}
-    {do
-      (= {body} (stdin/read-bytes content-length))
-      (if (error? body) {nil}
-        {json/parse body})})})
+(def {lsp/sys} nil)
+(def {lsp/out} nil)
+(def {lsp/initialized} 0)
 
 (fun {lsp/write-message json-body} {do
   (= {msg} (json/encode json-body))
-  (stdout/write (str "Content-Length: " (len msg) "\r\n\r\n"))
-  (stdout/write msg)
-  (stdout/flush)})
+  (pipe/write lsp/out (str "Content-Length: " (len msg) "\r\n\r\n" msg))})
 
 (fun {lsp/send-response id result}
   {lsp/write-message (list :jsonrpc "2.0" :id id :result result)})
@@ -310,26 +286,18 @@
   (stderr/write (str "[valk-lsp] found " (len files) " .valk files\n"))
   files})
 
-(fun {lsp/drain-scan db pending in-txn indexed} {
-  if (nil? pending) {do
-    (if (== in-txn 1) {sqlite/exec db "COMMIT"} {})
-    (if (> indexed 0)
-      {do (lsp/invalidate-known-set)
-          (lsp/progress-end lsp/progress-token (str "indexed " indexed " files"))
-          (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
-          (lsp/cleanup-stale-files)} {})
-    nil}
-  {if (stdin/has-data) {do
-    (if (== in-txn 1) {do (sqlite/exec db "COMMIT") {}} {})
-    (if (> indexed 0)
-      {do (lsp/invalidate-known-set)
-          (stderr/write (str "[valk-lsp] scan paused: " indexed " indexed, " (len pending) " remaining\n"))} {})
-    pending}
-  {do
-    (= {txn} (if (== in-txn 0) {do (sqlite/exec db "BEGIN") 1} {in-txn}))
-    (= {did} (lsp/index-file db (head pending)))
-    (lsp/drain-scan db (tail pending) txn (+ indexed did))}}
+(fun {lsp/scan-all-inner db files indexed} {
+  if (nil? files) {indexed}
+    {do
+      (= {did} (lsp/index-file db (head files)))
+      (lsp/scan-all-inner db (tail files) (+ indexed did))}
 })
+
+(fun {lsp/scan-all db files} {do
+  (sqlite/exec db "BEGIN")
+  (= {indexed} (lsp/scan-all-inner db files 0))
+  (sqlite/exec db "COMMIT")
+  indexed})
 
 (fun {handle-initialize id params} {do
   (= {root-uri} (plist/get params :rootUri))
@@ -359,10 +327,8 @@
     {do
       (= {text} (plist/get (head changes) :text))
       (lsp/doc-store uri text)
-      (if (not (stdin/has-data))
-        {do (lsp/sync-doc-text uri text)
-            (lsp/publish-diagnostics uri text)}
-        {})})})
+      (lsp/sync-doc-text uri text)
+      (lsp/publish-diagnostics uri text)})})
 
 (fun {handle-did-close params} {do
   (= {td} (plist/get params :textDocument))
@@ -1280,83 +1246,93 @@
 ; Dispatch
 ; ---------------------------------------------------------------------------
 
-(fun {lsp/dispatch msg initialized} {do
-  (= {method} (plist/get msg :method))
-  (= {id} (plist/get msg :id))
-  (= {params} (plist/get msg :params))
+(def {lsp/noop-cb} (\ {_} {}))
 
-  (if (nil? method) {:continue}
-    {do
-      (stderr/write (str "[valk-lsp] <- " method "\n"))
-      (match method
-        {"initialize" (handle-initialize id params) :initialized}
-        {"initialized" :scan}
-        {"shutdown" (lsp/send-response id (None)) :shutdown}
-        {"exit" :shutdown}
-        {_ (if (== initialized 0)
-             {do (if (num? id)
-                   {lsp/send-error id -32002 "Server not initialized"} {})
-                 :continue}
-             {lsp/dispatch-request method id params})})})})
+(fun {lsp/dispatch-to-worker method id params} {
+  aio/dispatch lsp/sys
+    (\ {_} {do (lsp/handle-readonly method id params) nil})
+    nil
+    lsp/noop-cb
+})
 
-(fun {lsp/dispatch-request method id params} {
+(fun {lsp/handle-readonly method id params} {
   match method
-    {"textDocument/didOpen" (handle-did-open params) :continue}
-    {"textDocument/didChange" (handle-did-change params) :continue}
-    {"textDocument/didClose" (handle-did-close params) :continue}
-    {"textDocument/didSave" (handle-did-save params) :continue}
-    {"textDocument/hover" (handle-hover id params) :continue}
-    {"textDocument/definition" (handle-definition id params) :continue}
-    {"textDocument/references" (handle-references id params) :continue}
-    {"textDocument/completion" (handle-completion id params) :continue}
-    {"textDocument/documentSymbol" (handle-document-symbols id params) :continue}
-    {"workspace/symbol" (handle-workspace-symbols id params) :continue}
-    {"textDocument/semanticTokens/full" (handle-semantic-tokens id params) :continue}
-    {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id params) :continue}
-    {"textDocument/prepareRename" (handle-prepare-rename id params) :continue}
-    {"textDocument/rename" (handle-rename id params) :continue}
-    {"textDocument/inlayHint" (handle-inlay-hints id params) :continue}
-    {"textDocument/signatureHelp" (handle-signature-help id params) :continue}
-    {"textDocument/documentHighlight" (handle-document-highlight id params) :continue}
-    {"textDocument/documentLink" (handle-document-link id params) :continue}
-    {"textDocument/foldingRange" (handle-folding-range id params) :continue}
-    {"textDocument/selectionRange" (handle-selection-range id params) :continue}
-    {"textDocument/codeLens" (handle-code-lens id params) :continue}
-    {"textDocument/codeAction" (handle-code-action id params) :continue}
-    {"$/cancelRequest" :continue}
+    {"textDocument/hover" (handle-hover id params)}
+    {"textDocument/definition" (handle-definition id params)}
+    {"textDocument/references" (handle-references id params)}
+    {"textDocument/completion" (handle-completion id params)}
+    {"textDocument/documentSymbol" (handle-document-symbols id params)}
+    {"workspace/symbol" (handle-workspace-symbols id params)}
+    {"textDocument/semanticTokens/full" (handle-semantic-tokens id params)}
+    {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id params)}
+    {"textDocument/prepareRename" (handle-prepare-rename id params)}
+    {"textDocument/rename" (handle-rename id params)}
+    {"textDocument/inlayHint" (handle-inlay-hints id params)}
+    {"textDocument/signatureHelp" (handle-signature-help id params)}
+    {"textDocument/documentHighlight" (handle-document-highlight id params)}
+    {"textDocument/documentLink" (handle-document-link id params)}
+    {"textDocument/foldingRange" (handle-folding-range id params)}
+    {"textDocument/selectionRange" (handle-selection-range id params)}
+    {"textDocument/codeLens" (handle-code-lens id params)}
+    {"textDocument/codeAction" (handle-code-action id params)}
     {_ (if (num? id)
-         {lsp/send-error id -32601 (str "Method not found: " method)} {})
-       :continue}
+         {lsp/send-error id -32601 (str "Method not found: " method)} {})}
 })
 
 ; ---------------------------------------------------------------------------
-; Main loop — processes messages, drains scan work between them
+; Event-driven main loop — pipe/lsp-reader delivers parsed messages
 ; ---------------------------------------------------------------------------
 
-(fun {lsp/loop initialized pending} {do
-  (= {pending} (if (nil? pending) {nil}
-    {if (nil? lsp/db) {nil}
-      {lsp/drain-scan lsp/db pending 0 0}}))
-  (= {msg} (lsp/read-message))
-  (if (== msg nil) {}
+(fun {lsp/on-message body} {do
+  (= {msg} (json/parse body))
+  (if (nil? msg) {}
     {do
-      (= {action} (lsp/dispatch msg initialized))
-      (if (== action :shutdown) {}
-      {if (== action :initialized)
-        {lsp/loop 1 nil}
-      {if (== action :scan)
-        {lsp/loop 1
-          (if (not (nil? lsp/db))
-            {do
-              (= {files} (lsp/collect-workspace-files lsp/root-path))
-              (= {tok} (lsp/next-progress-token))
-              (lsp/progress-begin tok "Indexing workspace" (len files))
-              files}
-            {nil})}
-        {lsp/loop initialized pending}}})})})
+      (= {method} (plist/get msg :method))
+      (= {id} (plist/get msg :id))
+      (= {params} (plist/get msg :params))
+      (if (nil? method) {}
+        {do
+          (stderr/write (str "[valk-lsp] <- " method "\n"))
+          (match method
+            {"initialize" (do (handle-initialize id params)
+                              (def {lsp/initialized} 1))}
+            {"initialized" (do
+              (if (not (nil? lsp/db))
+                {do
+                  (= {files} (lsp/collect-workspace-files lsp/root-path))
+                  (= {tok} (lsp/next-progress-token))
+                  (lsp/progress-begin tok "Indexing workspace" (len files))
+                  (aio/dispatch lsp/sys
+                    (\ {_} {lsp/scan-all lsp/db files})
+                    nil
+                    (\ {indexed} {do
+                      (lsp/invalidate-known-set)
+                      (lsp/progress-end tok (str "indexed " indexed " files"))
+                      (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
+                      (lsp/cleanup-stale-files)}))}
+                {}))}
+            {"shutdown" (do (lsp/send-response id (None))
+                            (aio/stop lsp/sys))}
+            {"exit" (aio/stop lsp/sys)}
+            {_ (if (== lsp/initialized 0)
+                 {if (num? id)
+                   {lsp/send-error id -32002 "Server not initialized"} {}}
+                 {match method
+                   {"textDocument/didOpen" (handle-did-open params)}
+                   {"textDocument/didChange" (handle-did-change params)}
+                   {"textDocument/didClose" (handle-did-close params)}
+                   {"textDocument/didSave" (handle-did-save params)}
+                   {"$/cancelRequest" {}}
+                   {_ (if (num? id)
+                        {lsp/dispatch-to-worker method id params}
+                        {})}})})})})})
 
-(fun {lsp/main} {do
-  (stderr/write "[valk-lsp] starting\n")
-  (lsp/loop 0 nil)
+(fun {lsp/start} {do
+  (stderr/write "[valk-lsp] starting (threaded)\n")
+  (def {lsp/sys} (aio/start {:num-threads 4}))
+  (= {stdin-pipe} (pipe/stdin-open lsp/sys))
+  (def {lsp/out} (pipe/stdout-open lsp/sys))
+  (pipe/lsp-reader stdin-pipe (\ {body} {lsp/on-message body}))
+  (aio/run lsp/sys)
   (if (not (nil? lsp/db)) {symdb/close lsp/db} {})
   (stderr/write "[valk-lsp] shutdown\n")})

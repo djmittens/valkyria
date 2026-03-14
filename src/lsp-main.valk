@@ -4,4 +4,4 @@
 (load "src/lsp-validate.valk")
 (load "src/lsp-hints.valk")
 (load "src/lsp.valk")
-(lsp/main)
+(lsp/start)
