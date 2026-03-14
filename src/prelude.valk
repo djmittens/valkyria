@@ -358,31 +358,21 @@
 
 ; Logics
 
-; Logical negation
+(sig 'not {-> Num Num})
 (fun {not x} {- 1 x})
 
-; x or y 
+(sig 'or {-> Num Num Num})
 (fun {or x y} {+ x y})
 
-; x and y
+(sig 'and {-> Num Num Num})
 (fun {and x y} {* x y})
 
 ; Higher-order function utilities
 
-; TODO(main): there is a bug where partial application doesnt work
-; definitely need to look into that. Also the error message is broken
-; valkyria> flip def
-; > 
-;   regex 
-;   expr|symbol|regex:1:1 'flip'
-;   expr|symbol|regex:1:6 'def'
-;   regex 
-; AST: Sexpr( Sym[flip] Sym[def] )
-; Result: Error[LEnv: Symbol `(null)` is not ]
-; Flip arguments of a function that  takes 2
+(sig 'flip {-> (-> A B C) B A C})
 (fun {flip f a b} {f b a})
 
-; Compose two functions such that (comp f g) == f(g(_))
+(sig 'comp {-> (-> B C) (-> A B) A C})
 (fun {comp f g x} {f (g x)})
 
 ; Coniditionals
