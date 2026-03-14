@@ -57,6 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 (def {SYMDB_VERSION} 2)
 
+(sig 'symdb/init {-> Str Ref})
 (fun {symdb/init path} {do
   (= {db} (sqlite/open path))
   (= {ver} (sqlite/query-value db "PRAGMA user_version"))
@@ -70,10 +71,12 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (sqlite/exec-script db symdb/schema-sql)
   db})
 
+(sig 'symdb/close {-> Ref Nil})
 (fun {symdb/close db} {sqlite/close db})
 
 ; === Helpers ===
 
+(sig 'uri->path {-> Str Str})
 (fun {uri->path uri} {
   if (< (len uri) 7) {uri}
     {if (== (str/slice uri 0 7) "file://")
@@ -81,12 +84,14 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       {uri}}
 })
 
+(sig 'clean-name {-> Str Str})
 (fun {clean-name s} {
   str/replace (str/replace (str/replace s "}" "") ")" "") "(" ""
 })
 
 ; === Doc comment extraction ===
 
+(sig 'strip-leading-spaces {-> Str Str})
 (fun {strip-leading-spaces s} {
   if (== (len s) 0) {s}
   {if (== (str/slice s 0 1) " ")
@@ -94,6 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
     {s}}
 })
 
+(sig 'strip-comment-prefix {-> Str Str})
 (fun {strip-comment-prefix s} {
   if (< (len s) 2) {""}
   {if (== (str/slice s 0 2) "; ")
@@ -103,6 +109,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
     {s}}}
 })
 
+(sig 'extract-doc-comment-walk {-> (List Str) Num (List Str) (List Str)})
 (fun {extract-doc-comment-walk lines idx acc} {
   if (< idx 0) {acc}
   {do
@@ -115,12 +122,14 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       {acc}})}
 })
 
+(sig 'extract-doc-comment {-> (List Str) Num Str})
 (fun {extract-doc-comment lines def-line} {do
   (= {comments} (extract-doc-comment-walk lines (- def-line 1) nil))
   (if (nil? comments) {nil}
     {str/join comments "\n"})
 })
 
+(sig 'append-all {-> List List List})
 (fun {append-all items acc} {
   if (nil? items) {acc}
     {append-all (tail items) (qcons (head items) acc)}
@@ -130,6 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 ; === Position utilities ===
 
+(sig 'pos-of-name {-> Str Str Num})
 (fun {pos-of-name text name} {do
   (= {idx} (str/index-of text name))
   (if (< idx 0) {{:line 0 :col 0}}
@@ -142,6 +152,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (list :line line :col col)})
 })
 
+(sig 'is-delim {-> Str Num})
 (fun {is-delim c} {
   if (== c " ") {1}
   {if (== c "(") {1}
@@ -157,6 +168,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   {0}}}}}}}}}}}
 })
 
+(sig 'scan-word-start {-> Str Num Num})
 (fun {scan-word-start s col} {
   if (<= col 0) {0}
     {do
@@ -165,6 +177,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
         {scan-word-start s (- col 1)})}
 })
 
+(sig 'scan-word-end {-> Str Num Num})
 (fun {scan-word-end s col} {
   if (>= col (len s)) {col}
     {do
@@ -173,6 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
         {scan-word-end s (+ col 1)})}
 })
 
+(sig 'word-at-position {-> Str Num Num Str})
 (fun {word-at-position text line col} {do
   (= {lines} (str/split text "\n"))
   (if (>= line (len lines)) {nil}
@@ -186,6 +200,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
             {str/slice target start end})})})
 })
 
+(sig 'word-range-at-position {-> Str Num Num List})
 (fun {word-range-at-position text line col} {do
   (= {lines} (str/split text "\n"))
   (if (>= line (len lines)) {nil}
@@ -201,17 +216,20 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 ; === Symbol extraction from AST ===
 
+(sig 'symdb/extract-symbols {-> Str List})
 (fun {symdb/extract-symbols text} {do
   (= {ast} (parse text))
   (if (error? ast) {nil}
     {symdb/extract-symbols-from-ast ast text})
 })
 
+(sig 'symdb/extract-symbols-from-ast {-> List Str List})
 (fun {symdb/extract-symbols-from-ast ast text} {do
   (= {lines} (str/split text "\n"))
   (reverse (symdb/walk-exprs ast text lines nil))
 })
 
+(sig 'symdb/walk-exprs {-> List Str (List Str) List List})
 (fun {symdb/walk-exprs exprs text lines acc} {
   if (nil? exprs) {acc}
     {do
@@ -220,6 +238,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
         (if (nil? syms) {acc} {append-all syms acc}))}
 })
 
+(sig 'symdb/extract-from-expr {-> Any Str (List Str) List})
 (fun {symdb/extract-from-expr expr text lines} {do
   (if (not (list? expr)) {nil}
     {if (nil? expr) {nil}
@@ -232,6 +251,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
         {nil}}}})}})
 })
 
+(sig 'symdb/extract-fun {-> List Str (List Str) List})
 (fun {symdb/extract-fun expr text lines} {do
   (= {binding} (head (tail expr)))
   (if (not (list? binding)) {nil}
@@ -249,6 +269,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
                   :sig (str "(fun " binding " ...)")))})
 })
 
+(sig 'symdb/count-params {-> List Num Num})
 (fun {symdb/count-params params n} {
   if (nil? params) {n}
     {do
@@ -259,6 +280,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
         {symdb/count-params (tail params) (+ n 1)}}})}
 })
 
+(sig 'symdb/extract-def {-> List Str (List Str) List})
 (fun {symdb/extract-def expr text lines} {do
   (= {binding} (head (tail expr)))
   (if (not (list? binding)) {nil}
@@ -273,6 +295,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
                   :doc doc-comment))})
 })
 
+(sig 'symdb/extract-type {-> List Str (List Str) List})
 (fun {symdb/extract-type expr text lines} {do
   (= {type-binding} (head (tail expr)))
   (if (not (list? type-binding)) {nil}
@@ -290,6 +313,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (join type-sym ctors)})
 })
 
+(sig 'symdb/extract-ctors {-> List Str Str List})
 (fun {symdb/extract-ctors variants text type-name} {
   if (nil? variants) {nil}
     {do
@@ -307,6 +331,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
           (join sym (symdb/extract-ctors (tail variants) text type-name))})}
 })
 
+(sig 'symdb/extract-sig {-> List Str (List Str) List})
 (fun {symdb/extract-sig expr text lines} {do
   (= {name-q} (head (tail expr)))
   (= {name} (if (list? name-q) {str (head name-q)} {str name-q}))
@@ -322,11 +347,13 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 ; === Reference extraction ===
 
+(sig 'symdb/extract-refs {-> Str List})
 (fun {symdb/extract-refs text} {do
   (= {ast} (parse text))
   (symdb/extract-refs-from-ast ast text)
 })
 
+(sig 'symdb/extract-refs-from-ast {-> List Str List})
 (fun {symdb/extract-refs-from-ast ast text} {do
   (= {raw} (symdb/collect-raw-refs ast nil))
   (if (nil? raw) {nil}
@@ -337,6 +364,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (symdb/zip-refs-lcs refs lcs nil)})
 })
 
+(sig 'symdb/zip-refs-lcs {-> List List List List})
 (fun {symdb/zip-refs-lcs refs lcs acc} {
   if (nil? refs) {reverse acc}
   {do
@@ -348,12 +376,14 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
                    :col (head (tail lc))) acc))}
 })
 
+(sig 'symdb/collect-raw-refs {-> List List List})
 (fun {symdb/collect-raw-refs exprs acc} {
   if (nil? exprs) {acc}
   {symdb/collect-raw-refs (tail exprs)
     (symdb/collect-raw-ref (head exprs) acc)}
 })
 
+(sig 'symdb/collect-raw-ref {-> Any List List})
 (fun {symdb/collect-raw-ref expr acc} {
   if (not (list? expr)) {
     if (not (sym? expr)) {acc}
@@ -375,6 +405,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       {symdb/collect-raw-ref-children expr acc}}}
 })
 
+(sig 'symdb/collect-raw-ref-children {-> List List List})
 (fun {symdb/collect-raw-ref-children expr acc} {
   if (nil? expr) {acc}
   {if (not (list? expr)) {acc}
@@ -384,6 +415,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 ; === Database operations ===
 
+(sig 'symdb/sync-document {-> Ref Str Str Nil})
 (fun {symdb/sync-document db uri text} {do
   (= {path} (uri->path uri))
   (= {hash} (file/fingerprint path))
@@ -400,6 +432,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
         (sqlite/exec db "COMMIT") 1})
 })
 
+(sig 'symdb/sync-file-symbols {-> Ref Str Str Str Nil})
 (fun {symdb/sync-file-symbols db uri text hash} {do
   (= {path} (uri->path uri))
   (= {ast} (parse text))
@@ -417,6 +450,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (symdb/insert-refs db file-id refs)})
 })
 
+(sig 'symdb/insert-symbols {-> Ref Num List Nil})
 (fun {symdb/insert-symbols db file-id syms} {
   if (nil? syms) {nil}
     {do
@@ -445,6 +479,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (symdb/insert-symbols db file-id (tail syms))}
 })
 
+(sig 'symdb/insert-refs {-> Ref Num List Nil})
 (fun {symdb/insert-refs db file-id refs} {
   if (nil? refs) {nil}
     {do
@@ -453,6 +488,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (sqlite/finalize stmt)}
 })
 
+(sig 'symdb/insert-refs-step {-> Ref Num List Nil})
 (fun {symdb/insert-refs-step stmt file-id refs} {
   if (nil? refs) {nil}
     {do
@@ -464,52 +500,61 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 ; === Query functions ===
 
+(sig 'symdb/find-definition {-> Ref Str Any})
 (fun {symdb/find-definition db name} {
   sqlite/query-maybe db
     "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.kind != 0 ORDER BY (CASE WHEN s.arity >= 0 THEN 0 ELSE 1 END), s.id LIMIT 1"
     name
 })
 
+(sig 'symdb/find-definitions {-> Ref Str List})
 (fun {symdb/find-definitions db name} {
   sqlite/query db
     "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 ORDER BY s.id"
     name
 })
 
+(sig 'symdb/file-symbols {-> Ref Str List})
 (fun {symdb/file-symbols db path} {
   sqlite/query db
     "SELECT s.name, s.line, s.col, s.kind, s.arity, s.doc FROM symbols s JOIN files f ON s.file_id=f.id WHERE f.path=?1 ORDER BY s.line, s.col"
     path
 })
 
+(sig 'symdb/search-symbols {-> Ref Str List})
 (fun {symdb/search-symbols db query} {
   sqlite/query db
     "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name LIKE ?1 ORDER BY s.name LIMIT 50"
     (str "%" query "%")
 })
 
+(sig 'symdb/all-symbol-names {-> Ref List})
 (fun {symdb/all-symbol-names db} {
   sqlite/query db
     "SELECT s.name, s.kind, s.doc, s.line, s.col, f.path FROM symbols s JOIN files f ON s.file_id=f.id GROUP BY s.name ORDER BY s.name LIMIT 200"
 })
 
+(sig 'symdb/completion-all {-> Ref List})
 (fun {symdb/completion-all db} {
   sqlite/query db
     "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc FROM symbols GROUP BY name ORDER BY name LIMIT 200"
 })
 
+(sig 'symdb/completion-symbols {-> Ref Str List})
 (fun {symdb/completion-symbols db prefix} {
   sqlite/query db
     "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc FROM symbols WHERE name LIKE ?1 GROUP BY name ORDER BY name LIMIT 100"
     (str prefix "%")
 })
 
+(sig 'symdb/find-refs {-> Ref Str List})
 (fun {symdb/find-refs db name} {
   sqlite/query db
     "SELECT r.line, r.col, f.path FROM refs r JOIN files f ON r.file_id=f.id WHERE r.name=?1 ORDER BY f.path, r.line, r.col"
     name
 })
 
+(sig 'symdb/symbol-hover {-> Ref Str Any})
 (fun {symdb/symbol-hover db name} {do
   (= {def-row} (sqlite/query-maybe db
     "SELECT s.name, s.kind, s.arity, s.doc, s.sig, f.path, s.line, s.col FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.line > 0 ORDER BY s.id LIMIT 1"
@@ -544,6 +589,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 ; === Reference counting ===
 
+(sig 'symdb/ref-count {-> Ref Str Num})
 (fun {symdb/ref-count db name} {
   sqlite/query-value db
     "SELECT COUNT(*) FROM refs WHERE name=?1" name
@@ -551,10 +597,12 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 ; === Stale file cleanup ===
 
+(sig 'symdb/all-indexed-paths {-> Ref List})
 (fun {symdb/all-indexed-paths db} {
   sqlite/query db "SELECT id, path FROM files"
 })
 
+(sig 'symdb/remove-file {-> Ref Num Nil})
 (fun {symdb/remove-file db file-id} {do
   (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
   (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
@@ -563,6 +611,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 
 ; === LSP helpers ===
 
+(sig 'symkind->lsp-kind {-> Num Num})
 (fun {symkind->lsp-kind kind} {
   if (== kind SYMKIND_FUNCTION) {LSP_SK_FUNCTION}
   {if (== kind SYMKIND_VARIABLE) {LSP_SK_VARIABLE}

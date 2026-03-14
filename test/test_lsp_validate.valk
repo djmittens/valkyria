@@ -339,9 +339,10 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {pt} (read-file "src/prelude.valk"))
       (= {_} (symdb/sync-document db "file:///prelude.valk" pt))
-      (= {code} "(fun {add-and-check x y} {do (= {sum} (+ x y)) (if (> sum 0) {str sum} {error \"negative\"})})")
+      (= {code} "(sig 'add-and-check {-> Num Num Str})\n(fun {add-and-check x y} {do (= {sum} (+ x y)) (if (> sum 0) {str sum} {error \"negative\"})})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
       (= {n} (diag-count-with-db db code))
-      (test/assert-eq 0 n "real code using builtins should produce 0 diagnostics")
+      (test/assert-eq 0 n "real code with sig should produce 0 diagnostics")
       (= {_} (sqlite/close db))
       true
     })
@@ -373,6 +374,290 @@
       (test/assert-eq 0
         (diag-count "(fun {f x & rest} {rest})")
         "& should be skipped, rest should be in scope")
+      true
+    })
+
+  ; --- sig type validation ---
+
+  (test "sig-valid-builtin-types"
+    {do
+      (test/assert-eq 0
+        (diag-count "(sig 'add {-> Num Num Num})")
+        "sig with known builtin types should produce 0 diagnostics")
+      true
+    })
+
+  (test "sig-all-builtins-valid"
+    {do
+      (test/assert-eq 0
+        (diag-count "(sig 'f {-> Num Str Nil Bool Err QExpr Fun Sym Ref Handle List Dict Never Any Num})")
+        "all builtin types should be valid")
+      true
+    })
+
+  (test "sig-unknown-type-flagged"
+    {do
+      (= {msgs} (diag-messages "(sig 'add {-> Nmu Num Num})"))
+      (test/assert-eq 1 (len msgs)
+        "sig with unknown type should produce 1 diagnostic")
+      (test/assert-eq "Type 'Nmu' is not defined" (head msgs)
+        "diagnostic should name the unknown type")
+      true
+    })
+
+  (test "sig-multiple-unknown-types"
+    {do
+      (= {msgs} (diag-messages "(sig 'bad {-> Nmu Strig Boo})"))
+      (test/assert-eq 3 (len msgs)
+        "sig with 3 unknown types should produce 3 diagnostics")
+      true
+    })
+
+  (test "sig-type-vars-not-flagged"
+    {do
+      (test/assert-eq 0
+        (diag-count "(sig 'id {-> A A})")
+        "single uppercase letters are type variables")
+      true
+    })
+
+  (test "sig-compound-types-validated"
+    {do
+      (test/assert-eq 0
+        (diag-count "(sig 'map {-> (-> A B) (List A) (List B)})")
+        "compound types with valid names should produce 0 diagnostics")
+      true
+    })
+
+  (test "sig-unknown-compound-type"
+    {do
+      (= {msgs} (diag-messages "(sig 'foo {-> (Lst A) A})"))
+      (test/assert-eq 1 (len msgs)
+        "unknown type in compound position should be flagged")
+      (test/assert-eq "Type 'Lst' is not defined" (head msgs)
+        "diagnostic should name the unknown compound type")
+      true
+    })
+
+  (test "sig-keywords-in-union-valid"
+    {do
+      (test/assert-eq 0
+        (diag-count "(sig 'status {-> Num (| :pending :running :done)})")
+        "keywords in union types should not be flagged")
+      true
+    })
+
+  (test "sig-user-type-from-ast"
+    {do
+      (test/assert-eq 0
+        (diag-count "(type {Color} {Red} {Green} {Blue})\n(sig 'paint {-> Color Nil})")
+        "types defined at top level should be recognized in sigs")
+      true
+    })
+
+  (test "sig-user-type-from-symdb"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {type-text} "(type {Velocity} {Velocity :x :y :z})")
+      (= {_} (symdb/sync-document db "file:///types.valk" type-text))
+      (= {code} "(sig 'get-vel {-> Str Velocity})")
+      (= {n} (diag-count-with-db db code))
+      (= {_} (sqlite/close db))
+      (test/assert-eq 0 n "types from symdb should be recognized in sigs")
+      true
+    })
+
+  (test "sig-lowercase-not-validated"
+    {do
+      (test/assert-eq 0
+        (diag-count "(sig 'server {-> (Ref http_server) Nil})")
+        "lowercase identifiers like ref subtypes are not validated")
+      true
+    })
+
+  (test "sig-wildcard-and-varargs"
+    {do
+      (test/assert-eq 0
+        (diag-count "(sig 'do {-> & _ A})")
+        "& and _ should be valid in sigs")
+      true
+    })
+
+  ; --- Type resolution diagnostics ---
+
+  (test "type-fun-with-sig-no-diag"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(sig 'add {-> Num Num Num})\n(fun {add a b} {+ a b})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {n} (diag-count-with-db db code))
+      (= {_} (sqlite/close db))
+      (test/assert-eq 0 n "function with sig should have no type diagnostics")
+      true
+    })
+
+  (test "type-fun-without-sig-flags-params"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(fun {add a b} {+ a b})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {msgs} (map (\{d} {plist/get d :message}) (vd/validate db (parse code) code)))
+      (= {_} (sqlite/close db))
+      (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
+      (test/assert-eq 2 (len type-msgs)
+        "function without sig should flag 2 params")
+      true
+    })
+
+  (test "type-param-with-annotation-not-flagged"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(fun {f x :: Num y} {+ x y})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {msgs} (map (\{d} {plist/get d :message}) (vd/validate db (parse code) code)))
+      (= {_} (sqlite/close db))
+      (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
+      (test/assert-eq 1 (len type-msgs)
+        "annotated param x should not be flagged, unannotated y should be")
+      true
+    })
+
+  (test "type-binding-literal-no-diag"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(sig 'f {-> Num})\n(fun {f} {do (= {x} 42) (= {y} \"hello\") (+ x (len y))})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {n} (diag-count-with-db db code))
+      (= {_} (sqlite/close db))
+      (test/assert-eq 0 n "bindings from literals should not be flagged")
+      true
+    })
+
+  (test "type-binding-sig-call-no-diag"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(sig 'f {-> Num})\n(fun {f} {do (= {x} (+ 1 2)) x})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {n} (diag-count-with-db db code))
+      (= {_} (sqlite/close db))
+      (test/assert-eq 0 n "binding from call with sig should not be flagged")
+      true
+    })
+
+  (test "type-binding-call-without-sig"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(sig 'f {-> Num})\n(fun {compute x} {x})\n(fun {f} {do (= {r} (compute 1)) r})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {msgs} (map (\{d} {plist/get d :message}) (vd/validate db (parse code) code)))
+      (= {_} (sqlite/close db))
+      (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
+      (test/assert (>= (len type-msgs) 2)
+        "should flag compute's param and r binding")
+      true
+    })
+
+  (test "type-binding-special-form-no-diag"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(sig 'f {-> Num Num})\n(fun {f x} {do (= {r} (if (> x 0) {x} {0})) r})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {n} (diag-count-with-db db code))
+      (= {_} (sqlite/close db))
+      (test/assert-eq 0 n "binding from special form (if) should not be flagged")
+      true
+    })
+
+  (test "type-binding-underscore-not-flagged"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(sig 'f {-> Num})\n(fun {compute x} {x})\n(fun {f} {do (= {_} (compute 1)) 42})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {msgs} (map (\{d} {plist/get d :message}) (vd/validate db (parse code) code)))
+      (= {_} (sqlite/close db))
+      (= {underscore-msgs} (filter (\{m} {str/starts-with? m "Type of '_'"}) msgs))
+      (test/assert-eq 0 (len underscore-msgs)
+        "_ binding should not be flagged for type resolution")
+      true
+    })
+
+  (test "type-no-db-no-diags"
+    {do
+      (test/assert-eq 0
+        (diag-count "(fun {f x y} {+ x y})")
+        "without db, no type resolution diagnostics")
+      true
+    })
+
+  (test "type-callable-param-no-diag"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(sig 'traverse {-> List (-> Num Num) Num})\n(fun {traverse l f} {do (= {r} (f (head l))) r})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {n} (diag-count-with-db db code))
+      (= {_} (sqlite/close db))
+      (test/assert-eq 0 n "calling a function-typed param should be inferrable")
+      true
+    })
+
+  (test "type-non-callable-param-flagged"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(sig 'process {-> Num Num Num})\n(fun {process x y} {do (= {r} (x 1)) r})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {msgs} (map (\{d} {plist/get d :message}) (vd/validate db (parse code) code)))
+      (= {_} (sqlite/close db))
+      (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
+      (test/assert (>= (len type-msgs) 1)
+        "calling a non-function-typed param should flag binding")
+      true
+    })
+
+  (test "type-callable-param-third-position"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(sig 'apply3 {-> Num Str (-> Str Num) Num})\n(fun {apply3 x s f} {do (= {r} (f s)) r})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {n} (diag-count-with-db db code))
+      (= {_} (sqlite/close db))
+      (test/assert-eq 0 n "function-typed param in third position should be inferrable")
+      true
+    })
+
+  (test "type-no-sig-params-untyped"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {bt} (read-file "src/builtins.valk"))
+      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
+      (= {code} "(fun {notype x f} {do (= {r} (f x)) r})")
+      (= {_} (symdb/sync-document db "file:///test.valk" code))
+      (= {msgs} (map (\{d} {plist/get d :message}) (vd/validate db (parse code) code)))
+      (= {_} (sqlite/close db))
+      (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
+      (test/assert (>= (len type-msgs) 3)
+        "without sig, all params and bindings should be flagged")
       true
     })
 

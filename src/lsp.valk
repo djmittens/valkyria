@@ -21,18 +21,22 @@
 (def {lsp/out} nil)
 (def {lsp/initialized} 0)
 
+(sig 'lsp/write-message {-> Str Nil})
 (fun {lsp/write-message json-body} {do
   (= {msg} (json/encode json-body))
   (pipe/write lsp/out (str "Content-Length: " (len msg) "\r\n\r\n" msg))})
 
+(sig 'lsp/send-response {-> Num Any Nil})
 (fun {lsp/send-response id result}
   {lsp/write-message (list :jsonrpc "2.0" :id id :result result)})
 
+(sig 'lsp/send-error {-> Num Num Str Nil})
 (fun {lsp/send-error id code message}
   {lsp/write-message
     (list :jsonrpc "2.0" :id id
           :error (list :code code :message message))})
 
+(sig 'lsp/send-notification {-> Str List Nil})
 (fun {lsp/send-notification method params}
   {lsp/write-message
     (list :jsonrpc "2.0" :method method :params params)})
@@ -46,23 +50,28 @@
 (def {lsp/root-path} nil)
 (def {lsp/doc-version} 0)
 
+(sig 'lsp/doc-store {-> Str Str Nil})
 (fun {lsp/doc-store uri text}
   {dict/set! lsp/documents uri text})
 
+(sig 'lsp/doc-get {-> Str Any})
 (fun {lsp/doc-get uri}
   {dict/get lsp/documents uri})
 
 (def {lsp/ast-cache} (dict/new))
 
+(sig 'lsp/cache-ast {-> Str Str List})
 (fun {lsp/cache-ast uri text} {do
   (= {ast} (parse text))
   (dict/set! lsp/ast-cache uri ast)
   ast})
 
+(sig 'lsp/get-ast {-> Str Str List})
 (fun {lsp/get-ast uri text} {do
   (= {cached} (dict/get lsp/ast-cache uri))
   (if (nil? cached) {parse text} {cached})})
 
+(sig 'lsp/get-doc {-> List List})
 (fun {lsp/get-doc params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -70,6 +79,7 @@
     (\ {text} {list :uri uri :text text :ast (lsp/get-ast uri text)}))
 })
 
+(sig 'lsp/get-text-pos {-> List List})
 (fun {lsp/get-text-pos params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -80,6 +90,7 @@
     (\ {text} {list :uri uri :text text :ast (lsp/get-ast uri text) :line line :col col}))
 })
 
+(sig 'lsp/get-word-ctx {-> List List})
 (fun {lsp/get-word-ctx params} {
   option/flat-map (lsp/get-text-pos params)
     (\ {ctx} {
@@ -135,10 +146,12 @@
 
 (def {lsp/known-set-cache} nil)
 
+(sig 'lsp/invalidate-known-set {-> Nil})
 (fun {lsp/invalidate-known-set} {
   def {lsp/known-set-cache} nil
 })
 
+(sig 'lsp/get-known-set {-> List})
 (fun {lsp/get-known-set} {
   if (nil? lsp/known-set-cache)
     {do (def {lsp/known-set-cache} (vd/load-known-set lsp/db))
@@ -150,6 +163,7 @@
 ; Diagnostic publishing
 ; ---------------------------------------------------------------------------
 
+(sig 'make-lsp-diag {-> List List})
 (fun {make-lsp-diag d}
   {list :range
     (list :start (list :line (plist/get d :line)
@@ -160,11 +174,13 @@
     :source "valk"
     :message (plist/get d :message)})
 
+(sig 'lsp/ensure-loads-indexed {-> List Nil})
 (fun {lsp/ensure-loads-indexed ast} {
   if (nil? lsp/db) {}
   {lsp/ensure-loads-walk ast}
 })
 
+(sig 'lsp/ensure-loads-walk {-> List Nil})
 (fun {lsp/ensure-loads-walk exprs} {
   if (nil? exprs) {}
   {do
@@ -183,6 +199,7 @@
     (lsp/ensure-loads-walk (tail exprs))}
 })
 
+(sig 'lsp/publish-diagnostics {-> Str Str Nil})
 (fun {lsp/publish-diagnostics uri text} {do
   (= {ast} (lsp/get-ast uri text))
   (if (error? ast)
@@ -205,12 +222,14 @@
 ; Sync document to symdb
 ; ---------------------------------------------------------------------------
 
+(sig 'lsp/sync-doc {-> Str Str Nil})
 (fun {lsp/sync-doc uri text} {do
   (lsp/doc-store uri text)
   (if (nil? lsp/db) {}
     {do (= {changed} (symdb/sync-document lsp/db uri text))
         (if (> changed 0) {lsp/invalidate-known-set} {})})})
 
+(sig 'lsp/sync-doc-text {-> Str Str Nil})
 (fun {lsp/sync-doc-text uri text} {do
   (if (nil? lsp/db) {}
     {do
@@ -233,12 +252,14 @@
 ; Method handlers — notifications
 ; ---------------------------------------------------------------------------
 
+(sig 'lsp/seed-file {-> Ref Str Num})
 (fun {lsp/seed-file db path} {do
   (= {path} (if (str/starts-with? path "/") {path}
                {str lsp/root-path "/" path}))
   (lsp/sync-file db path)
 })
 
+(sig 'lsp/seed-builtins {-> Ref Str Nil})
 (fun {lsp/seed-builtins db root} {do
   (= {builtins-path} (str root "/src/builtins.valk"))
   (= {b} (lsp/seed-file db builtins-path))
@@ -255,23 +276,27 @@
 (def {lsp/skip-dirs} (list "build" "vendor" "node_modules" "coverage-report"
                            "test-report" ".valk" ".git"))
 
+(sig 'lsp/skip-dir? {-> Str Num})
 (fun {lsp/skip-dir? name} {
   if (nil? lsp/skip-dirs) {0}
     {lsp/skip-dir-check name lsp/skip-dirs}
 })
 
+(sig 'lsp/skip-dir-check {-> Str List Num})
 (fun {lsp/skip-dir-check name dirs} {
   if (nil? dirs) {0}
     {if (== name (head dirs)) {1}
       {lsp/skip-dir-check name (tail dirs)}}
 })
 
+(sig 'lsp/scan-dir {-> Str List List})
 (fun {lsp/scan-dir root acc} {do
   (= {entries} (list-dir root))
   (if (error? entries) {acc}
     {lsp/scan-entries root entries acc})
 })
 
+(sig 'lsp/scan-entries {-> Str List List List})
 (fun {lsp/scan-entries root entries acc} {
   if (nil? entries) {acc}
     {do
@@ -288,16 +313,19 @@
       (lsp/scan-entries root (tail entries) acc)}
 })
 
+(sig 'lsp/index-file {-> Ref Str Num})
 (fun {lsp/index-file db path} {
   lsp/sync-file db path
 })
 
+(sig 'lsp/collect-workspace-files {-> Str List})
 (fun {lsp/collect-workspace-files root} {do
   (stderr/write (str "[valk-lsp] collecting workspace files: " root "\n"))
   (= {files} (lsp/scan-dir root nil))
   (stderr/write (str "[valk-lsp] found " (len files) " .valk files\n"))
   files})
 
+(sig 'lsp/scan-all-inner {-> Ref List Num Num})
 (fun {lsp/scan-all-inner db files indexed} {
   if (nil? files) {indexed}
     {do
@@ -305,12 +333,14 @@
       (lsp/scan-all-inner db (tail files) (+ indexed did))}
 })
 
+(sig 'lsp/scan-all {-> Ref List Num})
 (fun {lsp/scan-all db files} {do
   (sqlite/exec db "BEGIN")
   (= {indexed} (lsp/scan-all-inner db files 0))
   (sqlite/exec db "COMMIT")
   indexed})
 
+(sig 'handle-initialize {-> Num List Nil})
 (fun {handle-initialize id params} {do
   (= {root-uri} (plist/get params :rootUri))
   (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
@@ -324,6 +354,7 @@
     {})
   (lsp/send-response id lsp/capabilities)})
 
+(sig 'handle-did-open {-> List Nil})
 (fun {handle-did-open params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -336,6 +367,7 @@
                nil})
     nil lsp/noop-cb)})
 
+(sig 'handle-did-change {-> List Nil})
 (fun {handle-did-change params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -354,6 +386,7 @@
               nil}})
         nil lsp/noop-cb)})})
 
+(sig 'handle-did-close {-> List Nil})
 (fun {handle-did-close params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -362,6 +395,7 @@
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics nil))})
 
+(sig 'handle-did-save {-> List Nil})
 (fun {handle-did-save params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -379,6 +413,7 @@
 ; Method handlers — requests
 ; ---------------------------------------------------------------------------
 
+(sig 'hover/format-markdown {-> List Str Str})
 (fun {hover/format-markdown info word} {do
   (= {name} (plist/get info :name))
   (= {type-sig} (plist/get info :sig))
@@ -406,6 +441,7 @@
   (str/join (reverse sections) "\n\n---\n\n")
 })
 
+(sig 'handle-hover {-> Num List Nil})
 (fun {handle-hover id params} {
   match (lsp/get-word-ctx params)
     {(None) (lsp/send-response id (None))}
@@ -426,6 +462,7 @@
                 :end (list :line line :character (+ col (len word)))))))}
 })
 
+(sig 'handle-definition {-> Num List Nil})
 (fun {handle-definition id params} {do
   (= {result}
     (option/flat-map (lsp/get-word-ctx params) (\ {ctx} {
@@ -447,6 +484,7 @@
     {(None) (lsp/send-response id (None))}
     {(Some :value r) (lsp/send-response id r)})})
 
+(sig 'ref->lsp-location {-> Str Str List List})
 (fun {ref->lsp-location uri text r} {do
   (= {lc} (offset->line-col text (plist/get r :offset)))
   (= {rname} (plist/get r :name))
@@ -456,6 +494,7 @@
           :end (list :line (head lc) :character (+ (head (tail lc)) (len rname)))))
 })
 
+(sig 'handle-references {-> Num List Nil})
 (fun {handle-references id params} {
   match (lsp/get-word-ctx params)
     {(None) (lsp/send-response id nil)}
@@ -513,6 +552,7 @@
         :snippet "let {$1} $0" :sort "12")
 ))
 
+(sig 'make-snippet-item {-> List List})
 (fun {make-snippet-item s} {
   list :label (plist/get s :label)
        :kind 15
@@ -522,6 +562,7 @@
        :sortText (plist/get s :sort)
 })
 
+(sig 'filter-snippets {-> Str List List})
 (fun {filter-snippets prefix snippets} {
   if (nil? snippets) {nil}
   {do
@@ -532,6 +573,7 @@
       {filter-snippets prefix (tail snippets)})}
 })
 
+(sig 'symkind->completion-kind {-> Num Num})
 (fun {symkind->completion-kind kind} {
   if (== kind SYMKIND_FUNCTION) {3}
   {if (== kind SYMKIND_VARIABLE) {6}
@@ -540,6 +582,7 @@
     {6}}}}
 })
 
+(sig 'make-sym-completion-item {-> List List})
 (fun {make-sym-completion-item s} {do
   (= {name} (plist/get s :name))
   (= {kind} (plist/get s :kind))
@@ -554,6 +597,7 @@
     {plist/set item :documentation (list :kind "markdown" :value doc)})
 })
 
+(sig 'handle-completion {-> Num List Nil})
 (fun {handle-completion id params} {
   match (lsp/get-text-pos params)
     {(None) (lsp/send-response id nil)}
@@ -581,6 +625,7 @@
           (lsp/send-response id (list :isIncomplete :false :items all-items))}))}
 })
 
+(sig 'handle-document-symbols {-> Num List Nil})
 (fun {handle-document-symbols id params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -604,6 +649,7 @@
       }) syms))
       (lsp/send-response id lsp-syms)})})
 
+(sig 'handle-workspace-symbols {-> Num List Nil})
 (fun {handle-workspace-symbols id params} {do
   (= {query} (plist/get params :query))
   (if (nil? lsp/db) {lsp/send-response id nil}
@@ -628,6 +674,7 @@
       }) syms))
       (lsp/send-response id lsp-syms)})})
 
+(sig 'handle-semantic-tokens {-> Num List Nil})
 (fun {handle-semantic-tokens id params} {
   match (lsp/get-doc params)
     {(None) (lsp/send-response id (list :data nil))}
@@ -640,6 +687,7 @@
 ; Rename support
 ; ---------------------------------------------------------------------------
 
+(sig 'handle-prepare-rename {-> Num List Nil})
 (fun {handle-prepare-rename id params} {
   match (lsp/get-text-pos params)
     {(None) (lsp/send-error id -32602 "Document not found")}
@@ -656,6 +704,7 @@
           :placeholder (plist/get wr :word))}))}
 })
 
+(sig 'ref->lsp-edit {-> Str List Str List})
 (fun {ref->lsp-edit text r new-name} {do
   (= {lc} (offset->line-col text (plist/get r :offset)))
   (= {rlen} (plist/get r :len))
@@ -665,6 +714,7 @@
   :newText new-name)
 })
 
+(sig 'db-ref->lsp-edit {-> List Num Str List})
 (fun {db-ref->lsp-edit r word-len new-name} {
   list :range (list
     :start (list :line (plist/get r :line) :character (plist/get r :col))
@@ -672,6 +722,7 @@
   :newText new-name
 })
 
+(sig 'rename/group-by-uri {-> List List List})
 (fun {rename/group-by-uri locs acc} {
   if (nil? locs) {acc}
   {do
@@ -683,10 +734,12 @@
     (rename/group-by-uri (tail locs) (plist/set acc uri new-edits))}
 })
 
+(sig 'rename/make-doc-changes {-> List List})
 (fun {rename/make-doc-changes grouped} {
   rename/make-doc-changes-walk grouped nil
 })
 
+(sig 'rename/make-doc-changes-walk {-> List List List})
 (fun {rename/make-doc-changes-walk pairs acc} {
   if (nil? pairs) {acc}
   {do
@@ -697,6 +750,7 @@
     (rename/make-doc-changes-walk (tail (tail pairs)) (qcons doc-edit acc))}
 })
 
+(sig 'handle-rename {-> Num List Nil})
 (fun {handle-rename id params} {do
   (= {new-name} (plist/get params :newName))
   (match (lsp/get-word-ctx params)
@@ -738,6 +792,7 @@
 ; Inlay hints — parameter name hints for function calls
 ; ---------------------------------------------------------------------------
 
+(sig 'handle-inlay-hints {-> Num List Nil})
 (fun {handle-inlay-hints id params} {do
   (= {range} (plist/get params :range))
   (match (lsp/get-doc params)
@@ -751,6 +806,7 @@
 ; Signature help — show function signature as user types arguments
 ; ---------------------------------------------------------------------------
 
+(sig 'sig/scan-back {-> Str Num Num Num Any})
 (fun {sig/scan-back text pos dp db} {
   if (< pos 0) {nil}
   {do
@@ -769,6 +825,7 @@
       {sig/scan-back text (- pos 1) dp db}}}})}
 })
 
+(sig 'sig/extract-name {-> Str Num Any})
 (fun {sig/extract-name text open-pos} {do
   (= {start} (+ open-pos 1))
   (= {end} (scan-word-end text start))
@@ -776,6 +833,7 @@
     {str/slice text start end})
 })
 
+(sig 'sig/count-args {-> Str Num Num Num Num Num Num Num})
 (fun {sig/count-args text start end dp db count in-word} {
   if (>= start end) {count}
   {do
@@ -792,6 +850,7 @@
       {sig/count-args text (+ start 1) end dp db count in-word}}}}})}
 })
 
+(sig 'sig/lookup-params {-> Str List Any Any})
 (fun {sig/lookup-params name ast db} {do
   (= {local} (hint/collect-local-params ast))
   (= {params} (plist/get local name))
@@ -799,6 +858,7 @@
     {hint/query-db-params db name})
 })
 
+(sig 'handle-signature-help {-> Num List Nil})
 (fun {handle-signature-help id params} {do
   (= {result}
     (option/flat-map (lsp/get-text-pos params) (\ {ctx} {do
@@ -832,6 +892,7 @@
 ; Document highlight — highlight all occurrences of symbol under cursor
 ; ---------------------------------------------------------------------------
 
+(sig 'ref->highlight {-> Str List List})
 (fun {ref->highlight text r} {do
   (= {lc} (offset->line-col text (plist/get r :offset)))
   (= {rname} (plist/get r :name))
@@ -842,6 +903,7 @@
   :kind kind)
 })
 
+(sig 'handle-document-highlight {-> Num List Nil})
 (fun {handle-document-highlight id params} {
   match (lsp/get-word-ctx params)
     {(None) (lsp/send-response id nil)}
@@ -861,22 +923,26 @@
 ; Document links — make (load "path") clickable
 ; ---------------------------------------------------------------------------
 
+(sig 'link/collect-loads {-> List Str Str List})
 (fun {link/collect-loads ast text root} {
   link/walk-exprs ast text root nil
 })
 
+(sig 'link/walk-exprs {-> List Str Str List List})
 (fun {link/walk-exprs exprs text root acc} {
   if (nil? exprs) {acc}
   {link/walk-exprs (tail exprs) text root
     (link/walk-one (head exprs) text root acc)}
 })
 
+(sig 'link/walk-one {-> Any Str Str List List})
 (fun {link/walk-one expr text root acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
   {link/check-load expr (head expr) (tail expr) text root acc}}
 })
 
+(sig 'link/check-load {-> List Any List Str Str List List})
 (fun {link/check-load expr hd tl text root acc} {
   if (not (sym? hd)) {acc}
   {if (not (== (str hd) "load")) {link/walk-exprs tl text root acc}
@@ -884,6 +950,7 @@
   {link/extract-load-target (head tl) text root acc}}}
 })
 
+(sig 'link/extract-load-target {-> Any Str Str List List})
 (fun {link/extract-load-target target text root acc} {
   if (not (str? target)) {acc}
   {do
@@ -902,6 +969,7 @@
           :target (str "file://" full-path)) acc)})}
 })
 
+(sig 'handle-document-link {-> Num List Nil})
 (fun {handle-document-link id params} {
   match (lsp/get-doc params)
     {(None) (lsp/send-response id nil)}
@@ -922,22 +990,26 @@
   (dict/from-keys {"fun" "do" "match" "select" "case" "type" "let" "\\"
    "aio/do" "aio/let" "if" "ctx/with" "ctx/with-deadline"}))
 
+(sig 'fold/collect {-> List Str List})
 (fun {fold/collect ast text} {
   fold/walk-exprs ast text nil
 })
 
+(sig 'fold/walk-exprs {-> List Str List List})
 (fun {fold/walk-exprs exprs text acc} {
   if (nil? exprs) {acc}
   {fold/walk-exprs (tail exprs) text
     (fold/walk-one (head exprs) text acc)}
 })
 
+(sig 'fold/walk-one {-> Any Str List List})
 (fun {fold/walk-one expr text acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
   {fold/check-form expr (head expr) (tail expr) text acc}}
 })
 
+(sig 'fold/check-form {-> List Any List Str List List})
 (fun {fold/check-form expr hd tl text acc} {do
   (= {acc2} (fold/walk-exprs tl text acc))
   (if (not (sym? hd)) {fold/walk-exprs tl text acc}
@@ -946,6 +1018,7 @@
       {fold/walk-exprs tl text acc}})
 })
 
+(sig 'fold/emit-range {-> List Str List List})
 (fun {fold/emit-range expr text acc} {do
   (= {start-pos} (src-pos expr))
   (if (< start-pos 0) {acc}
@@ -962,6 +1035,7 @@
                      :kind "region") acc})})
 })
 
+(sig 'handle-folding-range {-> Num List Nil})
 (fun {handle-folding-range id params} {
   match (lsp/get-doc params)
     {(None) (lsp/send-response id nil)}
@@ -975,6 +1049,7 @@
 ; Selection range — smart selection expansion using AST structure
 ; ---------------------------------------------------------------------------
 
+(sig 'sel/find-ranges {-> Str List List List})
 (fun {sel/find-ranges text ast positions} {
   map (\ {pos} {do
     (= {line} (plist/get pos :line))
@@ -988,12 +1063,14 @@
   }) positions
 })
 
+(sig 'sel/collect-enclosing {-> List Str Num List List})
 (fun {sel/collect-enclosing exprs text offset acc} {
   if (nil? exprs) {acc}
   {sel/collect-enclosing (tail exprs) text offset
     (sel/check-one (head exprs) text offset acc)}
 })
 
+(sig 'sel/check-one {-> Any Str Num List List})
 (fun {sel/check-one expr text offset acc} {
   if (not (list? expr)) {acc}
   {do
@@ -1012,12 +1089,14 @@
           {acc})})}
 })
 
+(sig 'sel/build-nested {-> List List})
 (fun {sel/build-nested ranges} {
   if (nil? ranges) {list :range (list :start (list :line 0 :character 0)
                                        :end (list :line 0 :character 0))}
   {sel/build-nested-walk ranges}
 })
 
+(sig 'sel/build-nested-walk {-> List List})
 (fun {sel/build-nested-walk ranges} {
   if (nil? ranges) {nil}
   {if (nil? (tail ranges))
@@ -1026,6 +1105,7 @@
           :parent (sel/build-nested-walk (tail ranges))}}
 })
 
+(sig 'handle-selection-range {-> Num List Nil})
 (fun {handle-selection-range id params} {do
   (= {positions} (plist/get params :positions))
   (match (lsp/get-doc params)
@@ -1038,6 +1118,7 @@
 ; Code lens — show reference counts above function definitions
 ; ---------------------------------------------------------------------------
 
+(sig 'handle-code-lens {-> Num List Nil})
 (fun {handle-code-lens id params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -1048,6 +1129,7 @@
       (= {lenses} (lens/build-from-syms syms lsp/db))
       (lsp/send-response id lenses)})})
 
+(sig 'lens/build-from-syms {-> List Ref List})
 (fun {lens/build-from-syms syms db} {
   if (nil? syms) {nil}
   {do
@@ -1072,6 +1154,7 @@
 ; Code action — quick fixes for undefined symbols
 ; ---------------------------------------------------------------------------
 
+(sig 'handle-code-action {-> Num List Nil})
 (fun {handle-code-action id params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
@@ -1082,6 +1165,7 @@
       (= {actions} (ca/collect-actions diagnostics uri))
       (lsp/send-response id actions)})})
 
+(sig 'ca/collect-actions {-> List Str List})
 (fun {ca/collect-actions diags uri} {
   if (nil? diags) {nil}
   {do
@@ -1092,6 +1176,7 @@
     (join actions (ca/collect-actions (tail diags) uri))}
 })
 
+(sig 'ca/check-undefined {-> Str List Str List})
 (fun {ca/check-undefined msg d uri} {
   if (not (str/starts-with? msg "Symbol '")) {
     if (not (str/starts-with? msg "Function '")) {nil}
@@ -1099,12 +1184,14 @@
   {ca/suggest-similar msg d uri}
 })
 
+(sig 'ca/extract-name-from-msg {-> Str Any})
 (fun {ca/extract-name-from-msg msg} {do
   (= {parts} (str/split msg "'"))
   (if (< (len parts) 3) {nil}
     {nth 2 parts})
 })
 
+(sig 'ca/suggest-similar {-> Str List Str List})
 (fun {ca/suggest-similar msg d uri} {
   if (nil? lsp/db) {nil}
   {do
@@ -1116,6 +1203,7 @@
         (ca/make-fix-actions candidates name range uri d)})}
 })
 
+(sig 'ca/make-fix-actions {-> List Str List Str List List})
 (fun {ca/make-fix-actions candidates original range uri d} {
   if (nil? candidates) {nil}
   {do
@@ -1135,6 +1223,7 @@
 ; Semantic tokens range — tokens for visible viewport only
 ; ---------------------------------------------------------------------------
 
+(sig 'handle-semantic-tokens-range {-> Num List Nil})
 (fun {handle-semantic-tokens-range id params} {do
   (= {range} (plist/get params :range))
   (match (lsp/get-doc params)
@@ -1148,6 +1237,7 @@
       (lsp/send-response id (list :data filtered)))})
 })
 
+(sig 'sem/filter-range {-> List Num Num Num List List})
 (fun {sem/filter-range tokens start-line end-line cur-line acc} {
   if (nil? tokens) {reverse acc}
   {if (< (len tokens) 5) {reverse acc}
@@ -1170,11 +1260,13 @@
 ; Completion context filtering
 ; ---------------------------------------------------------------------------
 
+(sig 'lsp/in-string? {-> Str Num Num Num})
 (fun {lsp/in-string? text line col} {do
   (= {offset} (line-col->offset text line col))
   (lsp/count-quotes text offset 0 0)
 })
 
+(sig 'lsp/count-quotes {-> Str Num Num Num Num})
 (fun {lsp/count-quotes text limit pos count} {
   if (>= pos limit) {== (mod count 2) 1}
   {do
@@ -1190,6 +1282,7 @@
 ; Stale file cleanup
 ; ---------------------------------------------------------------------------
 
+(sig 'lsp/cleanup-stale-files {-> Nil})
 (fun {lsp/cleanup-stale-files} {
   if (nil? lsp/db) {}
   {do
@@ -1201,6 +1294,7 @@
       {})}
 })
 
+(sig 'lsp/check-stale-files {-> List Num Num})
 (fun {lsp/check-stale-files files count} {
   if (nil? files) {count}
   {do
@@ -1218,6 +1312,7 @@
 ; Unified file sync helper
 ; ---------------------------------------------------------------------------
 
+(sig 'lsp/sync-file {-> Ref Str Num})
 (fun {lsp/sync-file db path} {do
   (= {fp} (file/fingerprint path))
   (if (error? fp) {0}
@@ -1243,11 +1338,13 @@
 
 (def {lsp/progress-token} 0)
 
+(sig 'lsp/next-progress-token {-> Num})
 (fun {lsp/next-progress-token} {do
   (def {lsp/progress-token} (+ lsp/progress-token 1))
   lsp/progress-token
 })
 
+(sig 'lsp/progress-begin {-> Num Str Num Nil})
 (fun {lsp/progress-begin token title total} {do
   (lsp/send-notification "$/progress"
     (list :token token
@@ -1256,6 +1353,7 @@
                        :percentage 0)))
 })
 
+(sig 'lsp/progress-report {-> Num Str Num Nil})
 (fun {lsp/progress-report token message pct} {do
   (lsp/send-notification "$/progress"
     (list :token token
@@ -1264,6 +1362,7 @@
                        :percentage pct)))
 })
 
+(sig 'lsp/progress-end {-> Num Str Nil})
 (fun {lsp/progress-end token message} {do
   (lsp/send-notification "$/progress"
     (list :token token
@@ -1279,6 +1378,7 @@
 (def {lsp/sem-version} 0)
 (def {lsp/comp-version} 0)
 
+(sig 'lsp/dispatch-to-worker {-> Str Any List Nil})
 (fun {lsp/dispatch-to-worker method id params} {
   aio/dispatch lsp/sys
     (\ {_} {do (lsp/handle-readonly method id params) nil})
@@ -1286,6 +1386,7 @@
     lsp/noop-cb
 })
 
+(sig 'lsp/dispatch-request {-> Str Any List Nil})
 (fun {lsp/dispatch-request method id params} {
   match method
     {"textDocument/semanticTokens/full" (do
@@ -1315,6 +1416,7 @@
     {_ (lsp/dispatch-to-worker method id params)}
 })
 
+(sig 'lsp/handle-readonly {-> Str Any List Nil})
 (fun {lsp/handle-readonly method id params} {
   match method
     {"textDocument/hover" (handle-hover id params)}
@@ -1343,6 +1445,7 @@
 ; Event-driven main loop — pipe/lsp-reader delivers parsed messages
 ; ---------------------------------------------------------------------------
 
+(sig 'lsp/on-message {-> Str Nil})
 (fun {lsp/on-message body} {do
   (= {msg} (json/parse body))
   (if (nil? msg) {}
@@ -1385,6 +1488,7 @@
                          {lsp/dispatch-request method id params}
                                                  {})}})}})})})
 
+(sig 'lsp/start {-> Nil})
 (fun {lsp/start} {do
   (stderr/write "[valk-lsp] starting (threaded)\n")
   (def {lsp/sys} (aio/await (aio/start {:num-threads 4})))

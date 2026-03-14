@@ -21,22 +21,26 @@
 ; Returns plist mapping function-name -> param-names-list
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/collect-local-params {-> List List})
 (fun {hint/collect-local-params ast} {
   hint/params-walk ast nil
 })
 
+(sig 'hint/params-walk {-> List List List})
 (fun {hint/params-walk exprs params} {
   if (nil? exprs) {params}
   {hint/params-walk (tail exprs)
     (hint/params-one (head exprs) params)}
 })
 
+(sig 'hint/params-one {-> Any List List})
 (fun {hint/params-one expr params} {
   if (not (list? expr)) {params}
   {if (nil? expr) {params}
   {hint/params-dispatch (head expr) (tail expr) params}}
 })
 
+(sig 'hint/params-dispatch {-> Any List List List})
 (fun {hint/params-dispatch hd tl params} {
   if (not (sym? hd)) {hint/params-walk tl params}
   {do
@@ -51,11 +55,13 @@
     {hint/params-walk tl params}}}}}}})}
 })
 
+(sig 'hint/params-walk-lambda {-> List List List})
 (fun {hint/params-walk-lambda tl params} {
   if (< (len tl) 2) {params}
   {hint/params-walk (tail tl) params}
 })
 
+(sig 'hint/params-from-fun {-> List List List})
 (fun {hint/params-from-fun tl params} {
   if (< (len tl) 2) {params}
   {do
@@ -63,12 +69,14 @@
     (hint/params-walk (tail tl) params2)}
 })
 
+(sig 'hint/params-from-formals {-> List List List})
 (fun {hint/params-from-formals formals params} {
   if (not (list? formals)) {params}
   {if (nil? formals) {params}
   {hint/params-extract (head formals) (tail formals) params}}
 })
 
+(sig 'hint/params-extract {-> Str List List List})
 (fun {hint/params-extract fname rest params} {
   if (not (sym? fname)) {params}
   {plist/set params (str fname) (hint/filter-formals rest nil)}
@@ -78,16 +86,19 @@
 ; Filter param list: extract names, stop at &, skip :: and -> annotations
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/filter-formals {-> List List List})
 (fun {hint/filter-formals formals acc} {
   if (nil? formals) {reverse acc}
   {hint/filter-one (head formals) (tail formals) acc}
 })
 
+(sig 'hint/filter-one {-> Any List List List})
 (fun {hint/filter-one p rest acc} {
   if (not (sym? p)) {hint/filter-formals rest acc}
   {hint/filter-str (str p) rest acc}
 })
 
+(sig 'hint/filter-str {-> Str List List List})
 (fun {hint/filter-str name rest acc} {
   if (== name "&") {reverse acc}
   {if (== name "::") {hint/skip-ann rest acc}
@@ -95,6 +106,7 @@
   {hint/filter-formals rest (qcons name acc)}}}
 })
 
+(sig 'hint/skip-ann {-> List List List})
 (fun {hint/skip-ann rest acc} {
   if (nil? rest) {reverse acc}
   {hint/filter-formals (tail rest) acc}
@@ -105,6 +117,7 @@
 ; sig format: "(fun {name p1 p2 ...} ...)"
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/parse-sig-params {-> Str List})
 (fun {hint/parse-sig-params sig} {
   if (nil? sig) {nil}
   {do
@@ -119,6 +132,7 @@
               {hint/filter-sig-words (tail words) nil})})})}
 })
 
+(sig 'hint/filter-sig-words {-> List List List})
 (fun {hint/filter-sig-words words acc} {
   if (nil? words) {reverse acc}
   {do
@@ -131,6 +145,7 @@
     {hint/filter-sig-words (tail words) (qcons w acc)}}}}})}
 })
 
+(sig 'hint/skip-sig-ann {-> List List List})
 (fun {hint/skip-sig-ann rest acc} {
   if (nil? rest) {reverse acc}
   {hint/filter-sig-words (tail rest) acc}
@@ -140,6 +155,7 @@
 ; Lazy per-name symdb lookup (0.05ms per query via prepared statement)
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/query-db-params {-> Ref Str List})
 (fun {hint/query-db-params db name} {
   if (nil? db) {nil}
   {do
@@ -154,24 +170,28 @@
 ; Walk AST and collect hints
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/walk-exprs {-> List List List List})
 (fun {hint/walk-exprs exprs ctx acc} {
   if (nil? exprs) {acc}
   {hint/walk-exprs (tail exprs) ctx
     (hint/walk-code (head exprs) ctx acc)}
 })
 
+(sig 'hint/walk-code {-> Any List List List})
 (fun {hint/walk-code expr ctx acc} {
   if (nil? expr) {acc}
   {if (not (list? expr)) {acc}
   {hint/walk-list (head expr) (tail expr) ctx acc}}
 })
 
+(sig 'hint/walk-list {-> Any List List List List})
 (fun {hint/walk-list hd tl ctx acc} {
   if (not (sym? hd))
     {hint/walk-exprs tl ctx (hint/walk-code hd ctx acc)}
   {hint/walk-dispatch (str hd) tl ctx acc}
 })
 
+(sig 'hint/walk-dispatch {-> Str List List List List})
 (fun {hint/walk-dispatch name tl ctx acc} {
   if (dict/has? HINT_SKIP_FORMS name)
     {hint/walk-special name tl ctx acc}
@@ -184,6 +204,7 @@
 ; Special forms: walk sub-expressions but skip formals/bindings
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/walk-special {-> Str List List List List})
 (fun {hint/walk-special name tl ctx acc} {
   if (== name "fun") {hint/walk-fun-body tl ctx acc}
   {if (== name "\\") {hint/walk-fun-body tl ctx acc}
@@ -195,11 +216,13 @@
   {hint/walk-exprs tl ctx acc}}}}}}}
 })
 
+(sig 'hint/walk-fun-body {-> List List List List})
 (fun {hint/walk-fun-body tl ctx acc} {
   if (< (len tl) 2) {acc}
   {hint/walk-code (head (tail tl)) ctx acc}
 })
 
+(sig 'hint/walk-def-vals {-> List List List List})
 (fun {hint/walk-def-vals tl ctx acc} {
   if (nil? tl) {acc}
   {hint/walk-exprs (tail tl) ctx acc}
@@ -209,6 +232,7 @@
 ; Function call: emit param hints + recurse into args
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/walk-call {-> Str List List List List})
 (fun {hint/walk-call name args ctx acc} {do
   (= {params} (hint/lookup-params name ctx))
   (= {acc2} (if (nil? params) {acc}
@@ -217,6 +241,7 @@
   (hint/walk-exprs args ctx acc2)
 })
 
+(sig 'hint/lookup-params {-> Str List List})
 (fun {hint/lookup-params name ctx} {do
   (= {local} (plist/get (plist/get ctx :local) name))
   (if (not (nil? local)) {local}
@@ -227,6 +252,7 @@
 ; Emit parameter hints: match args to param names
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/emit-param-hints {-> List List List List})
 (fun {hint/emit-param-hints args params acc} {
   if (nil? args) {acc}
   {if (nil? params) {acc}
@@ -234,6 +260,7 @@
     (tail args) (tail params) acc}}
 })
 
+(sig 'hint/emit-one {-> Any Str List List List List})
 (fun {hint/emit-one arg param-name rest-args rest-params acc} {
   hint/emit-param-hints rest-args rest-params
     (if (hint/skip-hint? arg param-name) {acc}
@@ -243,6 +270,7 @@
         {qcons (list :offset pos :label (str param-name ":") :kind 2) acc})})
 })
 
+(sig 'hint/skip-hint? {-> Any Str Num})
 (fun {hint/skip-hint? arg param-name} {
   if (not (sym? arg)) {0}
   {do
@@ -256,10 +284,12 @@
 ; Format hints for LSP response
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/format-hints {-> List Str List List})
 (fun {hint/format-hints raw-hints text range} {
   hint/format-loop raw-hints text range nil
 })
 
+(sig 'hint/format-loop {-> List Str List List List})
 (fun {hint/format-loop hints text range acc} {
   if (nil? hints) {acc}
   {do
@@ -281,6 +311,7 @@
         {acc}))}
 })
 
+(sig 'hint/in-range? {-> Num List Num})
 (fun {hint/in-range? line range} {
   if (nil? range) {1}
   {do
@@ -294,16 +325,19 @@
 ; sig format in symdb: {-> ParamType1 ParamType2 ... ReturnType}
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/count-char-loop {-> Str Str Num Num Num})
 (fun {hint/count-char-loop s ch pos count} {
   if (>= pos (len s)) {count}
   {hint/count-char-loop s ch (+ pos 1)
     (if (== (str/slice s pos (+ pos 1)) ch) {+ count 1} {count})}
 })
 
+(sig 'hint/count-char {-> Str Str Num})
 (fun {hint/count-char s ch} {
   hint/count-char-loop s ch 0 0
 })
 
+(sig 'hint/parse-sig-tokens {-> List Num Str List List})
 (fun {hint/parse-sig-tokens tokens depth current groups} {
   if (nil? tokens) {
     if (nil? current) {reverse groups}
@@ -322,6 +356,7 @@
       {hint/parse-sig-tokens rest new-depth (qcons tok current) groups})}
 })
 
+(sig 'hint/parse-prefix-sig {-> Str List})
 (fun {hint/parse-prefix-sig sig-str} {
   if (nil? sig-str) {nil}
   {do
@@ -332,6 +367,7 @@
         {hint/parse-sig-tokens (tail tokens) 0 nil nil}})}
 })
 
+(sig 'hint/query-sig-types {-> Ref Str List})
 (fun {hint/query-sig-types db name} {
   if (nil? db) {nil}
   {do
@@ -342,6 +378,7 @@
       {hint/parse-prefix-sig (plist/get row :sig)})}
 })
 
+(sig 'hint/infer-call-return-type {-> Str Ref Any})
 (fun {hint/infer-call-return-type name db} {
   if (nil? db) {nil}
   {do
@@ -351,11 +388,13 @@
         {last sig-types}})}
 })
 
+(sig 'hint/skip-inline-ann {-> List List Num List List})
 (fun {hint/skip-inline-ann rest sig-types type-idx acc} {
   if (nil? rest) {acc}
   {hint/emit-def-type-hints (tail rest) sig-types type-idx acc}
 })
 
+(sig 'hint/emit-def-hint-sym {-> List Num List List Num List List})
 (fun {hint/emit-def-hint-sym ps pos rest sig-types type-idx acc} {
   if (== ps "::") {hint/skip-inline-ann rest sig-types type-idx acc}
   {if (== ps "->") {acc}
@@ -369,16 +408,19 @@
     (hint/emit-def-type-hints rest sig-types (+ type-idx 1) acc2)}}}
 })
 
+(sig 'hint/emit-def-hint-one {-> Any List List Num List List})
 (fun {hint/emit-def-hint-one p rest sig-types type-idx acc} {
   if (not (sym? p)) {hint/emit-def-type-hints rest sig-types type-idx acc}
   {hint/emit-def-hint-sym (str p) (src-pos p) rest sig-types type-idx acc}
 })
 
+(sig 'hint/emit-def-type-hints {-> List List Num List List})
 (fun {hint/emit-def-type-hints params sig-types type-idx acc} {
   if (nil? params) {acc}
   {hint/emit-def-hint-one (head params) (tail params) sig-types type-idx acc}
 })
 
+(sig 'hint/infer-val-type {-> Any Ref Any})
 (fun {hint/infer-val-type val db} {
   if (num? val) {"Num"}
   {if (str? val) {"Str"}
@@ -387,11 +429,13 @@
   {hint/infer-from-head (head val) db}}}}
 })
 
+(sig 'hint/infer-from-head {-> Any Ref Any})
 (fun {hint/infer-from-head hd db} {
   if (not (sym? hd)) {nil}
   {hint/infer-by-name (str hd) db}
 })
 
+(sig 'hint/infer-by-name {-> Str Ref Any})
 (fun {hint/infer-by-name n db} {
   if (== n "list") {"List"}
   {if (== n "dict/new") {"Dict"}
@@ -402,12 +446,14 @@
   {hint/infer-call-return-type n db}}}}}}
 })
 
+(sig 'hint/emit-binding-type {-> List Any Ref List List})
 (fun {hint/emit-binding-type formals val db acc} {
   if (not (list? formals)) {acc}
   {if (nil? formals) {acc}
   {hint/emit-binding-for (head formals) val db acc}}
 })
 
+(sig 'hint/emit-binding-for {-> Any Any Ref List List})
 (fun {hint/emit-binding-for name-sym val db acc} {
   if (not (sym? name-sym)) {acc}
   {do
@@ -420,22 +466,26 @@
           {qcons (list :offset (+ pos (len ns)) :label (str ":: " type-str) :kind 1) acc})})}
 })
 
+(sig 'hint/type-from-fun {-> List Ref List List})
 (fun {hint/type-from-fun tl db acc} {
   if (< (len tl) 2) {acc}
   {hint/type-fun-with-parts (head tl) (head (tail tl)) db acc}
 })
 
+(sig 'hint/type-fun-with-parts {-> List List Ref List List})
 (fun {hint/type-fun-with-parts formals body db acc} {
   if (not (list? formals)) {acc}
   {if (nil? formals) {acc}
   {hint/type-fun-extract (head formals) (tail formals) body db acc}}
 })
 
+(sig 'hint/type-fun-extract {-> Str List List Ref List List})
 (fun {hint/type-fun-extract fname params body db acc} {
   if (not (sym? fname)) {acc}
   {hint/type-fun-emit (str fname) params body db acc}
 })
 
+(sig 'hint/type-fun-emit {-> Str List List Ref List List})
 (fun {hint/type-fun-emit name params body db acc} {do
   (= {sig-types} (hint/query-sig-types db name))
   (= {acc2} (if (nil? sig-types) {acc}
@@ -450,32 +500,38 @@
   (hint/type-one body db acc3)
 })
 
+(sig 'hint/type-from-def {-> List Ref List List})
 (fun {hint/type-from-def tl db acc} {
   if (< (len tl) 2) {acc}
   {hint/type-def-with-parts (head tl) (head (tail tl)) db acc}
 })
 
+(sig 'hint/type-def-with-parts {-> List Any Ref List List})
 (fun {hint/type-def-with-parts formals val db acc} {do
   (= {acc2} (hint/emit-binding-type formals val db acc))
   (hint/type-one val db acc2)
 })
 
+(sig 'hint/type-walk-body {-> List Ref List List})
 (fun {hint/type-walk-body tl db acc} {
   if (< (len tl) 2) {acc}
   {hint/type-one (head (tail tl)) db acc}
 })
 
+(sig 'hint/type-one {-> Any Ref List List})
 (fun {hint/type-one expr db acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
   {hint/type-dispatch (head expr) (tail expr) db acc}}
 })
 
+(sig 'hint/type-dispatch {-> Any List Ref List List})
 (fun {hint/type-dispatch hd tl db acc} {
   if (not (sym? hd)) {hint/type-walk tl db acc}
   {hint/type-by-name (str hd) tl db acc}
 })
 
+(sig 'hint/type-by-name {-> Str List Ref List List})
 (fun {hint/type-by-name n tl db acc} {
   if (== n "fun") {hint/type-from-fun tl db acc}
   {if (== n "def") {hint/type-from-def tl db acc}
@@ -488,12 +544,14 @@
   {hint/type-walk tl db acc}}}}}}}}
 })
 
+(sig 'hint/type-walk {-> List Ref List List})
 (fun {hint/type-walk exprs db acc} {
   if (nil? exprs) {acc}
   {hint/type-walk (tail exprs) db
     (hint/type-one (head exprs) db acc)}
 })
 
+(sig 'hint/collect-type-hints {-> List Ref List})
 (fun {hint/collect-type-hints ast db} {
   hint/type-walk ast db nil
 })
@@ -502,10 +560,12 @@
 ; Public API
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/collect {-> Str Ref List List})
 (fun {hint/collect text db range} {
   hint/collect-from-ast (parse text) text db range
 })
 
+(sig 'hint/collect-from-ast {-> List Str Ref List List})
 (fun {hint/collect-from-ast ast text db range} {
   if (error? ast) {nil}
   {do
