@@ -41,25 +41,26 @@
 ; State
 ; ---------------------------------------------------------------------------
 
-(def {lsp/documents} {})
+(def {lsp/documents} (dict/new))
 (def {lsp/db} nil)
 (def {lsp/root-path} nil)
+(def {lsp/doc-version} 0)
 
 (fun {lsp/doc-store uri text}
-  {def {lsp/documents} (plist/set lsp/documents uri text)})
+  {dict/set! lsp/documents uri text})
 
 (fun {lsp/doc-get uri}
-  {plist/get lsp/documents uri})
+  {dict/get lsp/documents uri})
 
-(def {lsp/ast-cache} nil)
+(def {lsp/ast-cache} (dict/new))
 
 (fun {lsp/cache-ast uri text} {do
   (= {ast} (parse text))
-  (def {lsp/ast-cache} (plist/set lsp/ast-cache uri ast))
+  (dict/set! lsp/ast-cache uri ast)
   ast})
 
 (fun {lsp/get-ast uri text} {do
-  (= {cached} (plist/get lsp/ast-cache uri))
+  (= {cached} (dict/get lsp/ast-cache uri))
   (if (nil? cached) {parse text} {cached})})
 
 (fun {lsp/get-doc params} {do
@@ -343,18 +344,21 @@
     {do
       (= {text} (plist/get (head changes) :text))
       (lsp/doc-store uri text)
+      (def {lsp/doc-version} (+ lsp/doc-version 1))
+      (= {v} lsp/doc-version)
       (aio/dispatch lsp/sys
-        (\ {_} {do (lsp/cache-ast uri text)
-                   (lsp/sync-doc-text uri text)
-                   (lsp/publish-diagnostics uri text)
-                   nil})
+        (\ {_} {if (not (== lsp/doc-version v)) {nil}
+          {do (lsp/cache-ast uri text)
+              (lsp/sync-doc-text uri text)
+              (lsp/publish-diagnostics uri text)
+              nil}})
         nil lsp/noop-cb)})})
 
 (fun {handle-did-close params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
-  (def {lsp/documents} (plist/set lsp/documents uri nil))
-  (def {lsp/ast-cache} (plist/set lsp/ast-cache uri nil))
+  (dict/remove! lsp/documents uri)
+  (dict/remove! lsp/ast-cache uri)
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics nil))})
 

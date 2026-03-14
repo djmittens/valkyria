@@ -61,7 +61,7 @@
 ; --- State reset helper ---
 
 (fun {reset-state} {do
-  (def {lsp/documents} {})
+  (def {lsp/documents} (dict/new))
   (def {lsp/db} nil)
   (def {lsp/root-path} nil)
   (def {lsp/known-set-cache} nil)
