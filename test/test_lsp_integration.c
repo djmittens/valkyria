@@ -642,7 +642,7 @@ static void test_inlay_hints(VALK_TEST_ARGS()) {
     "\"uri\":\"file:///tmp/hint.valk\","
     "\"languageId\":\"valk\","
     "\"version\":1,"
-    "\"text\":\"(fun {add a b} {+ a b})\\n(add 1 2)\"}}}");
+    "\"text\":\"(fun {add a b} {+ a b})\\n(def {x} 42)\\n(add 1 2)\"}}}");
 
   usleep(200000);
 
@@ -650,7 +650,7 @@ static void test_inlay_hints(VALK_TEST_ARGS()) {
     "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"textDocument/inlayHint\","
     "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/hint.valk\"},"
     "\"range\":{\"start\":{\"line\":0,\"character\":0},"
-    "\"end\":{\"line\":1,\"character\":99}}}}");
+    "\"end\":{\"line\":2,\"character\":99}}}}");
 
   resp = lsp_read_response(&reader, 9, LSP_TIMEOUT_MS);
   VALK_TEST_ASSERT(resp != NULL, "should get inlay hints response");
@@ -659,6 +659,7 @@ static void test_inlay_hints(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(strstr(resp, "\"result\"") != NULL, "should have result");
   VALK_TEST_ASSERT(strstr(resp, "\"a:\"") != NULL, "should have param hint for a");
   VALK_TEST_ASSERT(strstr(resp, "\"b:\"") != NULL, "should have param hint for b");
+  VALK_TEST_ASSERT(strstr(resp, "\":: Num\"") != NULL, "should have type hint for x binding");
   free(resp);
 
   lsp_write(lsp.write_fd,

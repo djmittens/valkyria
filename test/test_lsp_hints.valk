@@ -48,8 +48,8 @@
   (test "no-hints-special-forms"
     {do
       (test/assert-eq 0 (hint-count "(if 1 {2} {3})") "if excluded")
-      (test/assert-eq 0 (hint-count "(def {x} 1)") "def excluded")
-      (test/assert-eq 0 (hint-count "(= {x} 1)") "= excluded")
+      (test/assert-eq 1 (hint-count "(def {x} 1)") "def has type hint")
+      (test/assert-eq 1 (hint-count "(= {x} 1)") "= has type hint")
       true
     })
 
@@ -292,6 +292,213 @@
       (= {text} "(fun {foo a b} {list a b}) (\\ {x} {foo x 1})")
       (= {hints} (hint/collect text nil nil))
       (test/assert-eq 2 (len hints) "calls inside lambda get hints")
+      true
+    })
+
+  ; --- Type hint: parse-prefix-sig ---
+
+  (test "prefix-sig-simple"
+    {do
+      (= {types} (hint/parse-prefix-sig "{-> Num Num Num}"))
+      (test/assert-eq 3 (len types) "3 types")
+      (test/assert-eq "Num" (nth 1 types) "first type")
+      (test/assert-eq "Num" (nth 3 types) "last (return) type")
+      true
+    })
+
+  (test "prefix-sig-compound"
+    {do
+      (= {types} (hint/parse-prefix-sig "{-> (List A) A}"))
+      (test/assert-eq 2 (len types) "2 types")
+      (test/assert-eq "(List A)" (nth 1 types) "compound type grouped")
+      (test/assert-eq "A" (nth 2 types) "return type")
+      true
+    })
+
+  (test "prefix-sig-higher-order"
+    {do
+      (= {types} (hint/parse-prefix-sig "{-> (-> A B) (List A) (List B)}"))
+      (test/assert-eq 3 (len types) "3 types")
+      (test/assert-eq "(-> A B)" (nth 1 types) "arrow type grouped")
+      (test/assert-eq "(List A)" (nth 2 types) "compound param")
+      (test/assert-eq "(List B)" (nth 3 types) "compound return")
+      true
+    })
+
+  (test "prefix-sig-nil-input"
+    {do
+      (test/assert (nil? (hint/parse-prefix-sig nil)) "nil returns nil")
+      true
+    })
+
+  (test "prefix-sig-no-arrow"
+    {do
+      (test/assert (nil? (hint/parse-prefix-sig "{Num}")) "no arrow returns nil")
+      true
+    })
+
+  (test "prefix-sig-too-short"
+    {do
+      (test/assert (nil? (hint/parse-prefix-sig "{-> Num}")) "single type returns nil")
+      true
+    })
+
+  ; --- Type hint: infer-val-type (tested via hint/collect through def/= path) ---
+
+  (test "infer-num"
+    {do
+      (= {ast} (parse "(= {x} 42)"))
+      (= {val} (head (tail (tail (head ast)))))
+      (test/assert-eq "Num" (hint/infer-val-type val nil) "number")
+      true
+    })
+
+  (test "infer-str"
+    {do
+      (= {ast} (parse "(= {x} \"hello\")"))
+      (= {val} (head (tail (tail (head ast)))))
+      (test/assert-eq "Str" (hint/infer-val-type val nil) "string")
+      true
+    })
+
+  (test "infer-list"
+    {do
+      (= {ast} (parse "(= {x} (list 1 2 3))"))
+      (= {val} (head (tail (tail (head ast)))))
+      (test/assert-eq "List" (hint/infer-val-type val nil) "list call")
+      true
+    })
+
+  (test "infer-dict"
+    {do
+      (= {ast} (parse "(= {x} (dict/new))"))
+      (= {val} (head (tail (tail (head ast)))))
+      (test/assert-eq "Dict" (hint/infer-val-type val nil) "dict/new")
+      true
+    })
+
+  (test "infer-option-none"
+    {do
+      (= {ast} (parse "(= {x} (None))"))
+      (= {val} (head (tail (tail (head ast)))))
+      (test/assert-eq "Option" (hint/infer-val-type val nil) "None")
+      true
+    })
+
+  (test "infer-option-some"
+    {do
+      (= {ast} (parse "(= {x} (Some 42))"))
+      (= {val} (head (tail (tail (head ast)))))
+      (test/assert-eq "Option" (hint/infer-val-type val nil) "Some")
+      true
+    })
+
+  (test "infer-lambda"
+    {do
+      (= {ast} (parse "(= {x} (\\ {y} {+ y 1}))"))
+      (= {val} (head (tail (tail (head ast)))))
+      (test/assert-eq "Fn" (hint/infer-val-type val nil) "lambda")
+      true
+    })
+
+  (test "infer-unknown-nil"
+    {do
+      (= {ast} (parse "(= {x} (foo 1))"))
+      (= {val} (head (tail (tail (head ast)))))
+      (test/assert (nil? (hint/infer-val-type val nil)) "unknown without db")
+      true
+    })
+
+  ; --- Type hint: def bindings ---
+
+  (test "type-hint-def-num"
+    {do
+      (= {text} "(def {x} 42)")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Num" labels) "def num gets type hint")
+      true
+    })
+
+  (test "type-hint-assign-str"
+    {do
+      (= {text} "(= {s} \"hello\")")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Str" labels) "assign str gets type hint")
+      true
+    })
+
+  (test "type-hint-def-list"
+    {do
+      (= {text} "(= {items} (list 1 2 3))")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: List" labels) "list gets type hint")
+      true
+    })
+
+  (test "type-hint-def-dict"
+    {do
+      (= {text} "(= {m} (dict/new))")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Dict" labels) "dict gets type hint")
+      true
+    })
+
+  (test "type-hint-def-lambda"
+    {do
+      (= {text} "(= {f} (\\ {x} {+ x 1}))")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Fn" labels) "lambda gets type hint")
+      true
+    })
+
+  (test "type-hint-def-option"
+    {do
+      (= {text} "(= {result} (None))")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Option" labels) "None gets Option type hint")
+      true
+    })
+
+  (test "type-hint-kind-is-type"
+    {do
+      (= {text} "(def {x} 42)")
+      (= {hints} (hint/collect text nil nil))
+      (= {type-hints} (filter (\ {h} {== (plist/get h :kind) 1}) hints))
+      (test/assert (> (len type-hints) 0) "type hints have kind 1")
+      true
+    })
+
+  (test "type-hint-has-padding-left"
+    {do
+      (= {text} "(def {x} 42)")
+      (= {hints} (hint/collect text nil nil))
+      (= {type-hints} (filter (\ {h} {== (plist/get h :kind) 1}) hints))
+      (= {h} (head type-hints))
+      (test/assert (not (nil? (plist/get h :paddingLeft))) "type hint has paddingLeft")
+      true
+    })
+
+  (test "type-hint-no-unknown-binding"
+    {do
+      (= {text} "(= {x} (unknown-fn 1))")
+      (= {hints} (hint/collect text nil nil))
+      (test/assert-eq 0 (len hints) "unknown fn without db gives no type hint")
+      true
+    })
+
+  (test "type-hint-nested-in-do"
+    {do
+      (= {text} "(do (= {x} 42) (= {s} \"hello\"))")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Num" labels) "x gets Num inside do")
+      (test/assert (member? ":: Str" labels) "s gets Str inside do")
       true
     })
 
