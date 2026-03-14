@@ -21,6 +21,25 @@
   len (hint/collect text nil nil)
 })
 
+(fun {make-sig-db} {do
+  (= {db} (sqlite/open ":memory:"))
+  (sqlite/exec-script db symdb/schema-sql)
+  db
+})
+
+(fun {seed-sig db name sig-str} {do
+  (sqlite/exec db "INSERT OR IGNORE INTO files (path, hash) VALUES ('test.valk', 'h1')")
+  (sqlite/exec db
+    "INSERT INTO symbols (name, file_id, line, col, kind, sig) VALUES (?1, 1, 0, 0, 1, ?2)"
+    name sig-str)
+})
+
+(fun {extract-fun-params text} {do
+  (= {ast} (parse text))
+  (= {formals} (head (tail (head ast))))
+  (tail formals)
+})
+
 (test/run (list
 
   ; --- Basic cases ---
@@ -524,6 +543,116 @@
       (= {p} (plist/get params "helper"))
       (test/assert (not (nil? p)) "fun inside do block collected")
       (test/assert-eq 2 (len p) "helper has 2 params")
+      true
+    })
+
+  ; --- Parameter type hints on function definitions ---
+
+  (test "param-type-direct-simple"
+    {do
+      (= {params} (extract-fun-params "(fun {add a b} {+ a b})"))
+      (= {sig-types} (list "Num" "Num" "Num"))
+      (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
+      (test/assert-eq 2 (len hints) "2 param type hints")
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Num" labels) "param gets :: Num")
+      true
+    })
+
+  (test "param-type-direct-mixed"
+    {do
+      (= {params} (extract-fun-params "(fun {greet name age} {list name age})"))
+      (= {sig-types} (list "Str" "Num" "Str"))
+      (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
+      (test/assert-eq 2 (len hints) "2 param type hints")
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Str" labels) "name gets :: Str")
+      (test/assert (member? ":: Num" labels) "age gets :: Num")
+      true
+    })
+
+  (test "param-type-direct-rest-stops"
+    {do
+      (= {params} (extract-fun-params "(fun {foo a & rest} {list a rest})"))
+      (= {sig-types} (list "Num" "List" "List"))
+      (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
+      (test/assert-eq 1 (len hints) "stops at &")
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Num" labels) "a before & gets hint")
+      true
+    })
+
+  (test "param-type-direct-kind"
+    {do
+      (= {params} (extract-fun-params "(fun {add a b} {+ a b})"))
+      (= {sig-types} (list "Num" "Num" "Num"))
+      (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
+      (= {kinds} (map (\ {h} {plist/get h :kind}) hints))
+      (test/assert (member? 1 kinds) "kind should be 1 (Type)")
+      true
+    })
+
+  (test "param-type-direct-compound"
+    {do
+      (= {params} (extract-fun-params "(fun {mymap f xs} {list f xs})"))
+      (= {sig-types} (list "(-> A B)" "(List A)" "(List B)"))
+      (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
+      (test/assert-eq 2 (len hints) "2 compound type hints")
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: (-> A B)" labels) "f gets arrow type")
+      (test/assert (member? ":: (List A)" labels) "xs gets list type")
+      true
+    })
+
+  (test "param-type-direct-nil-params"
+    {do
+      (= {hints} (hint/emit-def-type-hints nil (list "Num") 0 nil))
+      (test/assert-eq 0 (len hints) "nil params no hints")
+      true
+    })
+
+  (test "param-type-pipeline-with-db"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "add" "{-> Num Num Num}")
+      (= {text} "(fun {add a b} {+ a b})")
+      (= {hints} (hint/collect text db nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? ":: Num" labels) "param gets :: Num from db")
+      true
+    })
+
+  (test "param-type-pipeline-no-sig"
+    {do
+      (= {db} (make-sig-db))
+      (= {text} "(fun {add a b} {+ a b})")
+      (= {hints} (hint/collect text db nil))
+      (= {type-hints} (filter (\ {h} {== (plist/get h :kind) 1}) hints))
+      (test/assert-eq 0 (len type-hints) "no sig no type hints")
+      true
+    })
+
+  (test "param-type-pipeline-padding-left"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "add" "{-> Num Num Num}")
+      (= {text} "(fun {add a b} {+ a b})")
+      (= {hints} (hint/collect text db nil))
+      (= {type-hints} (filter (\ {h} {== (plist/get h :kind) 1}) hints))
+      (= {h} (head type-hints))
+      (test/assert (not (nil? h)) "type hint exists")
+      (test/assert (not (nil? (plist/get h :paddingLeft))) "paddingLeft set")
+      true
+    })
+
+  (test "param-type-pipeline-return-type"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "add" "{-> Num Num Num}")
+      (= {text} "(fun {add a b} {+ a b})")
+      (= {hints} (hint/collect text db nil))
+      (= {labels} (map (\ {h} {plist/get h :label}) hints))
+      (test/assert (member? "-> Num" labels) "return type hint emitted")
       true
     })
 

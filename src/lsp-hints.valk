@@ -356,25 +356,27 @@
   {hint/emit-def-type-hints (tail rest) sig-types type-idx acc}
 })
 
+(fun {hint/emit-def-hint-sym ps pos rest sig-types type-idx acc} {
+  if (== ps "::") {hint/skip-inline-ann rest sig-types type-idx acc}
+  {if (== ps "->") {acc}
+  {if (== ps "&") {acc}
+  {do
+    (= {num-param-types} (- (len sig-types) 1))
+    (= {type-str} (if (< type-idx num-param-types)
+      {nth (+ type-idx 1) sig-types} {nil}))
+    (= {acc2} (if (or (nil? type-str) (< pos 0)) {acc}
+      {qcons (list :offset (+ pos (len ps)) :label (str ":: " type-str) :kind 1) acc}))
+    (hint/emit-def-type-hints rest sig-types (+ type-idx 1) acc2)}}}
+})
+
+(fun {hint/emit-def-hint-one p rest sig-types type-idx acc} {
+  if (not (sym? p)) {hint/emit-def-type-hints rest sig-types type-idx acc}
+  {hint/emit-def-hint-sym (str p) (src-pos p) rest sig-types type-idx acc}
+})
+
 (fun {hint/emit-def-type-hints params sig-types type-idx acc} {
   if (nil? params) {acc}
-  {do
-    (= {p} (head params))
-    (= {rest} (tail params))
-    (if (not (sym? p)) {hint/emit-def-type-hints rest sig-types type-idx acc}
-      {do
-        (= {ps} (str p))
-        (if (== ps "::") {hint/skip-inline-ann rest sig-types type-idx acc}
-        {if (== ps "->") {acc}
-        {if (== ps "&") {acc}
-        {do
-          (= {num-param-types} (- (len sig-types) 1))
-          (= {type-str} (if (< type-idx num-param-types)
-            {nth (+ type-idx 1) sig-types} {nil}))
-          (= {pos} (src-pos p))
-          (= {acc2} (if (or (nil? type-str) (< pos 0)) {acc}
-            {qcons (list :offset (+ pos (len ps)) :label (str ":: " type-str) :kind 1) acc}))
-          (hint/emit-def-type-hints rest sig-types (+ type-idx 1) acc2)}}})})}
+  {hint/emit-def-hint-one (head params) (tail params) sig-types type-idx acc}
 })
 
 (fun {hint/infer-val-type val db} {

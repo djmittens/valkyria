@@ -739,7 +739,8 @@
   (match (lsp/get-doc params)
     {(None) (lsp/send-response id nil)}
     {(Some :value ctx)
-      (lsp/send-response id (hint/collect-from-ast (plist/get ctx :ast) (plist/get ctx :text) lsp/db range))})
+      (do (= {hints} (hint/collect-from-ast (plist/get ctx :ast) (plist/get ctx :text) lsp/db range))
+          (lsp/send-response id hints))})
 })
 
 ; ---------------------------------------------------------------------------
