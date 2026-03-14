@@ -108,7 +108,6 @@ typedef struct {
   valk_aio_system_t *sys;
   valk_pipe_t *pipe;
   int fd;
-  bool readable;
 } pipe_init_ctx_t;
 
 static void __pipe_init_on_loop(void *ctx) {
@@ -117,10 +116,6 @@ static void __pipe_init_on_loop(void *ctx) {
 
   uv_pipe_init(init->sys->eventloop, &pipe->uv, 0);
   uv_pipe_open(&pipe->uv, init->fd);
-
-  if (init->readable) {
-    uv_read_start((uv_stream_t *)&pipe->uv, __pipe_alloc_cb, __pipe_read_cb);
-  }
 
   free(init);
 }
@@ -143,7 +138,6 @@ static valk_lval_t *valk_builtin_pipe_stdin_open(valk_lenv_t *e, valk_lval_t *a)
   ctx->sys = sys;
   ctx->pipe = pipe;
   ctx->fd = 0;
-  ctx->readable = true;
   valk_aio_enqueue_task(sys, __pipe_init_on_loop, ctx);
 
   valk_lval_t *ref;
@@ -171,7 +165,6 @@ static valk_lval_t *valk_builtin_pipe_stdout_open(valk_lenv_t *e, valk_lval_t *a
   ctx->sys = sys;
   ctx->pipe = pipe;
   ctx->fd = 1;
-  ctx->readable = false;
   valk_aio_enqueue_task(sys, __pipe_init_on_loop, ctx);
 
   valk_lval_t *ref;
@@ -238,6 +231,11 @@ static valk_lval_t *valk_builtin_pipe_write(valk_lenv_t *e, valk_lval_t *a) {
   return valk_lval_nil();
 }
 
+static void __pipe_start_read_on_loop(void *ctx) {
+  valk_pipe_t *pipe = (valk_pipe_t *)ctx;
+  uv_read_start((uv_stream_t *)&pipe->uv, __pipe_alloc_cb, __pipe_read_cb);
+}
+
 static valk_lval_t *valk_builtin_pipe_on_data(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
@@ -251,6 +249,8 @@ static valk_lval_t *valk_builtin_pipe_on_data(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *heap_cb = valk_evacuate_to_heap(cb_arg);
   pipe->callback_handle = valk_handle_create(&valk_sys->handle_table, heap_cb);
   pipe->callback_set = true;
+
+  valk_aio_enqueue_task(pipe->sys, __pipe_start_read_on_loop, pipe);
 
   return valk_lval_nil();
 }
@@ -403,10 +403,7 @@ static void __lsp_reader_init_on_loop(void *ctx) {
   lsp_reader_init_ctx_t *init = (lsp_reader_init_ctx_t *)ctx;
   valk_pipe_t *pipe = init->pipe;
 
-  uv_read_stop((uv_stream_t *)&pipe->uv);
-
   pipe->uv.data = init->reader;
-
   uv_read_start((uv_stream_t *)&pipe->uv, __lsp_reader_alloc_cb, __lsp_reader_read_cb);
 
   free(init);

@@ -121,6 +121,36 @@ static lsp_proc_t start_lsp(void) {
   return (lsp_proc_t){.pid = pid, .write_fd = stdin_pipe[1], .read_fd = stdout_pipe[0]};
 }
 
+static lsp_proc_t start_lsp_immediate(void) {
+  int stdin_pipe[2], stdout_pipe[2];
+  pipe(stdin_pipe);
+  pipe(stdout_pipe);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    dup2(stdin_pipe[0], 0);
+    dup2(stdout_pipe[1], 1);
+    close(stdin_pipe[1]);
+    close(stdout_pipe[0]);
+    close(stdin_pipe[0]);
+    close(stdout_pipe[1]);
+
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) {
+      dup2(devnull, 2);
+      close(devnull);
+    }
+
+    execlp("build/valk", "build/valk", "src/lsp-main.valk", NULL);
+    _exit(1);
+  }
+
+  close(stdin_pipe[0]);
+  close(stdout_pipe[1]);
+
+  return (lsp_proc_t){.pid = pid, .write_fd = stdin_pipe[1], .read_fd = stdout_pipe[0]};
+}
+
 static void stop_lsp(lsp_proc_t *lsp) {
   close(lsp->write_fd);
   close(lsp->read_fd);
@@ -676,6 +706,40 @@ static void test_inlay_hints(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_startup_race(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  signal(SIGPIPE, SIG_IGN);
+
+  for (int attempt = 0; attempt < 5; attempt++) {
+    lsp_proc_t lsp = start_lsp_immediate();
+    lsp_reader_t reader;
+    lsp_reader_init(&reader, lsp.read_fd);
+
+    lsp_write(lsp.write_fd,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+      "\"params\":{\"capabilities\":{}}}");
+
+    char *resp = lsp_read_response(&reader, 1, LSP_TIMEOUT_MS);
+    VALK_TEST_ASSERT(resp != NULL, "initialize response on immediate send");
+    if (!resp) { stop_lsp(&lsp); VALK_PASS(); return; }
+    VALK_TEST_ASSERT(strstr(resp, "\"result\"") != NULL, "should have result");
+    free(resp);
+
+    lsp_write(lsp.write_fd,
+      "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":{}}");
+    resp = lsp_read_response(&reader, 99, LSP_TIMEOUT_MS);
+    free(resp);
+    lsp_write(lsp.write_fd, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    close(lsp.write_fd);
+    lsp.write_fd = -1;
+    int status;
+    waitpid(lsp.pid, &status, 0);
+    close(lsp.read_fd);
+  }
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -689,5 +753,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "lsp_signature_help", test_signature_help);
   valk_testsuite_add_test(suite, "lsp_semantic_tokens_range", test_semantic_tokens_range);
   valk_testsuite_add_test(suite, "lsp_inlay_hints", test_inlay_hints);
+  valk_testsuite_add_test(suite, "lsp_startup_race", test_startup_race);
   return valk_testsuite_run(suite);
 }
