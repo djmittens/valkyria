@@ -269,10 +269,15 @@
     (= {col} (head (tail lc)))
     (hint/format-loop (tail hints) text range
       (if (hint/in-range? line range)
-        {qcons (list :position (list :line line :character col)
-                     :label (plist/get h :label)
-                     :kind (plist/get h :kind)
-                     :paddingRight :true) acc}
+        {if (== (plist/get h :kind) 1)
+          {qcons (list :position (list :line line :character col)
+                       :label (plist/get h :label)
+                       :kind 1
+                       :paddingLeft :true) acc}
+          {qcons (list :position (list :line line :character col)
+                       :label (plist/get h :label)
+                       :kind 2
+                       :paddingRight :true) acc}}
         {acc}))}
 })
 
@@ -282,6 +287,178 @@
     (= {start-line} (plist/get (plist/get range :start) :line))
     (= {end-line} (plist/get (plist/get range :end) :line))
     (and (>= line start-line) (<= line end-line))}
+})
+
+; ---------------------------------------------------------------------------
+; Type hints — show types at definitions and bindings
+; sig format in symdb: {-> ParamType1 ParamType2 ... ReturnType}
+; ---------------------------------------------------------------------------
+
+(fun {hint/count-char-loop s ch pos count} {
+  if (>= pos (len s)) {count}
+  {hint/count-char-loop s ch (+ pos 1)
+    (if (== (str/slice s pos (+ pos 1)) ch) {+ count 1} {count})}
+})
+
+(fun {hint/count-char s ch} {
+  hint/count-char-loop s ch 0 0
+})
+
+(fun {hint/parse-sig-tokens tokens depth current groups} {
+  if (nil? tokens) {
+    if (nil? current) {reverse groups}
+    {reverse (qcons (str/join (reverse current) " ") groups)}}
+  {do
+    (= {tok} (head tokens))
+    (= {rest} (tail tokens))
+    (= {opens} (hint/count-char tok "("))
+    (= {closes} (hint/count-char tok ")"))
+    (= {new-depth} (+ (- (+ depth opens) closes) 0))
+    (if (and (== new-depth 0) (not (nil? current)))
+      {hint/parse-sig-tokens rest 0 nil
+        (qcons (str/join (reverse (qcons tok current)) " ") groups)}
+      {hint/parse-sig-tokens rest new-depth (qcons tok current) groups})}
+})
+
+(fun {hint/parse-prefix-sig sig-str} {
+  if (nil? sig-str) {nil}
+  {do
+    (= {inner} (str/slice sig-str 1 (- (len sig-str) 1)))
+    (= {tokens} (str/split inner " "))
+    (if (< (len tokens) 3) {nil}
+      {if (not (== (head tokens) "->")) {nil}
+        {hint/parse-sig-tokens (tail tokens) 0 nil nil}})}
+})
+
+(fun {hint/query-sig-types db name} {
+  if (nil? db) {nil}
+  {do
+    (= {row} (sqlite/query-maybe db
+      "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
+      name))
+    (if (nil? row) {nil}
+      {hint/parse-prefix-sig (plist/get row :sig)})}
+})
+
+(fun {hint/skip-inline-ann rest sig-types type-idx acc} {
+  if (nil? rest) {acc}
+  {hint/emit-def-type-hints (tail rest) sig-types type-idx acc}
+})
+
+(fun {hint/emit-def-type-hints params sig-types type-idx acc} {
+  if (nil? params) {acc}
+  {do
+    (= {p} (head params))
+    (= {rest} (tail params))
+    (if (not (sym? p)) {hint/emit-def-type-hints rest sig-types type-idx acc}
+      {do
+        (= {ps} (str p))
+        (if (== ps "::") {hint/skip-inline-ann rest sig-types type-idx acc}
+        {if (== ps "->") {acc}
+        {if (== ps "&") {acc}
+        {do
+          (= {num-param-types} (- (len sig-types) 1))
+          (= {type-str} (if (< type-idx num-param-types)
+            {nth (+ type-idx 1) sig-types} {nil}))
+          (= {pos} (src-pos p))
+          (= {acc2} (if (or (nil? type-str) (< pos 0)) {acc}
+            {qcons (list :offset (+ pos (len ps)) :label (str ":: " type-str) :kind 1) acc}))
+          (hint/emit-def-type-hints rest sig-types (+ type-idx 1) acc2)}}})})}
+})
+
+(fun {hint/infer-val-type val} {
+  if (num? val) {"Num"}
+  {if (str? val) {"Str"}
+  {if (not (list? val)) {nil}
+  {if (nil? val) {nil}
+  {do
+    (= {hd} (head val))
+    (if (not (sym? hd)) {nil}
+      {do
+        (= {n} (str hd))
+        (if (== n "list") {"List"}
+        {if (== n "dict/new") {"Dict"}
+        {if (== n "dict/from-keys") {"Dict"}
+        {if (== n "None") {"Option"}
+        {if (== n "Some") {"Option"}
+        {if (== n "\\") {"Fn"}
+        {nil}}}}}})})}}}}})
+
+(fun {hint/emit-binding-type formals val acc} {
+  if (not (list? formals)) {acc}
+  {if (nil? formals) {acc}
+  {do
+    (= {name-sym} (head formals))
+    (if (not (sym? name-sym)) {acc}
+      {do
+        (= {type-str} (hint/infer-val-type val))
+        (if (nil? type-str) {acc}
+          {do
+            (= {pos} (src-pos name-sym))
+            (= {ns} (str name-sym))
+            (if (< pos 0) {acc}
+              {qcons (list :offset (+ pos (len ns)) :label (str ":: " type-str) :kind 1) acc})})})}}
+})
+
+(fun {hint/type-from-fun tl db acc} {
+  if (< (len tl) 2) {acc}
+  {do
+    (= {formals} (head tl))
+    (= {body} (head (tail tl)))
+    (if (not (list? formals)) {acc}
+    {if (nil? formals) {acc}
+    {do
+      (= {fname} (head formals))
+      (if (not (sym? fname)) {acc}
+        {do
+          (= {name} (str fname))
+          (= {params} (tail formals))
+          (= {sig-types} (hint/query-sig-types db name))
+          (= {acc2} (if (nil? sig-types) {acc}
+            {hint/emit-def-type-hints params sig-types 0 acc}))
+          (hint/type-one body db acc2)})}})}
+})
+
+(fun {hint/type-from-def tl db acc} {
+  if (< (len tl) 2) {acc}
+  {do
+    (= {formals} (head tl))
+    (= {val} (head (tail tl)))
+    (= {acc2} (hint/emit-binding-type formals val acc))
+    (hint/type-one val db acc2)}
+})
+
+(fun {hint/type-walk-body tl db acc} {
+  if (< (len tl) 2) {acc}
+  {hint/type-one (head (tail tl)) db acc}
+})
+
+(fun {hint/type-one expr db acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {do
+    (= {hd} (head expr))
+    (if (not (sym? hd)) {hint/type-walk (tail expr) db acc}
+      {do
+        (= {n} (str hd))
+        (if (== n "fun") {hint/type-from-fun (tail expr) db acc}
+        {if (== n "def") {hint/type-from-def (tail expr) db acc}
+        {if (== n "=") {hint/type-from-def (tail expr) db acc}
+        {if (== n "do") {hint/type-walk (tail expr) db acc}
+        {if (== n "\\") {hint/type-walk-body (tail expr) db acc}
+        {if (== n "if") {hint/type-walk (tail expr) db acc}
+        {if (== n "match") {hint/type-walk (tail expr) db acc}
+        {if (== n "let") {hint/type-walk (tail expr) db acc}
+        {hint/type-walk (tail expr) db acc}}}}}}}})})}}})
+
+(fun {hint/type-walk exprs db acc} {
+  if (nil? exprs) {acc}
+  {hint/type-walk (tail exprs) db
+    (hint/type-one (head exprs) db acc)}
+})
+
+(fun {hint/collect-type-hints ast db} {
+  hint/type-walk ast db nil
 })
 
 ; ---------------------------------------------------------------------------
@@ -298,5 +475,6 @@
     (= {local-params} (hint/collect-local-params ast))
     (= {ctx} (list :local local-params :db db))
     (= {raw-hints} (hint/walk-exprs ast ctx nil))
-    (hint/format-hints raw-hints text range)}
+    (= {type-hints} (hint/collect-type-hints ast db))
+    (hint/format-hints (join raw-hints type-hints) text range)}
 })
