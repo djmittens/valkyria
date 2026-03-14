@@ -20,6 +20,7 @@ void valk_mpmc_init(valk_mpmc_queue_t *q, size_t capacity) {
 }
 
 void valk_mpmc_destroy(valk_mpmc_queue_t *q) {
+  if (!q->buffer) return;
   free(q->buffer);
   q->buffer = NULL;
 }

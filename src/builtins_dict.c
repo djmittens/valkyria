@@ -112,7 +112,13 @@ static valk_dict_t *dict_grow(valk_dict_t *d, u64 need_str) {
   new_cells[new_cap - 1].next = DICT_EMPTY;
   nd->free_head = new_used < new_cap ? new_used : DICT_EMPTY;
 
-  valk_mem_free(d);
+  if (on_heap) {
+    VALK_WITH_ALLOC((void *)valk_thread_ctx.heap) {
+      valk_mem_free(d);
+    }
+  } else {
+    valk_mem_free(d);
+  }
   return nd;
 }
 

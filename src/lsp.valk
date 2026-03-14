@@ -316,8 +316,12 @@
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
   (= {text} (plist/get td :text))
-  (lsp/sync-doc uri text)
-  (lsp/publish-diagnostics uri text)})
+  (lsp/doc-store uri text)
+  (aio/dispatch lsp/sys
+    (\ {_} {do (lsp/sync-doc uri text)
+               (lsp/publish-diagnostics uri text)
+               nil})
+    nil lsp/noop-cb)})
 
 (fun {handle-did-change params} {do
   (= {td} (plist/get params :textDocument))
@@ -327,8 +331,11 @@
     {do
       (= {text} (plist/get (head changes) :text))
       (lsp/doc-store uri text)
-      (lsp/sync-doc-text uri text)
-      (lsp/publish-diagnostics uri text)})})
+      (aio/dispatch lsp/sys
+        (\ {_} {do (lsp/sync-doc-text uri text)
+                   (lsp/publish-diagnostics uri text)
+                   nil})
+        nil lsp/noop-cb)})})
 
 (fun {handle-did-close params} {do
   (= {td} (plist/get params :textDocument))
@@ -341,13 +348,13 @@
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
   (= {text} (plist/get params :text))
-  (if (nil? text) {do
-    (= {cached} (lsp/doc-get uri))
-    (if (nil? cached) {}
-      {do (lsp/sync-doc uri cached)
-          (lsp/publish-diagnostics uri cached)})}
-    {do (lsp/sync-doc uri text)
-        (lsp/publish-diagnostics uri text)})})
+  (= {save-text} (if (nil? text) {lsp/doc-get uri} {text}))
+  (if (nil? save-text) {}
+    {aio/dispatch lsp/sys
+      (\ {_} {do (lsp/sync-doc uri save-text)
+                 (lsp/publish-diagnostics uri save-text)
+                 nil})
+      nil lsp/noop-cb})})
 
 ; ---------------------------------------------------------------------------
 ; Method handlers — requests
@@ -1291,10 +1298,9 @@
       (= {id} (plist/get msg :id))
       (= {params} (plist/get msg :params))
       (if (nil? method) {}
-        {do
-          (stderr/write (str "[valk-lsp] <- " method "\n"))
-          (match method
-            {"initialize" (do (handle-initialize id params)
+        {match method
+            {"initialize" (do (stderr/write (str "[valk-lsp] <- initialize\n"))
+                              (handle-initialize id params)
                               (def {lsp/initialized} 1))}
             {"initialized" (do
               (if (not (nil? lsp/db))
@@ -1311,8 +1317,7 @@
                       (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
                       (lsp/cleanup-stale-files)}))}
                 {}))}
-            {"shutdown" (do (lsp/send-response id (None))
-                            (aio/stop lsp/sys))}
+            {"shutdown" (lsp/send-response id (None))}
             {"exit" (aio/stop lsp/sys)}
             {_ (if (== lsp/initialized 0)
                  {if (num? id)
@@ -1325,11 +1330,11 @@
                    {"$/cancelRequest" {}}
                    {_ (if (num? id)
                         {lsp/dispatch-to-worker method id params}
-                        {})}})})})})})
+                                                 {})}})}})})})
 
 (fun {lsp/start} {do
   (stderr/write "[valk-lsp] starting (threaded)\n")
-  (def {lsp/sys} (aio/start {:num-threads 4}))
+  (def {lsp/sys} (aio/await (aio/start {:num-threads 4})))
   (= {stdin-pipe} (pipe/stdin-open lsp/sys))
   (def {lsp/out} (pipe/stdout-open lsp/sys))
   (pipe/lsp-reader stdin-pipe (\ {body} {lsp/on-message body}))

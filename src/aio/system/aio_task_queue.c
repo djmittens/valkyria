@@ -83,13 +83,23 @@ void valk_aio_loop_task_queue_shutdown(valk_aio_loop_t *loop) {
   while ((item = valk_mpmc_pop(&tq->queue)) != NULL) {
     free(item);
   }
-  valk_mpmc_destroy(&tq->queue);
 
   tq->initialized = false;
 }
 
+void valk_aio_loop_task_queue_destroy(valk_aio_loop_t *loop) {
+  valk_aio_task_queue_t *tq = &loop->task_queue;
+  if (!tq->queue.buffer) return;
+  void *item;
+  while ((item = valk_mpmc_pop(&tq->queue)) != NULL) {
+    free(item);
+  }
+  valk_mpmc_destroy(&tq->queue);
+}
+
 bool valk_aio_loop_enqueue_task(valk_aio_loop_t *loop, valk_aio_task_fn fn, void *ctx) {
   if (!loop || !fn) return false;
+  if (loop->sys && loop->sys->shuttingDown) return false;
 
   valk_aio_task_item_t *task = malloc(sizeof(valk_aio_task_item_t));
   task->fn = fn;

@@ -423,6 +423,10 @@ add_executable(test_pipe_builtins test/test_pipe_builtins.c test/testing.c)
 target_link_libraries(test_pipe_builtins PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_pipe_builtins src/)
 
+add_executable(test_lsp_integration test/test_lsp_integration.c test/testing.c)
+target_link_libraries(test_lsp_integration PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+include_directories(test_lsp_integration src/)
+
 add_executable(test_aio_backpressure test/unit/test_aio_backpressure.c test/testing.c)
 target_link_libraries(test_aio_backpressure PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 include_directories(test_aio_backpressure src/)

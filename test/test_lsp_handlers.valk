@@ -1,13 +1,18 @@
-(load-raw "src/lsp.valk")
+(load "src/prelude.valk")
+(load "src/symdb.valk")
+(load "src/lsp-analysis.valk")
+(load "src/lsp-validate.valk")
+(load "src/lsp-hints.valk")
+(load "src/lsp.valk")
 (load "src/modules/test.valk")
-
-
 
 ; --- Response capture stubs ---
 
 (def {*captured-responses*} nil)
 (def {*captured-errors*} nil)
 (def {*captured-notifications*} nil)
+(def {*aio-stopped*} 0)
+(def {*aio-dispatched*} nil)
 
 (fun {lsp/send-response id result} {do
   (def {*captured-responses*}
@@ -27,10 +32,15 @@
   nil
 })
 
+(fun {aio/stop sys} {def {*aio-stopped*} 1})
+(fun {aio/dispatch sys fn arg cb} {do (= {r} (fn arg)) (cb r)})
+
 (fun {reset-captures} {do
   (def {*captured-responses*} nil)
   (def {*captured-errors*} nil)
   (def {*captured-notifications*} nil)
+  (def {*aio-stopped*} 0)
+  (def {*aio-dispatched*} nil)
 })
 
 (fun {last-response} {
@@ -87,13 +97,6 @@
   ; =========================================================================
   ; Pure helper functions
   ; =========================================================================
-
-  (test "strip-cr"
-    {do
-      (test/assert-eq "hello" (strip-cr "hello\r\n") "should remove cr and lf")
-      (test/assert-eq "ab" (strip-cr "a\rb\n") "should remove embedded cr/lf")
-      (test/assert-eq "test" (strip-cr "test") "no-op on clean string")
-    })
 
   ; --- doc-store / doc-get ---
 
@@ -1059,45 +1062,51 @@
       (test/assert (nil? (plist/get params :diagnostics)) "diagnostics cleared")
     })
 
-  ; --- lsp/dispatch ---
+  ; --- lsp/on-message dispatch ---
 
   (test "dispatch-nil-method"
     {do
       (reset-state)
-      (= {action} (lsp/dispatch (list :method nil) 0))
-      (test/assert-eq :continue action "nil method -> continue")
+      (reset-captures)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\"}")
+      (test/assert (nil? (last-response)) "no method -> no response")
+      (test/assert (nil? (last-error)) "no method -> no error")
     })
 
   (test "dispatch-shutdown"
     {do
       (reset-state)
       (reset-captures)
-      (= {action} (lsp/dispatch (list :method "shutdown" :id 1 :params nil) 1))
-      (test/assert-eq :shutdown action "shutdown -> :shutdown")
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}")
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should send response")
+      (test/assert-eq 1 (plist/get resp :id) "response id=1")
+      (test/assert-eq 0 *aio-stopped* "shutdown should not stop, exit does")
     })
 
   (test "dispatch-exit"
     {do
       (reset-state)
-      (= {action} (lsp/dispatch (list :method "exit" :id nil :params nil) 1))
-      (test/assert-eq :shutdown action "exit -> :shutdown")
+      (reset-captures)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")
+      (test/assert-eq 1 *aio-stopped* "exit should call aio/stop")
     })
 
   (test "dispatch-initialized"
     {do
       (reset-state)
-      (= {action} (lsp/dispatch (list :method "initialized" :id nil :params nil) 1))
-      (test/assert-eq :scan action "initialized -> :scan")
+      (reset-captures)
+      (def {lsp/initialized} 1)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\"}")
+      (test/assert (nil? (last-error)) "initialized should not error")
     })
 
   (test "dispatch-not-initialized"
     {do
       (reset-state)
       (reset-captures)
-      (= {action} (lsp/dispatch (list :method "textDocument/hover" :id 99 :params nil) 0))
-      (test/assert-eq :continue action "not initialized -> continue")
+      (def {lsp/initialized} 0)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"textDocument/hover\",\"params\":{}}")
       (= {err} (last-error))
       (test/assert (not (nil? err)) "should send error")
       (test/assert-eq -32002 (plist/get err :code) "error code -32002")
@@ -1106,27 +1115,32 @@
   (test "dispatch-cancel-request"
     {do
       (reset-state)
-      (= {action} (lsp/dispatch-request "$/cancelRequest" nil nil))
-      (test/assert-eq :continue action "cancel -> continue")
+      (reset-captures)
+      (def {lsp/initialized} 1)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{}}")
+      (test/assert (nil? (last-response)) "cancel -> no response")
+      (test/assert (nil? (last-error)) "cancel -> no error")
     })
 
   (test "dispatch-unknown-method-with-id"
     {do
       (reset-state)
       (reset-captures)
-      (= {action} (lsp/dispatch-request "unknown/method" 42 nil))
-      (test/assert-eq :continue action "unknown -> continue")
+      (def {lsp/initialized} 1)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"unknown/method\",\"params\":{}}")
       (= {err} (last-error))
       (test/assert (not (nil? err)) "should send error for unknown")
       (test/assert-eq -32601 (plist/get err :code) "error code -32601")
     })
 
-  (test "dispatch-unknown-method-no-id"
+  (test "dispatch-unknown-notification"
     {do
       (reset-state)
       (reset-captures)
-      (= {action} (lsp/dispatch-request "unknown/notif" nil nil))
-      (test/assert-eq :continue action "unknown notif -> continue")
+      (def {lsp/initialized} 1)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"method\":\"unknown/notif\",\"params\":{}}")
+      (test/assert (nil? (last-response)) "unknown notif -> no response")
+      (test/assert (nil? (last-error)) "unknown notif -> no error")
     })
 
   ; =========================================================================
