@@ -182,13 +182,24 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
     pages_tried++;
     // LCOV_EXCL_START - page reclaim path requires MADV_DONTNEED to zero page
     if (page->reclaimed) {
+      sz current = atomic_load(&heap->committed_bytes);
+      sz new_committed;
+      bool limit_ok = false;
+      do {
+        if (current + list->page_size > heap->hard_limit) break;
+        new_committed = current + list->page_size;
+        limit_ok = atomic_compare_exchange_weak(&heap->committed_bytes, &current, new_committed);
+      } while (!limit_ok);
+      if (!limit_ok) {
+        page = page->next_partial;
+        continue;
+      }
       page->size_class = size_class;
       page->slots_per_page = list->slots_per_page;
       page->bitmap_bytes = valk_gc_bitmap_bytes(size_class);
       atomic_store(&page->num_allocated, 0);
       memset(valk_gc_page_alloc_bitmap(page), 0, page->bitmap_bytes);
       memset(valk_gc_page_mark_bitmap(page), 0, page->bitmap_bytes);
-      atomic_fetch_add(&heap->committed_bytes, list->page_size);
       page->reclaimed = false;
       start_slot = 0;
       break;
@@ -282,7 +293,11 @@ static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
   u64 current = valk_gc_heap_used_bytes(heap);
 
   if (current + alloc_size > heap->hard_limit) {
-    valk_gc_oom_abort(heap, bytes);
+    valk_gc_heap_collect(heap);
+    current = valk_gc_heap_used_bytes(heap);
+    if (current + alloc_size > heap->hard_limit) {
+      valk_gc_oom_abort(heap, bytes);
+    }
   }
 
   void *data = mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE,
@@ -353,7 +368,10 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
   }
 
   if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
-    valk_gc_oom_abort(heap, bytes);
+    valk_gc_heap_collect(heap);
+    if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
+      valk_gc_oom_abort(heap, bytes);
+    }
   }
 
   ptr = valk_gc_tlab_alloc(valk_gc_local_tlab, size_class);
