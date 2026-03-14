@@ -505,6 +505,176 @@ static void test_didchange_diagnostics(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_signature_help(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  signal(SIGPIPE, SIG_IGN);
+
+  lsp_proc_t lsp = start_lsp();
+  lsp_reader_t reader;
+  lsp_reader_init(&reader, lsp.read_fd);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+    "\"params\":{\"capabilities\":{}}}");
+  char *resp = lsp_read_response(&reader, 1, LSP_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "initialize response");
+  if (!resp) { stop_lsp(&lsp); return; }
+  free(resp);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+    "\"params\":{\"textDocument\":{"
+    "\"uri\":\"file:///tmp/sig.valk\","
+    "\"languageId\":\"valk\","
+    "\"version\":1,"
+    "\"text\":\"(fun {add a b} {+ a b})\\n(add 1 2)\"}}}");
+
+  usleep(200000);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/signatureHelp\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/sig.valk\"},"
+    "\"position\":{\"line\":1,\"character\":5}}}");
+
+  resp = lsp_read_response(&reader, 5, LSP_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "should get signature help response");
+  if (!resp) { stop_lsp(&lsp); return; }
+
+  VALK_TEST_ASSERT(strstr(resp, "\"result\"") != NULL, "should have result");
+  free(resp);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":{}}");
+  resp = lsp_read_response(&reader, 99, LSP_TIMEOUT_MS);
+  free(resp);
+  lsp_write(lsp.write_fd, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+  close(lsp.write_fd);
+  lsp.write_fd = -1;
+  int status;
+  waitpid(lsp.pid, &status, 0);
+  close(lsp.read_fd);
+  VALK_PASS();
+}
+
+static void test_semantic_tokens_range(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  signal(SIGPIPE, SIG_IGN);
+
+  lsp_proc_t lsp = start_lsp();
+  lsp_reader_t reader;
+  lsp_reader_init(&reader, lsp.read_fd);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+    "\"params\":{\"capabilities\":{}}}");
+  char *resp = lsp_read_response(&reader, 1, LSP_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "initialize response");
+  if (!resp) { stop_lsp(&lsp); return; }
+  free(resp);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+    "\"params\":{\"textDocument\":{"
+    "\"uri\":\"file:///tmp/tokr.valk\","
+    "\"languageId\":\"valk\","
+    "\"version\":1,"
+    "\"text\":\"(fun {f x} {+ x 1})\\n(def {y} 42)\"}}}");
+
+  usleep(200000);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"textDocument/semanticTokens/range\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/tokr.valk\"},"
+    "\"range\":{\"start\":{\"line\":0,\"character\":0},"
+    "\"end\":{\"line\":1,\"character\":99}}}}");
+
+  resp = lsp_read_response(&reader, 8, LSP_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "should get semantic tokens range response");
+  if (!resp) { stop_lsp(&lsp); return; }
+
+  VALK_TEST_ASSERT(strstr(resp, "\"result\"") != NULL, "should have result");
+  VALK_TEST_ASSERT(strstr(resp, "data") != NULL, "should have data field");
+  free(resp);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":{}}");
+  resp = lsp_read_response(&reader, 99, LSP_TIMEOUT_MS);
+  free(resp);
+  lsp_write(lsp.write_fd, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+  close(lsp.write_fd);
+  lsp.write_fd = -1;
+  int status;
+  waitpid(lsp.pid, &status, 0);
+  close(lsp.read_fd);
+  VALK_PASS();
+}
+
+static void test_inlay_hints(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  signal(SIGPIPE, SIG_IGN);
+
+  lsp_proc_t lsp = start_lsp();
+  lsp_reader_t reader;
+  lsp_reader_init(&reader, lsp.read_fd);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+    "\"params\":{\"capabilities\":{}}}");
+  char *resp = lsp_read_response(&reader, 1, LSP_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "initialize response");
+  if (!resp) { stop_lsp(&lsp); return; }
+  free(resp);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+    "\"params\":{\"textDocument\":{"
+    "\"uri\":\"file:///tmp/hint.valk\","
+    "\"languageId\":\"valk\","
+    "\"version\":1,"
+    "\"text\":\"(fun {add a b} {+ a b})\\n(add 1 2)\"}}}");
+
+  usleep(200000);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"textDocument/inlayHint\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/hint.valk\"},"
+    "\"range\":{\"start\":{\"line\":0,\"character\":0},"
+    "\"end\":{\"line\":1,\"character\":99}}}}");
+
+  resp = lsp_read_response(&reader, 9, LSP_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "should get inlay hints response");
+  if (!resp) { stop_lsp(&lsp); return; }
+
+  VALK_TEST_ASSERT(strstr(resp, "\"result\"") != NULL, "should have result");
+  VALK_TEST_ASSERT(strstr(resp, "\"a:\"") != NULL, "should have param hint for a");
+  VALK_TEST_ASSERT(strstr(resp, "\"b:\"") != NULL, "should have param hint for b");
+  free(resp);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":{}}");
+  resp = lsp_read_response(&reader, 99, LSP_TIMEOUT_MS);
+  free(resp);
+  lsp_write(lsp.write_fd, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+  close(lsp.write_fd);
+  lsp.write_fd = -1;
+  int status;
+  waitpid(lsp.pid, &status, 0);
+  close(lsp.read_fd);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -515,5 +685,8 @@ int main(void) {
   valk_testsuite_add_test(suite, "lsp_unknown_method_error", test_unknown_method_error);
   valk_testsuite_add_test(suite, "lsp_semantic_tokens", test_semantic_tokens);
   valk_testsuite_add_test(suite, "lsp_didchange_diagnostics", test_didchange_diagnostics);
+  valk_testsuite_add_test(suite, "lsp_signature_help", test_signature_help);
+  valk_testsuite_add_test(suite, "lsp_semantic_tokens_range", test_semantic_tokens_range);
+  valk_testsuite_add_test(suite, "lsp_inlay_hints", test_inlay_hints);
   return valk_testsuite_run(suite);
 }
