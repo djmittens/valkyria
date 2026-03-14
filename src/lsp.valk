@@ -1276,17 +1276,8 @@
 ; ---------------------------------------------------------------------------
 
 (def {lsp/noop-cb} (\ {_} {}))
-(def {lsp/request-versions} (dict/new))
-
-(fun {lsp/dispatch-versioned key id stale-resp method params} {do
-  (= {new-v} (+ (dict/get lsp/request-versions key 0) 1))
-  (dict/set! lsp/request-versions key new-v)
-  (aio/dispatch lsp/sys
-    (\ {_} {if (not (== (dict/get lsp/request-versions key) new-v))
-      {lsp/send-response id stale-resp}
-      {do (lsp/handle-readonly method id params) nil}})
-    nil lsp/noop-cb)
-})
+(def {lsp/sem-version} 0)
+(def {lsp/comp-version} 0)
 
 (fun {lsp/dispatch-to-worker method id params} {
   aio/dispatch lsp/sys
@@ -1297,16 +1288,30 @@
 
 (fun {lsp/dispatch-request method id params} {
   match method
-    {"textDocument/inlayHint"
-      (lsp/dispatch-versioned "hint" id nil method params)}
-    {"textDocument/semanticTokens/full"
-      (lsp/dispatch-versioned "sem" id (list :data nil) method params)}
-    {"textDocument/semanticTokens/range"
-      (lsp/dispatch-versioned "sem" id (list :data nil) method params)}
-    {"textDocument/completion"
-      (lsp/dispatch-versioned "comp" id nil method params)}
-    {"textDocument/signatureHelp"
-      (lsp/dispatch-versioned "sig" id (None) method params)}
+    {"textDocument/semanticTokens/full" (do
+      (def {lsp/sem-version} (+ lsp/sem-version 1))
+      (= {v} lsp/sem-version)
+      (aio/dispatch lsp/sys
+        (\ {_} {if (not (== lsp/sem-version v))
+          {lsp/send-response id (list :data nil)}
+          {do (lsp/handle-readonly method id params) nil}})
+        nil lsp/noop-cb))}
+    {"textDocument/semanticTokens/range" (do
+      (def {lsp/sem-version} (+ lsp/sem-version 1))
+      (= {v} lsp/sem-version)
+      (aio/dispatch lsp/sys
+        (\ {_} {if (not (== lsp/sem-version v))
+          {lsp/send-response id (list :data nil)}
+          {do (lsp/handle-readonly method id params) nil}})
+        nil lsp/noop-cb))}
+    {"textDocument/completion" (do
+      (def {lsp/comp-version} (+ lsp/comp-version 1))
+      (= {v} lsp/comp-version)
+      (aio/dispatch lsp/sys
+        (\ {_} {if (not (== lsp/comp-version v))
+          {lsp/send-response id nil}
+          {do (lsp/handle-readonly method id params) nil}})
+        nil lsp/noop-cb))}
     {_ (lsp/dispatch-to-worker method id params)}
 })
 
