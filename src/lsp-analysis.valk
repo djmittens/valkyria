@@ -644,6 +644,11 @@
     {ref/walk-exprs ast nil nil})
 })
 
+(fun {ref/collect-refs-from-ast ast} {
+  if (error? ast) {nil}
+  {ref/walk-exprs ast nil nil}
+})
+
 (fun {ref/find-at-offset refs offset} {
   if (nil? refs) {nil}
   {do
@@ -667,6 +672,19 @@
 
 (fun {ref/find-scoped-refs text line col} {do
   (= {refs} (ref/collect-refs text))
+  (if (nil? refs) {nil}
+    {do
+      (= {offset} (line-col->offset text line col))
+      (= {target} (ref/find-at-offset refs offset))
+      (if (nil? target) {nil}
+        {do
+          (= {scope-id} (plist/get target :scope-id))
+          (if (== scope-id -1) {nil}
+            {ref/matching-refs refs (plist/get target :name) scope-id nil})})})
+})
+
+(fun {ref/find-scoped-refs-from-ast ast text line col} {do
+  (= {refs} (ref/collect-refs-from-ast ast))
   (if (nil? refs) {nil}
     {do
       (= {offset} (line-col->offset text line col))

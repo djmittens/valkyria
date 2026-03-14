@@ -571,7 +571,7 @@
     {do
       (= {text} "(fun {f x}\n  (+ x 1))")
       (= {positions} (list (list :line 1 :character 5)))
-      (= {ranges} (sel/find-ranges text positions))
+      (= {ranges} (sel/find-ranges text (parse text) positions))
       (test/assert (not (nil? ranges)) "should return ranges")
       (= {first-sel} (head ranges))
       (test/assert (not (nil? (plist/get first-sel :range))) "should have range")

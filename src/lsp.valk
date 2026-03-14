@@ -51,11 +51,22 @@
 (fun {lsp/doc-get uri}
   {plist/get lsp/documents uri})
 
+(def {lsp/ast-cache} nil)
+
+(fun {lsp/cache-ast uri text} {do
+  (= {ast} (parse text))
+  (def {lsp/ast-cache} (plist/set lsp/ast-cache uri ast))
+  ast})
+
+(fun {lsp/get-ast uri text} {do
+  (= {cached} (plist/get lsp/ast-cache uri))
+  (if (nil? cached) {parse text} {cached})})
+
 (fun {lsp/get-doc params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
   (option/map (option/from-nullable (lsp/doc-get uri))
-    (\ {text} {list :uri uri :text text}))
+    (\ {text} {list :uri uri :text text :ast (lsp/get-ast uri text)}))
 })
 
 (fun {lsp/get-text-pos params} {do
@@ -65,7 +76,7 @@
   (= {line} (plist/get pos :line))
   (= {col} (plist/get pos :character))
   (option/map (option/from-nullable (lsp/doc-get uri))
-    (\ {text} {list :uri uri :text text :line line :col col}))
+    (\ {text} {list :uri uri :text text :ast (lsp/get-ast uri text) :line line :col col}))
 })
 
 (fun {lsp/get-word-ctx params} {
@@ -172,7 +183,7 @@
 })
 
 (fun {lsp/publish-diagnostics uri text} {do
-  (= {ast} (parse text))
+  (= {ast} (lsp/get-ast uri text))
   (if (error? ast)
     {lsp/send-notification "textDocument/publishDiagnostics"
       (list :uri uri :diagnostics
@@ -318,7 +329,8 @@
   (= {text} (plist/get td :text))
   (lsp/doc-store uri text)
   (aio/dispatch lsp/sys
-    (\ {_} {do (lsp/sync-doc uri text)
+    (\ {_} {do (lsp/cache-ast uri text)
+               (lsp/sync-doc uri text)
                (lsp/publish-diagnostics uri text)
                nil})
     nil lsp/noop-cb)})
@@ -332,7 +344,8 @@
       (= {text} (plist/get (head changes) :text))
       (lsp/doc-store uri text)
       (aio/dispatch lsp/sys
-        (\ {_} {do (lsp/sync-doc-text uri text)
+        (\ {_} {do (lsp/cache-ast uri text)
+                   (lsp/sync-doc-text uri text)
                    (lsp/publish-diagnostics uri text)
                    nil})
         nil lsp/noop-cb)})})
@@ -341,6 +354,7 @@
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
   (def {lsp/documents} (plist/set lsp/documents uri nil))
+  (def {lsp/ast-cache} (plist/set lsp/ast-cache uri nil))
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics nil))})
 
@@ -351,7 +365,8 @@
   (= {save-text} (if (nil? text) {lsp/doc-get uri} {text}))
   (if (nil? save-text) {}
     {aio/dispatch lsp/sys
-      (\ {_} {do (lsp/sync-doc uri save-text)
+      (\ {_} {do (lsp/cache-ast uri save-text)
+                 (lsp/sync-doc uri save-text)
                  (lsp/publish-diagnostics uri save-text)
                  nil})
       nil lsp/noop-cb})})
@@ -446,7 +461,8 @@
       (= {word} (plist/get ctx :word))
       (= {line} (plist/get ctx :line))
       (= {col} (plist/get ctx :col))
-      (= {local-refs} (ref/find-scoped-refs text line col))
+      (= {ast} (plist/get ctx :ast))
+      (= {local-refs} (ref/find-scoped-refs-from-ast ast text line col))
       (if (not (nil? local-refs))
         {lsp/send-response id (map (\ {r} {ref->lsp-location uri text r}) local-refs)}
         {if (nil? lsp/db) {lsp/send-response id nil}
@@ -612,7 +628,7 @@
   match (lsp/get-doc params)
     {(None) (lsp/send-response id (list :data nil))}
     {(Some :value ctx) (do
-      (= {data} (sem/tokenize (plist/get ctx :text)))
+      (= {data} (sem/tokenize-ast (plist/get ctx :ast) (plist/get ctx :text)))
       (lsp/send-response id (list :data data)))}
 })
 
@@ -687,7 +703,8 @@
       (= {word} (plist/get ctx :word))
       (= {line} (plist/get ctx :line))
       (= {col} (plist/get ctx :col))
-      (= {local-refs} (ref/find-scoped-refs text line col))
+      (= {ast} (plist/get ctx :ast))
+      (= {local-refs} (ref/find-scoped-refs-from-ast ast text line col))
       (if (not (nil? local-refs))
         {do
           (= {edits} (map (\ {r} {ref->lsp-edit text r new-name}) local-refs))
@@ -722,7 +739,7 @@
   (match (lsp/get-doc params)
     {(None) (lsp/send-response id nil)}
     {(Some :value ctx)
-      (lsp/send-response id (hint/collect (plist/get ctx :text) lsp/db range))})
+      (lsp/send-response id (hint/collect-from-ast (plist/get ctx :ast) (plist/get ctx :text) lsp/db range))})
 })
 
 ; ---------------------------------------------------------------------------
@@ -770,8 +787,8 @@
       {sig/count-args text (+ start 1) end dp db count in-word}}}}})}
 })
 
-(fun {sig/lookup-params name text db} {do
-  (= {local} (hint/collect-local-params (parse text)))
+(fun {sig/lookup-params name ast db} {do
+  (= {local} (hint/collect-local-params ast))
   (= {params} (plist/get local name))
   (if (not (nil? params)) {params}
     {hint/query-db-params db name})
@@ -781,10 +798,11 @@
   (= {result}
     (option/flat-map (lsp/get-text-pos params) (\ {ctx} {do
       (= {text} (plist/get ctx :text))
+      (= {ast} (plist/get ctx :ast))
       (= {offset} (line-col->offset text (plist/get ctx :line) (plist/get ctx :col)))
       (option/flat-map (option/from-nullable (sig/scan-back text (- offset 1) 0 0)) (\ {open-pos} {
         option/flat-map (option/from-nullable (sig/extract-name text open-pos)) (\ {name} {
-          option/map (option/from-nullable (sig/lookup-params name text lsp/db)) (\ {fn-params} {do
+          option/map (option/from-nullable (sig/lookup-params name ast lsp/db)) (\ {fn-params} {do
             (= {name-end} (+ open-pos 1 (len name)))
             (= {arg-idx} (sig/count-args text name-end offset 0 0 0 0))
             (= {active} (if (>= arg-idx (len fn-params))
@@ -824,11 +842,12 @@
     {(None) (lsp/send-response id nil)}
     {(Some :value ctx) (do
       (= {text} (plist/get ctx :text))
+      (= {ast} (plist/get ctx :ast))
       (= {word} (plist/get ctx :word))
-      (= {local-refs} (ref/find-scoped-refs text (plist/get ctx :line) (plist/get ctx :col)))
+      (= {local-refs} (ref/find-scoped-refs-from-ast ast text (plist/get ctx :line) (plist/get ctx :col)))
       (= {refs} (if (not (nil? local-refs)) {local-refs}
         {do
-          (= {all-refs} (ref/collect-refs text))
+          (= {all-refs} (ref/collect-refs-from-ast ast))
           (filter (\ {r} {== (plist/get r :name) word}) all-refs)}))
       (lsp/send-response id (map (\ {r} {ref->highlight text r}) refs)))}
 })
@@ -883,7 +902,7 @@
     {(None) (lsp/send-response id nil)}
     {(Some :value ctx) (do
       (= {text} (plist/get ctx :text))
-      (= {ast} (parse text))
+      (= {ast} (plist/get ctx :ast))
       (if (error? ast) {lsp/send-response id nil}
         {do
           (= {root} (if (nil? lsp/root-path) {"."} {lsp/root-path}))
@@ -942,22 +961,20 @@
   match (lsp/get-doc params)
     {(None) (lsp/send-response id nil)}
     {(Some :value ctx) (do
-      (= {text} (plist/get ctx :text))
-      (= {ast} (parse text))
+      (= {ast} (plist/get ctx :ast))
       (if (error? ast) {lsp/send-response id nil}
-        {lsp/send-response id (fold/collect ast text)}))}
+        {lsp/send-response id (fold/collect ast (plist/get ctx :text))}))}
 })
 
 ; ---------------------------------------------------------------------------
 ; Selection range — smart selection expansion using AST structure
 ; ---------------------------------------------------------------------------
 
-(fun {sel/find-ranges text positions} {
+(fun {sel/find-ranges text ast positions} {
   map (\ {pos} {do
     (= {line} (plist/get pos :line))
     (= {col} (plist/get pos :character))
     (= {offset} (line-col->offset text line col))
-    (= {ast} (parse text))
     (if (error? ast)
       {list :range (list :start pos :end pos)}
       {do
@@ -1009,7 +1026,7 @@
   (match (lsp/get-doc params)
     {(None) (lsp/send-response id nil)}
     {(Some :value ctx)
-      (lsp/send-response id (sel/find-ranges (plist/get ctx :text) positions))})
+      (lsp/send-response id (sel/find-ranges (plist/get ctx :text) (plist/get ctx :ast) positions))})
 })
 
 ; ---------------------------------------------------------------------------
@@ -1121,7 +1138,7 @@
       (= {text} (plist/get ctx :text))
       (= {start-line} (plist/get (plist/get range :start) :line))
       (= {end-line} (plist/get (plist/get range :end) :line))
-      (= {data} (sem/tokenize text))
+      (= {data} (sem/tokenize-ast (plist/get ctx :ast) text))
       (= {filtered} (sem/filter-range data start-line end-line 0 nil))
       (lsp/send-response id (list :data filtered)))})
 })
