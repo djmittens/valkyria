@@ -6,7 +6,13 @@
     {(or (== var "*test-default-timeout-ms*")
          (or (== var "*test-default-suite-timeout-ms*")
              (== var "*test-json-output*")))}
-    {false})
+    {(if (== rel "test/test_lsp_handlers.valk")
+      {(or (== var "*captured-responses*")
+           (or (== var "*captured-errors*")
+               (or (== var "*captured-notifications*")
+                   (or (== var "*aio-stopped*")
+                       (== var "*aio-dispatched*")))))}
+      {false})})
 })
 
 ; Check if line contains (atom ...)

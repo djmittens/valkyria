@@ -87,9 +87,11 @@ static void __pipe_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
   }
   // LCOV_EXCL_STOP
 
+  // LCOV_EXCL_START — callback_set always true (read starts via pipe/on-data which sets it); cb null = handle table race
   if (pipe->callback_set) {
     valk_lval_t *cb = valk_handle_resolve(&valk_sys->handle_table, pipe->callback_handle);
     if (cb) {
+      // LCOV_EXCL_STOP
       char *copy = malloc(nread + 1);
       memcpy(copy, buf->base, nread);
       copy[nread] = '\0';
@@ -329,8 +331,10 @@ static void __lsp_reader_try_parse(valk_lsp_reader_t *reader) {
       char saved = reader->buf[reader->content_length];
       reader->buf[reader->content_length] = '\0';
 
+      // LCOV_EXCL_START — cb null = handle table race; callback_handle set at reader creation
       valk_lval_t *cb = valk_handle_resolve(&valk_sys->handle_table, reader->callback_handle);
       if (cb) {
+      // LCOV_EXCL_STOP
         valk_lval_t *body_str = valk_lval_str(reader->buf);
         valk_lval_t *args = valk_lval_cons(body_str, valk_lval_nil());
         valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
@@ -454,7 +458,9 @@ static void __dispatch_completion_on_loop0(void *ctx) {
   valk_lval_t *cb = valk_handle_resolve(&valk_sys->handle_table, comp->cb_handle);
   valk_lval_t *result = valk_handle_resolve(&valk_sys->handle_table, comp->result_handle);
 
+  // LCOV_EXCL_START — handles just created in dispatch; null = handle table race
   if (cb && result) {
+    // LCOV_EXCL_STOP
     VALK_GC_ROOT(cb);
     VALK_GC_ROOT(result);
 
