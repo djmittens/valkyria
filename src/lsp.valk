@@ -218,6 +218,21 @@
       (lsp/send-notification "textDocument/publishDiagnostics"
         (list :uri uri :diagnostics lsp-diags))})})
 
+(sig 'lsp/publish-diagnostics-fast {-> Str Str Nil})
+(fun {lsp/publish-diagnostics-fast uri text} {do
+  (= {ast} (lsp/get-ast uri text))
+  (if (error? ast)
+    {lsp/send-notification "textDocument/publishDiagnostics"
+      (list :uri uri :diagnostics
+        (list (list :range
+          (list :start (list :line 0 :character 0)
+                :end   (list :line 0 :character 1))
+          :severity 1
+          :source "valk"
+          :message (str ast))))}
+    {lsp/send-notification "textDocument/publishDiagnostics"
+      (list :uri uri :diagnostics nil)})})
+
 ; ---------------------------------------------------------------------------
 ; Sync document to symdb
 ; ---------------------------------------------------------------------------
@@ -376,15 +391,9 @@
     {do
       (= {text} (plist/get (head changes) :text))
       (lsp/doc-store uri text)
-      (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (= {v} lsp/doc-version)
-      (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/doc-version v)) {nil}
-          {do (lsp/cache-ast uri text)
-              (lsp/sync-doc-text uri text)
-              (lsp/publish-diagnostics uri text)
-              nil}})
-        nil lsp/noop-cb)})})
+      (dict/remove! lsp/ast-cache uri)
+      (lsp/send-notification "textDocument/publishDiagnostics"
+        (list :uri uri :diagnostics nil))})})
 
 (sig 'handle-did-close {-> List Nil})
 (fun {handle-did-close params} {do
@@ -1377,6 +1386,7 @@
 (def {lsp/noop-cb} (\ {_} {}))
 (def {lsp/sem-version} 0)
 (def {lsp/comp-version} 0)
+(def {lsp/hint-version} 0)
 
 (sig 'lsp/dispatch-to-worker {-> Str Any List Nil})
 (fun {lsp/dispatch-to-worker method id params} {
@@ -1394,7 +1404,7 @@
       (= {v} lsp/sem-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/sem-version v))
-          {lsp/send-response id (list :data nil)}
+          {nil}
           {do (lsp/handle-readonly method id params) nil}})
         nil lsp/noop-cb))}
     {"textDocument/semanticTokens/range" (do
@@ -1402,7 +1412,7 @@
       (= {v} lsp/sem-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/sem-version v))
-          {lsp/send-response id (list :data nil)}
+          {nil}
           {do (lsp/handle-readonly method id params) nil}})
         nil lsp/noop-cb))}
     {"textDocument/completion" (do
@@ -1410,7 +1420,15 @@
       (= {v} lsp/comp-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/comp-version v))
-          {lsp/send-response id nil}
+          {nil}
+          {do (lsp/handle-readonly method id params) nil}})
+        nil lsp/noop-cb))}
+    {"textDocument/inlayHint" (do
+      (def {lsp/hint-version} (+ lsp/hint-version 1))
+      (= {v} lsp/hint-version)
+      (aio/dispatch lsp/sys
+        (\ {_} {if (not (== lsp/hint-version v))
+          {nil}
           {do (lsp/handle-readonly method id params) nil}})
         nil lsp/noop-cb))}
     {_ (lsp/dispatch-to-worker method id params)}
