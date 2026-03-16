@@ -362,7 +362,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (if (nil? raw) {nil}
     {do
       (= {refs} (reverse raw))
-      (= {offsets} (map (\ {r} {plist/get r :offset}) refs))
+      (= {offsets} (map (\ {r} {offset:r}) refs))
       (= {lcs} (offsets->line-cols text offsets))
       (symdb/zip-refs-lcs refs lcs nil)})
 })
@@ -374,7 +374,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
     (= {r} (head refs))
     (= {lc} (head lcs))
     (symdb/zip-refs-lcs (tail refs) (tail lcs)
-      (qcons (list :name (plist/get r :name)
+      (qcons (list :name name:r
                    :line (head lc)
                    :col (head (tail lc))) acc))}
 })
@@ -426,7 +426,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (= {existing} (sqlite/query-maybe db
     "SELECT hash FROM files WHERE path=?1" path))
   (if (not (nil? existing))
-    {if (== (plist/get existing :hash) hash) {0}
+    {if (== hash:existing hash) {0}
       {do (sqlite/exec db "BEGIN")
           (symdb/sync-file-symbols db uri text hash)
           (sqlite/exec db "COMMIT") 1}}
@@ -458,27 +458,27 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   if (nil? syms) {nil}
     {do
       (= {s} (head syms))
-      (= {is-sig} (plist/get s :is-sig))
+      (= {is-sig} is-sig:s)
       (if (== is-sig 1)
         {do
           (= {existing} (sqlite/query-maybe db
-            "SELECT id, doc FROM symbols WHERE file_id=?1 AND name=?2" file-id (plist/get s :name)))
+            "SELECT id, doc FROM symbols WHERE file_id=?1 AND name=?2" file-id name:s))
           (if (nil? existing)
             {sqlite/exec db
               "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc, sig) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
-              (plist/get s :name) file-id (plist/get s :line) (plist/get s :col)
-              (plist/get s :kind) (plist/get s :arity) (plist/get s :doc) (plist/get s :sig)}
+              name:s file-id line:s col:s
+              kind:s arity:s doc:s sig:s}
             {do
-              (= {new-doc} (plist/get s :doc))
-              (= {old-doc} (plist/get existing :doc))
+              (= {new-doc} doc:s)
+              (= {old-doc} doc:existing)
               (= {final-doc} (if (nil? new-doc) {old-doc} {new-doc}))
               (sqlite/exec db
                 "UPDATE symbols SET sig=?1, doc=?2 WHERE id=?3"
-                (plist/get s :sig) final-doc (plist/get existing :id))})}
+                sig:s final-doc id:existing)})}
         {sqlite/exec db
           "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc, sig) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
-          (plist/get s :name) file-id (plist/get s :line) (plist/get s :col)
-          (plist/get s :kind) (plist/get s :arity) (plist/get s :doc) (plist/get s :sig)})
+          name:s file-id line:s col:s
+          kind:s arity:s doc:s sig:s})
       (symdb/insert-symbols db file-id (tail syms))}
 })
 
@@ -496,7 +496,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   if (nil? refs) {nil}
     {do
       (= {r} (head refs))
-      (sqlite/bind stmt (plist/get r :name) file-id (plist/get r :line) (plist/get r :col))
+      (sqlite/bind stmt name:r file-id line:r col:r)
       (sqlite/step stmt)
       (symdb/insert-refs-step stmt file-id (tail refs))}
 })
@@ -573,16 +573,16 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
           name))
         (if (nil? fallback) {nil}
           {do
-            (= {type-sig} (if (nil? sig-row) {nil} {plist/get sig-row :sig}))
-            (= {sig-doc} (if (nil? sig-row) {nil} {plist/get sig-row :doc}))
-            (= {fb-doc} (plist/get fallback :doc))
+            (= {type-sig} (if (nil? sig-row) {nil} {sig:sig-row}))
+            (= {sig-doc} (if (nil? sig-row) {nil} {doc:sig-row}))
+            (= {fb-doc} doc:fallback)
             (= {final-doc} (if (nil? fb-doc) {sig-doc} {fb-doc}))
             (plist/set (plist/set fallback :sig type-sig) :doc final-doc)})}}
     {do
-      (= {type-sig} (if (nil? sig-row) {nil} {plist/get sig-row :sig}))
-      (= {formals} (plist/get def-row :sig))
-      (= {def-doc} (plist/get def-row :doc))
-      (= {sig-doc} (if (nil? sig-row) {nil} {plist/get sig-row :doc}))
+      (= {type-sig} (if (nil? sig-row) {nil} {sig:sig-row}))
+      (= {formals} sig:def-row)
+      (= {def-doc} doc:def-row)
+      (= {sig-doc} (if (nil? sig-row) {nil} {doc:sig-row}))
       (= {final-doc} (if (nil? def-doc) {sig-doc} {def-doc}))
       (plist/set (plist/set (plist/set def-row
         :sig type-sig)

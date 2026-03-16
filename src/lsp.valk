@@ -89,8 +89,8 @@
 
 (sig 'lsp/get-doc {-> List DocCtx})
 (fun {lsp/get-doc params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
+  (= {td} textDocument:params)
+  (= {uri} uri:td)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
     {(DocCtx :uri uri :text text :ast (lsp/get-ast uri text))})
@@ -98,11 +98,11 @@
 
 (sig 'lsp/get-text-pos {-> List TextPosCtx})
 (fun {lsp/get-text-pos params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
-  (= {pos} (plist/get params :position))
-  (= {line} (plist/get pos :line))
-  (= {col} (plist/get pos :character))
+  (= {td} textDocument:params)
+  (= {uri} uri:td)
+  (= {pos} position:params)
+  (= {line} line:pos)
+  (= {col} character:pos)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
     {(TextPosCtx :uri uri :text text :ast (lsp/get-ast uri text) :line line :col col)})
@@ -184,13 +184,13 @@
 (sig 'make-lsp-diag {-> List List})
 (fun {make-lsp-diag d}
   {list :range
-    (list :start (list :line (plist/get d :line)
-                       :character (plist/get d :col))
-          :end   (list :line (plist/get d :line)
-                       :character (plist/get d :end-col)))
-    :severity (plist/get d :severity)
+    (list :start (list :line line:d
+                       :character col:d)
+          :end   (list :line line:d
+                       :character end-col:d))
+    :severity severity:d
     :source "valk"
-    :message (plist/get d :message)})
+    :message message:d})
 
 (sig 'lsp/ensure-loads-indexed {-> List Nil})
 (fun {lsp/ensure-loads-indexed ast} {
@@ -271,7 +271,7 @@
       (= {existing} (sqlite/query-maybe lsp/db
         "SELECT hash FROM files WHERE path=?1" path))
       (if (not (nil? existing))
-        {if (== (plist/get existing :hash) hash) {}
+        {if (== hash:existing hash) {}
           {do (sqlite/exec lsp/db "BEGIN")
               (symdb/sync-file-symbols lsp/db uri text hash)
               (sqlite/exec lsp/db "COMMIT")
@@ -334,8 +334,8 @@
   if (nil? entries) {acc}
     {do
       (= {entry} (head entries))
-      (= {name} (plist/get entry :name))
-      (= {type} (plist/get entry :type))
+      (= {name} name:entry)
+      (= {type} type:entry)
       (= {full} (str root "/" name))
       (= {acc} (if (== type "dir")
         {if (lsp/skip-dir? name) {acc}
@@ -375,7 +375,7 @@
 
 (sig 'handle-initialize {-> Num List Nil})
 (fun {handle-initialize id params} {do
-  (= {root-uri} (plist/get params :rootUri))
+  (= {root-uri} rootUri:params)
   (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
   (if (not (nil? root-uri))
     {do
@@ -389,9 +389,9 @@
 
 (sig 'handle-did-open {-> List Nil})
 (fun {handle-did-open params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
-  (= {text} (plist/get td :text))
+  (= {td} textDocument:params)
+  (= {uri} uri:td)
+  (= {text} text:td)
   (lsp/doc-store uri text)
   (aio/dispatch lsp/sys
     (\ {_} {do (lsp/cache-ast uri text)
@@ -402,9 +402,9 @@
 
 (sig 'handle-did-change {-> List Nil})
 (fun {handle-did-change params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
-  (= {changes} (plist/get params :contentChanges))
+  (= {td} textDocument:params)
+  (= {uri} uri:td)
+  (= {changes} contentChanges:params)
   (if (nil? changes) {}
     {do
       (= {text} (plist/get (head changes) :text))
@@ -415,8 +415,8 @@
 
 (sig 'handle-did-close {-> List Nil})
 (fun {handle-did-close params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
+  (= {td} textDocument:params)
+  (= {uri} uri:td)
   (dict/remove! lsp/documents uri)
   (dict/remove! lsp/ast-cache uri)
   (lsp/send-notification "textDocument/publishDiagnostics"
@@ -424,9 +424,9 @@
 
 (sig 'handle-did-save {-> List Nil})
 (fun {handle-did-save params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
-  (= {text} (plist/get params :text))
+  (= {td} textDocument:params)
+  (= {uri} uri:td)
+  (= {text} text:params)
   (= {save-text} (if (nil? text) {lsp/doc-get uri} {text}))
   (if (nil? save-text) {}
     {aio/dispatch lsp/sys
@@ -442,12 +442,12 @@
 
 (sig 'hover/format-markdown {-> List Str Str})
 (fun {hover/format-markdown info word} {do
-  (= {name} (plist/get info :name))
-  (= {type-sig} (plist/get info :sig))
-  (= {formals} (plist/get info :formals))
-  (= {doc} (plist/get info :doc))
-  (= {path} (plist/get info :path))
-  (= {sym-line} (plist/get info :line))
+  (= {name} name:info)
+  (= {type-sig} sig:info)
+  (= {formals} formals:info)
+  (= {doc} doc:info)
+  (= {path} path:info)
+  (= {sym-line} line:info)
   (= {sections} nil)
   (= {sections} (if (not (nil? type-sig))
     {qcons (str "```valk\n" name " : " type-sig "\n```") sections}
@@ -496,9 +496,9 @@
       (if (nil? defn)
         {lsp/send-response id (None)}
         {do
-          (= {def-path} (plist/get defn :path))
-          (= {def-line} (plist/get defn :line))
-          (= {def-col} (plist/get defn :col))
+          (= {def-path} path:defn)
+          (= {def-line} line:defn)
+          (= {def-col} col:defn)
           (lsp/send-response id
             (list :uri (str "file://" def-path)
                   :range (list
@@ -508,8 +508,8 @@
 
 (sig 'ref->lsp-location {-> Str Str List List})
 (fun {ref->lsp-location uri text r} {do
-  (= {lc} (offset->line-col text (plist/get r :offset)))
-  (= {rname} (plist/get r :name))
+  (= {lc} (offset->line-col text offset:r))
+  (= {rname} name:r)
   (list :uri uri
         :range (list
           :start (list :line (head lc) :character (head (tail lc)))
@@ -528,10 +528,10 @@
           {do
             (= {refs} (symdb/find-refs lsp/db word:ctx))
             (lsp/send-response id (map (\ {r} {
-              list :uri (str "file://" (plist/get r :path))
+              list :uri (str "file://" path:r)
                    :range (list
-                     :start (list :line (plist/get r :line) :character (plist/get r :col))
-                     :end (list :line (plist/get r :line) :character (+ (plist/get r :col) (len word:ctx))))
+                     :start (list :line line:r :character col:r)
+                     :end (list :line line:r :character (+ col:r (len word:ctx))))
             }) refs))}})})
 })
 
@@ -599,10 +599,10 @@
 
 (sig 'make-sym-completion-item {-> List List})
 (fun {make-sym-completion-item s} {do
-  (= {name} (plist/get s :name))
-  (= {kind} (plist/get s :kind))
-  (= {sig} (plist/get s :sig))
-  (= {doc} (plist/get s :doc))
+  (= {name} name:s)
+  (= {kind} kind:s)
+  (= {sig} sig:s)
+  (= {doc} doc:s)
   (= {detail-str} (if (nil? sig) {""} {sig}))
   (= {item} (list :label name
                    :kind (symkind->completion-kind kind)
@@ -638,17 +638,17 @@
 
 (sig 'handle-document-symbols {-> Num List Nil})
 (fun {handle-document-symbols id params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
+  (= {td} textDocument:params)
+  (= {uri} uri:td)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {path} (uri->path uri))
       (= {syms} (symdb/file-symbols lsp/db path))
       (= {lsp-syms} (map (\ {s} {do
-        (= {sym-line} (plist/get s :line))
-        (= {sym-col} (plist/get s :col))
-        (= {sym-name} (plist/get s :name))
-        (= {sym-kind} (plist/get s :kind))
+        (= {sym-line} line:s)
+        (= {sym-col} col:s)
+        (= {sym-name} name:s)
+        (= {sym-kind} kind:s)
         (list :name sym-name
               :kind (symkind->lsp-kind sym-kind)
               :range (list
@@ -662,23 +662,23 @@
 
 (sig 'handle-workspace-symbols {-> Num List Nil})
 (fun {handle-workspace-symbols id params} {do
-  (= {query} (plist/get params :query))
+  (= {query} query:params)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {syms} (if (nil? query) {symdb/all-symbol-names lsp/db}
         {if (== query "") {symdb/all-symbol-names lsp/db}
           {symdb/search-symbols lsp/db query}}))
       (= {lsp-syms} (map (\ {s} {do
-        (= {sym-line} (plist/get s :line))
-        (= {sym-col} (plist/get s :col))
-        (= {sym-name} (plist/get s :name))
+        (= {sym-line} line:s)
+        (= {sym-col} col:s)
+        (= {sym-name} name:s)
         (= {sl} (if (nil? sym-line) {0} {sym-line}))
         (= {sc} (if (nil? sym-col) {0} {sym-col}))
         (list :name sym-name
-             :kind (symkind->lsp-kind (plist/get s :kind))
+             :kind (symkind->lsp-kind kind:s)
              :location (list
-               :uri (str "file://" (if (nil? (plist/get s :path))
-                 {""} {plist/get s :path}))
+               :uri (str "file://" (if (nil? path:s)
+                 {""} {path:s}))
                :range (list
                  :start (list :line sl :character sc)
                  :end (list :line sl :character (+ sc (len sym-name))))))
@@ -713,8 +713,8 @@
 
 (sig 'ref->lsp-edit {-> Str List Str List})
 (fun {ref->lsp-edit text r new-name} {do
-  (= {lc} (offset->line-col text (plist/get r :offset)))
-  (= {rlen} (plist/get r :len))
+  (= {lc} (offset->line-col text offset:r))
+  (= {rlen} len:r)
   (list :range (list
     :start (list :line (head lc) :character (head (tail lc)))
     :end (list :line (head lc) :character (+ (head (tail lc)) rlen)))
@@ -724,8 +724,8 @@
 (sig 'db-ref->lsp-edit {-> List Num Str List})
 (fun {db-ref->lsp-edit r word-len new-name} {
   list :range (list
-    :start (list :line (plist/get r :line) :character (plist/get r :col))
-    :end (list :line (plist/get r :line) :character (+ (plist/get r :col) word-len)))
+    :start (list :line line:r :character col:r)
+    :end (list :line line:r :character (+ col:r word-len)))
   :newText new-name
 })
 
@@ -734,8 +734,8 @@
   if (nil? locs) {acc}
   {do
     (= {loc} (head locs))
-    (= {uri} (plist/get loc :uri))
-    (= {edit} (plist/get loc :edit))
+    (= {uri} uri:loc)
+    (= {edit} edit:loc)
     (= {existing} (plist/get acc uri))
     (= {new-edits} (if (nil? existing) {list edit} {qcons edit existing}))
     (rename/group-by-uri (tail locs) (plist/set acc uri new-edits))}
@@ -759,7 +759,7 @@
 
 (sig 'handle-rename {-> Num List Nil})
 (fun {handle-rename id params} {do
-  (= {new-name} (plist/get params :newName))
+  (= {new-name} newName:params)
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
     {do
@@ -777,11 +777,11 @@
             (= {db-defs} (symdb/find-definitions lsp/db word:ctx))
             (= {all-locs} (join
               (map (\ {r} {
-                list :uri (str "file://" (plist/get r :path))
+                list :uri (str "file://" path:r)
                      :edit (db-ref->lsp-edit r word-len new-name)
               }) db-refs)
               (map (\ {d} {
-                list :uri (str "file://" (plist/get d :path))
+                list :uri (str "file://" path:d)
                      :edit (db-ref->lsp-edit d word-len new-name)
               }) db-defs)))
             (= {grouped} (rename/group-by-uri all-locs nil))
@@ -795,7 +795,7 @@
 
 (sig 'handle-inlay-hints {-> Num List Nil})
 (fun {handle-inlay-hints id params} {do
-  (= {range} (plist/get params :range))
+  (= {range} range:params)
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
     {do (= {hints} (hint/collect-from-ast ast:ctx text:ctx lsp/db range))
@@ -894,9 +894,9 @@
 
 (sig 'ref->highlight {-> Str List List})
 (fun {ref->highlight text r} {do
-  (= {lc} (offset->line-col text (plist/get r :offset)))
-  (= {rname} (plist/get r :name))
-  (= {kind} (if (== (plist/get r :is-def) 1) {3} {2}))
+  (= {lc} (offset->line-col text offset:r))
+  (= {rname} name:r)
+  (= {kind} (if (== is-def:r 1) {3} {2}))
   (list :range (list
     :start (list :line (head lc) :character (head (tail lc)))
     :end (list :line (head lc) :character (+ (head (tail lc)) (len rname))))
@@ -912,7 +912,7 @@
       (= {refs} (if (not (nil? local-refs)) {local-refs}
         {do
           (= {all-refs} (ref/collect-refs-from-ast ast:ctx))
-          (filter (\ {r} {== (plist/get r :name) word:ctx}) all-refs)}))
+          (filter (\ {r} {== name:r word:ctx}) all-refs)}))
       (lsp/send-response id (map (\ {r} {ref->highlight text:ctx r}) refs))})
 })
 
@@ -1044,8 +1044,8 @@
 (sig 'sel/find-ranges {-> Str List List List})
 (fun {sel/find-ranges text ast positions} {
   map (\ {pos} {do
-    (= {line} (plist/get pos :line))
-    (= {col} (plist/get pos :character))
+    (= {line} line:pos)
+    (= {col} character:pos)
     (= {offset} (line-col->offset text line col))
     (if (error? ast)
       {list :range (list :start pos :end pos)}
@@ -1099,7 +1099,7 @@
 
 (sig 'handle-selection-range {-> Num List Nil})
 (fun {handle-selection-range id params} {do
-  (= {positions} (plist/get params :positions))
+  (= {positions} positions:params)
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
     {lsp/send-response id (sel/find-ranges text:ctx ast:ctx positions)})
@@ -1111,8 +1111,8 @@
 
 (sig 'handle-code-lens {-> Num List Nil})
 (fun {handle-code-lens id params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
+  (= {td} textDocument:params)
+  (= {uri} uri:td)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {path} (uri->path uri))
@@ -1125,13 +1125,13 @@
   if (nil? syms) {nil}
   {do
     (= {s} (head syms))
-    (= {kind} (plist/get s :kind))
+    (= {kind} kind:s)
     (if (== kind SYMKIND_FUNCTION)
       {do
-        (= {name} (plist/get s :name))
+        (= {name} name:s)
         (= {count} (symdb/ref-count db name))
-        (= {sym-line} (plist/get s :line))
-        (= {sym-col} (plist/get s :col))
+        (= {sym-line} line:s)
+        (= {sym-col} col:s)
         (= {lens} (list :range (list
           :start (list :line sym-line :character sym-col)
           :end (list :line sym-line :character (+ sym-col (len name))))
@@ -1147,10 +1147,10 @@
 
 (sig 'handle-code-action {-> Num List Nil})
 (fun {handle-code-action id params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
-  (= {context} (plist/get params :context))
-  (= {diagnostics} (plist/get context :diagnostics))
+  (= {td} textDocument:params)
+  (= {uri} uri:td)
+  (= {context} context:params)
+  (= {diagnostics} diagnostics:context)
   (if (nil? diagnostics) {lsp/send-response id nil}
     {do
       (= {actions} (ca/collect-actions diagnostics uri))
@@ -1161,7 +1161,7 @@
   if (nil? diags) {nil}
   {do
     (= {d} (head diags))
-    (= {msg} (plist/get d :message))
+    (= {msg} message:d)
     (= {actions} (if (nil? msg) {nil}
       {ca/check-undefined msg d uri}))
     (join actions (ca/collect-actions (tail diags) uri))}
@@ -1190,7 +1190,7 @@
     (if (nil? name) {nil}
       {do
         (= {candidates} (symdb/search-symbols lsp/db name))
-        (= {range} (plist/get d :range))
+        (= {range} range:d)
         (ca/make-fix-actions candidates name range uri d)})}
 })
 
@@ -1199,7 +1199,7 @@
   if (nil? candidates) {nil}
   {do
     (= {c} (head candidates))
-    (= {cname} (plist/get c :name))
+    (= {cname} name:c)
     (if (== cname original) {ca/make-fix-actions (tail candidates) original range uri d}
       {do
         (= {action} (list :title (str "Did you mean '" cname "'?")
@@ -1216,12 +1216,14 @@
 
 (sig 'handle-semantic-tokens-range {-> Num List Nil})
 (fun {handle-semantic-tokens-range id params} {do
-  (= {range} (plist/get params :range))
+  (= {range} range:params)
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id (list :data nil)}
     {do
-      (= {start-line} (plist/get (plist/get range :start) :line))
-      (= {end-line} (plist/get (plist/get range :end) :line))
+      (= {start-pos} start:range)
+      (= {end-pos} end:range)
+      (= {start-line} line:start-pos)
+      (= {end-line} line:end-pos)
       (= {data} (sem/tokenize-ast ast:ctx text:ctx))
       (= {filtered} (sem/filter-range data start-line end-line 0 nil))
       (lsp/send-response id (list :data filtered))})
@@ -1289,8 +1291,8 @@
   if (nil? files) {count}
   {do
     (= {f} (head files))
-    (= {path} (plist/get f :path))
-    (= {file-id} (plist/get f :id))
+    (= {path} path:f)
+    (= {file-id} id:f)
     (= {fp} (file/fingerprint path))
     (if (error? fp)
       {do (symdb/remove-file lsp/db file-id)
@@ -1311,7 +1313,7 @@
       (= {existing} (sqlite/query-maybe db
         "SELECT hash FROM files WHERE path=?1" fpath))
       (if (not (nil? existing))
-        {if (== (plist/get existing :hash) fp) {0}
+        {if (== hash:existing fp) {0}
           {do
             (= {text} (read-file path))
             (if (error? text) {0}
@@ -1449,9 +1451,9 @@
   (= {msg} (json/parse body))
   (if (nil? msg) {}
     {do
-      (= {method} (plist/get msg :method))
-      (= {id} (plist/get msg :id))
-      (= {params} (plist/get msg :params))
+      (= {method} method:msg)
+      (= {id} id:msg)
+      (= {params} params:msg)
       (if (nil? method) {}
         {match method
             {"initialize" (do (stderr/write (str "[valk-lsp] <- initialize\n"))

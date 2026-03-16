@@ -8,8 +8,8 @@
 
 (fun {get-arena-available sys} {
   (= {stats} (aio/pool-stats sys))
-  (= {arenas} (plist/get stats :arenas))
-  (plist/get arenas :available)
+  (= {arenas} arenas:stats)
+  available:arenas
 })
 
 (def {async-handler}

@@ -388,15 +388,15 @@
   if (nil? scopes) {-1}
   {do
     (= {s} (head scopes))
-    (if (member? name (plist/get s :names))
-      {plist/get s :id}
+    (if (member? name names:s)
+      {id:s}
       {ref/resolve-scope name (tail scopes)})}
 })
 
 (sig 'ref/current-scope-id {-> List Num})
 (fun {ref/current-scope-id scopes} {
   if (nil? scopes) {-1}
-  {plist/get (head scopes) :id}
+  {do (= {s} (head scopes)) id:s}
 })
 
 ; --- Core walker ---
@@ -697,7 +697,7 @@
   if (nil? scopes) {scopes}
   {do
     (= {s} (head scopes))
-    (= {names} (plist/get s :names))
+    (= {names} names:s)
     (qcons (plist/set s :names (qcons name names)) (tail scopes))}
 })
 
@@ -737,8 +737,8 @@
   if (nil? refs) {nil}
   {do
     (= {r} (head refs))
-    (= {roff} (plist/get r :offset))
-    (= {rlen} (plist/get r :len))
+    (= {roff} offset:r)
+    (= {rlen} len:r)
     (if (and (>= offset roff) (< offset (+ roff rlen)))
       {r}
       {ref/find-at-offset (tail refs) offset})}
@@ -749,8 +749,8 @@
   if (nil? refs) {reverse acc}
   {do
     (= {r} (head refs))
-    (if (and (== (plist/get r :name) target-name)
-             (== (plist/get r :scope-id) target-scope))
+    (if (and (== name:r target-name)
+             (== scope-id:r target-scope))
       {ref/matching-refs (tail refs) target-name target-scope (qcons r acc)}
       {ref/matching-refs (tail refs) target-name target-scope acc})}
 })
@@ -764,9 +764,9 @@
       (= {target} (ref/find-at-offset refs offset))
       (if (nil? target) {nil}
         {do
-          (= {scope-id} (plist/get target :scope-id))
+          (= {scope-id} scope-id:target)
           (if (== scope-id -1) {nil}
-            {ref/matching-refs refs (plist/get target :name) scope-id nil})})})
+            {ref/matching-refs refs name:target scope-id nil})})})
 })
 
 (sig 'ref/find-scoped-refs-from-ast {-> List Str Num Num List})
@@ -778,7 +778,7 @@
       (= {target} (ref/find-at-offset refs offset))
       (if (nil? target) {nil}
         {do
-          (= {scope-id} (plist/get target :scope-id))
+          (= {scope-id} scope-id:target)
           (if (== scope-id -1) {nil}
-            {ref/matching-refs refs (plist/get target :name) scope-id nil})})})
+            {ref/matching-refs refs name:target scope-id nil})})})
 })

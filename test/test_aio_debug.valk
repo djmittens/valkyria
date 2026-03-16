@@ -150,9 +150,9 @@
     (= {req} {:path "/debug/"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "text/html; charset=utf-8" (plist/get resp (head {:content-type}))
+    (test/assert-eq "text/html; charset=utf-8" (:content-type resp)
       "content-type should be text/html")
     true
   })
@@ -161,9 +161,9 @@
     (= {req} {:path "/debug/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "application/json" (plist/get resp (head {:content-type}))
+    (test/assert-eq "application/json" (:content-type resp)
       "content-type should be application/json")
     true
   })
@@ -172,9 +172,9 @@
     (= {req} {:path "/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "text/plain; version=0.0.4" (plist/get resp (head {:content-type}))
+    (test/assert-eq "text/plain; version=0.0.4" (:content-type resp)
       "content-type should be prometheus format")
     true
   })
@@ -182,7 +182,7 @@
     {do
     (= {r1} (aio/debug-handle-request mock-sys {:path "/"}))
     (test/assert (!= r1 nil) "/ returns redirect response (otherwise branch)")
-    (test/assert-eq "200" (plist/get r1 (head {:status})) "redirect has status 200")
+    (test/assert-eq "200" (:status r1) "redirect has status 200")
     (= {r2} (aio/debug-handle-request mock-sys {:path "/api/data"}))
     (test/assert (!= r2 nil) "/api/data returns redirect response")
     (= {r3} (aio/debug-handle-request mock-sys {:path "/debug/unknown"}))
@@ -194,9 +194,9 @@
     (= {req} {:path "/debug"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "text/html; charset=utf-8" (plist/get resp (head {:content-type}))
+    (test/assert-eq "text/html; charset=utf-8" (:content-type resp)
       "content-type should be text/html")
     true
   })
@@ -205,12 +205,12 @@
     (= {req} {:path "/debug/diagnostics/memory"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil for /debug/diagnostics/memory")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "text/event-stream; charset=utf-8" (plist/get resp (head {:content-type}))
+    (test/assert-eq "text/event-stream; charset=utf-8" (:content-type resp)
       "content-type should be text/event-stream")
     ; body-type should be the keyword :sse-stream
-    (= {body-type} (plist/get resp (head {:body-type})))
+    (= {body-type} (:body-type resp))
     (test/assert (!= body-type nil) "body-type should be present")
     true
   })
@@ -220,7 +220,7 @@
     ; Handler should work like debug-handle-request
     (= {resp} (handler {:path "/debug/"}))
     (test/assert (!= resp nil) "handler should return response for /debug/")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "handler response should have status 200")
     true
   })
@@ -229,9 +229,9 @@
     (= {resp} (aio/debug-handle-request mock-sys {:path "/debug/"}))
 
     ; Check that required fields exist
-    (= {status} (plist/get resp (head {:status})))
-    (= {content-type} (plist/get resp (head {:content-type})))
-    (= {body} (plist/get resp (head {:body})))
+    (= {status} (:status resp))
+    (= {content-type} (:content-type resp))
+    (= {body} (:body resp))
 
     (test/assert (!= status nil) "response should have status")
     (test/assert (!= content-type nil) "response should have content-type")
@@ -251,7 +251,7 @@
     {do
     (= {req} {:path "/debug/"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
+    (= {body} (:body resp))
 
     ; Body should match the cached content
     (test/assert-eq aio/debug-html-content body
@@ -291,9 +291,9 @@
     (= {req} {:path "/debug/slab/buckets"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "application/json" (plist/get resp (head {:content-type}))
+    (test/assert-eq "application/json" (:content-type resp)
       "content-type should be application/json")
     true
   })
@@ -301,7 +301,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys nil))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -309,7 +309,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "slab=tcp_buffers&start=0&end=1000&buckets=50"))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -317,7 +317,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "start=100&end=500"))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -325,7 +325,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "invalidparam"))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -333,7 +333,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "unknown=value&start=100"))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -342,9 +342,9 @@
     (= {req} {:path "/debug/metrics/state"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "application/json" (plist/get resp (head {:content-type}))
+    (test/assert-eq "application/json" (:content-type resp)
       "content-type should be application/json")
     true
   })
@@ -352,7 +352,7 @@
     {do
     (= {req} {:path "/debug/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
+    (= {body} (:body resp))
 
     (test/assert (> (len body) 0)
       "JSON metrics body should not be empty")
@@ -364,7 +364,7 @@
     {do
     (= {req} {:path "/debug/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
+    (= {body} (:body resp))
     (= {direct} (aio/metrics-json mock-sys))
 
     ; Both should be strings of similar length (uptime may differ slightly)
@@ -376,7 +376,7 @@
     {do
     (= {req} {:path "/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
+    (= {body} (:body resp))
 
     (test/assert (> (len body) 0)
       "Prometheus metrics body should not be empty")
@@ -388,7 +388,7 @@
     {do
     (= {req} {:path "/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
+    (= {body} (:body resp))
     (= {direct} (aio/debug-merge-metrics-prometheus mock-sys))
 
     (test/assert (> (len body) 0) "route body should exist")
@@ -399,7 +399,7 @@
     {do
     (= {resp} (aio/debug-handle-request mock-sys {:path ""}))
     (test/assert (!= resp nil) "empty path should return redirect response")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "empty path should have status 200")
     true
   })
@@ -407,8 +407,8 @@
     {do
     (= {resp} (aio/debug-handle-request mock-sys {:path "/debug/?foo=bar"}))
     (test/assert (!= resp nil) "path with query string returns dashboard (query stripped)")
-    (test/assert-eq "200" (plist/get resp (head {:status})) "status should be 200")
-    (test/assert-eq "text/html; charset=utf-8" (plist/get resp (head {:content-type}))
+    (test/assert-eq "200" (:status resp) "status should be 200")
+    (test/assert-eq "text/html; charset=utf-8" (:content-type resp)
       "should return HTML dashboard after query stripping")
     true
   })

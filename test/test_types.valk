@@ -378,4 +378,34 @@
     })
 
 
+
+  ; === Plist fallback tests ===
+  (test "field-var-plist-fallback"
+    {do
+      (= {td} (list :uri "/test.valk" :text "hello"))
+      (test/assert-eq "/test.valk" uri:td "field:var falls back to plist/get for untyped vars")
+    })
+
+  (test "field-var-plist-fallback-multiple"
+    {do
+      (= {info} (list :name "Alice" :age 30 :city "NYC"))
+      (test/assert-eq "Alice" name:info "plist fallback name")
+      (test/assert-eq 30 age:info "plist fallback age")
+      (test/assert-eq "NYC" city:info "plist fallback city")
+    })
+
+  (test "field-var-plist-fallback-nil"
+    {do
+      (= {data} (list :x 1))
+      (test/assert (nil? y:data) "plist fallback returns nil for missing key")
+    })
+
+  (test "field-var-typed-still-works"
+    {do
+      (= {p} (Person :name "Bob" :age 25 :email "bob@x.com"))
+      (test/assert-eq "Bob" name:p "typed field:var still compiles to nth")
+      (test/assert-eq 25 age:p "typed field:var age")
+    })
+
+
 ))

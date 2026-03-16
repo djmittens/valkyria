@@ -181,16 +181,16 @@
     {do
     (= {result} (json/parse "{\"name\":\"alice\",\"age\":30}"))
     (test/assert-eq 4 (len result) "object with 2 keys has 4 plist elements")
-    (test/assert-eq "alice" (plist/get result (head {:name})) "name value")
-    (test/assert-eq 30 (plist/get result (head {:age})) "age value")
+    (test/assert-eq "alice" (:name result) "name value")
+    (test/assert-eq 30 (:age result) "age value")
     true
   })
 
   (test "parse-nested-object"
     {do
     (= {result} (json/parse "{\"user\":{\"id\":1}}"))
-    (= {user} (plist/get result (head {:user})))
-    (test/assert-eq 1 (plist/get user (head {:id})) "nested object value")
+    (= {user} (:user result))
+    (test/assert-eq 1 (:id user) "nested object value")
     true
   })
 
@@ -198,8 +198,8 @@
     {do
     (= {result} (json/parse "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7,\"h\":8,\"i\":9,\"j\":10}"))
     (test/assert-eq 20 (len result) "10 keys = 20 plist elements")
-    (test/assert-eq 1 (plist/get result (head {:a})) "first key")
-    (test/assert-eq 10 (plist/get result (head {:j})) "last key")
+    (test/assert-eq 1 (:a result) "first key")
+    (test/assert-eq 10 (:j result) "last key")
     true
   })
 
@@ -219,7 +219,7 @@
   (test "parse-object-with-array-value"
     {do
     (= {result} (json/parse "{\"items\":[10,20,30]}"))
-    (= {items} (plist/get result (head {:items})))
+    (= {items} (:items result))
     (test/assert-eq 3 (len items) "array value has 3 elements")
     (test/assert-eq 10 (nth 1 items) "first item")
     (test/assert-eq 30 (nth 3 items) "third item")
@@ -229,9 +229,9 @@
   (test "parse-deeply-nested"
     {do
     (= {result} (json/parse "{\"a\":{\"b\":{\"c\":42}}}"))
-    (= {a} (plist/get result (head {:a})))
-    (= {b} (plist/get a (head {:b})))
-    (test/assert-eq 42 (plist/get b (head {:c})) "deeply nested value")
+    (= {a} (:a result))
+    (= {b} (:b a))
+    (test/assert-eq 42 (:c b) "deeply nested value")
     true
   })
 
@@ -378,8 +378,8 @@
     {do
     (= {encoded} (json/encode {:x 10 :y 20}))
     (= {decoded} (json/parse encoded))
-    (test/assert-eq 10 (plist/get decoded (head {:x})) "object roundtrip x")
-    (test/assert-eq 20 (plist/get decoded (head {:y})) "object roundtrip y")
+    (test/assert-eq 10 (:x decoded) "object roundtrip x")
+    (test/assert-eq 20 (:y decoded) "object roundtrip y")
     true
   })
 
@@ -418,7 +418,7 @@
   (test "parse-object-with-whitespace"
     {do
     (= {result} (json/parse "{ \"key\" : \"value\" }"))
-    (test/assert-eq "value" (plist/get result (head {:key})) "object with whitespace")
+    (test/assert-eq "value" (:key result) "object with whitespace")
     true
   })
 
@@ -448,7 +448,7 @@
   (test "parse-object-with-null-value"
     {do
     (= {result} (json/parse "{\"x\":null}"))
-    (= {val} (plist/get result (head {:x})))
+    (= {val} (:x result))
     (test/assert-eq (head val) (head {Option::None}) "object null value")
     true
   })
@@ -456,8 +456,8 @@
   (test "parse-object-with-bool-values"
     {do
     (= {result} (json/parse "{\"a\":true,\"b\":false}"))
-    (test/assert-eq 1 (plist/get result (head {:a})) "true value")
-    (test/assert-eq 0 (plist/get result (head {:b})) "false value")
+    (test/assert-eq 1 (:a result) "true value")
+    (test/assert-eq 0 (:b result) "false value")
     true
   })
 
@@ -476,9 +476,9 @@
     (= {result} (json/parse "[{\"id\":1},{\"id\":2}]"))
     (test/assert-eq 2 (len result) "2 objects in array")
     (= {first} (nth 1 result))
-    (test/assert-eq 1 (plist/get first (head {:id})) "first object id")
+    (test/assert-eq 1 (:id first) "first object id")
     (= {second} (nth 2 result))
-    (test/assert-eq 2 (plist/get second (head {:id})) "second object id")
+    (test/assert-eq 2 (:id second) "second object id")
     true
   })
 
@@ -544,7 +544,7 @@
   (test "parse-truncated-object"
     {do
     (= {result} (json/parse "{\"a\":1"))
-    (test/assert-eq 1 (plist/get result (head {:a})) "truncated object still has parsed key")
+    (test/assert-eq 1 (:a result) "truncated object still has parsed key")
     true
   })
 

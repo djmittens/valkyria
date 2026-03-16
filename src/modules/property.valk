@@ -43,18 +43,18 @@
 ; ops: {:map (f -> fa -> fb) :mk (a -> fa) :eq (fa -> fb -> Bool)}
 
 (fun {laws/functor-identity ops gen-a} {do
-  (= {fmap} (plist/get ops :map))
-  (= {mk}   (plist/get ops :mk))
-  (= {eq}   (plist/get ops :eq))
+  (= {fmap} map:ops)
+  (= {mk}   mk:ops)
+  (= {eq}   eq:ops)
   (= {a} (gen-a))
   (= {fa} (mk a))
   (eq (fmap id fa) fa)
 })
 
 (fun {laws/functor-composition ops gen-a f g} {do
-  (= {fmap} (plist/get ops :map))
-  (= {mk}   (plist/get ops :mk))
-  (= {eq}   (plist/get ops :eq))
+  (= {fmap} map:ops)
+  (= {mk}   mk:ops)
+  (= {eq}   eq:ops)
   (= {a} (gen-a))
   (= {fa} (mk a))
   (eq (fmap g (fmap f fa)) (fmap (comp g f) fa))
@@ -64,18 +64,18 @@
 ; ops: {:pure (a -> fa) :ap (f(a->b) -> fa -> fb) :eq (fa -> fb -> Bool)}
 
 (fun {laws/applicative-identity ops gen-a} {do
-  (= {pure} (plist/get ops :pure))
-  (= {ap}   (plist/get ops :ap))
-  (= {eq}   (plist/get ops :eq))
+  (= {pure} pure:ops)
+  (= {ap}   ap:ops)
+  (= {eq}   eq:ops)
   (= {a} (gen-a))
   (= {v} (pure a))
   (eq (ap (pure id) v) v)
 })
 
 (fun {laws/applicative-homomorphism ops gen-a f} {do
-  (= {pure} (plist/get ops :pure))
-  (= {ap}   (plist/get ops :ap))
-  (= {eq}   (plist/get ops :eq))
+  (= {pure} pure:ops)
+  (= {ap}   ap:ops)
+  (= {eq}   eq:ops)
   (= {a} (gen-a))
   (eq (ap (pure f) (pure a)) (pure (f a)))
 })
@@ -84,26 +84,26 @@
 ; ops: {:pure (a -> ma) :flat-map (ma -> (a -> mb) -> mb) :eq (ma -> mb -> Bool)}
 
 (fun {laws/monad-left-identity ops gen-a f} {do
-  (= {pure}     (plist/get ops :pure))
-  (= {flat-map} (plist/get ops :flat-map))
-  (= {eq}       (plist/get ops :eq))
+  (= {pure}     pure:ops)
+  (= {flat-map} flat-map:ops)
+  (= {eq}       eq:ops)
   (= {a} (gen-a))
   (eq (flat-map (pure a) f) (f a))
 })
 
 (fun {laws/monad-right-identity ops gen-a} {do
-  (= {pure}     (plist/get ops :pure))
-  (= {flat-map} (plist/get ops :flat-map))
-  (= {eq}       (plist/get ops :eq))
+  (= {pure}     pure:ops)
+  (= {flat-map} flat-map:ops)
+  (= {eq}       eq:ops)
   (= {a} (gen-a))
   (= {m} (pure a))
   (eq (flat-map m pure) m)
 })
 
 (fun {laws/monad-associativity ops gen-a f g} {do
-  (= {pure}     (plist/get ops :pure))
-  (= {flat-map} (plist/get ops :flat-map))
-  (= {eq}       (plist/get ops :eq))
+  (= {pure}     pure:ops)
+  (= {flat-map} flat-map:ops)
+  (= {eq}       eq:ops)
   (= {a} (gen-a))
   (= {m} (pure a))
   (eq (flat-map (flat-map m f) g)
@@ -114,34 +114,34 @@
 ; ops: {:add add-fn :mul mul-fn :zero zero :one one :eq eq-fn}
 
 (fun {laws/semiring-additive-identity ops gen-a} {do
-  (= {add}  (plist/get ops :add))
-  (= {zero} (plist/get ops :zero))
-  (= {eq}   (plist/get ops :eq))
+  (= {add}  add:ops)
+  (= {zero} zero:ops)
+  (= {eq}   eq:ops)
   (= {a} (gen-a))
   (and (eq (add a zero) a)
        (eq (add zero a) a))
 })
 
 (fun {laws/semiring-multiplicative-identity ops gen-a} {do
-  (= {mul} (plist/get ops :mul))
-  (= {one} (plist/get ops :one))
-  (= {eq}  (plist/get ops :eq))
+  (= {mul} mul:ops)
+  (= {one} one:ops)
+  (= {eq}  eq:ops)
   (= {a} (gen-a))
   (and (eq (mul a one) a)
        (eq (mul one a) a))
 })
 
 (fun {laws/semiring-additive-commutativity ops gen-a} {do
-  (= {add} (plist/get ops :add))
-  (= {eq}  (plist/get ops :eq))
+  (= {add} add:ops)
+  (= {eq}  eq:ops)
   (= {a} (gen-a))
   (= {b} (gen-a))
   (eq (add a b) (add b a))
 })
 
 (fun {laws/semiring-additive-associativity ops gen-a} {do
-  (= {add} (plist/get ops :add))
-  (= {eq}  (plist/get ops :eq))
+  (= {add} add:ops)
+  (= {eq}  eq:ops)
   (= {a} (gen-a))
   (= {b} (gen-a))
   (= {c} (gen-a))
@@ -149,8 +149,8 @@
 })
 
 (fun {laws/semiring-multiplicative-associativity ops gen-a} {do
-  (= {mul} (plist/get ops :mul))
-  (= {eq}  (plist/get ops :eq))
+  (= {mul} mul:ops)
+  (= {eq}  eq:ops)
   (= {a} (gen-a))
   (= {b} (gen-a))
   (= {c} (gen-a))
@@ -158,9 +158,9 @@
 })
 
 (fun {laws/semiring-distributivity ops gen-a} {do
-  (= {add} (plist/get ops :add))
-  (= {mul} (plist/get ops :mul))
-  (= {eq}  (plist/get ops :eq))
+  (= {add} add:ops)
+  (= {mul} mul:ops)
+  (= {eq}  eq:ops)
   (= {a} (gen-a))
   (= {b} (gen-a))
   (= {c} (gen-a))
@@ -173,9 +173,9 @@
 
 ; bimap id id = id
 (fun {laws/bifunctor-identity ops gen-a gen-b} {do
-  (= {bimap} (plist/get ops :bimap))
-  (= {mk}    (plist/get ops :mk))
-  (= {eq}    (plist/get ops :eq))
+  (= {bimap} bimap:ops)
+  (= {mk}    mk:ops)
+  (= {eq}    eq:ops)
   (= {a} (gen-a))
   (= {b} (gen-b))
   (= {p} (mk a b))
@@ -184,9 +184,9 @@
 
 ; bimap (f . g) (h . k) = bimap f h . bimap g k
 (fun {laws/bifunctor-composition ops gen-a gen-b f g h k} {do
-  (= {bimap} (plist/get ops :bimap))
-  (= {mk}    (plist/get ops :mk))
-  (= {eq}    (plist/get ops :eq))
+  (= {bimap} bimap:ops)
+  (= {mk}    mk:ops)
+  (= {eq}    eq:ops)
   (= {a} (gen-a))
   (= {b} (gen-b))
   (= {p} (mk a b))
@@ -199,18 +199,18 @@
 
 ; traverse list pure = pure list (identity law)
 (fun {laws/traversable-identity ops gen-a gen-list-size} {do
-  (= {traverse} (plist/get ops :traverse))
-  (= {pure}     (plist/get ops :pure))
-  (= {eq}       (plist/get ops :eq))
+  (= {traverse} traverse:ops)
+  (= {pure}     pure:ops)
+  (= {eq}       eq:ops)
   (= {n} (gen-list-size))
   (= {l} (gen/list-of gen-a n))
   (eq (traverse l pure) (pure l))
 })
 
 (fun {laws/semiring-annihilation ops gen-a} {do
-  (= {mul}  (plist/get ops :mul))
-  (= {zero} (plist/get ops :zero))
-  (= {eq}   (plist/get ops :eq))
+  (= {mul}  mul:ops)
+  (= {zero} zero:ops)
+  (= {eq}   eq:ops)
   (= {a} (gen-a))
   (and (eq (mul a zero) zero)
        (eq (mul zero a) zero))

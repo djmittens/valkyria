@@ -163,7 +163,7 @@
       "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '(fun %' AND kind=1 LIMIT 1"
       name))
     (if (nil? row) {nil}
-      {hint/parse-sig-params (plist/get row :sig)})}
+      {hint/parse-sig-params sig:row})}
 })
 
 ; ---------------------------------------------------------------------------
@@ -243,9 +243,9 @@
 
 (sig 'hint/lookup-params {-> Str List List})
 (fun {hint/lookup-params name ctx} {do
-  (= {local} (plist/get (plist/get ctx :local) name))
+  (= {local} (plist/get local:ctx name))
   (if (not (nil? local)) {local}
-    {hint/query-db-params (plist/get ctx :db) name})
+    {hint/query-db-params db:ctx name})
 })
 
 ; ---------------------------------------------------------------------------
@@ -294,18 +294,18 @@
   if (nil? hints) {acc}
   {do
     (= {h} (head hints))
-    (= {lc} (offset->line-col text (plist/get h :offset)))
+    (= {lc} (offset->line-col text offset:h))
     (= {line} (head lc))
     (= {col} (head (tail lc)))
     (hint/format-loop (tail hints) text range
       (if (hint/in-range? line range)
-        {if (== (plist/get h :kind) 1)
+        {if (== kind:h 1)
           {qcons (list :position (list :line line :character col)
-                       :label (plist/get h :label)
+                       :label label:h
                        :kind 1
                        :paddingLeft :true) acc}
           {qcons (list :position (list :line line :character col)
-                       :label (plist/get h :label)
+                       :label label:h
                        :kind 2
                        :paddingRight :true) acc}}
         {acc}))}
@@ -315,8 +315,10 @@
 (fun {hint/in-range? line range} {
   if (nil? range) {1}
   {do
-    (= {start-line} (plist/get (plist/get range :start) :line))
-    (= {end-line} (plist/get (plist/get range :end) :line))
+    (= {start-pos} start:range)
+    (= {end-pos} end:range)
+    (= {start-line} line:start-pos)
+    (= {end-line} line:end-pos)
     (and (>= line start-line) (<= line end-line))}
 })
 
@@ -375,7 +377,7 @@
       "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
       name))
     (if (nil? row) {nil}
-      {hint/parse-prefix-sig (plist/get row :sig)})}
+      {hint/parse-prefix-sig sig:row})}
 })
 
 (sig 'hint/infer-call-return-type {-> Str Ref Any})

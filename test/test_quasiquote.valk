@@ -184,21 +184,21 @@
   (test "plist-get-basic"
     {do
     (= {data} {:name "Alice" :age 30})
-    (test/assert-eq "Alice" (plist/get data :name) "should get name")
-    (test/assert-eq 30 (plist/get data :age) "should get age")
+    (test/assert-eq "Alice" name:data "should get name")
+    (test/assert-eq 30 age:data "should get age")
     true
   })
   (test "plist-get-missing-key"
     {do
     (= {data} {:a 1 :b 2})
-    (= {result} (plist/get data :missing))
+    (= {result} missing:data)
     (test/assert (== result nil) "missing key should return nil")
     true
   })
   (test "plist-get-empty"
     {do
     (= {data} {})
-    (= {result} (plist/get data :key))
+    (= {result} key:data)
     (test/assert (== result nil) "empty plist should return nil")
     true
   }))

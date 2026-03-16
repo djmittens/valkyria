@@ -860,6 +860,15 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
           }
           return valk_lval_err("type '%s' has no field ':%.*s'", type_name, (int)field_len, expr->str);
         }
+      } else {
+        char field_key[field_len + 2];
+        field_key[0] = ':';
+        memcpy(field_key + 1, expr->str, field_len);
+        field_key[field_len + 1] = '\0';
+        valk_lval_t *plist_get_sym = valk_lval_sym("plist/get");
+        valk_lval_t *var_sym = valk_lval_sym(var_name);
+        valk_lval_t *key_sym = valk_lval_sym(field_key);
+        return valk_lval_cons(plist_get_sym, valk_lval_cons(var_sym, valk_lval_cons(key_sym, valk_lval_nil())));
       }
     }
     return expr;
