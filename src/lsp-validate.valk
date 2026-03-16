@@ -372,7 +372,7 @@
         (= {c1} (str/slice name (+ idx 1) (+ idx 2)))
         (if (== c1 ":") {0}
         {if (not (vd/is-lowercase-char c1)) {0}
-          {== (str/index-of (str/slice name (+ idx 1) (len name)) ":") -1}})}})})})
+          {1}})}})})})
 })
 
 (sig 'vd/check-sym-name {-> Any Str List List})

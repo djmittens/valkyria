@@ -445,7 +445,16 @@
   {if (== n "None") {"Option"}
   {if (== n "Some") {"Option"}
   {if (== n "\\") {"Fn"}
-  {hint/infer-call-return-type n db}}}}}}
+  {if (hint/is-ctor-name n) {n}
+  {hint/infer-call-return-type n db}}}}}}}
+})
+
+(sig 'hint/is-ctor-name {-> Str Num})
+(fun {hint/is-ctor-name n} {
+  if (<= (len n) 0) {0}
+  {do
+    (= {c} (str/slice n 0 1))
+    (>= (str/index-of "ABCDEFGHIJKLMNOPQRSTUVWXYZ" c) 0)}
 })
 
 (sig 'hint/emit-binding-type {-> List Any Ref List List})

@@ -408,4 +408,33 @@
     })
 
 
+
+  ; === Chaining tests ===
+  (test "chain-plist-two-levels"
+    {do
+      (= {data} (list :user (list :name "Alice" :age 30)))
+      (test/assert-eq "Alice" data:user:name "two-level chain")
+      (test/assert-eq 30 data:user:age "two-level chain age")
+    })
+
+  (test "chain-plist-three-levels"
+    {do
+      (= {root} (list :a (list :b (list :c 42))))
+      (test/assert-eq 42 root:a:b:c "three-level chain")
+    })
+
+  (test "chain-plist-nested-object"
+    {do
+      (= {data} (list :person (list :name "Bob" :age 25)))
+      (test/assert-eq "Bob" data:person:name "plist nested object")
+      (test/assert-eq 25 data:person:age "plist nested age")
+    })
+
+  (test "chain-nil-propagates"
+    {do
+      (= {data} (list :x (list :y 1)))
+      (test/assert (nil? data:z:y) "missing first field returns nil, second is nil")
+    })
+
+
 ))

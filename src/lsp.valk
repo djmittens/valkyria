@@ -89,8 +89,7 @@
 
 (sig 'lsp/get-doc {-> List DocCtx})
 (fun {lsp/get-doc params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
+  (= {uri} params:textDocument:uri)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
     {(DocCtx :uri uri :text text :ast (lsp/get-ast uri text))})
@@ -98,14 +97,11 @@
 
 (sig 'lsp/get-text-pos {-> List TextPosCtx})
 (fun {lsp/get-text-pos params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
-  (= {pos} params:position)
-  (= {line} pos:line)
-  (= {col} pos:character)
+  (= {uri} params:textDocument:uri)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
-    {(TextPosCtx :uri uri :text text :ast (lsp/get-ast uri text) :line line :col col)})
+    {(TextPosCtx :uri uri :text text :ast (lsp/get-ast uri text)
+                 :line params:position:line :col params:position:character)})
 })
 
 (sig 'lsp/get-word-ctx {-> List WordCtx})
@@ -389,9 +385,8 @@
 
 (sig 'handle-did-open {-> List Nil})
 (fun {handle-did-open params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
-  (= {text} td:text)
+  (= {uri} params:textDocument:uri)
+  (= {text} params:textDocument:text)
   (lsp/doc-store uri text)
   (aio/dispatch lsp/sys
     (\ {_} {do (lsp/cache-ast uri text)
@@ -402,8 +397,7 @@
 
 (sig 'handle-did-change {-> List Nil})
 (fun {handle-did-change params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
+  (= {uri} params:textDocument:uri)
   (= {changes} params:contentChanges)
   (if (nil? changes) {}
     {do
@@ -415,8 +409,7 @@
 
 (sig 'handle-did-close {-> List Nil})
 (fun {handle-did-close params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
+  (= {uri} params:textDocument:uri)
   (dict/remove! lsp/documents uri)
   (dict/remove! lsp/ast-cache uri)
   (lsp/send-notification "textDocument/publishDiagnostics"
@@ -424,8 +417,7 @@
 
 (sig 'handle-did-save {-> List Nil})
 (fun {handle-did-save params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
+  (= {uri} params:textDocument:uri)
   (= {text} params:text)
   (= {save-text} (if (nil? text) {lsp/doc-get uri} {text}))
   (if (nil? save-text) {}
@@ -638,8 +630,7 @@
 
 (sig 'handle-document-symbols {-> Num List Nil})
 (fun {handle-document-symbols id params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
+  (= {uri} params:textDocument:uri)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {path} (uri->path uri))
@@ -1111,8 +1102,7 @@
 
 (sig 'handle-code-lens {-> Num List Nil})
 (fun {handle-code-lens id params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
+  (= {uri} params:textDocument:uri)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {path} (uri->path uri))
@@ -1147,8 +1137,7 @@
 
 (sig 'handle-code-action {-> Num List Nil})
 (fun {handle-code-action id params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
+  (= {uri} params:textDocument:uri)
   (= {context} params:context)
   (= {diagnostics} context:diagnostics)
   (if (nil? diagnostics) {lsp/send-response id nil}

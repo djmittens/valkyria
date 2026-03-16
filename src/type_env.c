@@ -207,8 +207,53 @@ static bool is_field_access(const char *sym) {
   const char *colon = strchr(sym, ':');
   if (!colon || colon == sym || colon[1] == '\0') return false;
   if (colon[1] == ':') return false;
-  if (strchr(colon + 1, ':') != NULL) return false;
   return true;
+}
+
+static const char *scope_find_type(valk_type_scope_t *scope, const char *var);
+static valk_constructor_t *find_constructor_by_short_name(valk_type_env_t *env, const char *short_name);
+
+static valk_lval_t *resolve_field_access(valk_type_env_t *env, valk_type_scope_t *scope,
+                                          valk_lval_t *var_expr, const char *var_name,
+                                          const char *field_name) {
+  const char *type_name = var_name ? scope_find_type(scope, var_name) : NULL;
+  u64 field_len = strlen(field_name);
+  char field_key[field_len + 2];
+  field_key[0] = ':';
+  memcpy(field_key + 1, field_name, field_len);
+  field_key[field_len + 1] = '\0';
+
+  if (type_name) {
+    valk_constructor_t *ctor = valk_type_env_find_constructor(env, type_name);
+    if (!ctor) ctor = find_constructor_by_short_name(env, type_name);
+    if (!ctor) {
+      valk_type_decl_t *tdecl = valk_type_env_find_type(env, type_name);
+      if (tdecl) {
+        for (u64 c = 0; c < tdecl->constructor_count && !ctor; c++) {
+          for (u64 f = 0; f < tdecl->constructors[c]->field_count; f++) {
+            if (strcmp(tdecl->constructors[c]->fields[f].name, field_key) == 0) {
+              ctor = tdecl->constructors[c];
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (ctor) {
+      for (u64 i = 0; i < ctor->field_count; i++) {
+        if (strcmp(ctor->fields[i].name, field_key) == 0) {
+          valk_lval_t *index = valk_lval_num((long)(i + 2));
+          valk_lval_t *nth_sym = valk_lval_sym("nth");
+          return valk_lval_cons(nth_sym, valk_lval_cons(index, valk_lval_cons(var_expr, valk_lval_nil())));
+        }
+      }
+      return valk_lval_err("type '%s' has no field ':%s'", type_name, field_name);
+    }
+  }
+
+  valk_lval_t *plist_get_sym = valk_lval_sym("plist/get");
+  valk_lval_t *key_sym = valk_lval_sym(field_key);
+  return valk_lval_cons(plist_get_sym, valk_lval_cons(var_expr, valk_lval_cons(key_sym, valk_lval_nil())));
 }
 
 static const char *scope_find_type(valk_type_scope_t *scope, const char *var) {
@@ -835,57 +880,34 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
     if (scope && is_field_access(expr->str)) {
       const char *colon = strchr(expr->str, ':');
       u64 var_len = colon - expr->str;
-      const char *field_name = colon + 1;
-      u64 field_len = strlen(field_name);
 
       char var_buf[var_len + 1];
       memcpy(var_buf, expr->str, var_len);
       var_buf[var_len] = '\0';
 
-      const char *type_name = scope_find_type(scope, var_buf);
-      if (type_name) {
-        char field_key[field_len + 2];
-        field_key[0] = ':';
-        memcpy(field_key + 1, field_name, field_len);
-        field_key[field_len + 1] = '\0';
+      if (var_buf[0] < 'a' || var_buf[0] > 'z') goto not_field;
 
-        valk_constructor_t *ctor = valk_type_env_find_constructor(env, type_name);
-        if (!ctor) ctor = find_constructor_by_short_name(env, type_name);
-        if (!ctor) {
-          valk_type_decl_t *tdecl = valk_type_env_find_type(env, type_name);
-          if (tdecl) {
-            for (u64 c = 0; c < tdecl->constructor_count && !ctor; c++) {
-              for (u64 f = 0; f < tdecl->constructors[c]->field_count; f++) {
-                if (strcmp(tdecl->constructors[c]->fields[f].name, field_key) == 0) {
-                  ctor = tdecl->constructors[c];
-                  break;
-                }
-              }
-            }
-          }
-        }
-        if (ctor) {
-          for (u64 i = 0; i < ctor->field_count; i++) {
-            if (strcmp(ctor->fields[i].name, field_key) == 0) {
-              valk_lval_t *index = valk_lval_num((long)(i + 2));
-              valk_lval_t *nth_sym = valk_lval_sym("nth");
-              valk_lval_t *var_sym = valk_lval_sym(var_buf);
-              return valk_lval_cons(nth_sym, valk_lval_cons(index, valk_lval_cons(var_sym, valk_lval_nil())));
-            }
-          }
-          return valk_lval_err("type '%s' has no field ':%s'", type_name, field_name);
-        }
-      } else if (var_buf[0] >= 'a' && var_buf[0] <= 'z') {
-        char field_key[field_len + 2];
-        field_key[0] = ':';
-        memcpy(field_key + 1, field_name, field_len);
-        field_key[field_len + 1] = '\0';
-        valk_lval_t *plist_get_sym = valk_lval_sym("plist/get");
-        valk_lval_t *var_sym = valk_lval_sym(var_buf);
-        valk_lval_t *key_sym = valk_lval_sym(field_key);
-        return valk_lval_cons(plist_get_sym, valk_lval_cons(var_sym, valk_lval_cons(key_sym, valk_lval_nil())));
+      const char *rest = colon + 1;
+      valk_lval_t *result = valk_lval_sym(var_buf);
+      const char *cur_var = var_buf;
+
+      while (*rest) {
+        const char *next_colon = strchr(rest, ':');
+        if (next_colon && next_colon[1] == ':') next_colon = NULL;
+        u64 flen = next_colon ? (u64)(next_colon - rest) : strlen(rest);
+        char fbuf[flen + 1];
+        memcpy(fbuf, rest, flen);
+        fbuf[flen] = '\0';
+
+        result = resolve_field_access(env, scope, result, cur_var, fbuf);
+        if (LVAL_TYPE(result) == LVAL_ERR) return result;
+
+        cur_var = NULL;
+        rest = next_colon ? next_colon + 1 : rest + flen;
       }
+      return result;
     }
+    not_field:
     return expr;
   }
 

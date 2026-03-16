@@ -267,7 +267,7 @@ static void walk_sym(walk_ctx_t *w, valk_lval_t *expr) {
   if (name[0] >= 'a' && name[0] <= 'z') {
     const char *colon = strchr(name, ':');
     if (colon && colon != name && colon[1] >= 'a' && colon[1] <= 'z' &&
-        !strchr(colon + 1, ':')) {
+        colon[1] != ':') {
       advance_cursor(w, name);
       return;
     }
