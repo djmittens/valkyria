@@ -12,11 +12,7 @@
     return err;                                                          \
   } while (0)
 
-#define VALK_SET_ORIGIN_ALLOCATOR(obj)                   \
-  do {                                                   \
-    (obj)->origin_allocator = valk_thread_ctx.allocator; \
-    (obj)->gc_next = nullptr;                            \
-  } while (0)
+#define VALK_SET_ORIGIN_ALLOCATOR(obj) ((void)(obj))
 
 #define LVAL_ASSERT(args, cond, fmt, ...) \
   if ((cond)) {                           \

@@ -54,6 +54,8 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
+  valk_lval_init_singletons();
+
   valk_gc_heap_t* gc_heap = sys->heap;
 
   // Note: valk_system_create() already registers the calling thread for GC.

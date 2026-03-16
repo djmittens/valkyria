@@ -576,7 +576,7 @@ void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
     valk_gc_set_root(heap, env);
 
     VALK_WITH_ALLOC((void *)arena) {
-      valk_lval_t *num = valk_lval_num(42);
+      valk_lval_t *num = valk_lval_num(999);
       VALK_TEST_ASSERT(LVAL_ALLOC(num) == LVAL_ALLOC_SCRATCH,
                        "Number should be in scratch");
       valk_lenv_def(env, valk_lval_sym("x"), num);
@@ -586,8 +586,8 @@ void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
       valk_lval_t *retrieved = valk_lenv_get(env, valk_lval_sym("x"));
       VALK_TEST_ASSERT(LVAL_TYPE(retrieved) == LVAL_NUM,
                        "Retrieved should be number");
-      VALK_TEST_ASSERT(retrieved->num == 42,
-                       "Number value should be 42");
+      VALK_TEST_ASSERT(retrieved->num == 999,
+                       "Number value should be 999");
       VALK_TEST_ASSERT(LVAL_ALLOC(retrieved) == LVAL_ALLOC_HEAP,
                        "def should evacuate scratch value to heap");
     }
@@ -1198,7 +1198,7 @@ void test_checkpoint_closure(VALK_TEST_ARGS()) {
     VALK_WITH_ALLOC((void *)arena) {
       // Create captured environment with a value
       valk_lenv_t *captured = valk_lenv_empty();
-      valk_lenv_put(captured, valk_lval_sym("captured_val"), valk_lval_num(42));
+      valk_lenv_put(captured, valk_lval_sym("captured_val"), valk_lval_num(999));
 
       // Create a lambda function: formals = {x}, body = {+ x captured_val}
       valk_lval_t *formals_arr[] = {valk_lval_sym("x")};
@@ -1227,7 +1227,7 @@ void test_checkpoint_closure(VALK_TEST_ARGS()) {
         valk_lenv_get(closure->fun.env, valk_lval_sym("captured_val"));
     VALK_TEST_ASSERT(LVAL_TYPE(captured_val) == LVAL_NUM,
                      "captured_val should be number");
-    VALK_TEST_ASSERT(captured_val->num == 42, "captured_val should be 42");
+    VALK_TEST_ASSERT(captured_val->num == 999, "captured_val should be 999");
   }
 
   valk_thread_ctx = old_ctx;
@@ -1827,15 +1827,15 @@ void test_region_promote_lval(VALK_TEST_ARGS()) {
   valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
   
   VALK_WITH_ALLOC((valk_mem_allocator_t *)request) {
-    valk_lval_t *num = valk_lval_num(42);
+    valk_lval_t *num = valk_lval_num(999);
     ASSERT_NOT_NULL(num);
-    ASSERT_LVAL_NUM(num, 42);
+    ASSERT_LVAL_NUM(num, 999);
     
     valk_lval_t *promoted = valk_region_promote_lval(session, num);
     ASSERT_NOT_NULL(promoted);
-    ASSERT_LVAL_NUM(promoted, 42);
+    ASSERT_LVAL_NUM(promoted, 999);
     
-    ASSERT_EQ(promoted->origin_allocator, session);
+    ASSERT_EQ(LVAL_ALLOC(promoted), LVAL_ALLOC_HEAP);
     ASSERT_GT(atomic_load(&session->stats.promotion_count), 0);
   }
   
@@ -1861,7 +1861,7 @@ void test_region_promote_lval_string(VALK_TEST_ARGS()) {
     valk_lval_t *promoted = valk_region_promote_lval(session, str);
     ASSERT_NOT_NULL(promoted);
     ASSERT_LVAL_STR(promoted, "hello world");
-    ASSERT_EQ(promoted->origin_allocator, session);
+    ASSERT_EQ(LVAL_ALLOC(promoted), LVAL_ALLOC_HEAP);
   }
 
   valk_region_destroy(request);
@@ -1887,7 +1887,7 @@ void test_region_promote_lval_symbol(VALK_TEST_ARGS()) {
     ASSERT_NOT_NULL(promoted);
     ASSERT_EQ(LVAL_TYPE(promoted), LVAL_SYM);
     ASSERT_STR_CONTAINS(promoted->str, "my-symbol");
-    ASSERT_EQ(promoted->origin_allocator, session);
+    ASSERT_EQ(LVAL_ALLOC(promoted), LVAL_ALLOC_HEAP);
   }
 
   valk_region_destroy(request);
@@ -1913,7 +1913,7 @@ void test_region_promote_lval_cons(VALK_TEST_ARGS()) {
     valk_lval_t *promoted = valk_region_promote_lval(session, list);
     ASSERT_NOT_NULL(promoted);
     ASSERT_EQ(LVAL_TYPE(promoted), LVAL_CONS);
-    ASSERT_EQ(promoted->origin_allocator, session);
+    ASSERT_EQ(LVAL_ALLOC(promoted), LVAL_ALLOC_HEAP);
 
     valk_lval_t *head = promoted->cons.head;
     ASSERT_NOT_NULL(head);
@@ -1943,7 +1943,7 @@ void test_region_promote_lval_error(VALK_TEST_ARGS()) {
     ASSERT_NOT_NULL(promoted);
     ASSERT_EQ(LVAL_TYPE(promoted), LVAL_ERR);
     ASSERT_STR_CONTAINS(promoted->str, "test error message");
-    ASSERT_EQ(promoted->origin_allocator, session);
+    ASSERT_EQ(LVAL_ALLOC(promoted), LVAL_ALLOC_HEAP);
   }
 
   valk_region_destroy(request);
@@ -1972,7 +1972,7 @@ void test_region_promote_lval_lambda(VALK_TEST_ARGS()) {
     valk_lval_t *promoted = valk_region_promote_lval(session, lambda);
     ASSERT_NOT_NULL(promoted);
     ASSERT_EQ(LVAL_TYPE(promoted), LVAL_FUN);
-    ASSERT_EQ(promoted->origin_allocator, session);
+    ASSERT_EQ(LVAL_ALLOC(promoted), LVAL_ALLOC_HEAP);
   }
 
   valk_region_destroy(request);

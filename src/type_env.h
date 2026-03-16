@@ -28,11 +28,31 @@ typedef struct {
   bool is_product;
 } valk_type_decl_t;
 
+#define VALK_TYPE_MAX_SCOPE_ENTRIES 64
+
+typedef struct valk_type_scope {
+  struct { const char *var; const char *type; } entries[VALK_TYPE_MAX_SCOPE_ENTRIES];
+  u64 count;
+  struct valk_type_scope *parent;
+} valk_type_scope_t;
+
+#define VALK_TYPE_MAX_SIGS 512
+#define VALK_TYPE_MAX_SIG_PARAMS 16
+
+typedef struct {
+  char *name;
+  char *param_types[VALK_TYPE_MAX_SIG_PARAMS];
+  u64 param_count;
+  char *return_type;
+} valk_type_sig_t;
+
 typedef struct {
   valk_type_decl_t *types[VALK_TYPE_MAX_TYPES];
   u64 type_count;
   valk_constructor_t *constructors[VALK_TYPE_MAX_CONSTRUCTORS];
   u64 constructor_count;
+  valk_type_sig_t *sigs[VALK_TYPE_MAX_SIGS];
+  u64 sig_count;
 } valk_type_env_t;
 
 valk_type_env_t *valk_type_env_new(void);

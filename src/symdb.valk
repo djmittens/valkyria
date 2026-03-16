@@ -1,6 +1,9 @@
 ; Valkyria Symbol Database — Valk library using sqlite/* builtins
 ; Assumes prelude.valk is already loaded.
 
+
+(type {WordRange}
+  {:word Str :start Num :end Num})
 ; === Symbol kind constants ===
 (def {SYMKIND_FUNCTION} 1)
 (def {SYMKIND_VARIABLE} 2)
@@ -200,7 +203,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
             {str/slice target start end})})})
 })
 
-(sig 'word-range-at-position {-> Str Num Num List})
+(sig 'word-range-at-position {-> Str Num Num WordRange})
 (fun {word-range-at-position text line col} {do
   (= {lines} (str/split text "\n"))
   (if (>= line (len lines)) {nil}
@@ -211,7 +214,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
           (= {start} (scan-word-start target col))
           (= {end} (scan-word-end target col))
           (if (>= start end) {nil}
-            {list :word (str/slice target start end) :start start :end end})})})
+            {(WordRange :word (str/slice target start end) :start start :end end)})})})
 })
 
 ; === Symbol extraction from AST ===

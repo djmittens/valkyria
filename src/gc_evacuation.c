@@ -137,7 +137,6 @@ valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 
   memcpy(new_val, v, sizeof(valk_lval_t));
   new_val->flags = (new_val->flags & ~LVAL_ALLOC_MASK) | LVAL_ALLOC_HEAP;
-  new_val->origin_allocator = ctx->heap;
 
   bool needs_string_copy = (ctx->scratch == nullptr) ||
                            !valk_ptr_in_arena(ctx->scratch, v);
@@ -146,7 +145,7 @@ valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
-      if (new_val->str != nullptr &&
+      if (new_val->str != nullptr && !(new_val->flags & LVAL_FLAG_INTERNED) &&
           (needs_string_copy || valk_ptr_in_arena(ctx->scratch, new_val->str))) {
         u64 len = strlen(v->str) + 1;
         VALK_WITH_ALLOC((void*)ctx->heap) {
@@ -297,7 +296,7 @@ void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
     case LVAL_STR:
     case LVAL_SYM:
     case LVAL_ERR:
-      if (v->str != nullptr &&
+      if (v->str != nullptr && !(v->flags & LVAL_FLAG_INTERNED) &&
           (ctx->scratch == nullptr || valk_ptr_in_arena(ctx->scratch, v->str))) {
         u64 len = strlen(v->str) + 1;
         char* new_str = nullptr;
@@ -528,10 +527,10 @@ static valk_lval_t* valk_evacuate_leaf(valk_gc_heap_t* heap, valk_lval_t* v) {
   if (!nv) return v; // LCOV_EXCL_LINE
   memcpy(nv, v, sizeof(valk_lval_t));
   nv->flags = (nv->flags & ~LVAL_ALLOC_MASK) | LVAL_ALLOC_HEAP;
-  nv->origin_allocator = heap;
 
   valk_ltype_e t = LVAL_TYPE(v);
-  if ((t == LVAL_SYM || t == LVAL_STR || t == LVAL_ERR) && nv->str) {
+  if ((t == LVAL_SYM || t == LVAL_STR || t == LVAL_ERR) && nv->str &&
+      !(nv->flags & LVAL_FLAG_INTERNED)) {
     u64 len = strlen(v->str) + 1;
     VALK_WITH_ALLOC((void*)heap) { nv->str = valk_mem_alloc(len); }
     if (nv->str) memcpy(nv->str, v->str, len);

@@ -349,15 +349,40 @@
   vd/check-sym-name expr (str expr) ctx
 })
 
+(def {vd/lowercase} "abcdefghijklmnopqrstuvwxyz")
+
+(sig 'vd/is-lowercase-char {-> Str Num})
+(fun {vd/is-lowercase-char c} {
+  >= (str/index-of vd/lowercase c) 0
+})
+
+(sig 'vd/is-field-access {-> Str Num})
+(fun {vd/is-field-access name} {do
+  (if (< (len name) 3) {0}
+  {do
+    (= {c0} (str/slice name 0 1))
+    (if (not (vd/is-lowercase-char c0)) {0}
+    {do
+      (= {idx} (str/index-of name ":"))
+      (if (<= idx 0) {0}
+      {if (>= idx (- (len name) 1)) {0}
+      {do
+        (= {c1} (str/slice name (+ idx 1) (+ idx 2)))
+        (if (== c1 ":") {0}
+        {if (not (vd/is-lowercase-char c1)) {0}
+          {== (str/index-of (str/slice name (+ idx 1) (len name)) ":") -1}})}})})})
+})
+
 (sig 'vd/check-sym-name {-> Any Str List List})
 (fun {vd/check-sym-name expr name ctx} {
   if (<= (len name) 0) {ctx}
   {if (== (str/slice name 0 1) ":") {ctx}
+  {if (vd/is-field-access name) {ctx}
   {if (vd/is-known name (plist/get ctx :scope)
                     (plist/get ctx :globals)
                     (plist/get ctx :known)) {ctx}
   {vd/add-diag ctx expr name
-    (str "Symbol '" name "' is not defined")}}}
+    (str "Symbol '" name "' is not defined")}}}}
 })
 
 (sig 'vd/add-diag {-> List Any Str Str List})

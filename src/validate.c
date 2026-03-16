@@ -264,6 +264,15 @@ static void walk_sym(walk_ctx_t *w, valk_lval_t *expr) {
     }
   }
 
+  if (name[0] >= 'a' && name[0] <= 'z') {
+    const char *colon = strchr(name, ':');
+    if (colon && colon != name && colon[1] >= 'a' && colon[1] <= 'z' &&
+        !strchr(colon + 1, ':')) {
+      advance_cursor(w, name);
+      return;
+    }
+  }
+
   char msg[256];
   snprintf(msg, sizeof(msg), "Symbol '%s' is not defined", name);
   diag_at_sym(w, name, msg, 1);
@@ -657,7 +666,7 @@ valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
   while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
     valk_lval_t *expr = valk_lval_head(rest);
     if (LVAL_TYPE(expr) == LVAL_ERR) break;
-    if (expr->src_pos >= 0) cursor = expr->src_pos;
+    if (LVAL_SRC_POS(expr) >= 0) cursor = LVAL_SRC_POS(expr);
     walk_expr(&w, expr);
     rest = valk_lval_tail(rest);
   }

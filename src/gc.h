@@ -43,16 +43,6 @@ void valk_system_wake_threads(valk_system_t *sys);
 void valk_gc_reset_after_fork(void);
 void valk_gc_mark_reset_after_fork(void);
 
-// ============================================================================
-// GC Allocation Header (legacy)
-// ============================================================================
-
-typedef struct valk_gc_header_t {
-  void* origin_allocator;
-  struct valk_gc_header_t* gc_next;
-  sz size;
-} valk_gc_header_t;
-
 struct valk_slab_t;
 
 // ============================================================================
@@ -173,6 +163,7 @@ static inline bool valk_lifetime_can_reference(valk_lifetime_e from, valk_lifeti
 }
 
 valk_lifetime_e valk_allocator_lifetime(void *allocator);
+valk_lifetime_e valk_lval_alloc_lifetime(struct valk_lval_t *v);
 bool valk_region_write_barrier(void *parent_allocator, void *child_allocator,
                                 bool promote_on_escape);
 struct valk_lval_t *valk_region_promote_lval(valk_region_t *target,

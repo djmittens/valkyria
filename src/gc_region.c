@@ -189,6 +189,14 @@ void valk_region_get_stats(valk_region_t *region, valk_region_stats_t *out) {
 // Cross-Region Reference Checking
 // ============================================================================
 
+valk_lifetime_e valk_lval_alloc_lifetime(valk_lval_t *v) {
+  u64 alloc = LVAL_ALLOC(v);
+  if (alloc == LVAL_ALLOC_SCRATCH) return VALK_LIFETIME_SCRATCH;
+  if (alloc == LVAL_ALLOC_GLOBAL) return VALK_LIFETIME_IMMORTAL;
+  if (alloc == LVAL_ALLOC_HEAP) return VALK_LIFETIME_SESSION;
+  return VALK_LIFETIME_SCRATCH;
+}
+
 valk_lifetime_e valk_allocator_lifetime(void *allocator) {
   if (!allocator) return VALK_LIFETIME_SCRATCH;
 
@@ -235,7 +243,7 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
   valk_lval_t *existing = valk_ptr_map_get(copied, src);
   if (existing) return existing; // LCOV_EXCL_BR_LINE - shared references in recursive copy
 
-  valk_lifetime_e src_lifetime = valk_allocator_lifetime(src->origin_allocator);
+  valk_lifetime_e src_lifetime = valk_lval_alloc_lifetime(src);
   if (valk_lifetime_can_reference(target->lifetime, src_lifetime)) { // LCOV_EXCL_BR_LINE - mixed-lifetime structures
     return src;
   }
@@ -245,8 +253,7 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
   if (!copy) return nullptr; // LCOV_EXCL_BR_LINE - OOM
 
   memcpy(copy, src, lval_size);
-  copy->origin_allocator = target;
-  copy->gc_next = nullptr;
+  copy->flags = (copy->flags & ~LVAL_ALLOC_MASK) | valk_alloc_flags_from_allocator((void*)target);
 
   valk_ptr_map_put(copied, src, copy);
 
@@ -270,7 +277,7 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
-      if (src->str) { // LCOV_EXCL_BR_LINE - str always set for SYM/STR/ERR
+      if (src->str && !(src->flags & LVAL_FLAG_INTERNED)) { // LCOV_EXCL_BR_LINE - str always set for SYM/STR/ERR
         sz len = strlen(src->str) + 1;
         copy->str = valk_region_alloc(target, len);
         if (copy->str) memcpy(copy->str, src->str, len); // LCOV_EXCL_BR_LINE - OOM
@@ -315,7 +322,7 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
 valk_lval_t *valk_region_promote_lval(valk_region_t *target, valk_lval_t *val) {
   if (!target || !val) return val; // LCOV_EXCL_BR_LINE
 
-  valk_lifetime_e val_lifetime = valk_allocator_lifetime(val->origin_allocator);
+  valk_lifetime_e val_lifetime = valk_lval_alloc_lifetime(val);
   if (valk_lifetime_can_reference(target->lifetime, val_lifetime)) { // LCOV_EXCL_BR_LINE
     return val;
   }
@@ -333,18 +340,15 @@ valk_lval_t *valk_region_promote_lval(valk_region_t *target, valk_lval_t *val) {
 valk_lval_t *valk_region_ensure_safe_ref(valk_lval_t *parent, valk_lval_t *child) {
   if (!parent || !child) return child; // LCOV_EXCL_BR_LINE
 
-  void *parent_alloc = parent->origin_allocator;
-  void *child_alloc = child->origin_allocator;
+  valk_lifetime_e parent_lt = valk_lval_alloc_lifetime(parent);
+  valk_lifetime_e child_lt = valk_lval_alloc_lifetime(child);
 
-  if (!parent_alloc || !child_alloc) return child; // LCOV_EXCL_BR_LINE - allocators always set
-
-  if (valk_region_write_barrier(parent_alloc, child_alloc, false)) {
+  if (valk_lifetime_can_reference(parent_lt, child_lt)) {
     return child;
   }
 
-  valk_mem_allocator_t *alloc = (valk_mem_allocator_t *)parent_alloc;
-  if (alloc->type == VALK_ALLOC_REGION) { // LCOV_EXCL_BR_LINE
-    return valk_region_promote_lval((valk_region_t *)parent_alloc, child);
+  if (LVAL_ALLOC(parent) == LVAL_ALLOC_HEAP && LVAL_ALLOC(child) == LVAL_ALLOC_SCRATCH) {
+    return valk_evacuate_to_heap(child);
   }
 
   return child;

@@ -5,46 +5,41 @@
 #include "coverage.h"
 #include "types.h"
 
+// ===========================================================================
+// Flag layout in _Atomic u64:
+//   bits  0-7:   type (8 bits, valk_ltype_e)
+//   bits  8-9:   alloc region (2 bits: scratch=0, global=1, heap=2)
+//   bits 10-16:  GC generation (7 bits, 0-127 survived cycles)
+//   bit  17:     immortal
+//   bit  18:     quoted (cons cell prints as {} vs ())
+//   bits 32-63:  src_pos (32 bits, source position, -1 = unknown)
+// ===========================================================================
+
 #define LVAL_TYPE_BITS 8ULL
 #define LVAL_TYPE_MASK 0x00000000000000FFULL
 #define LVAL_FLAGS_MASK 0xFFFFFFFFFFFFFF00ULL
 
 #define LVAL_TYPE(_lval) ((valk_ltype_e)(_lval->flags & LVAL_TYPE_MASK))
 
-// Allocation flags - where this value was allocated
 #define LVAL_ALLOC_BITS 2
 #define LVAL_ALLOC_SHIFT (LVAL_TYPE_BITS)
 #define LVAL_ALLOC_MASK (0x3ULL << LVAL_ALLOC_SHIFT)
 
-#define LVAL_ALLOC_SCRATCH  (0ULL << LVAL_ALLOC_SHIFT)  // Scratch arena (ephemeral)
-#define LVAL_ALLOC_GLOBAL   (1ULL << LVAL_ALLOC_SHIFT)  // Global arena (persistent)
-#define LVAL_ALLOC_HEAP     (2ULL << LVAL_ALLOC_SHIFT)  // GC heap (persistent)
+#define LVAL_ALLOC_SCRATCH  (0ULL << LVAL_ALLOC_SHIFT)
+#define LVAL_ALLOC_GLOBAL   (1ULL << LVAL_ALLOC_SHIFT)
+#define LVAL_ALLOC_HEAP     (2ULL << LVAL_ALLOC_SHIFT)
 
-// GC mark bit
-#define LVAL_FLAG_GC_MARK   (1ULL << (LVAL_TYPE_BITS + LVAL_ALLOC_BITS))
-
-// GC generation counter (7 bits, 0-127 generations survived)
-// Used for object survival histogram to detect potential memory leaks
-// Objects surviving many GC cycles may indicate retained references
 #define LVAL_GC_GEN_BITS    7
-#define LVAL_GC_GEN_SHIFT   (LVAL_TYPE_BITS + LVAL_ALLOC_BITS + 1)  // After GC mark bit
+#define LVAL_GC_GEN_SHIFT   (LVAL_TYPE_BITS + LVAL_ALLOC_BITS)
 #define LVAL_GC_GEN_MASK    (0x7FULL << LVAL_GC_GEN_SHIFT)
 #define LVAL_GC_GEN_MAX     127
 
-// Immortal bit - objects that are never collected (builtins, stdlib)
-// This allows GC to skip these objects during both mark and sweep
 #define LVAL_FLAG_IMMORTAL  (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS))
-
-// Quoted flag - for cons cells, indicates this should print as {} not ()
-// Used to preserve round-trip fidelity for quoted expressions
 #define LVAL_FLAG_QUOTED    (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 1))
+#define LVAL_FLAG_INTERNED  (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 2))
 
-// Forwarding pointer flag - set on scratch LVALs after evacuation to heap.
-// When set, gc_next contains a pointer to the heap copy.  This prevents
-// a second evacuation context (e.g. checkpoint) from creating a duplicate
-// heap copy of the same scratch value.  gc_next is safe to reuse because
-// scratch LVALs are never on the GC heap linked list.
-#define LVAL_FLAG_FORWARDED (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 2))
+#define LVAL_SRC_POS_SHIFT  32
+#define LVAL_SRC_POS_MASK   (0xFFFFFFFFULL << LVAL_SRC_POS_SHIFT)
 
 #define LVAL_GC_GEN(lval) (((lval)->flags & LVAL_GC_GEN_MASK) >> LVAL_GC_GEN_SHIFT)
 #define LVAL_GC_GEN_SET(lval, gen) do { \
@@ -56,11 +51,16 @@
   if (_gen < LVAL_GC_GEN_MAX) LVAL_GC_GEN_SET(lval, _gen + 1); \
 } while(0)
 
-// Helper to get allocation type
 #define LVAL_ALLOC(_lval) ((_lval)->flags & LVAL_ALLOC_MASK)
 
-// Helper to get allocation flags from allocator type
-// Implemented in parser.c
+#define LVAL_SRC_POS(lval) ((int)(i32)((lval)->flags >> LVAL_SRC_POS_SHIFT))
+#define LVAL_SRC_POS_SET(lval, pos) do { \
+  (lval)->flags = ((lval)->flags & ~LVAL_SRC_POS_MASK) | \
+                  ((u64)(u32)(pos) << LVAL_SRC_POS_SHIFT); \
+} while(0)
+
+#define LVAL_SRC_POS_DEFAULT ((u64)(u32)(-1) << LVAL_SRC_POS_SHIFT)
+
 u64 valk_alloc_flags_from_allocator(void* allocator);
 
 // Forward declarations
@@ -81,6 +81,7 @@ typedef enum {
   LVAL_REF,
   LVAL_NIL,    // Empty list / nil value
   LVAL_CONS,   // Cons cell (list) - use LVAL_FLAG_QUOTED for {} vs () printing
+#define LVAL_FLAG_INTERNED  (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 2))
   LVAL_ERR,
   LVAL_HANDLE,   // Async operation handle (cancellable promise)
   LVAL_DICT,     // Dict (hash map) - first-class value type
@@ -114,9 +115,6 @@ struct valk_lenv_t {
 
 struct valk_lval_t {
   _Atomic u64 flags;
-  void *origin_allocator;  // Always track where this value was allocated
-  struct valk_lval_t *gc_next;  // Linked list for GC heap tracking
-  int src_pos;
 #ifdef VALK_COVERAGE
   u16 cov_file_id;
   u16 cov_line;
@@ -229,6 +227,9 @@ typedef struct {
   u16 file_id;
 } valk_parse_ctx_t;
 
+void valk_lval_init_singletons(void);
+u64 valk_sym_intern_count(void);
+
 #ifdef VALK_COVERAGE
 
 
@@ -239,6 +240,7 @@ typedef struct {
   (lval)->cov_column = (col); \
   u8 __type = LVAL_TYPE(lval); \
   bool __is_quoted = ((lval)->flags & LVAL_FLAG_QUOTED) != 0; \
+#define LVAL_FLAG_INTERNED  (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 2))
   if (__type == LVAL_CONS && !__is_quoted) { \
     VALK_COVERAGE_MARK_LINE((fid), (ln)); \
     VALK_COVERAGE_MARK_LVAL(lval); \

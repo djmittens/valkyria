@@ -138,7 +138,7 @@ static valk_lval_t* valk_builtin_src_pos(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1); // LCOV_EXCL_BR_LINE
   valk_lval_t* v = valk_lval_list_nth(a, 0);
-  return valk_lval_num(v->src_pos);
+  return valk_lval_num(LVAL_SRC_POS(v));
 }
 
 static valk_lval_t* valk_builtin_quoted_p(valk_lenv_t* e, valk_lval_t* a) {

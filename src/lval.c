@@ -1,6 +1,7 @@
 #include "parser.h"
 #include "dict.h"
 
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,104 @@
 static const char* valk_lval_str_escape(char x);
 
 static char* lval_str_escapable = "\a\b\f\n\r\t\v\\\'\"";
+
+// ============================================================================
+// Singleton Nil, Small Integer Cache, and Symbol Intern Table
+// ============================================================================
+
+#define VALK_NUM_CACHE_MIN (-1)
+#define VALK_NUM_CACHE_MAX 256
+#define VALK_NUM_CACHE_SIZE (VALK_NUM_CACHE_MAX - VALK_NUM_CACHE_MIN + 1)
+
+static valk_lval_t __valk_nil_singleton;
+static valk_lval_t __valk_num_cache[VALK_NUM_CACHE_SIZE];
+static bool __valk_singletons_initialized = false;
+
+// Symbol string intern table: open-addressing hash table with FNV-1a
+// Stores deduplicated, permanent char* strings for symbol names.
+// Each valk_lval_sym() call creates a fresh struct but shares the interned string.
+#define SYM_TABLE_INITIAL_CAP 512
+
+static struct {
+  const char **strings;
+  u64 count;
+  u64 capacity;
+  pthread_mutex_t lock;
+} __sym_table;
+
+static u64 sym_hash(const char *s) {
+  u64 h = 14695981039346656037ULL;
+  for (; *s; s++) {
+    h ^= (u8)*s;
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
+static void sym_table_grow(void) {
+  u64 new_cap = __sym_table.capacity * 2;
+  const char **new_strings = calloc(new_cap, sizeof(const char *));
+  for (u64 i = 0; i < __sym_table.capacity; i++) {
+    if (__sym_table.strings[i] == NULL) continue;
+    u64 idx = sym_hash(__sym_table.strings[i]) & (new_cap - 1);
+    while (new_strings[idx] != NULL)
+      idx = (idx + 1) & (new_cap - 1);
+    new_strings[idx] = __sym_table.strings[i];
+  }
+  free(__sym_table.strings);
+  __sym_table.strings = new_strings;
+  __sym_table.capacity = new_cap;
+}
+
+static const char *sym_intern_str(const char *name) {
+  pthread_mutex_lock(&__sym_table.lock);
+  u64 mask = __sym_table.capacity - 1;
+  u64 idx = sym_hash(name) & mask;
+  while (__sym_table.strings[idx] != NULL) {
+    if (strcmp(__sym_table.strings[idx], name) == 0) {
+      const char *result = __sym_table.strings[idx];
+      pthread_mutex_unlock(&__sym_table.lock);
+      return result;
+    }
+    idx = (idx + 1) & mask;
+  }
+  u64 slen = strlen(name);
+  if (slen > 200) slen = 200;
+  char *istr = malloc(slen + 1);
+  memcpy(istr, name, slen);
+  istr[slen] = '\0';
+  __sym_table.strings[idx] = istr;
+  __sym_table.count++;
+  if (__sym_table.count * 4 > __sym_table.capacity * 3)
+    sym_table_grow();
+  pthread_mutex_unlock(&__sym_table.lock);
+  return istr;
+}
+
+u64 valk_sym_intern_count(void) {
+  return __sym_table.count;
+}
+
+void valk_lval_init_singletons(void) {
+  if (__valk_singletons_initialized) return;
+  __valk_singletons_initialized = true;
+
+  __valk_nil_singleton.flags = LVAL_NIL | LVAL_ALLOC_HEAP | LVAL_FLAG_IMMORTAL | LVAL_SRC_POS_DEFAULT;
+  __valk_nil_singleton.cons.head = nullptr;
+  __valk_nil_singleton.cons.tail = nullptr;
+
+  for (int i = 0; i < VALK_NUM_CACHE_SIZE; i++) {
+    long val = VALK_NUM_CACHE_MIN + i;
+    __valk_num_cache[i].flags = LVAL_NUM | LVAL_ALLOC_HEAP | LVAL_FLAG_IMMORTAL | LVAL_SRC_POS_DEFAULT;
+    __valk_num_cache[i].num = val;
+  }
+
+  __sym_table.capacity = SYM_TABLE_INITIAL_CAP;
+  __sym_table.count = 0;
+  __sym_table.strings = calloc(SYM_TABLE_INITIAL_CAP, sizeof(const char *));
+  pthread_mutex_init(&__sym_table.lock, NULL);
+}
+
 
 char* valk_c_err_format(const char* fmt, const char* file, const u64 line,
                         const char* function) {
@@ -40,6 +139,14 @@ u64 valk_alloc_flags_from_allocator(void* allocator) {
       return LVAL_ALLOC_GLOBAL;
     case VALK_ALLOC_GC_HEAP:
       return LVAL_ALLOC_HEAP;
+    case VALK_ALLOC_REGION: {
+      valk_region_t *region = (valk_region_t *)allocator;
+      switch (region->lifetime) {
+        case VALK_LIFETIME_IMMORTAL: return LVAL_ALLOC_GLOBAL;
+        case VALK_LIFETIME_SESSION:  return LVAL_ALLOC_HEAP;
+        default:                     return LVAL_ALLOC_SCRATCH;
+      }
+    }
     // LCOV_EXCL_START - SLAB allocator not used for lval allocation
     case VALK_ALLOC_SLAB:
       return LVAL_ALLOC_GLOBAL;
@@ -110,9 +217,7 @@ const char* valk_ltype_name(valk_ltype_e type) {
 valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_REF | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_REF | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   u64 tlen = strlen(type);
   if (tlen > 100) tlen = 100;
@@ -131,20 +236,19 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
 valk_lval_t* valk_lval_dict(valk_dict_t* data) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_DICT | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_DICT | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   res->dict.data = data;
   return res;
 }
 
 valk_lval_t* valk_lval_num(long x) {
+  if (__valk_singletons_initialized && x >= VALK_NUM_CACHE_MIN && x <= VALK_NUM_CACHE_MAX) {
+    return &__valk_num_cache[x - VALK_NUM_CACHE_MIN];
+  }
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_NUM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_NUM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   res->num = x;
   return res;
@@ -154,9 +258,7 @@ valk_lval_t* valk_lval_num(long x) {
 valk_lval_t* valk_lval_err(const char* fmt, ...) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_ERR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_ERR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   va_list va, va2;
   va_start(va, fmt);
@@ -177,25 +279,25 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
 valk_lval_t* valk_lval_sym(const char* sym) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_SYM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_SYM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
-  u64 slen = strlen(sym);
-  if (slen > 200) slen = 200;
-  res->str = valk_mem_alloc(slen + 1);
-  memcpy(res->str, sym, slen);
-  res->str[slen] = '\0';
-
+  if (__valk_singletons_initialized) {
+    res->str = (char *)sym_intern_str(sym);
+    res->flags |= LVAL_FLAG_INTERNED;
+  } else {
+    u64 slen = strlen(sym);
+    if (slen > 200) slen = 200;
+    res->str = valk_mem_alloc(slen + 1);
+    memcpy(res->str, sym, slen);
+    res->str[slen] = '\0';
+  }
   return res;
 }
 
 valk_lval_t* valk_lval_str(const char* str) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   u64 slen = strlen(str);
   res->str = valk_mem_alloc(slen + 1);
@@ -207,9 +309,7 @@ valk_lval_t* valk_lval_str(const char* str) {
 valk_lval_t* valk_lval_str_n(const char* bytes, u64 n) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   res->str = valk_mem_alloc(n + 1);
   if (n) memcpy(res->str, bytes, n);
@@ -276,9 +376,7 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
 
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, body);
 
@@ -318,11 +416,10 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
 }
 
 valk_lval_t* valk_lval_nil(void) {
+  if (__valk_singletons_initialized) return &__valk_nil_singleton;
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_NIL | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_NIL | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   res->cons.head = nullptr;
   res->cons.tail = nullptr;
@@ -332,9 +429,7 @@ valk_lval_t* valk_lval_nil(void) {
 valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_CONS | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_CONS | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, head);
   res->cons.head = valk_region_ensure_safe_ref(res, head);
@@ -345,9 +440,7 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
 valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
-      LVAL_CONS | LVAL_FLAG_QUOTED | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = -1;
+      LVAL_CONS | LVAL_FLAG_QUOTED | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   INHERIT_SOURCE_LOC(res, head);
   res->cons.head = valk_region_ensure_safe_ref(res, head);
@@ -468,13 +561,12 @@ valk_lval_t* valk_plist_get(valk_lval_t* plist, const char* key_str) {
 
 valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   if (lval == nullptr) return nullptr;
+  if (valk_lval_is_immortal(lval)) return lval;
 
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
 
-  res->flags = (lval->flags & (LVAL_TYPE_MASK | LVAL_FLAG_QUOTED)) |
+  res->flags = (lval->flags & (LVAL_TYPE_MASK | LVAL_FLAG_QUOTED | LVAL_FLAG_INTERNED | LVAL_SRC_POS_MASK)) |
                valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
-  VALK_SET_ORIGIN_ALLOCATOR(res);
-  res->src_pos = lval->src_pos;
 
 #ifdef VALK_COVERAGE
   res->cov_file_id = lval->cov_file_id;
@@ -506,11 +598,16 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
     case LVAL_NIL:
       break;
     case LVAL_SYM: {
-      u64 slen = strlen(lval->str);
-      if (slen > 200) slen = 200;
-      res->str = valk_mem_alloc(slen + 1);
-      memcpy(res->str, lval->str, slen);
-      res->str[slen] = '\0';
+      if (lval->flags & LVAL_FLAG_INTERNED) {
+        res->str = lval->str;
+        res->flags |= LVAL_FLAG_INTERNED;
+      } else {
+        u64 slen = strlen(lval->str);
+        if (slen > 200) slen = 200;
+        res->str = valk_mem_alloc(slen + 1);
+        memcpy(res->str, lval->str, slen);
+        res->str[slen] = '\0';
+      }
       break;
     }
     case LVAL_ERR: {
@@ -565,6 +662,7 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
   }
   // LCOV_EXCL_BR_STOP
 
+  if (x == y) return 1;
   if (LVAL_TYPE(x) != LVAL_TYPE(y)) {
     return 0;
   }
@@ -573,6 +671,7 @@ int valk_lval_eq(valk_lval_t* x, valk_lval_t* y) {
     case LVAL_NUM:
       return (x->num == y->num);
     case LVAL_SYM:
+      return (x->str == y->str) || (strcmp(x->str, y->str) == 0);
     case LVAL_STR:
     case LVAL_ERR:
       return (strcmp(x->str, y->str) == 0);

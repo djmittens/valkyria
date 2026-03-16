@@ -62,7 +62,7 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
     } else {
       res = valk_lval_sym(sym);
     }
-    res->src_pos = start;
+    LVAL_SRC_POS_SET(res, start);
     *i += len;
     free(sym);
     return res;
@@ -111,7 +111,7 @@ static valk_lval_t* valk_lval_read_str(int* i, const char* s) {
 
   *i = end + 1;
   valk_lval_t *result = valk_lval_str(tmp);
-  result->src_pos = start;
+  LVAL_SRC_POS_SET(result, start);
   return result;
 }
 
@@ -189,7 +189,7 @@ static valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx) {
     valk_lval_t *quoted = valk_lval_read_ctx(ctx);
     if (LVAL_TYPE(quoted) == LVAL_ERR) return quoted;
     valk_lval_t *sym = valk_lval_sym("quasiquote");
-    sym->src_pos = saved_pos;
+    LVAL_SRC_POS_SET(sym, saved_pos);
     LVAL_SET_SOURCE_LOC(sym, ctx->file_id, saved_line, saved_col); // LCOV_EXCL_BR_LINE - coverage macro
     res = valk_lval_cons(sym, valk_lval_cons(quoted, valk_lval_nil()));
     LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col); // LCOV_EXCL_BR_LINE - coverage macro
@@ -203,7 +203,7 @@ static valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx) {
     valk_lval_t *unquoted = valk_lval_read_ctx(ctx);
     if (LVAL_TYPE(unquoted) == LVAL_ERR) return unquoted;
     valk_lval_t *sym = valk_lval_sym(splicing ? "unquote-splicing" : "unquote");
-    sym->src_pos = saved_pos;
+    LVAL_SRC_POS_SET(sym, saved_pos);
     LVAL_SET_SOURCE_LOC(sym, ctx->file_id, saved_line, saved_col); // LCOV_EXCL_BR_LINE - coverage macro
     res = valk_lval_cons(sym, valk_lval_cons(unquoted, valk_lval_nil()));
     LVAL_SET_SOURCE_LOC(res, ctx->file_id, saved_line, saved_col); // LCOV_EXCL_BR_LINE - coverage macro
@@ -222,7 +222,7 @@ static valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx) {
     ctx->pos++;
   }
 
-  if (res->src_pos < 0) res->src_pos = saved_pos;
+  if (LVAL_SRC_POS(res) < 0) LVAL_SRC_POS_SET(res, saved_pos);
 
   parse_ctx_skip_whitespace(ctx);
   return res;
@@ -277,7 +277,7 @@ static valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
     LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col); // LCOV_EXCL_BR_LINE - coverage macro
   }
 
-  result->src_pos = saved_pos;
+  LVAL_SRC_POS_SET(result, saved_pos);
   return result;
 }
 

@@ -119,18 +119,17 @@
     {do
       (reset-state)
       (lsp/doc-store "file:///x.valk" "content")
-      (= {result} (lsp/get-doc (list :textDocument (list :uri "file:///x.valk"))))
-      (test/assert (some? result) "should return Some")
-      (= {ctx} (Some:value result))
-      (test/assert-eq "file:///x.valk" (plist/get ctx :uri) "uri")
-      (test/assert-eq "content" (plist/get ctx :text) "text")
+      (= {ctx} (lsp/get-doc (list :textDocument (list :uri "file:///x.valk"))))
+      (test/assert (not (nil? ctx)) "should return DocCtx")
+      (test/assert-eq "file:///x.valk" uri:ctx "uri")
+      (test/assert-eq "content" text:ctx "text")
     })
 
   (test "get-doc-missing"
     {do
       (reset-state)
       (= {result} (lsp/get-doc (list :textDocument (list :uri "file:///nope"))))
-      (test/assert (none? result) "should return None for missing doc")
+      (test/assert (nil? result) "should return nil for missing doc")
     })
 
   ; --- lsp/get-text-pos ---
@@ -141,11 +140,10 @@
       (lsp/doc-store "file:///t.valk" "hello\nworld")
       (= {params} (list :textDocument (list :uri "file:///t.valk")
                          :position (list :line 1 :character 3)))
-      (= {result} (lsp/get-text-pos params))
-      (test/assert (some? result) "should return Some")
-      (= {ctx} (Some:value result))
-      (test/assert-eq 1 (plist/get ctx :line) "line")
-      (test/assert-eq 3 (plist/get ctx :col) "col")
+      (= {ctx} (lsp/get-text-pos params))
+      (test/assert (not (nil? ctx)) "should return TextPosCtx")
+      (test/assert-eq 1 line:ctx "line")
+      (test/assert-eq 3 col:ctx "col")
     })
 
   (test "get-text-pos-missing"
@@ -153,7 +151,7 @@
       (reset-state)
       (= {params} (list :textDocument (list :uri "file:///no")
                          :position (list :line 0 :character 0)))
-      (test/assert (none? (lsp/get-text-pos params)) "should return None")
+      (test/assert (nil? (lsp/get-text-pos params)) "should return nil")
     })
 
   ; --- lsp/get-word-ctx ---
@@ -164,10 +162,9 @@
       (lsp/doc-store "file:///w.valk" "hello world")
       (= {params} (list :textDocument (list :uri "file:///w.valk")
                          :position (list :line 0 :character 6)))
-      (= {result} (lsp/get-word-ctx params))
-      (test/assert (some? result) "should return Some")
-      (= {doc} (Some:value result))
-      (test/assert-eq "world" (plist/get doc :word) "word should be world")
+      (= {ctx} (lsp/get-word-ctx params))
+      (test/assert (not (nil? ctx)) "should return WordCtx")
+      (test/assert-eq "world" word:ctx "word should be world")
     })
 
   (test "get-word-ctx-no-word"
@@ -177,7 +174,7 @@
       (= {params} (list :textDocument (list :uri "file:///w.valk")
                          :position (list :line 0 :character 0)))
       (= {result} (lsp/get-word-ctx params))
-      (test/assert (none? result) "no word at cursor -> None")
+      (test/assert (nil? result) "no word at cursor -> nil")
     })
 
   ; --- make-lsp-diag ---
@@ -258,7 +255,7 @@
 
   (test "make-snippet-item"
     {do
-      (= {s} (list :label "fun" :detail "(fun {name} {body})"
+      (= {s} (FormSnippet :label "fun" :detail "(fun {name} {body})"
                     :snippet "fun {$1}" :sort "00"))
       (= {item} (make-snippet-item s))
       (test/assert-eq "fun" (plist/get item :label) "label")

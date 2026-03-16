@@ -190,4 +190,84 @@
       (test/assert (== (Some:value inner) 42) "inner value")
     })
 
+  ; === field:var inference tests ===
+
+  (test "field-access-product"
+    {do
+      (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
+      (test/assert (== name:p "Alice") "name:p works")
+      (test/assert (== age:p 30) "age:p works")
+      (test/assert (== email:p "a@b.com") "email:p works")
+    })
+
+  (test "field-access-sum"
+    {do
+      (= {s} (Circle :radius 5))
+      (test/assert (== radius:s 5) "radius:s works")
+    })
+
+  (test "field-access-sum-rect"
+    {do
+      (= {r} (Rect :w 10 :h 20))
+      (test/assert (== w:r 10) "w:r works")
+      (test/assert (== h:r 20) "h:r works")
+    })
+
+  (test "field-access-inline"
+    {do
+      (= {p} (Person :name "Bob" :age 25 :email "b@b.com"))
+      (test/assert (== (str/join (list name:p "!") "") "Bob!") "field access inline in call")
+    })
+
+  (test "field-access-in-condition"
+    {do
+      (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
+      (test/assert (if (> age:p 18) true false) "field access in condition")
+    })
+
+  (test "field-access-nested-do"
+    {do
+      (= {result}
+        (do
+          (= {p} (Person :name "Inner" :age 1 :email "x"))
+          name:p))
+      (test/assert (== result "Inner") "field access in nested do")
+    })
+
+  (test "field-access-multiple-bindings"
+    {do
+      (= {p1} (Person :name "Alice" :age 30 :email "a@a.com"))
+      (= {p2} (Person :name "Bob" :age 25 :email "b@b.com"))
+      (test/assert (== name:p1 "Alice") "p1 name")
+      (test/assert (== name:p2 "Bob") "p2 name")
+    })
+
+  (test "field-access-option"
+    {do
+      (= {x} (Some :value 42))
+      (test/assert (== value:x 42) "value:x works for Some")
+    })
+
+  (test "field-access-result"
+    {do
+      (= {r} (Ok :value 99))
+      (test/assert (== value:r 99) "value:r works for Ok")
+    })
+
+
+  ; === sig-based type inference tests ===
+
+  (test "sig-return-type-inference"
+    {do
+      (= {lookup-result} (Some :value 42))
+      (test/assert (== value:lookup-result 42) "inferred from constructor binding")
+    })
+
+  (test "sig-param-inference"
+    {do
+      (= {check-name} (\ {p} {do (Person:name p)}))
+      (test/assert (== (check-name (Person :name "Z" :age 1 :email "z")) "Z") "explicit accessor in lambda")
+    })
+
+
 ))

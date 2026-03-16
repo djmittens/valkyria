@@ -70,9 +70,9 @@
     {do
       (= {r} (word-range-at-position "hello world" 0 0))
       (test/assert (not (nil? r)) "should return range")
-      (test/assert-eq "hello" (plist/get r :word) "word should be hello")
-      (test/assert-eq 0 (plist/get r :start) "start should be 0")
-      (test/assert-eq 5 (plist/get r :end) "end should be 5")
+      (test/assert-eq "hello" word:r "word should be hello")
+      (test/assert-eq 0 start:r "start should be 0")
+      (test/assert-eq 5 end:r "end should be 5")
       true
     })
 
@@ -80,7 +80,7 @@
     {do
       (= {r} (word-range-at-position "a b" 0 1))
       (test/assert (not (nil? r)) "space returns adjacent word range")
-      (test/assert-eq "a" (plist/get r :word) "should return word a")
+      (test/assert-eq "a" word:r "should return word a")
       true
     })
 

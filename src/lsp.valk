@@ -13,6 +13,22 @@
 (load "src/lsp-validate.valk")
 (load "src/lsp-hints.valk")
 
+
+; ---------------------------------------------------------------------------
+; Typed contexts — replace ad-hoc plists with field:var access
+; ---------------------------------------------------------------------------
+
+(type {DocCtx}
+  {:uri Str :text Str :ast List})
+
+(type {TextPosCtx}
+  {:uri Str :text Str :ast List :line Num :col Num})
+
+(type {WordCtx}
+  {:uri Str :text Str :ast List :line Num :col Num :word Str})
+
+(type {FormSnippet}
+  {:label Str :detail Str :snippet Str :sort Str})
 ; ---------------------------------------------------------------------------
 ; LSP I/O — Content-Length framing over uv_pipe_t
 ; ---------------------------------------------------------------------------
@@ -71,33 +87,35 @@
   (= {cached} (dict/get lsp/ast-cache uri))
   (if (nil? cached) {parse text} {cached})})
 
-(sig 'lsp/get-doc {-> List List})
+(sig 'lsp/get-doc {-> List DocCtx})
 (fun {lsp/get-doc params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
-  (option/map (option/from-nullable (lsp/doc-get uri))
-    (\ {text} {list :uri uri :text text :ast (lsp/get-ast uri text)}))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {nil}
+    {(DocCtx :uri uri :text text :ast (lsp/get-ast uri text))})
 })
 
-(sig 'lsp/get-text-pos {-> List List})
+(sig 'lsp/get-text-pos {-> List TextPosCtx})
 (fun {lsp/get-text-pos params} {do
   (= {td} (plist/get params :textDocument))
   (= {uri} (plist/get td :uri))
   (= {pos} (plist/get params :position))
   (= {line} (plist/get pos :line))
   (= {col} (plist/get pos :character))
-  (option/map (option/from-nullable (lsp/doc-get uri))
-    (\ {text} {list :uri uri :text text :ast (lsp/get-ast uri text) :line line :col col}))
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {nil}
+    {(TextPosCtx :uri uri :text text :ast (lsp/get-ast uri text) :line line :col col)})
 })
 
-(sig 'lsp/get-word-ctx {-> List List})
-(fun {lsp/get-word-ctx params} {
-  option/flat-map (lsp/get-text-pos params)
-    (\ {ctx} {
-      option/map (option/from-nullable
-        (word-at-position (plist/get ctx :text) (plist/get ctx :line) (plist/get ctx :col)))
-        (\ {w} {plist/set ctx :word w})
-    })
+(sig 'lsp/get-word-ctx {-> List WordCtx})
+(fun {lsp/get-word-ctx params} {do
+  (= {ctx} (lsp/get-text-pos params))
+  (if (nil? ctx) {nil}
+    {do
+      (= {w} (word-at-position text:ctx line:ctx col:ctx))
+      (if (nil? w) {nil}
+        {(WordCtx :uri uri:ctx :text text:ctx :ast ast:ctx :line line:ctx :col col:ctx :word w)})})
 })
 
 ; ---------------------------------------------------------------------------
@@ -451,47 +469,42 @@
 })
 
 (sig 'handle-hover {-> Num List Nil})
-(fun {handle-hover id params} {
-  match (lsp/get-word-ctx params)
-    {(None) (lsp/send-response id (None))}
-    {(Some :value ctx) (do
-      (= {word} (plist/get ctx :word))
-      (= {line} (plist/get ctx :line))
-      (= {col} (plist/get ctx :col))
+(fun {handle-hover id params} {do
+  (= {ctx} (lsp/get-word-ctx params))
+  (if (nil? ctx) {lsp/send-response id (None)}
+    {do
       (= {info} (if (nil? lsp/db) {nil}
-        {symdb/symbol-hover lsp/db word}))
+        {symdb/symbol-hover lsp/db word:ctx}))
       (= {hover-str} (if (nil? info)
-        {str "```valk\n" word "\n```"}
-        {hover/format-markdown info word}))
+        {str "```valk\n" word:ctx "\n```"}
+        {hover/format-markdown info word:ctx}))
       (lsp/send-response id
         (list :contents
           (list :kind "markdown" :value hover-str)
           :range
-          (list :start (list :line line :character col)
-                :end (list :line line :character (+ col (len word)))))))}
+          (list :start (list :line line:ctx :character col:ctx)
+                :end (list :line line:ctx :character (+ col:ctx (len word:ctx))))))})
 })
 
 (sig 'handle-definition {-> Num List Nil})
 (fun {handle-definition id params} {do
-  (= {result}
-    (option/flat-map (lsp/get-word-ctx params) (\ {ctx} {
-      option/flat-map (option/from-nullable lsp/db) (\ {db} {do
-        (= {word} (plist/get ctx :word))
-        (= {defn} (symdb/find-definition db word))
-        (option/map (option/from-nullable defn) (\ {d} {do
-          (= {def-path} (plist/get d :path))
-          (= {def-line} (plist/get d :line))
-          (= {def-col} (plist/get d :col))
-          (list :uri (str "file://" def-path)
-                :range (list
-                  :start (list :line def-line :character def-col)
-                  :end (list :line def-line :character (+ def-col (len word)))))
-        }))
-      })
-    })))
-  (match result
-    {(None) (lsp/send-response id (None))}
-    {(Some :value r) (lsp/send-response id r)})})
+  (= {ctx} (lsp/get-word-ctx params))
+  (if (nil? ctx) {lsp/send-response id (None)}
+  {if (nil? lsp/db) {lsp/send-response id (None)}
+    {do
+      (= {defn} (symdb/find-definition lsp/db word:ctx))
+      (if (nil? defn)
+        {lsp/send-response id (None)}
+        {do
+          (= {def-path} (plist/get defn :path))
+          (= {def-line} (plist/get defn :line))
+          (= {def-col} (plist/get defn :col))
+          (lsp/send-response id
+            (list :uri (str "file://" def-path)
+                  :range (list
+                    :start (list :line def-line :character def-col)
+                    :end (list :line def-line :character (+ def-col (len word:ctx))))))})}})
+})
 
 (sig 'ref->lsp-location {-> Str Str List List})
 (fun {ref->lsp-location uri text r} {do
@@ -504,28 +517,22 @@
 })
 
 (sig 'handle-references {-> Num List Nil})
-(fun {handle-references id params} {
-  match (lsp/get-word-ctx params)
-    {(None) (lsp/send-response id nil)}
-    {(Some :value ctx) (do
-      (= {uri} (plist/get ctx :uri))
-      (= {text} (plist/get ctx :text))
-      (= {word} (plist/get ctx :word))
-      (= {line} (plist/get ctx :line))
-      (= {col} (plist/get ctx :col))
-      (= {ast} (plist/get ctx :ast))
-      (= {local-refs} (ref/find-scoped-refs-from-ast ast text line col))
+(fun {handle-references id params} {do
+  (= {ctx} (lsp/get-word-ctx params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {do
+      (= {local-refs} (ref/find-scoped-refs-from-ast ast:ctx text:ctx line:ctx col:ctx))
       (if (not (nil? local-refs))
-        {lsp/send-response id (map (\ {r} {ref->lsp-location uri text r}) local-refs)}
+        {lsp/send-response id (map (\ {r} {ref->lsp-location uri:ctx text:ctx r}) local-refs)}
         {if (nil? lsp/db) {lsp/send-response id nil}
           {do
-            (= {refs} (symdb/find-refs lsp/db word))
+            (= {refs} (symdb/find-refs lsp/db word:ctx))
             (lsp/send-response id (map (\ {r} {
               list :uri (str "file://" (plist/get r :path))
                    :range (list
                      :start (list :line (plist/get r :line) :character (plist/get r :col))
-                     :end (list :line (plist/get r :line) :character (+ (plist/get r :col) (len word))))
-            }) refs))}}))}
+                     :end (list :line (plist/get r :line) :character (+ (plist/get r :col) (len word:ctx))))
+            }) refs))}})})
 })
 
 ; ---------------------------------------------------------------------------
@@ -533,42 +540,42 @@
 ; ---------------------------------------------------------------------------
 
 (def {lsp/form-snippets} (list
-  (list :label "fun" :detail "(fun {name} {body})"
+  (FormSnippet :label "fun" :detail "(fun {name} {body})"
         :snippet "fun {${1:name}} {$0}" :sort "00")
-  (list :label "if" :detail "(if cond {then} {else})"
+  (FormSnippet :label "if" :detail "(if cond {then} {else})"
         :snippet "if ${1:cond} {$2} {$0}" :sort "01")
-  (list :label "def" :detail "(def {name} value)"
+  (FormSnippet :label "def" :detail "(def {name} value)"
         :snippet "def {${1:name}} $0" :sort "02")
-  (list :label "=" :detail "(= {name} value)"
+  (FormSnippet :label "=" :detail "(= {name} value)"
         :snippet "= {${1:name}} $0" :sort "03")
-  (list :label "\\" :detail "(\\ {args} {body})"
+  (FormSnippet :label "\\" :detail "(\\ {args} {body})"
         :snippet "\\ {${1:args}} {$0}" :sort "04")
-  (list :label "do" :detail "(do expr...)"
+  (FormSnippet :label "do" :detail "(do expr...)"
         :snippet "do $0" :sort "05")
-  (list :label "match" :detail "(match val {pat body}...)"
+  (FormSnippet :label "match" :detail "(match val {pat body}...)"
         :snippet "match ${1:val} {$0}" :sort "06")
-  (list :label "select" :detail "(select {cond body}...)"
+  (FormSnippet :label "select" :detail "(select {cond body}...)"
         :snippet "select {${1:cond} $0}" :sort "07")
-  (list :label "case" :detail "(case val {pat body}...)"
+  (FormSnippet :label "case" :detail "(case val {pat body}...)"
         :snippet "case ${1:val} {$0}" :sort "08")
-  (list :label "type" :detail "(type {Name} {Ctor fields})"
+  (FormSnippet :label "type" :detail "(type {Name} {Ctor fields})"
         :snippet "type {${1:Name}} {$0}" :sort "09")
-  (list :label "load" :detail "(load \"path\")"
+  (FormSnippet :label "load" :detail "(load \"path\")"
         :snippet "load \"$0\"" :sort "10")
-  (list :label "sig" :detail "(sig 'name {type})"
+  (FormSnippet :label "sig" :detail "(sig 'name {type})"
         :snippet "sig '${1:name} {$0}" :sort "11")
-  (list :label "let" :detail "(let {bindings} body)"
+  (FormSnippet :label "let" :detail "(let {bindings} body)"
         :snippet "let {$1} $0" :sort "12")
 ))
 
-(sig 'make-snippet-item {-> List List})
+(sig 'make-snippet-item {-> FormSnippet List})
 (fun {make-snippet-item s} {
-  list :label (plist/get s :label)
+  list :label label:s
        :kind 15
-       :detail (plist/get s :detail)
-       :insertText (plist/get s :snippet)
+       :detail detail:s
+       :insertText snippet:s
        :insertTextFormat 2
-       :sortText (plist/get s :sort)
+       :sortText sort:s
 })
 
 (sig 'filter-snippets {-> Str List List})
@@ -576,8 +583,7 @@
   if (nil? snippets) {nil}
   {do
     (= {s} (head snippets))
-    (= {label} (plist/get s :label))
-    (if (str/starts-with? label prefix)
+    (if (str/starts-with? (FormSnippet:label s) prefix)
       {qcons (make-snippet-item s) (filter-snippets prefix (tail snippets))}
       {filter-snippets prefix (tail snippets)})}
 })
@@ -607,31 +613,27 @@
 })
 
 (sig 'handle-completion {-> Num List Nil})
-(fun {handle-completion id params} {
-  match (lsp/get-text-pos params)
-    {(None) (lsp/send-response id nil)}
-    {(Some :value ctx) (do
-      (= {text} (plist/get ctx :text))
-      (= {line} (plist/get ctx :line))
-      (= {col} (plist/get ctx :col))
-      (if (lsp/in-string? text line col)
-        {lsp/send-response id (list :isIncomplete :false :items nil)}
-        {do
-          (= {word} (word-at-position text line col))
-          (= {prefix} (if (nil? word) {""} {word}))
-          (= {snippet-items} (if (str/starts-with? prefix ":")
-            {nil}
-            {if (== prefix "")
-              {map make-snippet-item lsp/form-snippets}
-              {filter-snippets prefix lsp/form-snippets}}))
-          (= {sym-items} (if (nil? lsp/db) {nil}
-            {do
-              (= {syms} (if (== prefix "")
-                {symdb/completion-all lsp/db}
-                {symdb/completion-symbols lsp/db prefix}))
-              (map make-sym-completion-item syms)}))
-          (= {all-items} (join snippet-items (if (nil? sym-items) {nil} {sym-items})))
-          (lsp/send-response id (list :isIncomplete :false :items all-items))}))}
+(fun {handle-completion id params} {do
+  (= {ctx} (lsp/get-text-pos params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {if (lsp/in-string? text:ctx line:ctx col:ctx)
+      {lsp/send-response id (list :isIncomplete :false :items nil)}
+      {do
+        (= {word} (word-at-position text:ctx line:ctx col:ctx))
+        (= {prefix} (if (nil? word) {""} {word}))
+        (= {snippet-items} (if (str/starts-with? prefix ":")
+          {nil}
+          {if (== prefix "")
+            {map make-snippet-item lsp/form-snippets}
+            {filter-snippets prefix lsp/form-snippets}}))
+        (= {sym-items} (if (nil? lsp/db) {nil}
+          {do
+            (= {syms} (if (== prefix "")
+              {symdb/completion-all lsp/db}
+              {symdb/completion-symbols lsp/db prefix}))
+            (map make-sym-completion-item syms)}))
+        (= {all-items} (join snippet-items (if (nil? sym-items) {nil} {sym-items})))
+        (lsp/send-response id (list :isIncomplete :false :items all-items))}})
 })
 
 (sig 'handle-document-symbols {-> Num List Nil})
@@ -684,12 +686,11 @@
       (lsp/send-response id lsp-syms)})})
 
 (sig 'handle-semantic-tokens {-> Num List Nil})
-(fun {handle-semantic-tokens id params} {
-  match (lsp/get-doc params)
-    {(None) (lsp/send-response id (list :data nil))}
-    {(Some :value ctx) (do
-      (= {data} (sem/tokenize-ast (plist/get ctx :ast) (plist/get ctx :text)))
-      (lsp/send-response id (list :data data)))}
+(fun {handle-semantic-tokens id params} {do
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx)
+    {lsp/send-response id (list :data nil)}
+    {lsp/send-response id (list :data (sem/tokenize-ast ast:ctx text:ctx))})
 })
 
 ; ---------------------------------------------------------------------------
@@ -697,20 +698,17 @@
 ; ---------------------------------------------------------------------------
 
 (sig 'handle-prepare-rename {-> Num List Nil})
-(fun {handle-prepare-rename id params} {
-  match (lsp/get-text-pos params)
-    {(None) (lsp/send-error id -32602 "Document not found")}
-    {(Some :value ctx) (do
-      (= {text} (plist/get ctx :text))
-      (= {line} (plist/get ctx :line))
-      (= {col} (plist/get ctx :col))
-      (= {wr} (word-range-at-position text line col))
+(fun {handle-prepare-rename id params} {do
+  (= {ctx} (lsp/get-text-pos params))
+  (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
+    {do
+      (= {wr} (word-range-at-position text:ctx line:ctx col:ctx))
       (if (nil? wr) {lsp/send-error id -32602 "No symbol at cursor"}
         {lsp/send-response id
           (list :range (list
-            :start (list :line line :character (plist/get wr :start))
-            :end (list :line line :character (plist/get wr :end)))
-          :placeholder (plist/get wr :word))}))}
+            :start (list :line line:ctx :character start:wr)
+            :end (list :line line:ctx :character end:wr))
+          :placeholder word:wr)})})
 })
 
 (sig 'ref->lsp-edit {-> Str List Str List})
@@ -762,27 +760,21 @@
 (sig 'handle-rename {-> Num List Nil})
 (fun {handle-rename id params} {do
   (= {new-name} (plist/get params :newName))
-  (match (lsp/get-word-ctx params)
-    {(None) (lsp/send-error id -32602 "Document not found")}
-    {(Some :value ctx) (do
-      (= {uri} (plist/get ctx :uri))
-      (= {text} (plist/get ctx :text))
-      (= {word} (plist/get ctx :word))
-      (= {line} (plist/get ctx :line))
-      (= {col} (plist/get ctx :col))
-      (= {ast} (plist/get ctx :ast))
-      (= {local-refs} (ref/find-scoped-refs-from-ast ast text line col))
+  (= {ctx} (lsp/get-word-ctx params))
+  (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
+    {do
+      (= {local-refs} (ref/find-scoped-refs-from-ast ast:ctx text:ctx line:ctx col:ctx))
       (if (not (nil? local-refs))
         {do
-          (= {edits} (map (\ {r} {ref->lsp-edit text r new-name}) local-refs))
-          (= {doc-edit} (list :textDocument (list :uri uri :version (None))
+          (= {edits} (map (\ {r} {ref->lsp-edit text:ctx r new-name}) local-refs))
+          (= {doc-edit} (list :textDocument (list :uri uri:ctx :version (None))
                               :edits edits))
           (lsp/send-response id (list :documentChanges (list doc-edit)))}
         {if (nil? lsp/db) {lsp/send-error id -32602 "No workspace"}
           {do
-            (= {word-len} (len word))
-            (= {db-refs} (symdb/find-refs lsp/db word))
-            (= {db-defs} (symdb/find-definitions lsp/db word))
+            (= {word-len} (len word:ctx))
+            (= {db-refs} (symdb/find-refs lsp/db word:ctx))
+            (= {db-defs} (symdb/find-definitions lsp/db word:ctx))
             (= {all-locs} (join
               (map (\ {r} {
                 list :uri (str "file://" (plist/get r :path))
@@ -794,8 +786,8 @@
               }) db-defs)))
             (= {grouped} (rename/group-by-uri all-locs nil))
             (= {doc-changes} (rename/make-doc-changes grouped))
-            (lsp/send-response id (list :documentChanges doc-changes))}}))}
-  )})
+            (lsp/send-response id (list :documentChanges doc-changes))}})})
+})
 
 ; ---------------------------------------------------------------------------
 ; Inlay hints — parameter name hints for function calls
@@ -804,11 +796,10 @@
 (sig 'handle-inlay-hints {-> Num List Nil})
 (fun {handle-inlay-hints id params} {do
   (= {range} (plist/get params :range))
-  (match (lsp/get-doc params)
-    {(None) (lsp/send-response id nil)}
-    {(Some :value ctx)
-      (do (= {hints} (hint/collect-from-ast (plist/get ctx :ast) (plist/get ctx :text) lsp/db range))
-          (lsp/send-response id hints))})
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {do (= {hints} (hint/collect-from-ast ast:ctx text:ctx lsp/db range))
+        (lsp/send-response id hints)})
 })
 
 ; ---------------------------------------------------------------------------
@@ -869,33 +860,33 @@
 
 (sig 'handle-signature-help {-> Num List Nil})
 (fun {handle-signature-help id params} {do
-  (= {result}
-    (option/flat-map (lsp/get-text-pos params) (\ {ctx} {do
-      (= {text} (plist/get ctx :text))
-      (= {ast} (plist/get ctx :ast))
-      (= {offset} (line-col->offset text (plist/get ctx :line) (plist/get ctx :col)))
-      (option/flat-map (option/from-nullable (sig/scan-back text (- offset 1) 0 0)) (\ {open-pos} {
-        option/flat-map (option/from-nullable (sig/extract-name text open-pos)) (\ {name} {
-          option/map (option/from-nullable (sig/lookup-params name ast lsp/db)) (\ {fn-params} {do
-            (= {name-end} (+ open-pos 1 (len name)))
-            (= {arg-idx} (sig/count-args text name-end offset 0 0 0 0))
-            (= {active} (if (>= arg-idx (len fn-params))
-              {- (len fn-params) 1} {arg-idx}))
-            (= {param-items} (map (\ {p} {list :label p}) fn-params))
-            (= {sig-label} (str "(" name " " (str/join fn-params " ") ")"))
-            (list :signatures
-              (list (list :label sig-label
-                          :parameters param-items
-                          :activeParameter (if (< active 0) {0} {active})))
-              :activeSignature 0
-              :activeParameter (if (< active 0) {0} {active}))
-          })
-        })
-      }))
-    })))
-  (match result
-    {(None) (lsp/send-response id (None))}
-    {(Some :value r) (lsp/send-response id r)})})
+  (= {ctx} (lsp/get-text-pos params))
+  (if (nil? ctx) {lsp/send-response id (None)}
+    {do
+      (= {offset} (line-col->offset text:ctx line:ctx col:ctx))
+      (= {open-pos} (sig/scan-back text:ctx (- offset 1) 0 0))
+      (if (nil? open-pos) {lsp/send-response id (None)}
+        {do
+          (= {name} (sig/extract-name text:ctx open-pos))
+          (if (nil? name) {lsp/send-response id (None)}
+            {do
+              (= {fn-params} (sig/lookup-params name ast:ctx lsp/db))
+              (if (nil? fn-params) {lsp/send-response id (None)}
+                {do
+                  (= {name-end} (+ open-pos 1 (len name)))
+                  (= {arg-idx} (sig/count-args text:ctx name-end offset 0 0 0 0))
+                  (= {active} (if (>= arg-idx (len fn-params))
+                    {- (len fn-params) 1} {arg-idx}))
+                  (= {param-items} (map (\ {p} {list :label p}) fn-params))
+                  (= {sig-label} (str "(" name " " (str/join fn-params " ") ")"))
+                  (lsp/send-response id
+                    (list :signatures
+                      (list (list :label sig-label
+                                  :parameters param-items
+                                  :activeParameter (if (< active 0) {0} {active})))
+                      :activeSignature 0
+                      :activeParameter (if (< active 0) {0} {active})))})})})})
+})
 
 ; ---------------------------------------------------------------------------
 ; Document highlight — highlight all occurrences of symbol under cursor
@@ -913,19 +904,16 @@
 })
 
 (sig 'handle-document-highlight {-> Num List Nil})
-(fun {handle-document-highlight id params} {
-  match (lsp/get-word-ctx params)
-    {(None) (lsp/send-response id nil)}
-    {(Some :value ctx) (do
-      (= {text} (plist/get ctx :text))
-      (= {ast} (plist/get ctx :ast))
-      (= {word} (plist/get ctx :word))
-      (= {local-refs} (ref/find-scoped-refs-from-ast ast text (plist/get ctx :line) (plist/get ctx :col)))
+(fun {handle-document-highlight id params} {do
+  (= {ctx} (lsp/get-word-ctx params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {do
+      (= {local-refs} (ref/find-scoped-refs-from-ast ast:ctx text:ctx line:ctx col:ctx))
       (= {refs} (if (not (nil? local-refs)) {local-refs}
         {do
-          (= {all-refs} (ref/collect-refs-from-ast ast))
-          (filter (\ {r} {== (plist/get r :name) word}) all-refs)}))
-      (lsp/send-response id (map (\ {r} {ref->highlight text r}) refs)))}
+          (= {all-refs} (ref/collect-refs-from-ast ast:ctx))
+          (filter (\ {r} {== (plist/get r :name) word:ctx}) all-refs)}))
+      (lsp/send-response id (map (\ {r} {ref->highlight text:ctx r}) refs))})
 })
 
 ; ---------------------------------------------------------------------------
@@ -979,16 +967,13 @@
 })
 
 (sig 'handle-document-link {-> Num List Nil})
-(fun {handle-document-link id params} {
-  match (lsp/get-doc params)
-    {(None) (lsp/send-response id nil)}
-    {(Some :value ctx) (do
-      (= {text} (plist/get ctx :text))
-      (= {ast} (plist/get ctx :ast))
-      (if (error? ast) {lsp/send-response id nil}
-        {do
-          (= {root} (if (nil? lsp/root-path) {"."} {lsp/root-path}))
-          (lsp/send-response id (link/collect-loads ast text root))}))}
+(fun {handle-document-link id params} {do
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {if (error? ast:ctx) {lsp/send-response id nil}
+      {do
+        (= {root} (if (nil? lsp/root-path) {"."} {lsp/root-path}))
+        (lsp/send-response id (link/collect-loads ast:ctx text:ctx root))}})
 })
 
 ; ---------------------------------------------------------------------------
@@ -1045,13 +1030,11 @@
 })
 
 (sig 'handle-folding-range {-> Num List Nil})
-(fun {handle-folding-range id params} {
-  match (lsp/get-doc params)
-    {(None) (lsp/send-response id nil)}
-    {(Some :value ctx) (do
-      (= {ast} (plist/get ctx :ast))
-      (if (error? ast) {lsp/send-response id nil}
-        {lsp/send-response id (fold/collect ast (plist/get ctx :text))}))}
+(fun {handle-folding-range id params} {do
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {if (error? ast:ctx) {lsp/send-response id nil}
+      {lsp/send-response id (fold/collect ast:ctx text:ctx)}})
 })
 
 ; ---------------------------------------------------------------------------
@@ -1117,10 +1100,9 @@
 (sig 'handle-selection-range {-> Num List Nil})
 (fun {handle-selection-range id params} {do
   (= {positions} (plist/get params :positions))
-  (match (lsp/get-doc params)
-    {(None) (lsp/send-response id nil)}
-    {(Some :value ctx)
-      (lsp/send-response id (sel/find-ranges (plist/get ctx :text) (plist/get ctx :ast) positions))})
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {lsp/send-response id (sel/find-ranges text:ctx ast:ctx positions)})
 })
 
 ; ---------------------------------------------------------------------------
@@ -1235,15 +1217,14 @@
 (sig 'handle-semantic-tokens-range {-> Num List Nil})
 (fun {handle-semantic-tokens-range id params} {do
   (= {range} (plist/get params :range))
-  (match (lsp/get-doc params)
-    {(None) (lsp/send-response id (list :data nil))}
-    {(Some :value ctx) (do
-      (= {text} (plist/get ctx :text))
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id (list :data nil)}
+    {do
       (= {start-line} (plist/get (plist/get range :start) :line))
       (= {end-line} (plist/get (plist/get range :end) :line))
-      (= {data} (sem/tokenize-ast (plist/get ctx :ast) text))
+      (= {data} (sem/tokenize-ast ast:ctx text:ctx))
       (= {filtered} (sem/filter-range data start-line end-line 0 nil))
-      (lsp/send-response id (list :data filtered)))})
+      (lsp/send-response id (list :data filtered))})
 })
 
 (sig 'sem/filter-range {-> List Num Num Num List List})
