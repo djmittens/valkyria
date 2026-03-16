@@ -63,10 +63,10 @@
     (= {config} (foldl aio/debug-parse-param defaults params))
 
     ; Extract parsed values
-    (= {slab-name} slab:config)
-    (= {start-val} start:config)
-    (= {end-val} end:config)
-    (= {num-buckets} buckets:config)
+    (= {slab-name} config:slab)
+    (= {start-val} config:start)
+    (= {end-val} config:end)
+    (= {num-buckets} config:buckets)
 
     ; Call the builtin
     (= {result} (aio/slab-buckets sys slab-name start-val end-val num-buckets))
@@ -133,7 +133,7 @@
     ; Extract request path - support both ref (runtime) and qexpr (testing)
     (= {path} (if (ref? req)
                 {(req/path req)}
-                {path:req}))
+                {req:path}))
 
     ; Split path and query string (HTTP/2 :path includes query)
     (= {path-parts} (str/split path "?"))

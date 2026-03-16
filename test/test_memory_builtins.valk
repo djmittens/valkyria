@@ -110,9 +110,9 @@
   (test "gc-metrics-has-expected-keys"
     {do
     (= {m} (mem/gc/metrics))
-    (test/assert (num? cycles:m) "should have :cycles")
-    (test/assert (num? heap-used:m) "should have :heap-used")
-    (test/assert (num? heap-total:m) "should have :heap-total")
+    (test/assert (num? m:cycles) "should have :cycles")
+    (test/assert (num? m:heap-used) "should have :heap-used")
+    (test/assert (num? m:heap-total) "should have :heap-total")
     true
   })
   (test "set-hard-limit-below-usage-errors"

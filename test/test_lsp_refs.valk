@@ -12,11 +12,11 @@
 })
 
 (fun {find-ref-by-name refs name} {
-  head (filter (\{r} {== name:r name}) refs)
+  head (filter (\{r} {== r:name name}) refs)
 })
 
 (fun {refs-with-name refs name} {
-  filter (\{r} {== name:r name}) refs
+  filter (\{r} {== r:name name}) refs
 })
 
 (fun {ref-count text} {
@@ -24,15 +24,15 @@
 })
 
 (fun {ref-names text} {
-  map (\{r} {name:r}) (ref/collect-refs text)
+  map (\{r} {r:name}) (ref/collect-refs text)
 })
 
 (fun {ref-defs text} {
-  filter (\{r} {== is-def:r 1}) (ref/collect-refs text)
+  filter (\{r} {== r:is-def 1}) (ref/collect-refs text)
 })
 
 (fun {ref-uses text} {
-  filter (\{r} {== is-def:r 0}) (ref/collect-refs text)
+  filter (\{r} {== r:is-def 0}) (ref/collect-refs text)
 })
 
 (test/run (list
@@ -52,9 +52,9 @@
         "single symbol should produce 1 ref")
       (= {refs} (ref/collect-refs "foo"))
       (= {r} (head refs))
-      (test/assert-eq "foo" name:r "name should be foo")
-      (test/assert-eq 0 is-def:r "should be use, not def")
-      (test/assert-eq -1 scope-id:r "global scope = -1")
+      (test/assert-eq "foo" r:name "name should be foo")
+      (test/assert-eq 0 r:is-def "should be use, not def")
+      (test/assert-eq -1 r:scope-id "global scope = -1")
       true
     })
 
@@ -84,7 +84,7 @@
   (test "fun-records-name-as-def"
     {do
       (= {defs} (ref-defs "(fun {f x} {x})"))
-      (= {names} (map (\{r} {name:r}) defs))
+      (= {names} (map (\{r} {r:name}) defs))
       (test/assert (member? "f" names) "f should be recorded as def")
       true
     })
@@ -92,7 +92,7 @@
   (test "fun-params-recorded-as-defs"
     {do
       (= {defs} (ref-defs "(fun {f a b} {+ a b})"))
-      (= {names} (map (\{r} {name:r}) defs))
+      (= {names} (map (\{r} {r:name}) defs))
       (test/assert (member? "a" names) "param a should be def")
       (test/assert (member? "b" names) "param b should be def")
       true
@@ -101,8 +101,8 @@
   (test "fun-name-is-global-scope"
     {do
       (= {defs} (ref-defs "(fun {f x} {x})"))
-      (= {f-def} (head (filter (\{r} {== name:r "f"}) defs)))
-      (test/assert-eq -1 scope-id:f-def
+      (= {f-def} (head (filter (\{r} {== r:name "f"}) defs)))
+      (test/assert-eq -1 f-def:scope-id
         "function name should be global scope (-1)")
       true
     })
@@ -110,8 +110,8 @@
   (test "fun-params-scoped-to-fun"
     {do
       (= {defs} (ref-defs "(fun {f x} {x})"))
-      (= {x-def} (head (filter (\{r} {== name:r "x"}) defs)))
-      (test/assert (!= -1 scope-id:x-def)
+      (= {x-def} (head (filter (\{r} {== r:name "x"}) defs)))
+      (test/assert (!= -1 x-def:scope-id)
         "param should be scoped to fun, not global")
       true
     })
@@ -121,7 +121,7 @@
   (test "lambda-params-as-defs"
     {do
       (= {defs} (ref-defs "(\\ {a} {a})"))
-      (= {names} (map (\{r} {name:r}) defs))
+      (= {names} (map (\{r} {r:name}) defs))
       (test/assert (member? "a" names) "lambda param should be def")
       true
     })
@@ -129,9 +129,9 @@
   (test "lambda-body-uses-scoped"
     {do
       (= {uses} (ref-uses "(\\ {x} {x})"))
-      (= {x-use} (head (filter (\{r} {== name:r "x"}) uses)))
+      (= {x-use} (head (filter (\{r} {== r:name "x"}) uses)))
       (test/assert (not (nil? x-use)) "should have use of x in body")
-      (test/assert (!= -1 scope-id:x-use)
+      (test/assert (!= -1 x-use:scope-id)
         "body ref to x should be scoped to lambda")
       true
     })
@@ -141,18 +141,18 @@
   (test "def-records-global-defs"
     {do
       (= {defs} (ref-defs "(def {myvar} 42)"))
-      (= {names} (map (\{r} {name:r}) defs))
+      (= {names} (map (\{r} {r:name}) defs))
       (test/assert (member? "myvar" names) "def should record myvar as def")
-      (= {mv} (head (filter (\{r} {== name:r "myvar"}) defs)))
-      (test/assert-eq -1 scope-id:mv "def should be global")
+      (= {mv} (head (filter (\{r} {== r:name "myvar"}) defs)))
+      (test/assert-eq -1 mv:scope-id "def should be global")
       true
     })
 
   (test "assign-records-local-defs"
     {do
       (= {refs} (ref/collect-refs "(fun {f} {do (= {x} 1) x})"))
-      (= {defs} (filter (\{r} {== is-def:r 1}) refs))
-      (= {x-def} (head (filter (\{r} {== name:r "x"}) defs)))
+      (= {defs} (filter (\{r} {== r:is-def 1}) refs))
+      (= {x-def} (head (filter (\{r} {== r:name "x"}) defs)))
       (test/assert (not (nil? x-def)) "= should record x as def")
       true
     })
@@ -162,10 +162,10 @@
   (test "do-threads-assign-scope"
     {do
       (= {refs} (ref/collect-refs "(fun {f} {do (= {x} 1) x})"))
-      (= {uses} (filter (\{r} {== is-def:r 0}) refs))
-      (= {x-use} (head (filter (\{r} {== name:r "x"}) uses)))
+      (= {uses} (filter (\{r} {== r:is-def 0}) refs))
+      (= {x-use} (head (filter (\{r} {== r:name "x"}) uses)))
       (test/assert (not (nil? x-use)) "x should have a use ref after = binding")
-      (test/assert (!= -1 scope-id:x-use )
+      (test/assert (!= -1 x-use:scope-id )
         "x use after = should be scoped")
       true
     })
@@ -175,7 +175,7 @@
   (test "type-records-type-and-ctors"
     {do
       (= {defs} (ref-defs "(type {Color} {Red} {Green} {Blue})"))
-      (= {names} (map (\{r} {name:r}) defs))
+      (= {names} (map (\{r} {r:name}) defs))
       (test/assert (member? "Color" names) "type name should be def")
       (test/assert (member? "Red" names) "constructor should be def")
       (test/assert (member? "Green" names) "constructor should be def")
@@ -196,7 +196,7 @@
   (test "ampersand-skipped"
     {do
       (= {defs} (ref-defs "(fun {f x & rest} {rest})"))
-      (= {names} (map (\{r} {name:r}) defs))
+      (= {names} (map (\{r} {r:name}) defs))
       (test/assert (not (member? "&" names)) "& should not be a param def")
       (test/assert (member? "rest" names) "rest should be a param def")
       true
@@ -209,7 +209,7 @@
       (= {refs} (ref/collect-refs "foo"))
       (= {r} (ref/find-at-offset refs 0))
       (test/assert (not (nil? r)) "should find ref at offset 0")
-      (test/assert-eq "foo" name:r "should be foo")
+      (test/assert-eq "foo" r:name "should be foo")
       true
     })
 
@@ -226,8 +226,8 @@
   (test "matching-refs-by-scope"
     {do
       (= {refs} (ref/collect-refs "(fun {f x} {x})"))
-      (= {x-ref} (head (filter (\{r} {== name:r "x"}) refs)))
-      (= {scope} scope-id:x-ref)
+      (= {x-ref} (head (filter (\{r} {== r:name "x"}) refs)))
+      (= {scope} x-ref:scope-id)
       (= {matched} (ref/matching-refs refs "x" scope nil))
       (test/assert (>= (len matched) 2)
         "should match both def and use of x in same scope")
@@ -295,12 +295,12 @@
       (= {r-plus} (find-ref-by-name refs "+"))
       (= {r-a} (find-ref-by-name refs "a"))
       (= {r-b} (find-ref-by-name refs "b"))
-      (test/assert-eq 0 line:r-plus "+ line")
-      (test/assert-eq 1 col:r-plus "+ col")
-      (test/assert-eq 0 line:r-a "a line")
-      (test/assert-eq 3 col:r-a "a col")
-      (test/assert-eq 0 line:r-b "b line")
-      (test/assert-eq 5 col:r-b "b col")
+      (test/assert-eq 0 r-plus:line "+ line")
+      (test/assert-eq 1 r-plus:col "+ col")
+      (test/assert-eq 0 r-a:line "a line")
+      (test/assert-eq 3 r-a:col "a col")
+      (test/assert-eq 0 r-b:line "b line")
+      (test/assert-eq 5 r-b:col "b col")
       true
     })
 
@@ -310,45 +310,45 @@
       (= {r-fun} (find-ref-by-name refs "fun"))
       (= {r-f} (find-ref-by-name refs "f"))
       (= {r-plus} (find-ref-by-name refs "+"))
-      (test/assert-eq 0 line:r-fun "fun on line 0")
-      (test/assert-eq 1 col:r-fun "fun at col 1")
-      (test/assert-eq 0 line:r-f "f on line 0")
-      (test/assert-eq 6 col:r-f "f at col 6")
-      (test/assert-eq 1 line:r-plus "+ on line 1")
-      (test/assert-eq 3 col:r-plus "+ at col 3")
+      (test/assert-eq 0 r-fun:line "fun on line 0")
+      (test/assert-eq 1 r-fun:col "fun at col 1")
+      (test/assert-eq 0 r-f:line "f on line 0")
+      (test/assert-eq 6 r-f:col "f at col 6")
+      (test/assert-eq 1 r-plus:line "+ on line 1")
+      (test/assert-eq 3 r-plus:col "+ at col 3")
       (= {x-refs} (refs-with-name refs "x"))
       (test/assert-eq 2 (len x-refs) "x appears twice (param + body)")
       (= {x1} (head x-refs))
       (= {x2} (head (tail x-refs)))
-      (test/assert-eq 0 line:x1 "first x on line 0")
-      (test/assert-eq 8 col:x1 "first x at col 8")
-      (test/assert-eq 1 line:x2 "second x on line 1")
-      (test/assert-eq 5 col:x2 "second x at col 5")
+      (test/assert-eq 0 x1:line "first x on line 0")
+      (test/assert-eq 8 x1:col "first x at col 8")
+      (test/assert-eq 1 x2:line "second x on line 1")
+      (test/assert-eq 5 x2:col "second x at col 5")
       true
     })
 
   (test "extract-refs-nested-expr"
     {do
       (= {refs} (symdb/extract-refs "(if (> a 0) {a} {b})"))
-      (= {names} (map (\{r} {name:r}) refs))
+      (= {names} (map (\{r} {r:name}) refs))
       (test/assert (member? "if" names) "should have if")
       (test/assert (member? ">" names) "should have >")
       (test/assert (member? "b" names) "should have b")
       (= {a-refs} (refs-with-name refs "a"))
       (test/assert-eq 2 (len a-refs) "a appears twice (condition + then)")
       (= {r-if} (find-ref-by-name refs "if"))
-      (test/assert-eq 1 col:r-if "if at col 1")
+      (test/assert-eq 1 r-if:col "if at col 1")
       (= {r-gt} (find-ref-by-name refs ">"))
-      (test/assert-eq 5 col:r-gt "> at col 5")
+      (test/assert-eq 5 r-gt:col "> at col 5")
       (= {r-b} (find-ref-by-name refs "b"))
-      (test/assert-eq 17 col:r-b "b at col 17")
+      (test/assert-eq 17 r-b:col "b at col 17")
       true
     })
 
   (test "extract-refs-fun-all-symbols"
     {do
       (= {refs} (symdb/extract-refs "(fun {f x y} {+ x y})"))
-      (= {names} (map (\{r} {name:r}) refs))
+      (= {names} (map (\{r} {r:name}) refs))
       (test/assert (member? "fun" names) "should have fun")
       (test/assert (member? "f" names) "should have f")
       (test/assert (member? "x" names) "should have x")
@@ -368,7 +368,7 @@
       (= {refs2} (symdb/extract-refs "false"))
       (test/assert-eq 0 (len refs2) "false should produce 0 refs")
       (= {refs3} (symdb/extract-refs "(match x {otherwise 0})"))
-      (= {names} (map (\{r} {name:r}) refs3))
+      (= {names} (map (\{r} {r:name}) refs3))
       (test/assert (not (member? "otherwise" names)) "otherwise excluded")
       (test/assert (member? "match" names) "match is a valid ref")
       (test/assert (member? "x" names) "x is a valid ref")
@@ -380,7 +380,7 @@
       (= {refs} (symdb/extract-refs "(+ 42 \"hello\")"))
       (test/assert-eq 1 (len refs) "only + should be extracted")
       (= {first-ref} (head refs))
-      (test/assert-eq "+" name:first-ref "ref should be +")
+      (test/assert-eq "+" first-ref:name "ref should be +")
       true
     })
 
@@ -394,20 +394,20 @@
   (test "extract-refs-def-form"
     {do
       (= {refs} (symdb/extract-refs "(def {val} 42)"))
-      (= {names} (map (\{r} {name:r}) refs))
+      (= {names} (map (\{r} {r:name}) refs))
       (test/assert (member? "def" names) "def is extracted")
       (test/assert (member? "val" names) "val is extracted")
       (test/assert-eq 2 (len refs) "only def and val (42 is a number)")
       (= {r-val} (find-ref-by-name refs "val"))
-      (test/assert-eq 0 line:r-val "val line 0")
-      (test/assert-eq 6 col:r-val "val col 6")
+      (test/assert-eq 0 r-val:line "val line 0")
+      (test/assert-eq 6 r-val:col "val col 6")
       true
     })
 
   (test "extract-refs-type-form"
     {do
       (= {refs} (symdb/extract-refs "(type {Color} {Red} {Green})"))
-      (= {names} (map (\{r} {name:r}) refs))
+      (= {names} (map (\{r} {r:name}) refs))
       (test/assert (member? "type" names) "type extracted")
       (test/assert (member? "Color" names) "Color extracted")
       (test/assert (member? "Red" names) "Red extracted")
@@ -418,7 +418,7 @@
   (test "extract-refs-lambda"
     {do
       (= {refs} (symdb/extract-refs "(map (\\{x} {+ x 1}) items)"))
-      (= {names} (map (\{r} {name:r}) refs))
+      (= {names} (map (\{r} {r:name}) refs))
       (test/assert (member? "map" names) "map extracted")
       (test/assert (member? "x" names) "x extracted")
       (test/assert (member? "+" names) "+ extracted")
@@ -438,15 +438,15 @@
       (= {refs} (symdb/find-refs db "helper"))
       (test/assert-eq 1 (len refs) "helper appears once in file")
       (= {r} (head refs))
-      (test/assert-eq 0 line:r "helper line 0")
-      (test/assert-eq 6 col:r "helper col 6")
-      (test/assert-eq "/a.valk" path:r "path matches")
+      (test/assert-eq 0 r:line "helper line 0")
+      (test/assert-eq 6 r:col "helper col 6")
+      (test/assert-eq "/a.valk" r:path "path matches")
       (= {x-refs} (symdb/find-refs db "x"))
       (test/assert-eq 2 (len x-refs) "x appears twice (param + body)")
       (= {x1} (head x-refs))
       (= {x2} (head (tail x-refs)))
-      (test/assert-eq 13 col:x1 "first x at col 13")
-      (test/assert-eq 19 col:x2 "second x at col 19")
+      (test/assert-eq 13 x1:col "first x at col 13")
+      (test/assert-eq 19 x2:col "second x at col 19")
       (sqlite/close db)
       true
     })
@@ -458,13 +458,13 @@
       (symdb/sync-document db "file:///b.valk" "(fun {main} {helper 42})")
       (= {refs} (symdb/find-refs db "helper"))
       (test/assert-eq 2 (len refs) "helper in 2 files")
-      (= {paths} (map (\{r} {path:r}) refs))
+      (= {paths} (map (\{r} {r:path}) refs))
       (test/assert (member? "/a.valk" paths) "found in a.valk")
       (test/assert (member? "/b.valk" paths) "found in b.valk")
-      (= {r-a} (head (filter (\{r} {== path:r "/a.valk"}) refs)))
-      (= {r-b} (head (filter (\{r} {== path:r "/b.valk"}) refs)))
-      (test/assert-eq 6 col:r-a "helper def col in a.valk")
-      (test/assert-eq 13 col:r-b "helper use col in b.valk")
+      (= {r-a} (head (filter (\{r} {== r:path "/a.valk"}) refs)))
+      (= {r-b} (head (filter (\{r} {== r:path "/b.valk"}) refs)))
+      (test/assert-eq 6 r-a:col "helper def col in a.valk")
+      (test/assert-eq 13 r-b:col "helper use col in b.valk")
       (sqlite/close db)
       true
     })
@@ -477,7 +477,7 @@
       (symdb/sync-document db "file:///b.valk" "(= {s} (add 3 4))")
       (= {refs} (symdb/find-refs db "add"))
       (test/assert-eq 3 (len refs) "add in 3 files")
-      (= {paths} (map (\{r} {path:r}) refs))
+      (= {paths} (map (\{r} {r:path}) refs))
       (test/assert (member? "/lib.valk" paths) "found in lib.valk")
       (test/assert (member? "/a.valk" paths) "found in a.valk")
       (test/assert (member? "/b.valk" paths) "found in b.valk")
@@ -520,11 +520,11 @@
       (= {r1} (head refs))
       (= {r2} (head (tail refs)))
       (= {r3} (head (tail (tail refs))))
-      (test/assert-eq "/a.valk" path:r1 "first ref from a.valk")
-      (test/assert-eq "/a.valk" path:r2 "second ref from a.valk")
-      (test/assert-eq "/b.valk" path:r3 "third ref from b.valk")
-      (test/assert-eq 0 line:r1 "first + on line 0")
-      (test/assert-eq 1 line:r2 "second + on line 1")
+      (test/assert-eq "/a.valk" r1:path "first ref from a.valk")
+      (test/assert-eq "/a.valk" r2:path "second ref from a.valk")
+      (test/assert-eq "/b.valk" r3:path "third ref from b.valk")
+      (test/assert-eq 0 r1:line "first + on line 0")
+      (test/assert-eq 1 r2:line "second + on line 1")
       (sqlite/close db)
       true
     })
@@ -539,9 +539,9 @@
       (= {x1} (head x-refs))
       (= {x2} (head (tail x-refs)))
       (= {x3} (head (tail (tail x-refs))))
-      (test/assert-eq 0 line:x1 "first x on line 0 (param)")
-      (test/assert-eq 1 line:x2 "second x on line 1 (* x y)")
-      (test/assert-eq 2 line:x3 "third x on line 2 (- x y)")
+      (test/assert-eq 0 x1:line "first x on line 0 (param)")
+      (test/assert-eq 1 x2:line "second x on line 1 (* x y)")
+      (test/assert-eq 2 x3:line "third x on line 2 (- x y)")
       (sqlite/close db)
       true
     })
@@ -582,7 +582,7 @@
       (= {refs} (symdb/find-refs db "plist/get"))
       (test/assert-eq 1 (len refs) "plist/get only from call site, not sig")
       (= {first-ref} (head refs))
-      (test/assert-eq "/a.valk" path:first-ref "ref from a.valk")
+      (test/assert-eq "/a.valk" first-ref:path "ref from a.valk")
       (= {sig-refs} (symdb/find-refs db "QExpr"))
       (test/assert-eq 0 (len sig-refs) "type names inside sig not indexed")
       (sqlite/close db)
@@ -599,7 +599,7 @@
       (symdb/sync-document db "file:///a.valk" "(fun {shared y} {y})")
       (= {refs-after} (symdb/find-refs db "shared"))
       (test/assert-eq 2 (len refs-after) "shared still in 2 files after resync of a.valk")
-      (= {b-refs} (filter (\{r} {== path:r "/b.valk"}) refs-after))
+      (= {b-refs} (filter (\{r} {== r:path "/b.valk"}) refs-after))
       (test/assert-eq 1 (len b-refs) "b.valk refs untouched")
       (sqlite/close db)
       true
@@ -629,13 +629,13 @@
       (= {refs-before} (symdb/find-refs db "helper"))
       (test/assert-eq 1 (len refs-before) "helper has 1 ref after sync-document")
       (= {rb} (head refs-before))
-      (test/assert-eq 0 line:rb "helper on line 0")
+      (test/assert-eq 0 rb:line "helper on line 0")
       (= {v2} "(def {VERSION} 42)\n(fun {helper x} {+ x 1})")
       (symdb/sync-file-symbols db "file:///t.valk" v2 "newhash")
       (= {refs-after} (symdb/find-refs db "helper"))
       (test/assert-eq 1 (len refs-after) "helper still has 1 ref after resync")
       (= {ra} (head refs-after))
-      (test/assert-eq 1 line:ra
+      (test/assert-eq 1 ra:line
         "helper now on line 1 (shifted by inserted line)")
       (sqlite/close db)
       true
@@ -649,13 +649,13 @@
       (= {x-refs} (symdb/find-refs db "x"))
       (test/assert-eq 2 (len x-refs) "x has 2 refs initially")
       (= {xr} (head x-refs))
-      (test/assert-eq 0 line:xr "x on line 0 initially")
+      (test/assert-eq 0 xr:line "x on line 0 initially")
       (= {v2} "\n\n\n(fun {f x} {x})")
       (symdb/sync-file-symbols db "file:///t.valk" v2 "newhash")
       (= {x-after} (symdb/find-refs db "x"))
       (test/assert-eq 2 (len x-after) "x still has 2 refs")
       (= {xa} (head x-after))
-      (test/assert-eq 3 line:xa
+      (test/assert-eq 3 xa:line
         "x now on line 3 after resync")
       (sqlite/close db)
       true
@@ -671,7 +671,7 @@
       (symdb/sync-file-symbols db "file:///a.valk" "(fun {shared} {2})" "new")
       (= {refs-after} (symdb/find-refs db "shared"))
       (test/assert-eq 2 (len refs-after) "shared still in 2 files (re-indexed)")
-      (= {b-refs} (filter (\{r} {== path:r "/b.valk"}) refs-after))
+      (= {b-refs} (filter (\{r} {== r:path "/b.valk"}) refs-after))
       (test/assert-eq 1 (len b-refs) "b.valk refs untouched")
       (sqlite/close db)
       true

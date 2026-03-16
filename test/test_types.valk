@@ -198,39 +198,39 @@
       (test/assert (== (Some:value inner) 42) "inner value")
     })
 
-  ; === field:var inference tests ===
+  ; === var:field inference tests ===
 
   (test "field-access-product"
     {do
       (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
-      (test/assert (== name:p "Alice") "name:p works")
-      (test/assert (== age:p 30) "age:p works")
-      (test/assert (== email:p "a@b.com") "email:p works")
+      (test/assert (== p:name "Alice") "name:p works")
+      (test/assert (== p:age 30) "age:p works")
+      (test/assert (== p:email "a@b.com") "email:p works")
     })
 
   (test "field-access-sum"
     {do
       (= {s} (Circle :radius 5))
-      (test/assert (== radius:s 5) "radius:s works")
+      (test/assert (== s:radius 5) "radius:s works")
     })
 
   (test "field-access-sum-rect"
     {do
       (= {r} (Rect :w 10 :h 20))
-      (test/assert (== w:r 10) "w:r works")
-      (test/assert (== h:r 20) "h:r works")
+      (test/assert (== r:w 10) "w:r works")
+      (test/assert (== r:h 20) "h:r works")
     })
 
   (test "field-access-inline"
     {do
       (= {p} (Person :name "Bob" :age 25 :email "b@b.com"))
-      (test/assert (== (str/join (list name:p "!") "") "Bob!") "field access inline in call")
+      (test/assert (== (str/join (list p:name "!") "") "Bob!") "field access inline in call")
     })
 
   (test "field-access-in-condition"
     {do
       (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
-      (test/assert (if (> age:p 18) true false) "field access in condition")
+      (test/assert (if (> p:age 18) true false) "field access in condition")
     })
 
   (test "field-access-nested-do"
@@ -238,7 +238,7 @@
       (= {result}
         (do
           (= {p} (Person :name "Inner" :age 1 :email "x"))
-          name:p))
+          p:name))
       (test/assert (== result "Inner") "field access in nested do")
     })
 
@@ -246,20 +246,20 @@
     {do
       (= {p1} (Person :name "Alice" :age 30 :email "a@a.com"))
       (= {p2} (Person :name "Bob" :age 25 :email "b@b.com"))
-      (test/assert (== name:p1 "Alice") "p1 name")
-      (test/assert (== name:p2 "Bob") "p2 name")
+      (test/assert (== p1:name "Alice") "p1 name")
+      (test/assert (== p2:name "Bob") "p2 name")
     })
 
   (test "field-access-option"
     {do
       (= {x} (Some :value 42))
-      (test/assert (== value:x 42) "value:x works for Some")
+      (test/assert (== x:value 42) "value:x works for Some")
     })
 
   (test "field-access-result"
     {do
       (= {r} (Ok :value 99))
-      (test/assert (== value:r 99) "value:r works for Ok")
+      (test/assert (== r:value 99) "value:r works for Ok")
     })
 
 
@@ -268,7 +268,7 @@
   (test "sig-return-type-inference"
     {do
       (= {lookup-result} (Some :value 42))
-      (test/assert (== value:lookup-result 42) "inferred from constructor binding")
+      (test/assert (== lookup-result:value 42) "inferred from constructor binding")
     })
 
   (test "sig-param-inference"
@@ -284,8 +284,8 @@
     {do
       (= {items} (get-items 10))
       (= {first} (head items))
-      (test/assert-eq "a" label:first "head of (List Item) infers Item type")
-      (test/assert-eq 10 value:first "field:var on head result")
+      (test/assert-eq "a" first:label "head of (List Item) infers Item type")
+      (test/assert-eq 10 first:value "field:var on head result")
     })
 
   (test "parametric-tail-preserves-type"
@@ -293,8 +293,8 @@
       (= {items} (get-items 10))
       (= {rest} (tail items))
       (= {second} (head rest))
-      (test/assert-eq "b" label:second "head of tail of (List Item)")
-      (test/assert-eq 11 value:second "field:var on head-of-tail")
+      (test/assert-eq "b" second:label "head of tail of (List Item)")
+      (test/assert-eq 11 second:value "field:var on head-of-tail")
     })
 
   (test "parametric-filter-preserves-type"
@@ -302,7 +302,7 @@
       (= {items} (get-items 10))
       (= {filtered} (filter (\ {x} {== (Item:label x) "b"}) items))
       (= {first} (head filtered))
-      (test/assert-eq "b" label:first "head of filter result")
+      (test/assert-eq "b" first:label "head of filter result")
     })
 
   (test "parametric-reverse-preserves-type"
@@ -310,7 +310,7 @@
       (= {items} (get-items 10))
       (= {rev} (reverse items))
       (= {first} (head rev))
-      (test/assert-eq "b" label:first "head of reverse result")
+      (test/assert-eq "b" first:label "head of reverse result")
     })
 
   ; === record update (with) ===
@@ -319,18 +319,18 @@
     {do
       (= {p} (Person :name "Alice" :age 30 :email "a@b"))
       (= {p2} (with p :age 31))
-      (test/assert-eq "Alice" name:p2 "unchanged field preserved")
-      (test/assert-eq 31 age:p2 "updated field changed")
-      (test/assert-eq "a@b" email:p2 "other unchanged field preserved")
+      (test/assert-eq "Alice" p2:name "unchanged field preserved")
+      (test/assert-eq 31 p2:age "updated field changed")
+      (test/assert-eq "a@b" p2:email "other unchanged field preserved")
     })
 
   (test "with-multiple-fields"
     {do
       (= {p} (Person :name "Bob" :age 25 :email "b@c"))
       (= {p2} (with p :name "Robert" :email "robert@c"))
-      (test/assert-eq "Robert" name:p2 "first override applied")
-      (test/assert-eq 25 age:p2 "non-overridden field preserved")
-      (test/assert-eq "robert@c" email:p2 "second override applied")
+      (test/assert-eq "Robert" p2:name "first override applied")
+      (test/assert-eq 25 p2:age "non-overridden field preserved")
+      (test/assert-eq "robert@c" p2:email "second override applied")
     })
 
   (test "with-preserves-type-inference"
@@ -338,17 +338,17 @@
       (= {p} (Person :name "Carol" :age 40 :email "c@d"))
       (= {p2} (with p :age 41))
       (= {p3} (with p2 :email "carol@d"))
-      (test/assert-eq "Carol" name:p3 "chained with preserves name")
-      (test/assert-eq 41 age:p3 "chained with preserves age update")
-      (test/assert-eq "carol@d" email:p3 "chained with applies email update")
+      (test/assert-eq "Carol" p3:name "chained with preserves name")
+      (test/assert-eq 41 p3:age "chained with preserves age update")
+      (test/assert-eq "carol@d" p3:email "chained with applies email update")
     })
 
   (test "with-in-fun-body"
     {do
       (= {p} (Person :name "Dan" :age 20 :email "d@e"))
-      (= {p2} (with p :age (+ age:p 1)))
-      (test/assert-eq 21 age:p2 "with in do block works")
-      (test/assert-eq "Dan" name:p2 "with preserves other fields")
+      (= {p2} (with p :age (+ p:age 1)))
+      (test/assert-eq 21 p2:age "with in do block works")
+      (test/assert-eq "Dan" p2:name "with preserves other fields")
     })
 
   ; === callable keywords ===
@@ -383,28 +383,28 @@
   (test "field-var-plist-fallback"
     {do
       (= {td} (list :uri "/test.valk" :text "hello"))
-      (test/assert-eq "/test.valk" uri:td "field:var falls back to plist/get for untyped vars")
+      (test/assert-eq "/test.valk" td:uri "field:var falls back to plist/get for untyped vars")
     })
 
   (test "field-var-plist-fallback-multiple"
     {do
       (= {info} (list :name "Alice" :age 30 :city "NYC"))
-      (test/assert-eq "Alice" name:info "plist fallback name")
-      (test/assert-eq 30 age:info "plist fallback age")
-      (test/assert-eq "NYC" city:info "plist fallback city")
+      (test/assert-eq "Alice" info:name "plist fallback name")
+      (test/assert-eq 30 info:age "plist fallback age")
+      (test/assert-eq "NYC" info:city "plist fallback city")
     })
 
   (test "field-var-plist-fallback-nil"
     {do
       (= {data} (list :x 1))
-      (test/assert (nil? y:data) "plist fallback returns nil for missing key")
+      (test/assert (nil? data:y) "plist fallback returns nil for missing key")
     })
 
   (test "field-var-typed-still-works"
     {do
       (= {p} (Person :name "Bob" :age 25 :email "bob@x.com"))
-      (test/assert-eq "Bob" name:p "typed field:var still compiles to nth")
-      (test/assert-eq 25 age:p "typed field:var age")
+      (test/assert-eq "Bob" p:name "typed var:field still compiles to nth")
+      (test/assert-eq 25 p:age "typed var:field age")
     })
 
 

@@ -6,20 +6,20 @@
   (test "parse-self-closing"
     {do
     (= {doc} (xml/parse "<root/>"))
-    (test/assert-eq "root" tag:doc "tag name")
-    (test/assert-eq 0 (len children:doc) "no children")
+    (test/assert-eq "root" doc:tag "tag name")
+    (test/assert-eq 0 (len doc:children) "no children")
     true
   })
 
   (test "parse-with-children"
     {do
     (= {doc} (xml/parse "<root><a/><b/></root>"))
-    (= {children} children:doc)
+    (= {children} doc:children)
     (test/assert-eq 2 (len children) "two children")
     (= {c1} (nth 1 children))
-    (test/assert-eq "a" tag:c1 "first child")
+    (test/assert-eq "a" c1:tag "first child")
     (= {c2} (nth 2 children))
-    (test/assert-eq "b" tag:c2 "second child")
+    (test/assert-eq "b" c2:tag "second child")
     true
   })
 
@@ -27,16 +27,16 @@
     {do
     (= {xml} "<item name=\"hello\" count=\"42\"/>")
     (= {doc} (xml/parse xml))
-    (= {attrs} attrs:doc)
-    (test/assert-eq "hello" name:attrs "string attr")
-    (test/assert-eq "42" count:attrs "number-valued attr is string")
+    (= {attrs} doc:attrs)
+    (test/assert-eq "hello" attrs:name "string attr")
+    (test/assert-eq "42" attrs:count "number-valued attr is string")
     true
   })
 
   (test "parse-text-content"
     {do
     (= {doc} (xml/parse "<msg>hello world</msg>"))
-    (test/assert-eq "hello world" text:doc "text content")
+    (test/assert-eq "hello world" doc:text "text content")
     true
   })
 
@@ -44,18 +44,18 @@
     {do
     (= {xml} "<root><parent><child val=\"1\"/></parent></root>")
     (= {doc} (xml/parse xml))
-    (= {parent} (head children:doc))
-    (= {child} (head children:parent))
-    (test/assert-eq "child" tag:child "nested tag")
-    (= {a} attrs:child)
-    (test/assert-eq "1" val:a "nested attr")
+    (= {parent} (head doc:children))
+    (= {child} (head parent:children))
+    (test/assert-eq "child" child:tag "nested tag")
+    (= {a} child:attrs)
+    (test/assert-eq "1" a:val "nested attr")
     true
   })
 
   (test "parse-no-attrs-gives-nil"
     {do
     (= {doc} (xml/parse "<bare/>"))
-    (= {attrs} attrs:doc)
+    (= {attrs} doc:attrs)
     (test/assert-eq 0 (len attrs) "no attrs is empty")
     true
   })
@@ -78,24 +78,24 @@
         "</packages>"
       "</coverage>"))
     (= {doc} (xml/parse xml))
-    (test/assert-eq "coverage" tag:doc "root tag")
-    (= {pkgs} children:doc)
+    (test/assert-eq "coverage" doc:tag "root tag")
+    (= {pkgs} doc:children)
     (= {first-pkg} (head pkgs))
-    (= {pkg} (head children:first-pkg))
-    (= {first-child} (head children:pkg))
-    (= {cls} (head children:first-child))
-    (= {ca} attrs:cls)
-    (test/assert-eq "src/foo.c" filename:ca "class filename")
-    (= {lines-elem} (head children:cls))
-    (= {lines} children:lines-elem)
+    (= {pkg} (head first-pkg:children))
+    (= {first-child} (head pkg:children))
+    (= {cls} (head first-child:children))
+    (= {ca} cls:attrs)
+    (test/assert-eq "src/foo.c" ca:filename "class filename")
+    (= {lines-elem} (head cls:children))
+    (= {lines} lines-elem:children)
     (test/assert-eq 2 (len lines) "two line elements")
     (= {line1} (nth 1 lines))
-    (= {al1} attrs:line1)
-    (test/assert-eq "10" number:al1 "line number")
-    (test/assert-eq "5" hits:al1 "hit count")
+    (= {al1} line1:attrs)
+    (test/assert-eq "10" al1:number "line number")
+    (test/assert-eq "5" al1:hits "hit count")
     (= {line2} (nth 2 lines))
-    (= {al2} attrs:line2)
-    (test/assert-eq "50% (1/2)" condition-coverage:al2 "condition coverage")
+    (= {al2} line2:attrs)
+    (test/assert-eq "50% (1/2)" al2:condition-coverage "condition coverage")
     true
   })
 
@@ -115,10 +115,10 @@
     {do
     (= {xml} (str "<root>\n  <child/>\n</root>"))
     (= {doc} (xml/parse xml))
-    (= {children} children:doc)
+    (= {children} doc:children)
     (test/assert-eq 1 (len children) "whitespace-only text nodes ignored")
     (= {fc} (head children))
-    (test/assert-eq "child" tag:fc "child tag")
+    (test/assert-eq "child" fc:tag "child tag")
     true
   })
 

@@ -152,7 +152,7 @@
   (test "plist-get-in-nested"
     {do
     (= {data} {:outer {:inner 42}})
-    (= {inner} outer:data)
+    (= {inner} data:outer)
     (= {result} inner:inner)
     (test/assert-eq 42 result "nested plist access")
     true

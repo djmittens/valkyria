@@ -8,8 +8,8 @@
     (test/assert (list? entries) "list-dir returns list")
     (test/assert (> (len entries) 0) "test dir has entries")
     (= {first} (nth 1 entries))
-    (test/assert (str? name:first) "entry has string name")
-    (test/assert (str? type:first) "entry has string type")
+    (test/assert (str? first:name) "entry has string name")
+    (test/assert (str? first:type) "entry has string type")
     true
   })
   (test "list-dir-nonexistent"
@@ -193,7 +193,7 @@
         {0}
         {do
           (= {entry} (head lst))
-          (if (== "dir" type:entry)
+          (if (== "dir" entry:type)
             {1}
             {has-dir? (tail lst)})
         }
@@ -436,24 +436,24 @@
   (test "exec-echo"
     {do
     (= {result} (exec "echo" "hello"))
-    (test/assert-eq 0 exit-code:result "exit code 0")
-    (test/assert-eq "hello\n" stdout:result "stdout captured")
-    (test/assert-eq "" stderr:result "no stderr")
+    (test/assert-eq 0 result:exit-code "exit code 0")
+    (test/assert-eq "hello\n" result:stdout "stdout captured")
+    (test/assert-eq "" result:stderr "no stderr")
     true
   })
 
   (test "exec-failing-command"
     {do
     (= {result} (exec "false"))
-    (test/assert (!= 0 exit-code:result) "non-zero exit code")
+    (test/assert (!= 0 result:exit-code) "non-zero exit code")
     true
   })
 
   (test "exec-stderr"
     {do
     (= {result} (exec "sh" "-c" "echo err >&2"))
-    (test/assert-eq 0 exit-code:result "exit code 0")
-    (test/assert-eq "err\n" stderr:result "stderr captured")
+    (test/assert-eq 0 result:exit-code "exit code 0")
+    (test/assert-eq "err\n" result:stderr "stderr captured")
     true
   })
 

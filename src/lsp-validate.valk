@@ -224,7 +224,7 @@
   if (nil? rows) {d}
   {do
     (= {row} (head rows))
-    (dict/put! d name:row)
+    (dict/put! d row:name)
     (vd/build-known-set (tail rows) d)}
 })
 
@@ -245,7 +245,7 @@
   if (nil? rows) {d}
   {do
     (= {row} (head rows))
-    (dict/put! d name:row)
+    (dict/put! d row:name)
     (vd/add-type-rows (tail rows) d)}
 })
 
@@ -380,9 +380,9 @@
   if (<= (len name) 0) {ctx}
   {if (== (str/slice name 0 1) ":") {ctx}
   {if (vd/is-field-access name) {ctx}
-  {if (vd/is-known name scope:ctx
-                    globals:ctx
-                    known:ctx) {ctx}
+  {if (vd/is-known name ctx:scope
+                    ctx:globals
+                    ctx:known) {ctx}
   {vd/add-diag ctx expr name
     (str "Symbol '" name "' is not defined")}}}}
 })
@@ -390,10 +390,10 @@
 (sig 'vd/add-diag {-> List Any Str Str List})
 (fun {vd/add-diag ctx expr name message} {
   plist/set ctx :diags
-    (qcons (vd/make-diag text:ctx
+    (qcons (vd/make-diag ctx:text
                          (src-pos expr) (len name)
                          DIAG_ERROR message)
-           diags:ctx)
+           ctx:diags)
 })
 
 ; ---------------------------------------------------------------------------
@@ -424,9 +424,9 @@
 
 (sig 'vd/walk-quoted-sym {-> Any Str List List List})
 (fun {vd/walk-quoted-sym hd name tl ctx} {
-  if (vd/is-known name scope:ctx
-                  globals:ctx
-                  known:ctx)
+  if (vd/is-known name ctx:scope
+                  ctx:globals
+                  ctx:known)
     {vd/dispatch-call nil hd name tl ctx}
   {ctx}
 })
@@ -468,7 +468,7 @@
 (fun {vd/thread-binding-vars binding ctx} {
   if (not (list? binding)) {ctx}
   {do
-    (vd/dict-add-names (head scope:ctx)
+    (vd/dict-add-names (head ctx:scope)
       (vd/collect-binding-names-list binding nil))
     ctx}
 })
@@ -508,7 +508,7 @@
   {if (== name "_") {ctx}
   {if (== (str/slice name 0 1) ":") {ctx}
   {if (not (vd/should-validate-type name)) {ctx}
-  {if (vd/is-known-type name types:ctx) {ctx}
+  {if (vd/is-known-type name ctx:types) {ctx}
   {vd/add-diag ctx elem name
     (str "Type '" name "' is not defined")}}}}}}}}
 })
@@ -618,7 +618,7 @@
 (fun {vd/build-typed-scope-q fname param-names db} {do
   (= {row} (vd/query-fun-sig db fname))
   (if (nil? row) {dict/from-keys param-names}
-    {vd/build-typed-scope-row param-names sig:row})
+    {vd/build-typed-scope-row param-names row:sig})
 })
 
 (sig 'vd/build-typed-scope {-> Str List Ref Dict})
@@ -679,9 +679,9 @@
 
 (sig 'vd/infer-by-callee-db {-> Str List Any})
 (fun {vd/infer-by-callee-db name ctx} {do
-  (= {found} (vd/query-fun-sig db:ctx name))
+  (= {found} (vd/query-fun-sig ctx:db name))
   (if (not (nil? found)) {1}
-    {if (vd/scope-has-callable name scope:ctx) {1} {nil}})
+    {if (vd/scope-has-callable name ctx:scope) {1} {nil}})
 })
 
 (sig 'vd/param-has-annotation {-> List Num})
@@ -723,7 +723,7 @@
 
 (sig 'vd/check-fun-types-named {-> Str List List List})
 (fun {vd/check-fun-types-named name params ctx} {do
-  (= {db} db:ctx)
+  (= {db} ctx:db)
   (if (nil? db) {ctx}
     {do
       (= {sig-row} (vd/query-fun-sig db name))
@@ -734,7 +734,7 @@
 
 (sig 'vd/check-binding-types {-> Any List List List})
 (fun {vd/check-binding-types binding vals ctx} {
-  if (nil? db:ctx) {ctx}
+  if (nil? ctx:db) {ctx}
   {if (not (list? binding)) {ctx}
   {if (not (== (len binding) 1)) {ctx}
   {if (nil? vals) {ctx}
@@ -782,9 +782,9 @@
 (sig 'vd/walk-call {-> Any Any Str List List List})
 (fun {vd/walk-call expr hd name tl ctx} {do
   (= {ctx2} (vd/walk-body tl ctx))
-  (= {scope} scope:ctx2)
-  (= {globals} globals:ctx2)
-  (= {known} known:ctx2)
+  (= {scope} ctx2:scope)
+  (= {globals} ctx2:globals)
+  (= {known} ctx2:known)
   (if (vd/is-known name scope globals known) {ctx2}
     {vd/add-diag ctx2 hd name
       (str "Function '" name "' is not defined")})
@@ -815,8 +815,8 @@
     {ctx}))
   (= {ctx2b} (vd/check-fun-param-types fname params ctx2))
   (= {param-names} (vd/collect-param-names params nil))
-  (= {saved-scope} scope:ctx2b)
-  (= {local-dict} (vd/build-typed-scope fname-str (reverse param-names) db:ctx2b))
+  (= {saved-scope} ctx2b:scope)
+  (= {local-dict} (vd/build-typed-scope fname-str (reverse param-names) ctx2b:db))
   (= {ctx3} (plist/set ctx2b :scope (qcons local-dict saved-scope)))
   (= {ctx4} (vd/walk-annotated-body params body-rest ctx3))
   (plist/set ctx4 :scope saved-scope)
@@ -824,7 +824,7 @@
 
 (sig 'vd/add-global {-> List Str List})
 (fun {vd/add-global ctx name} {do
-  (dict/put! globals:ctx name)
+  (dict/put! ctx:globals name)
   ctx
 })
 
@@ -851,7 +851,7 @@
   (= {param-names} (if (list? formals)
     {vd/collect-param-names formals nil}
     {nil}))
-  (= {saved-scope} scope:ctx)
+  (= {saved-scope} ctx:scope)
   (= {local-dict} (dict/from-keys param-names))
   (= {ctx2} (plist/set ctx :scope (qcons local-dict saved-scope)))
   (= {ctx3} (vd/walk-annotated-body formals body-rest ctx2))
@@ -878,8 +878,8 @@
 (fun {vd/walk-binding-inner form binding vals ctx} {do
   (= {names} (vd/collect-binding-names-list binding nil))
   (= {ctx2} (if (== form "def")
-    {do (vd/dict-add-names globals:ctx names) ctx}
-    {do (vd/dict-add-names (head scope:ctx) names) ctx}))
+    {do (vd/dict-add-names ctx:globals names) ctx}
+    {do (vd/dict-add-names (head ctx:scope) names) ctx}))
   (= {ctx3} (vd/check-binding-types binding vals ctx2))
   (vd/walk-body vals ctx3)
 })
@@ -906,7 +906,7 @@
 (sig 'vd/walk-type-add-globals {-> List List List})
 (fun {vd/walk-type-add-globals tl ctx} {do
   (= {names} (vd/collect-type-names tl nil))
-  (vd/dict-add-names globals:ctx names)
+  (vd/dict-add-names ctx:globals names)
   ctx
 })
 
@@ -941,7 +941,7 @@
 
 (sig 'vd/walk-match-clause-inner {-> Any List List List})
 (fun {vd/walk-match-clause-inner pattern body ctx} {do
-  (= {saved-scope} scope:ctx)
+  (= {saved-scope} ctx:scope)
   (= {pat-names} (vd/collect-pattern-names pattern nil))
   (= {local-dict} (dict/from-keys pat-names))
   (= {ctx2} (plist/set ctx :scope (qcons local-dict saved-scope)))
@@ -997,7 +997,7 @@
 (fun {vd/walk-aio-do-body body ctx} {
   if (not (list? body)) {vd/walk-expr body ctx}
   {do
-    (= {saved-scope} scope:ctx)
+    (= {saved-scope} ctx:scope)
     (= {ctx2} (plist/set ctx :scope (qcons (dict/new) saved-scope)))
     (= {ctx3} (vd/walk-aio-do-stmts body ctx2))
     (plist/set ctx3 :scope saved-scope)}
@@ -1035,7 +1035,7 @@
 (fun {vd/walk-aio-do-bind name rest ctx} {do
   (= {ctx2} (vd/walk-body rest ctx))
   (if (== name "_") {ctx2}
-    {do (dict/put! (head scope:ctx2) name) ctx2})
+    {do (dict/put! (head ctx2:scope) name) ctx2})
 })
 
 ; ---------------------------------------------------------------------------
@@ -1052,7 +1052,7 @@
 (fun {vd/walk-aio-let-inner bindings body-rest ctx} {
   if (not (list? bindings)) {vd/walk-body body-rest ctx}
   {do
-    (= {saved-scope} scope:ctx)
+    (= {saved-scope} ctx:scope)
     (= {ctx2} (plist/set ctx :scope (qcons (dict/new) saved-scope)))
     (= {ctx3} (vd/walk-aio-let-bindings bindings ctx2))
     (= {ctx4} (vd/walk-body body-rest ctx3))
@@ -1086,7 +1086,7 @@
   if (not (sym? var)) {vd/walk-body rest ctx}
   {do
     (= {ctx2} (vd/walk-body rest ctx))
-    (dict/put! (head scope:ctx2) (str var))
+    (dict/put! (head ctx2:scope) (str var))
     ctx2}
 })
 
@@ -1141,5 +1141,5 @@
                   :text text
                   :diags nil))
   (= {result} (vd/walk-body ast ctx))
-  (reverse diags:result)
+  (reverse result:diags)
 })

@@ -108,8 +108,8 @@
 
   (test "option-functor-identity-none"
     {do
-      (= {fmap} map:option-functor)
-      (= {eq}   eq:option-functor)
+      (= {fmap} option-functor:map)
+      (= {eq}   option-functor:eq)
       (test/assert (eq (fmap id (None)) (None)) "map id None = None")
     })
 
@@ -135,9 +135,9 @@
 
   (test "option-applicative-none-absorb"
     {do
-      (= {ap}   ap:option-applicative)
-      (= {pure} pure:option-applicative)
-      (= {eq}   eq:option-applicative)
+      (= {ap}   option-applicative:ap)
+      (= {pure} option-applicative:pure)
+      (= {eq}   option-applicative:eq)
       (test/assert (eq (ap (None) (pure 42)) (None))
                    "ap None (Some x) = None")
     })
@@ -163,7 +163,7 @@
 
   (test "option-monad-none-propagation"
     {do
-      (= {flat-map} flat-map:option-monad)
+      (= {flat-map} option-monad:flat-map)
       (test/assert (== (flat-map (None) (\ {x} {(Some (* x 2))})) (None))
                    "flat-map None f = None")
     })
@@ -171,8 +171,8 @@
   (test "option-monad-flat-map-to-none"
     {(prop/check "flat-map (Some a) (const None) = None" N
       (\ {} {do
-        (= {flat-map} flat-map:option-monad)
-        (= {pure}     pure:option-monad)
+        (= {flat-map} option-monad:flat-map)
+        (= {pure}     option-monad:pure)
         (= {a} (gen-small-int))
         (== (flat-map (pure a) (\ {_} {(None)})) (None))
       }))})
@@ -191,8 +191,8 @@
 
   (test "result-functor-err-propagation"
     {do
-      (= {fmap} map:result-functor)
-      (= {eq}   eq:result-functor)
+      (= {fmap} result-functor:map)
+      (= {eq}   result-functor:eq)
       (test/assert (eq (fmap double (Err "oops")) (Err "oops"))
                    "map f (Err e) = Err e")
     })
@@ -211,9 +211,9 @@
 
   (test "result-applicative-err-absorb"
     {do
-      (= {ap}   ap:result-applicative)
-      (= {pure} pure:result-applicative)
-      (= {eq}   eq:result-applicative)
+      (= {ap}   result-applicative:ap)
+      (= {pure} result-applicative:pure)
+      (= {eq}   result-applicative:eq)
       (test/assert (eq (ap (Err "bad") (pure 42)) (Err "bad"))
                    "ap (Err e) (Ok x) = Err e")
     })
@@ -239,7 +239,7 @@
 
   (test "result-monad-err-propagation"
     {do
-      (= {flat-map} flat-map:result-monad)
+      (= {flat-map} result-monad:flat-map)
       (test/assert (== (flat-map (Err "fail") (\ {x} {(Ok (* x 2))})) (Err "fail"))
                    "flat-map (Err e) f = Err e")
     })
@@ -247,8 +247,8 @@
   (test "result-monad-flat-map-to-err"
     {(prop/check "flat-map (Ok a) (const Err) = Err" N
       (\ {} {do
-        (= {flat-map} flat-map:result-monad)
-        (= {pure}     pure:result-monad)
+        (= {flat-map} result-monad:flat-map)
+        (= {pure}     result-monad:pure)
         (= {a} (gen-small-int))
         (== (flat-map (pure a) (\ {_} {(Err "nope")})) (Err "nope"))
       }))})

@@ -64,8 +64,8 @@
 
 (fun {*test-print-captured* test-name captured} {
   do
-    (= {out} stdout:captured)
-    (= {err} stderr:captured)
+    (= {out} captured:stdout)
+    (= {err} captured:stderr)
     (printf "<<<CAPTURED name=%s\n" test-name)
     (printf "<<<STDOUT\n%s\n>>>STDOUT\n" out)
     (printf "<<<STDERR\n%s\n>>>STDERR\n" err)
@@ -111,17 +111,17 @@
   do
     (= {test-name} (eval (head test)))
     (= {test-body} (head (tail test)))
-    (= {skip-suite} skip-suite:ctx)
-    (= {debug} debug:ctx)
-    (= {timeout-ms} timeout-ms:ctx)
+    (= {skip-suite} ctx:skip-suite)
+    (= {debug} ctx:debug)
+    (= {timeout-ms} ctx:timeout-ms)
 
-    (= {suite-name} suite-name:ctx)
+    (= {suite-name} ctx:suite-name)
     (if (== skip-suite 1)
       {do
         (if (== *test-json-output* 1)
           {(*test-json-result* test-name "skip" 0 suite-name)}
           {do (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")})
-        (plist/set ctx :skipped (+ skipped:ctx 1))}
+        (plist/set ctx :skipped (+ ctx:skipped 1))}
       {do
         (if (== debug 1)
           {do
@@ -155,7 +155,7 @@
               {do
                 (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
                 (*test-print-captured* test-name captured)})
-            (plist/set ctx :timed-out (+ timed-out:ctx 1))}
+            (plist/set ctx :timed-out (+ ctx:timed-out 1))}
           {do
             (if (== debug 1)
               {do
@@ -167,7 +167,7 @@
               {true})
 
             (= {passed} (if (== result true) {1} {0}))
-            (= {xfail} (if (and (== passed 0) (!= expected-exit:ctx 0)) {1} {0}))
+            (= {xfail} (if (and (== passed 0) (!= ctx:expected-exit 0)) {1} {0}))
 
             (if (== *test-json-output* 1)
               {(*test-json-result* test-name (if (== passed 1) {"pass"} {(if (== xfail 1) {"xfail"} {"fail"})}) elapsed suite-name)}
@@ -178,8 +178,8 @@
                       (*test-print-captured* test-name captured)})})
 
             (if (or (== passed 1) (== xfail 1))
-              {(plist/set ctx :passed (+ passed:ctx 1))}
-              {(plist/set ctx :failed (+ failed:ctx 1))})})})
+              {(plist/set ctx :passed (+ ctx:passed 1))}
+              {(plist/set ctx :failed (+ ctx:failed 1))})})})
 })
 
 ; Run a single sync test without timeout (no aio)
@@ -187,16 +187,16 @@
   do
     (= {test-name} (eval (head test)))
     (= {test-body} (head (tail test)))
-    (= {skip-suite} skip-suite:ctx)
-    (= {debug} debug:ctx)
-    (= {suite-name} suite-name:ctx)
+    (= {skip-suite} ctx:skip-suite)
+    (= {debug} ctx:debug)
+    (= {suite-name} ctx:suite-name)
 
     (if (== skip-suite 1)
       {do
         (if (== *test-json-output* 1)
           {(*test-json-result* test-name "skip" 0 suite-name)}
           {do (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")})
-        (plist/set ctx :skipped (+ skipped:ctx 1))}
+        (plist/set ctx :skipped (+ ctx:skipped 1))}
       {do
         (if (== debug 1)
           {do
@@ -224,7 +224,7 @@
           {true})
 
         (= {passed} (if (== result true) {1} {0}))
-        (= {xfail} (if (and (== passed 0) (!= expected-exit:ctx 0)) {1} {0}))
+        (= {xfail} (if (and (== passed 0) (!= ctx:expected-exit 0)) {1} {0}))
 
         (if (== *test-json-output* 1)
           {(*test-json-result* test-name (if (== passed 1) {"pass"} {(if (== xfail 1) {"xfail"} {"fail"})}) elapsed suite-name)}
@@ -235,8 +235,8 @@
                   (*test-print-captured* test-name captured)})})
 
         (if (or (== passed 1) (== xfail 1))
-          {(plist/set ctx :passed (+ passed:ctx 1))}
-          {(plist/set ctx :failed (+ failed:ctx 1))})})
+          {(plist/set ctx :passed (+ ctx:passed 1))}
+          {(plist/set ctx :failed (+ ctx:failed 1))})})
 })
 
 (fun {*is-test-list* arg} {
@@ -288,25 +288,25 @@
 (fun {*test-ctx-from-config* config} {
   (= {ctx} (test/context-new))
   (if (plist/has? config :suite-name)
-    {(= {ctx} (plist/set ctx :suite-name suite-name:config))}
+    {(= {ctx} (plist/set ctx :suite-name config:suite-name))}
     {true})
   (if (plist/has? config :skip-suite)
-    {(= {ctx} (plist/set ctx :skip-suite skip-suite:config))}
+    {(= {ctx} (plist/set ctx :skip-suite config:skip-suite))}
     {true})
   (if (plist/has? config :skip-reason)
-    {(= {ctx} (plist/set ctx :skip-reason skip-reason:config))}
+    {(= {ctx} (plist/set ctx :skip-reason config:skip-reason))}
     {true})
   (if (plist/has? config :debug)
-    {(= {ctx} (plist/set ctx :debug debug:config))}
+    {(= {ctx} (plist/set ctx :debug config:debug))}
     {true})
   (if (plist/has? config :expected-exit)
-    {(= {ctx} (plist/set ctx :expected-exit expected-exit:config))}
+    {(= {ctx} (plist/set ctx :expected-exit config:expected-exit))}
     {true})
   (if (plist/has? config :timeout-ms)
-    {(= {ctx} (plist/set ctx :timeout-ms timeout-ms:config))}
+    {(= {ctx} (plist/set ctx :timeout-ms config:timeout-ms))}
     {true})
   (if (plist/has? config :suite-timeout-ms)
-    {(= {ctx} (plist/set ctx :suite-timeout-ms suite-timeout-ms:config))}
+    {(= {ctx} (plist/set ctx :suite-timeout-ms config:suite-timeout-ms))}
     {true})
   ctx
 })
@@ -314,11 +314,11 @@
 ; Print final results and exit
 (fun {*test-print-results-and-exit* ctx} {
   do
-    (= {passed} passed:ctx)
-    (= {failed} failed:ctx)
-    (= {skipped} skipped:ctx)
-    (= {timed-out} timed-out:ctx)
-    (= {expected-exit} expected-exit:ctx)
+    (= {passed} ctx:passed)
+    (= {failed} ctx:failed)
+    (= {skipped} ctx:skipped)
+    (= {timed-out} ctx:timed-out)
+    (= {expected-exit} ctx:expected-exit)
 
     (printf "\n🏁 Test Results: ")
     (if (> timed-out 0)
@@ -347,7 +347,7 @@
     (= {total} (len tests))
 
     (= {ctx} (*test-ctx-from-config* config))
-    (= {expected-exit} expected-exit:ctx)
+    (= {expected-exit} ctx:expected-exit)
 
     (if (== total 0)
       {do
@@ -356,9 +356,9 @@
           {(shutdown 0)}
           {(shutdown 1)})}
       {do
-        (= {suite-name} suite-name:ctx)
-        (= {skip-suite} skip-suite:ctx)
-        (= {skip-reason} skip-reason:ctx)
+        (= {suite-name} ctx:suite-name)
+        (= {skip-suite} ctx:skip-suite)
+        (= {skip-reason} ctx:skip-reason)
 
         (if (== *test-json-output* 0)
           {(if (== skip-suite 1)
@@ -370,8 +370,8 @@
 
         (if (== *test-json-output* 1)
           {do
-            (= {exit-code} (if (== (+ failed:final-ctx timed-out:final-ctx) 0) {0} {1}))
-            (= {expected-exit} expected-exit:final-ctx)
+            (= {exit-code} (if (== (+ final-ctx:failed final-ctx:timed-out) 0) {0} {1}))
+            (= {expected-exit} final-ctx:expected-exit)
             (if (== exit-code expected-exit) {(shutdown 0)} {(shutdown exit-code)})}
           {(*test-print-results-and-exit* final-ctx)})})
 })
@@ -386,9 +386,9 @@
     (= {total} (len tests))
 
     (= {ctx} (*test-ctx-from-config* config))
-    (= {expected-exit} expected-exit:ctx)
-    (= {suite-timeout-ms} suite-timeout-ms:ctx)
-    (= {timeout-ms} timeout-ms:ctx)
+    (= {expected-exit} ctx:expected-exit)
+    (= {suite-timeout-ms} ctx:suite-timeout-ms)
+    (= {timeout-ms} ctx:timeout-ms)
 
     (if (== total 0)
       {do
@@ -397,9 +397,9 @@
           {(shutdown 0)}
           {(shutdown 1)})}
       {do
-        (= {suite-name} suite-name:ctx)
-        (= {skip-suite} skip-suite:ctx)
-        (= {skip-reason} skip-reason:ctx)
+        (= {suite-name} ctx:suite-name)
+        (= {skip-suite} ctx:skip-suite)
+        (= {skip-reason} ctx:skip-reason)
 
         (if (== *test-json-output* 0)
           {(if (== skip-suite 1)
@@ -421,8 +421,8 @@
         (aio/stop aio)
         (if (== *test-json-output* 1)
           {do
-            (= {exit-code} (if (== (+ failed:final-ctx timed-out:final-ctx) 0) {0} {1}))
-            (= {expected-exit} expected-exit:final-ctx)
+            (= {exit-code} (if (== (+ final-ctx:failed final-ctx:timed-out) 0) {0} {1}))
+            (= {expected-exit} final-ctx:expected-exit)
             (if (== exit-code expected-exit) {(shutdown 0)} {(shutdown exit-code)})}
           {(*test-print-results-and-exit* final-ctx)})})
 })
@@ -454,17 +454,17 @@
   do
     (= {test-name} (eval (head test)))
     (= {test-body} (eval (head (tail test))))
-    (= {skip-suite} skip-suite:ctx)
-    (= {debug} debug:ctx)
-    (= {timeout-ms} timeout-ms:ctx)
+    (= {skip-suite} ctx:skip-suite)
+    (= {debug} ctx:debug)
+    (= {timeout-ms} ctx:timeout-ms)
 
-    (= {suite-name} suite-name:ctx)
+    (= {suite-name} ctx:suite-name)
     (if (== skip-suite 1)
       {do
         (if (== *test-json-output* 1)
           {(*test-json-result* test-name "skip" 0 suite-name)}
           {do (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")})
-        (plist/set ctx :skipped (+ skipped:ctx 1))}
+        (plist/set ctx :skipped (+ ctx:skipped 1))}
       {do
         (= {cap} (test/capture-start))
         (= {start-time} (time-us {}))
@@ -500,17 +500,17 @@
               {do
                 (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
                 (*test-print-captured* test-name captured)})
-            (plist/set ctx :timed-out (+ timed-out:ctx 1))}
+            (plist/set ctx :timed-out (+ ctx:timed-out 1))}
           {do
             (= {passed} (if (== result true) {1}
                           {(if (== result :pass) {1}
                             {(if (list? result)
                               {(if (plist/has? result :status)
-                                {(== status:result :pass)}
+                                {(== result:status :pass)}
                                 {0})}
                               {0})})}))
 
-            (= {xfail} (if (and (== passed 0) (!= expected-exit:ctx 0)) {1} {0}))
+            (= {xfail} (if (and (== passed 0) (!= ctx:expected-exit 0)) {1} {0}))
 
             (if (== *test-json-output* 1)
               {(*test-json-result* test-name (if (== passed 1) {"pass"} {(if (== xfail 1) {"xfail"} {"fail"})}) elapsed suite-name)}
@@ -521,8 +521,8 @@
                       (*test-print-captured* test-name captured)})})
 
             (if (or (== passed 1) (== xfail 1))
-              {(plist/set ctx :passed (+ passed:ctx 1))}
-              {(plist/set ctx :failed (+ failed:ctx 1))})})})
+              {(plist/set ctx :passed (+ ctx:passed 1))}
+              {(plist/set ctx :failed (+ ctx:failed 1))})})})
 })
 
 
@@ -551,16 +551,16 @@
             :timeout-ms *test-default-timeout-ms* 
             :suite-timeout-ms *test-default-suite-timeout-ms*})
   (if (plist/has? config :suite-name)
-    {(= {ctx} (plist/set ctx :suite-name suite-name:config))}
+    {(= {ctx} (plist/set ctx :suite-name config:suite-name))}
     {true})
   (if (plist/has? config :expected-exit)
-    {(= {ctx} (plist/set ctx :expected-exit expected-exit:config))}
+    {(= {ctx} (plist/set ctx :expected-exit config:expected-exit))}
     {true})
   (if (plist/has? config :timeout-ms)
-    {(= {ctx} (plist/set ctx :timeout-ms timeout-ms:config))}
+    {(= {ctx} (plist/set ctx :timeout-ms config:timeout-ms))}
     {true})
   (if (plist/has? config :suite-timeout-ms)
-    {(= {ctx} (plist/set ctx :suite-timeout-ms suite-timeout-ms:config))}
+    {(= {ctx} (plist/set ctx :suite-timeout-ms config:suite-timeout-ms))}
     {true})
   ctx
 })
@@ -579,10 +579,10 @@
     (= {total} (len tests))
 
     (= {ctx} (*test-ctx-from-config* config))
-    (= {suite-name} suite-name:ctx)
-    (= {expected-exit} expected-exit:ctx)
-    (= {timeout-ms} timeout-ms:ctx)
-    (= {suite-timeout-ms} suite-timeout-ms:ctx)
+    (= {suite-name} ctx:suite-name)
+    (= {expected-exit} ctx:expected-exit)
+    (= {timeout-ms} ctx:timeout-ms)
+    (= {suite-timeout-ms} ctx:suite-timeout-ms)
     
     (if (== total 0)
       {do
@@ -601,8 +601,8 @@
         (aio/stop aio)
         (if (== *test-json-output* 1)
           {do
-            (= {exit-code} (if (== (+ failed:ctx timed-out:ctx) 0) {0} {1}))
-            (= {expected-exit} expected-exit:ctx)
+            (= {exit-code} (if (== (+ ctx:failed ctx:timed-out) 0) {0} {1}))
+            (= {expected-exit} ctx:expected-exit)
             (if (== exit-code expected-exit) {(shutdown 0)} {(shutdown exit-code)})}
           {(*test-print-results-and-exit* ctx)})})
 })

@@ -317,10 +317,10 @@
   (test "prelude-plist-get"
     {do
     (= {pl} {:name "Alice" :age 30 :city "NYC"})
-    (test/assert-eq "Alice" name:pl "plist/get should find name")
-    (test/assert-eq 30 age:pl "plist/get should find age")
-    (test/assert-eq "NYC" city:pl "plist/get should find city")
-    (test/assert-eq nil unknown:pl "plist/get should return nil for missing")
+    (test/assert-eq "Alice" pl:name "plist/get should find name")
+    (test/assert-eq 30 pl:age "plist/get should find age")
+    (test/assert-eq "NYC" pl:city "plist/get should find city")
+    (test/assert-eq nil pl:unknown "plist/get should return nil for missing")
     (test/assert-eq nil (plist/get {} :any) "plist/get on empty returns nil")
     true
   })
@@ -328,17 +328,17 @@
     {do
     (= {pl} {:name "Alice"})
     (= {pl2} (plist/set pl :age 25))
-    (test/assert-eq "Alice" name:pl2 "plist/set preserves existing")
-    (test/assert-eq 25 age:pl2 "plist/set adds new key")
+    (test/assert-eq "Alice" pl2:name "plist/set preserves existing")
+    (test/assert-eq 25 pl2:age "plist/set adds new key")
     
     ; Update existing key
     (= {pl3} (plist/set pl2 :name "Bob"))
-    (test/assert-eq "Bob" name:pl3 "plist/set updates existing")
-    (test/assert-eq 25 age:pl3 "plist/set preserves other keys")
+    (test/assert-eq "Bob" pl3:name "plist/set updates existing")
+    (test/assert-eq 25 pl3:age "plist/set preserves other keys")
     
     ; Set on empty plist
     (= {pl4} (plist/set {} :key "val"))
-    (test/assert-eq "val" key:pl4 "plist/set on empty creates plist")
+    (test/assert-eq "val" pl4:key "plist/set on empty creates plist")
     true
   })
   (test "prelude-plist-has"

@@ -31,10 +31,10 @@
   (test "test-context-new-works"
     {do
     (= {ctx} (test/context-new))
-    (test/assert-eq 0 passed:ctx "passed should start at 0")
-    (test/assert-eq 0 failed:ctx "failed should start at 0")
-    (test/assert-eq 0 skipped:ctx "skipped should start at 0")
-    (test/assert-eq "Valkyria Test Suite" suite-name:ctx "default suite name")
+    (test/assert-eq 0 ctx:passed "passed should start at 0")
+    (test/assert-eq 0 ctx:failed "failed should start at 0")
+    (test/assert-eq 0 ctx:skipped "skipped should start at 0")
+    (test/assert-eq "Valkyria Test Suite" ctx:suite-name "default suite name")
     true
   })
   (test "test-builder-pattern"

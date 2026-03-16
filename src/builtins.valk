@@ -313,7 +313,7 @@
 (sig 'req/path {-> (Ref http_request) Str})
 ; Get request scheme (http/https).
 (sig 'req/scheme {-> (Ref http_request) Str})
-; Get request authority (host:port).
+; Get request authority (port:host).
 (sig 'req/authority {-> (Ref http_request) Str})
 ; Get request body as string.
 (sig 'req/body {-> (Ref http_request) Str})

@@ -388,15 +388,15 @@
   if (nil? scopes) {-1}
   {do
     (= {s} (head scopes))
-    (if (member? name names:s)
-      {id:s}
+    (if (member? name s:names)
+      {s:id}
       {ref/resolve-scope name (tail scopes)})}
 })
 
 (sig 'ref/current-scope-id {-> List Num})
 (fun {ref/current-scope-id scopes} {
   if (nil? scopes) {-1}
-  {do (= {s} (head scopes)) id:s}
+  {do (= {s} (head scopes)) s:id}
 })
 
 ; --- Core walker ---
@@ -697,7 +697,7 @@
   if (nil? scopes) {scopes}
   {do
     (= {s} (head scopes))
-    (= {names} names:s)
+    (= {names} s:names)
     (qcons (plist/set s :names (qcons name names)) (tail scopes))}
 })
 
@@ -737,8 +737,8 @@
   if (nil? refs) {nil}
   {do
     (= {r} (head refs))
-    (= {roff} offset:r)
-    (= {rlen} len:r)
+    (= {roff} r:offset)
+    (= {rlen} r:len)
     (if (and (>= offset roff) (< offset (+ roff rlen)))
       {r}
       {ref/find-at-offset (tail refs) offset})}
@@ -749,8 +749,8 @@
   if (nil? refs) {reverse acc}
   {do
     (= {r} (head refs))
-    (if (and (== name:r target-name)
-             (== scope-id:r target-scope))
+    (if (and (== r:name target-name)
+             (== r:scope-id target-scope))
       {ref/matching-refs (tail refs) target-name target-scope (qcons r acc)}
       {ref/matching-refs (tail refs) target-name target-scope acc})}
 })
@@ -764,9 +764,9 @@
       (= {target} (ref/find-at-offset refs offset))
       (if (nil? target) {nil}
         {do
-          (= {scope-id} scope-id:target)
+          (= {scope-id} target:scope-id)
           (if (== scope-id -1) {nil}
-            {ref/matching-refs refs name:target scope-id nil})})})
+            {ref/matching-refs refs target:name scope-id nil})})})
 })
 
 (sig 'ref/find-scoped-refs-from-ast {-> List Str Num Num List})
@@ -778,7 +778,7 @@
       (= {target} (ref/find-at-offset refs offset))
       (if (nil? target) {nil}
         {do
-          (= {scope-id} scope-id:target)
+          (= {scope-id} target:scope-id)
           (if (== scope-id -1) {nil}
-            {ref/matching-refs refs name:target scope-id nil})})})
+            {ref/matching-refs refs target:name scope-id nil})})})
 })

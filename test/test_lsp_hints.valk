@@ -9,12 +9,12 @@
 
 (fun {hint-labels text} {do
   (= {hints} (hint/collect text nil nil))
-  (map (\ {h} {label:h}) hints)
+  (map (\ {h} {h:label}) hints)
 })
 
 (fun {hint-at-line text target-line} {do
   (= {hints} (hint/collect text nil nil))
-  (filter (\ {h} {do (= {pos} position:h) (== line:pos target-line)}) hints)
+  (filter (\ {h} {do (= {pos} h:position) (== pos:line target-line)}) hints)
 })
 
 (fun {hint-count text} {
@@ -79,7 +79,7 @@
       (= {text} "(fun {add a b} {+ a b}) (add 1 2)")
       (= {hints} (hint/collect text nil nil))
       (test/assert-eq 2 (len hints) "should produce 2 hints")
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? "a:" labels) "should have a: hint")
       (test/assert (member? "b:" labels) "should have b: hint")
       true
@@ -106,7 +106,7 @@
     {do
       (= {text} "(fun {greet name age} {list name age}) (greet name 25)")
       (= {hints} (hint/collect text nil nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (not (member? "name:" labels)) "skip when arg matches param")
       (test/assert (member? "age:" labels) "non-matching arg gets hint")
       true
@@ -127,7 +127,7 @@
       (= {text} "(fun {calc x :: Num y :: Num} {+ x y}) (calc 1 2)")
       (= {hints} (hint/collect text nil nil))
       (test/assert-eq 2 (len hints) "annotations stripped from params")
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? "x:" labels) "x param found")
       (test/assert (member? "y:" labels) "y param found")
       true
@@ -138,7 +138,7 @@
       (= {text} "(fun {add a b -> Num} {+ a b}) (add 1 2)")
       (= {hints} (hint/collect text nil nil))
       (test/assert-eq 2 (len hints) "return annotation excluded")
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? "a:" labels) "a param found")
       (test/assert (member? "b:" labels) "b param found")
       true
@@ -151,7 +151,7 @@
       (= {text} "(fun {foo a b & rest} {list a b rest}) (foo 1 2 3 4)")
       (= {hints} (hint/collect text nil nil))
       (test/assert-eq 2 (len hints) "rest params stop hint collection")
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? "a:" labels) "a before rest")
       (test/assert (member? "b:" labels) "b before rest")
       true
@@ -271,7 +271,7 @@
     {do
       (= {text} "(fun {foo a b} {list a b}) (foo 1 2)")
       (= {hints} (hint/collect text nil nil))
-      (= {kinds} (map (\ {h} {kind:h}) hints))
+      (= {kinds} (map (\ {h} {h:kind}) hints))
       (test/assert (member? 2 kinds) "kind should be 2 (Parameter)")
       true
     })
@@ -281,7 +281,7 @@
       (= {text} "(fun {foo a b} {list a b}) (foo 1 2)")
       (= {hints} (hint/collect text nil nil))
       (= {h} (head hints))
-      (test/assert (not (nil? paddingRight:h)) "paddingRight set")
+      (test/assert (not (nil? h:paddingRight)) "paddingRight set")
       true
     })
 
@@ -434,7 +434,7 @@
     {do
       (= {text} "(def {x} 42)")
       (= {hints} (hint/collect text nil nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Num" labels) "def num gets type hint")
       true
     })
@@ -443,7 +443,7 @@
     {do
       (= {text} "(= {s} \"hello\")")
       (= {hints} (hint/collect text nil nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Str" labels) "assign str gets type hint")
       true
     })
@@ -452,7 +452,7 @@
     {do
       (= {text} "(= {items} (list 1 2 3))")
       (= {hints} (hint/collect text nil nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: List" labels) "list gets type hint")
       true
     })
@@ -461,7 +461,7 @@
     {do
       (= {text} "(= {m} (dict/new))")
       (= {hints} (hint/collect text nil nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Dict" labels) "dict gets type hint")
       true
     })
@@ -470,7 +470,7 @@
     {do
       (= {text} "(= {f} (\\ {x} {+ x 1}))")
       (= {hints} (hint/collect text nil nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Fn" labels) "lambda gets type hint")
       true
     })
@@ -479,7 +479,7 @@
     {do
       (= {text} "(= {result} (None))")
       (= {hints} (hint/collect text nil nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Option" labels) "None gets Option type hint")
       true
     })
@@ -488,7 +488,7 @@
     {do
       (= {text} "(def {x} 42)")
       (= {hints} (hint/collect text nil nil))
-      (= {type-hints} (filter (\ {h} {== kind:h 1}) hints))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (test/assert (> (len type-hints) 0) "type hints have kind 1")
       true
     })
@@ -497,9 +497,9 @@
     {do
       (= {text} "(def {x} 42)")
       (= {hints} (hint/collect text nil nil))
-      (= {type-hints} (filter (\ {h} {== kind:h 1}) hints))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (= {h} (head type-hints))
-      (test/assert (not (nil? paddingLeft:h)) "type hint has paddingLeft")
+      (test/assert (not (nil? h:paddingLeft)) "type hint has paddingLeft")
       true
     })
 
@@ -515,7 +515,7 @@
     {do
       (= {text} "(do (= {x} 42) (= {s} \"hello\"))")
       (= {hints} (hint/collect text nil nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Num" labels) "x gets Num inside do")
       (test/assert (member? ":: Str" labels) "s gets Str inside do")
       true
@@ -554,7 +554,7 @@
       (= {sig-types} (list "Num" "Num" "Num"))
       (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
       (test/assert-eq 2 (len hints) "2 param type hints")
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Num" labels) "param gets :: Num")
       true
     })
@@ -565,7 +565,7 @@
       (= {sig-types} (list "Str" "Num" "Str"))
       (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
       (test/assert-eq 2 (len hints) "2 param type hints")
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Str" labels) "name gets :: Str")
       (test/assert (member? ":: Num" labels) "age gets :: Num")
       true
@@ -577,7 +577,7 @@
       (= {sig-types} (list "Num" "List" "List"))
       (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
       (test/assert-eq 1 (len hints) "stops at &")
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Num" labels) "a before & gets hint")
       true
     })
@@ -587,7 +587,7 @@
       (= {params} (extract-fun-params "(fun {add a b} {+ a b})"))
       (= {sig-types} (list "Num" "Num" "Num"))
       (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
-      (= {kinds} (map (\ {h} {kind:h}) hints))
+      (= {kinds} (map (\ {h} {h:kind}) hints))
       (test/assert (member? 1 kinds) "kind should be 1 (Type)")
       true
     })
@@ -598,7 +598,7 @@
       (= {sig-types} (list "(-> A B)" "(List A)" "(List B)"))
       (= {hints} (hint/emit-def-type-hints params sig-types 0 nil))
       (test/assert-eq 2 (len hints) "2 compound type hints")
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: (-> A B)" labels) "f gets arrow type")
       (test/assert (member? ":: (List A)" labels) "xs gets list type")
       true
@@ -617,7 +617,7 @@
       (seed-sig db "add" "{-> Num Num Num}")
       (= {text} "(fun {add a b} {+ a b})")
       (= {hints} (hint/collect text db nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Num" labels) "param gets :: Num from db")
       true
     })
@@ -627,7 +627,7 @@
       (= {db} (make-sig-db))
       (= {text} "(fun {add a b} {+ a b})")
       (= {hints} (hint/collect text db nil))
-      (= {type-hints} (filter (\ {h} {== kind:h 1}) hints))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (test/assert-eq 0 (len type-hints) "no sig no type hints")
       true
     })
@@ -638,10 +638,10 @@
       (seed-sig db "add" "{-> Num Num Num}")
       (= {text} "(fun {add a b} {+ a b})")
       (= {hints} (hint/collect text db nil))
-      (= {type-hints} (filter (\ {h} {== kind:h 1}) hints))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (= {h} (head type-hints))
       (test/assert (not (nil? h)) "type hint exists")
-      (test/assert (not (nil? paddingLeft:h)) "paddingLeft set")
+      (test/assert (not (nil? h:paddingLeft)) "paddingLeft set")
       true
     })
 
@@ -651,7 +651,7 @@
       (seed-sig db "add" "{-> Num Num Num}")
       (= {text} "(fun {add a b} {+ a b})")
       (= {hints} (hint/collect text db nil))
-      (= {labels} (map (\ {h} {label:h}) hints))
+      (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? "-> Num" labels) "return type hint emitted")
       true
     })

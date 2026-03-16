@@ -24,7 +24,7 @@
 (fun {diag-messages text} {do
   (= {ast} (parse text))
   (= {diags} (vd/validate-with-known nil ast text BUILTIN_KNOWN))
-  (map (\{d} {message:d}) diags)
+  (map (\{d} {d:message}) diags)
 })
 
 (fun {first-diag text} {do
@@ -112,7 +112,7 @@
     {do
       (= {d} (first-diag "bogus"))
       (test/assert (not (nil? d)) "should have a diagnostic")
-      (= {msg} message:d)
+      (= {msg} d:message)
       (test/assert-eq "Symbol 'bogus' is not defined" msg
         "message should name the symbol")
       true
@@ -122,7 +122,7 @@
     {do
       (= {d} (first-diag "(nope 1)"))
       (test/assert (not (nil? d)) "should have a diagnostic")
-      (= {msg} message:d)
+      (= {msg} d:message)
       (test/assert-eq "Function 'nope' is not defined" msg
         "message should say Function for call position")
       true
@@ -228,8 +228,8 @@
 
   (test "non-accessor-flagged"
     {do
-      (test/assert (> (diag-count "(foo:bar x)") 0)
-        "lowercase foo:bar is not an accessor pattern")
+      (test/assert (> (diag-count "(bar:foo x)") 0)
+        "lowercase bar:foo is not an accessor pattern")
       true
     })
 
@@ -258,16 +258,16 @@
     {do
       (= {d} (first-diag "bogus"))
       (test/assert (not (nil? d)) "should have diagnostic")
-      (test/assert-eq 0 line:d "should be line 0")
-      (test/assert-eq 0 col:d "should be col 0")
-      (test/assert-eq 5 end-col:d "end-col should be col + len")
+      (test/assert-eq 0 d:line "should be line 0")
+      (test/assert-eq 0 d:col "should be col 0")
+      (test/assert-eq 5 d:end-col "end-col should be col + len")
       true
     })
 
   (test "diag-severity"
     {do
       (= {d} (first-diag "bogus"))
-      (test/assert-eq 1 severity:d "undefined sym should be error severity")
+      (test/assert-eq 1 d:severity "undefined sym should be error severity")
       true
     })
 
@@ -505,7 +505,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(fun {add a b} {+ a b})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {message:d}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
       (= {_} (sqlite/close db))
       (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
       (test/assert-eq 2 (len type-msgs)
@@ -520,7 +520,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(fun {f x :: Num y} {+ x y})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {message:d}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
       (= {_} (sqlite/close db))
       (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
       (test/assert-eq 1 (len type-msgs)
@@ -561,7 +561,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(sig 'f {-> Num})\n(fun {compute x} {x})\n(fun {f} {do (= {r} (compute 1)) r})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {message:d}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
       (= {_} (sqlite/close db))
       (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
       (test/assert (>= (len type-msgs) 2)
@@ -589,7 +589,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(sig 'f {-> Num})\n(fun {compute x} {x})\n(fun {f} {do (= {_} (compute 1)) 42})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {message:d}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
       (= {_} (sqlite/close db))
       (= {underscore-msgs} (filter (\{m} {str/starts-with? m "Type of '_'"}) msgs))
       (test/assert-eq 0 (len underscore-msgs)
@@ -625,7 +625,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(sig 'process {-> Num Num Num})\n(fun {process x y} {do (= {r} (x 1)) r})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {message:d}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
       (= {_} (sqlite/close db))
       (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
       (test/assert (>= (len type-msgs) 1)
@@ -653,7 +653,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(fun {notype x f} {do (= {r} (f x)) r})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {message:d}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
       (= {_} (sqlite/close db))
       (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
       (test/assert (>= (len type-msgs) 3)

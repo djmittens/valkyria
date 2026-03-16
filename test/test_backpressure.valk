@@ -51,7 +51,7 @@
       (printf "[BP] Batches completed: %ld\n" (len batch-results))
       (= {all-requests} (foldl (\ {acc batch} {
         (if (plist/has? batch :value)
-          {(join acc value:batch)}
+          {(join acc batch:value)}
           {acc})
       }) {} batch-results))
       (printf "[BP] Got %ld requests\n" (len all-requests))

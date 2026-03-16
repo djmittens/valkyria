@@ -203,11 +203,10 @@ static bool is_accessor(const char *sym) {
 }
 
 static bool is_field_access(const char *sym) {
-  if (!sym || sym[0] < 'a' || sym[0] > 'z') return false;
+  if (!sym || !*sym) return false;
   const char *colon = strchr(sym, ':');
   if (!colon || colon == sym || colon[1] == '\0') return false;
   if (colon[1] == ':') return false;
-  if (colon[1] < 'a' || colon[1] > 'z') return false;
   if (strchr(colon + 1, ':') != NULL) return false;
   return true;
 }
@@ -415,6 +414,8 @@ static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_l
       LVAL_TYPE(binding->cons.tail) != LVAL_NIL) return;
   const char *var_name = binding->cons.head->str;
 
+  scope_add(scope, var_name, NULL);
+
   if (LVAL_TYPE(rhs) != LVAL_CONS || (rhs->flags & LVAL_FLAG_QUOTED) ||
       LVAL_TYPE(rhs->cons.head) != LVAL_SYM) return;
   const char *rhs_name = rhs->cons.head->str;
@@ -484,10 +485,18 @@ static void track_fun_params(valk_type_env_t *env, valk_type_scope_t *scope, val
   valk_lval_t *fn_name = formals->cons.head;
   if (LVAL_TYPE(fn_name) != LVAL_SYM) return;
 
+  valk_lval_t *param = formals->cons.tail;
+  while (LVAL_TYPE(param) != LVAL_NIL) {
+    valk_lval_t *psym = param->cons.head;
+    if (LVAL_TYPE(psym) == LVAL_SYM)
+      scope_add(scope, psym->str, NULL);
+    param = param->cons.tail;
+  }
+
   valk_type_sig_t *sig = valk_type_env_find_sig(env, fn_name->str);
   if (!sig) return;
 
-  valk_lval_t *param = formals->cons.tail;
+  param = formals->cons.tail;
   for (u64 p = 0; p < sig->param_count && LVAL_TYPE(param) != LVAL_NIL; p++) {
     valk_lval_t *psym = param->cons.head;
     if (LVAL_TYPE(psym) == LVAL_SYM && sig->param_types[p]) {
@@ -825,13 +834,19 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
   if (type == LVAL_SYM) {
     if (scope && is_field_access(expr->str)) {
       const char *colon = strchr(expr->str, ':');
-      u64 field_len = colon - expr->str;
-      const char *var_name = colon + 1;
-      const char *type_name = scope_find_type(scope, var_name);
+      u64 var_len = colon - expr->str;
+      const char *field_name = colon + 1;
+      u64 field_len = strlen(field_name);
+
+      char var_buf[var_len + 1];
+      memcpy(var_buf, expr->str, var_len);
+      var_buf[var_len] = '\0';
+
+      const char *type_name = scope_find_type(scope, var_buf);
       if (type_name) {
         char field_key[field_len + 2];
         field_key[0] = ':';
-        memcpy(field_key + 1, expr->str, field_len);
+        memcpy(field_key + 1, field_name, field_len);
         field_key[field_len + 1] = '\0';
 
         valk_constructor_t *ctor = valk_type_env_find_constructor(env, type_name);
@@ -854,19 +869,19 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
             if (strcmp(ctor->fields[i].name, field_key) == 0) {
               valk_lval_t *index = valk_lval_num((long)(i + 2));
               valk_lval_t *nth_sym = valk_lval_sym("nth");
-              valk_lval_t *var_sym = valk_lval_sym(var_name);
+              valk_lval_t *var_sym = valk_lval_sym(var_buf);
               return valk_lval_cons(nth_sym, valk_lval_cons(index, valk_lval_cons(var_sym, valk_lval_nil())));
             }
           }
-          return valk_lval_err("type '%s' has no field ':%.*s'", type_name, (int)field_len, expr->str);
+          return valk_lval_err("type '%s' has no field ':%s'", type_name, field_name);
         }
-      } else {
+      } else if (var_buf[0] >= 'a' && var_buf[0] <= 'z') {
         char field_key[field_len + 2];
         field_key[0] = ':';
-        memcpy(field_key + 1, expr->str, field_len);
+        memcpy(field_key + 1, field_name, field_len);
         field_key[field_len + 1] = '\0';
         valk_lval_t *plist_get_sym = valk_lval_sym("plist/get");
-        valk_lval_t *var_sym = valk_lval_sym(var_name);
+        valk_lval_t *var_sym = valk_lval_sym(var_buf);
         valk_lval_t *key_sym = valk_lval_sym(field_key);
         return valk_lval_cons(plist_get_sym, valk_lval_cons(var_sym, valk_lval_cons(key_sym, valk_lval_nil())));
       }

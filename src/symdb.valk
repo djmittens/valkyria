@@ -362,7 +362,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (if (nil? raw) {nil}
     {do
       (= {refs} (reverse raw))
-      (= {offsets} (map (\ {r} {offset:r}) refs))
+      (= {offsets} (map (\ {r} {r:offset}) refs))
       (= {lcs} (offsets->line-cols text offsets))
       (symdb/zip-refs-lcs refs lcs nil)})
 })
@@ -374,7 +374,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
     (= {r} (head refs))
     (= {lc} (head lcs))
     (symdb/zip-refs-lcs (tail refs) (tail lcs)
-      (qcons (list :name name:r
+      (qcons (list :name r:name
                    :line (head lc)
                    :col (head (tail lc))) acc))}
 })
@@ -426,7 +426,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   (= {existing} (sqlite/query-maybe db
     "SELECT hash FROM files WHERE path=?1" path))
   (if (not (nil? existing))
-    {if (== hash:existing hash) {0}
+    {if (== existing:hash hash) {0}
       {do (sqlite/exec db "BEGIN")
           (symdb/sync-file-symbols db uri text hash)
           (sqlite/exec db "COMMIT") 1}}
@@ -458,27 +458,27 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   if (nil? syms) {nil}
     {do
       (= {s} (head syms))
-      (= {is-sig} is-sig:s)
+      (= {is-sig} s:is-sig)
       (if (== is-sig 1)
         {do
           (= {existing} (sqlite/query-maybe db
-            "SELECT id, doc FROM symbols WHERE file_id=?1 AND name=?2" file-id name:s))
+            "SELECT id, doc FROM symbols WHERE file_id=?1 AND name=?2" file-id s:name))
           (if (nil? existing)
             {sqlite/exec db
               "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc, sig) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
-              name:s file-id line:s col:s
-              kind:s arity:s doc:s sig:s}
+              s:name file-id s:line s:col
+              s:kind s:arity s:doc s:sig}
             {do
-              (= {new-doc} doc:s)
-              (= {old-doc} doc:existing)
+              (= {new-doc} s:doc)
+              (= {old-doc} existing:doc)
               (= {final-doc} (if (nil? new-doc) {old-doc} {new-doc}))
               (sqlite/exec db
                 "UPDATE symbols SET sig=?1, doc=?2 WHERE id=?3"
-                sig:s final-doc id:existing)})}
+                s:sig final-doc existing:id)})}
         {sqlite/exec db
           "INSERT INTO symbols (name, file_id, line, col, kind, arity, doc, sig) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
-          name:s file-id line:s col:s
-          kind:s arity:s doc:s sig:s})
+          s:name file-id s:line s:col
+          s:kind s:arity s:doc s:sig})
       (symdb/insert-symbols db file-id (tail syms))}
 })
 
@@ -496,7 +496,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
   if (nil? refs) {nil}
     {do
       (= {r} (head refs))
-      (sqlite/bind stmt name:r file-id line:r col:r)
+      (sqlite/bind stmt r:name file-id r:line r:col)
       (sqlite/step stmt)
       (symdb/insert-refs-step stmt file-id (tail refs))}
 })
@@ -573,16 +573,16 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
           name))
         (if (nil? fallback) {nil}
           {do
-            (= {type-sig} (if (nil? sig-row) {nil} {sig:sig-row}))
-            (= {sig-doc} (if (nil? sig-row) {nil} {doc:sig-row}))
-            (= {fb-doc} doc:fallback)
+            (= {type-sig} (if (nil? sig-row) {nil} {sig-row:sig}))
+            (= {sig-doc} (if (nil? sig-row) {nil} {sig-row:doc}))
+            (= {fb-doc} fallback:doc)
             (= {final-doc} (if (nil? fb-doc) {sig-doc} {fb-doc}))
             (plist/set (plist/set fallback :sig type-sig) :doc final-doc)})}}
     {do
-      (= {type-sig} (if (nil? sig-row) {nil} {sig:sig-row}))
-      (= {formals} sig:def-row)
-      (= {def-doc} doc:def-row)
-      (= {sig-doc} (if (nil? sig-row) {nil} {doc:sig-row}))
+      (= {type-sig} (if (nil? sig-row) {nil} {sig-row:sig}))
+      (= {formals} def-row:sig)
+      (= {def-doc} def-row:doc)
+      (= {sig-doc} (if (nil? sig-row) {nil} {sig-row:doc}))
       (= {final-doc} (if (nil? def-doc) {sig-doc} {def-doc}))
       (plist/set (plist/set (plist/set def-row
         :sig type-sig)

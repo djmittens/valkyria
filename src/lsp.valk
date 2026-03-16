@@ -15,7 +15,7 @@
 
 
 ; ---------------------------------------------------------------------------
-; Typed contexts — replace ad-hoc plists with field:var access
+; Typed contexts — replace ad-hoc plists with var:field access
 ; ---------------------------------------------------------------------------
 
 (type {DocCtx}
@@ -89,8 +89,8 @@
 
 (sig 'lsp/get-doc {-> List DocCtx})
 (fun {lsp/get-doc params} {do
-  (= {td} textDocument:params)
-  (= {uri} uri:td)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
     {(DocCtx :uri uri :text text :ast (lsp/get-ast uri text))})
@@ -98,11 +98,11 @@
 
 (sig 'lsp/get-text-pos {-> List TextPosCtx})
 (fun {lsp/get-text-pos params} {do
-  (= {td} textDocument:params)
-  (= {uri} uri:td)
-  (= {pos} position:params)
-  (= {line} line:pos)
-  (= {col} character:pos)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {pos} params:position)
+  (= {line} pos:line)
+  (= {col} pos:character)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
     {(TextPosCtx :uri uri :text text :ast (lsp/get-ast uri text) :line line :col col)})
@@ -113,9 +113,9 @@
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {nil}
     {do
-      (= {w} (word-at-position text:ctx line:ctx col:ctx))
+      (= {w} (word-at-position ctx:text ctx:line ctx:col))
       (if (nil? w) {nil}
-        {(WordCtx :uri uri:ctx :text text:ctx :ast ast:ctx :line line:ctx :col col:ctx :word w)})})
+        {(WordCtx :uri ctx:uri :text ctx:text :ast ctx:ast :line ctx:line :col ctx:col :word w)})})
 })
 
 ; ---------------------------------------------------------------------------
@@ -184,13 +184,13 @@
 (sig 'make-lsp-diag {-> List List})
 (fun {make-lsp-diag d}
   {list :range
-    (list :start (list :line line:d
-                       :character col:d)
-          :end   (list :line line:d
-                       :character end-col:d))
-    :severity severity:d
+    (list :start (list :line d:line
+                       :character d:col)
+          :end   (list :line d:line
+                       :character d:end-col))
+    :severity d:severity
     :source "valk"
-    :message message:d})
+    :message d:message})
 
 (sig 'lsp/ensure-loads-indexed {-> List Nil})
 (fun {lsp/ensure-loads-indexed ast} {
@@ -271,7 +271,7 @@
       (= {existing} (sqlite/query-maybe lsp/db
         "SELECT hash FROM files WHERE path=?1" path))
       (if (not (nil? existing))
-        {if (== hash:existing hash) {}
+        {if (== existing:hash hash) {}
           {do (sqlite/exec lsp/db "BEGIN")
               (symdb/sync-file-symbols lsp/db uri text hash)
               (sqlite/exec lsp/db "COMMIT")
@@ -334,8 +334,8 @@
   if (nil? entries) {acc}
     {do
       (= {entry} (head entries))
-      (= {name} name:entry)
-      (= {type} type:entry)
+      (= {name} entry:name)
+      (= {type} entry:type)
       (= {full} (str root "/" name))
       (= {acc} (if (== type "dir")
         {if (lsp/skip-dir? name) {acc}
@@ -375,7 +375,7 @@
 
 (sig 'handle-initialize {-> Num List Nil})
 (fun {handle-initialize id params} {do
-  (= {root-uri} rootUri:params)
+  (= {root-uri} params:rootUri)
   (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
   (if (not (nil? root-uri))
     {do
@@ -389,9 +389,9 @@
 
 (sig 'handle-did-open {-> List Nil})
 (fun {handle-did-open params} {do
-  (= {td} textDocument:params)
-  (= {uri} uri:td)
-  (= {text} text:td)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {text} td:text)
   (lsp/doc-store uri text)
   (aio/dispatch lsp/sys
     (\ {_} {do (lsp/cache-ast uri text)
@@ -402,9 +402,9 @@
 
 (sig 'handle-did-change {-> List Nil})
 (fun {handle-did-change params} {do
-  (= {td} textDocument:params)
-  (= {uri} uri:td)
-  (= {changes} contentChanges:params)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {changes} params:contentChanges)
   (if (nil? changes) {}
     {do
       (= {text} (plist/get (head changes) :text))
@@ -415,8 +415,8 @@
 
 (sig 'handle-did-close {-> List Nil})
 (fun {handle-did-close params} {do
-  (= {td} textDocument:params)
-  (= {uri} uri:td)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (dict/remove! lsp/documents uri)
   (dict/remove! lsp/ast-cache uri)
   (lsp/send-notification "textDocument/publishDiagnostics"
@@ -424,9 +424,9 @@
 
 (sig 'handle-did-save {-> List Nil})
 (fun {handle-did-save params} {do
-  (= {td} textDocument:params)
-  (= {uri} uri:td)
-  (= {text} text:params)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {text} params:text)
   (= {save-text} (if (nil? text) {lsp/doc-get uri} {text}))
   (if (nil? save-text) {}
     {aio/dispatch lsp/sys
@@ -442,12 +442,12 @@
 
 (sig 'hover/format-markdown {-> List Str Str})
 (fun {hover/format-markdown info word} {do
-  (= {name} name:info)
-  (= {type-sig} sig:info)
-  (= {formals} formals:info)
-  (= {doc} doc:info)
-  (= {path} path:info)
-  (= {sym-line} line:info)
+  (= {name} info:name)
+  (= {type-sig} info:sig)
+  (= {formals} info:formals)
+  (= {doc} info:doc)
+  (= {path} info:path)
+  (= {sym-line} info:line)
   (= {sections} nil)
   (= {sections} (if (not (nil? type-sig))
     {qcons (str "```valk\n" name " : " type-sig "\n```") sections}
@@ -474,16 +474,16 @@
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
       (= {info} (if (nil? lsp/db) {nil}
-        {symdb/symbol-hover lsp/db word:ctx}))
+        {symdb/symbol-hover lsp/db ctx:word}))
       (= {hover-str} (if (nil? info)
-        {str "```valk\n" word:ctx "\n```"}
-        {hover/format-markdown info word:ctx}))
+        {str "```valk\n" ctx:word "\n```"}
+        {hover/format-markdown info ctx:word}))
       (lsp/send-response id
         (list :contents
           (list :kind "markdown" :value hover-str)
           :range
-          (list :start (list :line line:ctx :character col:ctx)
-                :end (list :line line:ctx :character (+ col:ctx (len word:ctx))))))})
+          (list :start (list :line ctx:line :character ctx:col)
+                :end (list :line ctx:line :character (+ ctx:col (len ctx:word))))))})
 })
 
 (sig 'handle-definition {-> Num List Nil})
@@ -492,24 +492,24 @@
   (if (nil? ctx) {lsp/send-response id (None)}
   {if (nil? lsp/db) {lsp/send-response id (None)}
     {do
-      (= {defn} (symdb/find-definition lsp/db word:ctx))
+      (= {defn} (symdb/find-definition lsp/db ctx:word))
       (if (nil? defn)
         {lsp/send-response id (None)}
         {do
-          (= {def-path} path:defn)
-          (= {def-line} line:defn)
-          (= {def-col} col:defn)
+          (= {def-path} defn:path)
+          (= {def-line} defn:line)
+          (= {def-col} defn:col)
           (lsp/send-response id
             (list :uri (str "file://" def-path)
                   :range (list
                     :start (list :line def-line :character def-col)
-                    :end (list :line def-line :character (+ def-col (len word:ctx))))))})}})
+                    :end (list :line def-line :character (+ def-col (len ctx:word))))))})}})
 })
 
 (sig 'ref->lsp-location {-> Str Str List List})
 (fun {ref->lsp-location uri text r} {do
-  (= {lc} (offset->line-col text offset:r))
-  (= {rname} name:r)
+  (= {lc} (offset->line-col text r:offset))
+  (= {rname} r:name)
   (list :uri uri
         :range (list
           :start (list :line (head lc) :character (head (tail lc)))
@@ -521,17 +521,17 @@
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
     {do
-      (= {local-refs} (ref/find-scoped-refs-from-ast ast:ctx text:ctx line:ctx col:ctx))
+      (= {local-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
       (if (not (nil? local-refs))
-        {lsp/send-response id (map (\ {r} {ref->lsp-location uri:ctx text:ctx r}) local-refs)}
+        {lsp/send-response id (map (\ {r} {ref->lsp-location ctx:uri ctx:text r}) local-refs)}
         {if (nil? lsp/db) {lsp/send-response id nil}
           {do
-            (= {refs} (symdb/find-refs lsp/db word:ctx))
+            (= {refs} (symdb/find-refs lsp/db ctx:word))
             (lsp/send-response id (map (\ {r} {
-              list :uri (str "file://" path:r)
+              list :uri (str "file://" r:path)
                    :range (list
-                     :start (list :line line:r :character col:r)
-                     :end (list :line line:r :character (+ col:r (len word:ctx))))
+                     :start (list :line r:line :character r:col)
+                     :end (list :line r:line :character (+ r:col (len ctx:word))))
             }) refs))}})})
 })
 
@@ -570,12 +570,12 @@
 
 (sig 'make-snippet-item {-> FormSnippet List})
 (fun {make-snippet-item s} {
-  list :label label:s
+  list :label s:label
        :kind 15
-       :detail detail:s
-       :insertText snippet:s
+       :detail s:detail
+       :insertText s:snippet
        :insertTextFormat 2
-       :sortText sort:s
+       :sortText s:sort
 })
 
 (sig 'filter-snippets {-> Str List List})
@@ -599,10 +599,10 @@
 
 (sig 'make-sym-completion-item {-> List List})
 (fun {make-sym-completion-item s} {do
-  (= {name} name:s)
-  (= {kind} kind:s)
-  (= {sig} sig:s)
-  (= {doc} doc:s)
+  (= {name} s:name)
+  (= {kind} s:kind)
+  (= {sig} s:sig)
+  (= {doc} s:doc)
   (= {detail-str} (if (nil? sig) {""} {sig}))
   (= {item} (list :label name
                    :kind (symkind->completion-kind kind)
@@ -616,10 +616,10 @@
 (fun {handle-completion id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id nil}
-    {if (lsp/in-string? text:ctx line:ctx col:ctx)
+    {if (lsp/in-string? ctx:text ctx:line ctx:col)
       {lsp/send-response id (list :isIncomplete :false :items nil)}
       {do
-        (= {word} (word-at-position text:ctx line:ctx col:ctx))
+        (= {word} (word-at-position ctx:text ctx:line ctx:col))
         (= {prefix} (if (nil? word) {""} {word}))
         (= {snippet-items} (if (str/starts-with? prefix ":")
           {nil}
@@ -638,17 +638,17 @@
 
 (sig 'handle-document-symbols {-> Num List Nil})
 (fun {handle-document-symbols id params} {do
-  (= {td} textDocument:params)
-  (= {uri} uri:td)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {path} (uri->path uri))
       (= {syms} (symdb/file-symbols lsp/db path))
       (= {lsp-syms} (map (\ {s} {do
-        (= {sym-line} line:s)
-        (= {sym-col} col:s)
-        (= {sym-name} name:s)
-        (= {sym-kind} kind:s)
+        (= {sym-line} s:line)
+        (= {sym-col} s:col)
+        (= {sym-name} s:name)
+        (= {sym-kind} s:kind)
         (list :name sym-name
               :kind (symkind->lsp-kind sym-kind)
               :range (list
@@ -662,23 +662,23 @@
 
 (sig 'handle-workspace-symbols {-> Num List Nil})
 (fun {handle-workspace-symbols id params} {do
-  (= {query} query:params)
+  (= {query} params:query)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {syms} (if (nil? query) {symdb/all-symbol-names lsp/db}
         {if (== query "") {symdb/all-symbol-names lsp/db}
           {symdb/search-symbols lsp/db query}}))
       (= {lsp-syms} (map (\ {s} {do
-        (= {sym-line} line:s)
-        (= {sym-col} col:s)
-        (= {sym-name} name:s)
+        (= {sym-line} s:line)
+        (= {sym-col} s:col)
+        (= {sym-name} s:name)
         (= {sl} (if (nil? sym-line) {0} {sym-line}))
         (= {sc} (if (nil? sym-col) {0} {sym-col}))
         (list :name sym-name
-             :kind (symkind->lsp-kind kind:s)
+             :kind (symkind->lsp-kind s:kind)
              :location (list
-               :uri (str "file://" (if (nil? path:s)
-                 {""} {path:s}))
+               :uri (str "file://" (if (nil? s:path)
+                 {""} {s:path}))
                :range (list
                  :start (list :line sl :character sc)
                  :end (list :line sl :character (+ sc (len sym-name))))))
@@ -690,7 +690,7 @@
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx)
     {lsp/send-response id (list :data nil)}
-    {lsp/send-response id (list :data (sem/tokenize-ast ast:ctx text:ctx))})
+    {lsp/send-response id (list :data (sem/tokenize-ast ctx:ast ctx:text))})
 })
 
 ; ---------------------------------------------------------------------------
@@ -702,19 +702,19 @@
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
     {do
-      (= {wr} (word-range-at-position text:ctx line:ctx col:ctx))
+      (= {wr} (word-range-at-position ctx:text ctx:line ctx:col))
       (if (nil? wr) {lsp/send-error id -32602 "No symbol at cursor"}
         {lsp/send-response id
           (list :range (list
-            :start (list :line line:ctx :character start:wr)
-            :end (list :line line:ctx :character end:wr))
-          :placeholder word:wr)})})
+            :start (list :line ctx:line :character wr:start)
+            :end (list :line ctx:line :character wr:end))
+          :placeholder wr:word)})})
 })
 
 (sig 'ref->lsp-edit {-> Str List Str List})
 (fun {ref->lsp-edit text r new-name} {do
-  (= {lc} (offset->line-col text offset:r))
-  (= {rlen} len:r)
+  (= {lc} (offset->line-col text r:offset))
+  (= {rlen} r:len)
   (list :range (list
     :start (list :line (head lc) :character (head (tail lc)))
     :end (list :line (head lc) :character (+ (head (tail lc)) rlen)))
@@ -724,8 +724,8 @@
 (sig 'db-ref->lsp-edit {-> List Num Str List})
 (fun {db-ref->lsp-edit r word-len new-name} {
   list :range (list
-    :start (list :line line:r :character col:r)
-    :end (list :line line:r :character (+ col:r word-len)))
+    :start (list :line r:line :character r:col)
+    :end (list :line r:line :character (+ r:col word-len)))
   :newText new-name
 })
 
@@ -734,8 +734,8 @@
   if (nil? locs) {acc}
   {do
     (= {loc} (head locs))
-    (= {uri} uri:loc)
-    (= {edit} edit:loc)
+    (= {uri} loc:uri)
+    (= {edit} loc:edit)
     (= {existing} (plist/get acc uri))
     (= {new-edits} (if (nil? existing) {list edit} {qcons edit existing}))
     (rename/group-by-uri (tail locs) (plist/set acc uri new-edits))}
@@ -759,29 +759,29 @@
 
 (sig 'handle-rename {-> Num List Nil})
 (fun {handle-rename id params} {do
-  (= {new-name} newName:params)
+  (= {new-name} params:newName)
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
     {do
-      (= {local-refs} (ref/find-scoped-refs-from-ast ast:ctx text:ctx line:ctx col:ctx))
+      (= {local-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
       (if (not (nil? local-refs))
         {do
-          (= {edits} (map (\ {r} {ref->lsp-edit text:ctx r new-name}) local-refs))
-          (= {doc-edit} (list :textDocument (list :uri uri:ctx :version (None))
+          (= {edits} (map (\ {r} {ref->lsp-edit ctx:text r new-name}) local-refs))
+          (= {doc-edit} (list :textDocument (list :uri ctx:uri :version (None))
                               :edits edits))
           (lsp/send-response id (list :documentChanges (list doc-edit)))}
         {if (nil? lsp/db) {lsp/send-error id -32602 "No workspace"}
           {do
-            (= {word-len} (len word:ctx))
-            (= {db-refs} (symdb/find-refs lsp/db word:ctx))
-            (= {db-defs} (symdb/find-definitions lsp/db word:ctx))
+            (= {word-len} (len ctx:word))
+            (= {db-refs} (symdb/find-refs lsp/db ctx:word))
+            (= {db-defs} (symdb/find-definitions lsp/db ctx:word))
             (= {all-locs} (join
               (map (\ {r} {
-                list :uri (str "file://" path:r)
+                list :uri (str "file://" r:path)
                      :edit (db-ref->lsp-edit r word-len new-name)
               }) db-refs)
               (map (\ {d} {
-                list :uri (str "file://" path:d)
+                list :uri (str "file://" d:path)
                      :edit (db-ref->lsp-edit d word-len new-name)
               }) db-defs)))
             (= {grouped} (rename/group-by-uri all-locs nil))
@@ -795,10 +795,10 @@
 
 (sig 'handle-inlay-hints {-> Num List Nil})
 (fun {handle-inlay-hints id params} {do
-  (= {range} range:params)
+  (= {range} params:range)
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
-    {do (= {hints} (hint/collect-from-ast ast:ctx text:ctx lsp/db range))
+    {do (= {hints} (hint/collect-from-ast ctx:ast ctx:text lsp/db range))
         (lsp/send-response id hints)})
 })
 
@@ -863,18 +863,18 @@
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
-      (= {offset} (line-col->offset text:ctx line:ctx col:ctx))
-      (= {open-pos} (sig/scan-back text:ctx (- offset 1) 0 0))
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {open-pos} (sig/scan-back ctx:text (- offset 1) 0 0))
       (if (nil? open-pos) {lsp/send-response id (None)}
         {do
-          (= {name} (sig/extract-name text:ctx open-pos))
+          (= {name} (sig/extract-name ctx:text open-pos))
           (if (nil? name) {lsp/send-response id (None)}
             {do
-              (= {fn-params} (sig/lookup-params name ast:ctx lsp/db))
+              (= {fn-params} (sig/lookup-params name ctx:ast lsp/db))
               (if (nil? fn-params) {lsp/send-response id (None)}
                 {do
                   (= {name-end} (+ open-pos 1 (len name)))
-                  (= {arg-idx} (sig/count-args text:ctx name-end offset 0 0 0 0))
+                  (= {arg-idx} (sig/count-args ctx:text name-end offset 0 0 0 0))
                   (= {active} (if (>= arg-idx (len fn-params))
                     {- (len fn-params) 1} {arg-idx}))
                   (= {param-items} (map (\ {p} {list :label p}) fn-params))
@@ -894,9 +894,9 @@
 
 (sig 'ref->highlight {-> Str List List})
 (fun {ref->highlight text r} {do
-  (= {lc} (offset->line-col text offset:r))
-  (= {rname} name:r)
-  (= {kind} (if (== is-def:r 1) {3} {2}))
+  (= {lc} (offset->line-col text r:offset))
+  (= {rname} r:name)
+  (= {kind} (if (== r:is-def 1) {3} {2}))
   (list :range (list
     :start (list :line (head lc) :character (head (tail lc)))
     :end (list :line (head lc) :character (+ (head (tail lc)) (len rname))))
@@ -908,12 +908,12 @@
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
     {do
-      (= {local-refs} (ref/find-scoped-refs-from-ast ast:ctx text:ctx line:ctx col:ctx))
+      (= {local-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
       (= {refs} (if (not (nil? local-refs)) {local-refs}
         {do
-          (= {all-refs} (ref/collect-refs-from-ast ast:ctx))
-          (filter (\ {r} {== name:r word:ctx}) all-refs)}))
-      (lsp/send-response id (map (\ {r} {ref->highlight text:ctx r}) refs))})
+          (= {all-refs} (ref/collect-refs-from-ast ctx:ast))
+          (filter (\ {r} {== r:name ctx:word}) all-refs)}))
+      (lsp/send-response id (map (\ {r} {ref->highlight ctx:text r}) refs))})
 })
 
 ; ---------------------------------------------------------------------------
@@ -970,10 +970,10 @@
 (fun {handle-document-link id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
-    {if (error? ast:ctx) {lsp/send-response id nil}
+    {if (error? ctx:ast) {lsp/send-response id nil}
       {do
         (= {root} (if (nil? lsp/root-path) {"."} {lsp/root-path}))
-        (lsp/send-response id (link/collect-loads ast:ctx text:ctx root))}})
+        (lsp/send-response id (link/collect-loads ctx:ast ctx:text root))}})
 })
 
 ; ---------------------------------------------------------------------------
@@ -1033,8 +1033,8 @@
 (fun {handle-folding-range id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
-    {if (error? ast:ctx) {lsp/send-response id nil}
-      {lsp/send-response id (fold/collect ast:ctx text:ctx)}})
+    {if (error? ctx:ast) {lsp/send-response id nil}
+      {lsp/send-response id (fold/collect ctx:ast ctx:text)}})
 })
 
 ; ---------------------------------------------------------------------------
@@ -1044,8 +1044,8 @@
 (sig 'sel/find-ranges {-> Str List List List})
 (fun {sel/find-ranges text ast positions} {
   map (\ {pos} {do
-    (= {line} line:pos)
-    (= {col} character:pos)
+    (= {line} pos:line)
+    (= {col} pos:character)
     (= {offset} (line-col->offset text line col))
     (if (error? ast)
       {list :range (list :start pos :end pos)}
@@ -1099,10 +1099,10 @@
 
 (sig 'handle-selection-range {-> Num List Nil})
 (fun {handle-selection-range id params} {do
-  (= {positions} positions:params)
+  (= {positions} params:positions)
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
-    {lsp/send-response id (sel/find-ranges text:ctx ast:ctx positions)})
+    {lsp/send-response id (sel/find-ranges ctx:text ctx:ast positions)})
 })
 
 ; ---------------------------------------------------------------------------
@@ -1111,8 +1111,8 @@
 
 (sig 'handle-code-lens {-> Num List Nil})
 (fun {handle-code-lens id params} {do
-  (= {td} textDocument:params)
-  (= {uri} uri:td)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {path} (uri->path uri))
@@ -1125,13 +1125,13 @@
   if (nil? syms) {nil}
   {do
     (= {s} (head syms))
-    (= {kind} kind:s)
+    (= {kind} s:kind)
     (if (== kind SYMKIND_FUNCTION)
       {do
-        (= {name} name:s)
+        (= {name} s:name)
         (= {count} (symdb/ref-count db name))
-        (= {sym-line} line:s)
-        (= {sym-col} col:s)
+        (= {sym-line} s:line)
+        (= {sym-col} s:col)
         (= {lens} (list :range (list
           :start (list :line sym-line :character sym-col)
           :end (list :line sym-line :character (+ sym-col (len name))))
@@ -1147,10 +1147,10 @@
 
 (sig 'handle-code-action {-> Num List Nil})
 (fun {handle-code-action id params} {do
-  (= {td} textDocument:params)
-  (= {uri} uri:td)
-  (= {context} context:params)
-  (= {diagnostics} diagnostics:context)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {context} params:context)
+  (= {diagnostics} context:diagnostics)
   (if (nil? diagnostics) {lsp/send-response id nil}
     {do
       (= {actions} (ca/collect-actions diagnostics uri))
@@ -1161,7 +1161,7 @@
   if (nil? diags) {nil}
   {do
     (= {d} (head diags))
-    (= {msg} message:d)
+    (= {msg} d:message)
     (= {actions} (if (nil? msg) {nil}
       {ca/check-undefined msg d uri}))
     (join actions (ca/collect-actions (tail diags) uri))}
@@ -1190,7 +1190,7 @@
     (if (nil? name) {nil}
       {do
         (= {candidates} (symdb/search-symbols lsp/db name))
-        (= {range} range:d)
+        (= {range} d:range)
         (ca/make-fix-actions candidates name range uri d)})}
 })
 
@@ -1199,7 +1199,7 @@
   if (nil? candidates) {nil}
   {do
     (= {c} (head candidates))
-    (= {cname} name:c)
+    (= {cname} c:name)
     (if (== cname original) {ca/make-fix-actions (tail candidates) original range uri d}
       {do
         (= {action} (list :title (str "Did you mean '" cname "'?")
@@ -1216,15 +1216,15 @@
 
 (sig 'handle-semantic-tokens-range {-> Num List Nil})
 (fun {handle-semantic-tokens-range id params} {do
-  (= {range} range:params)
+  (= {range} params:range)
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id (list :data nil)}
     {do
-      (= {start-pos} start:range)
-      (= {end-pos} end:range)
-      (= {start-line} line:start-pos)
-      (= {end-line} line:end-pos)
-      (= {data} (sem/tokenize-ast ast:ctx text:ctx))
+      (= {start-pos} range:start)
+      (= {end-pos} range:end)
+      (= {start-line} start-pos:line)
+      (= {end-line} end-pos:line)
+      (= {data} (sem/tokenize-ast ctx:ast ctx:text))
       (= {filtered} (sem/filter-range data start-line end-line 0 nil))
       (lsp/send-response id (list :data filtered))})
 })
@@ -1291,8 +1291,8 @@
   if (nil? files) {count}
   {do
     (= {f} (head files))
-    (= {path} path:f)
-    (= {file-id} id:f)
+    (= {path} f:path)
+    (= {file-id} f:id)
     (= {fp} (file/fingerprint path))
     (if (error? fp)
       {do (symdb/remove-file lsp/db file-id)
@@ -1313,7 +1313,7 @@
       (= {existing} (sqlite/query-maybe db
         "SELECT hash FROM files WHERE path=?1" fpath))
       (if (not (nil? existing))
-        {if (== hash:existing fp) {0}
+        {if (== existing:hash fp) {0}
           {do
             (= {text} (read-file path))
             (if (error? text) {0}
@@ -1451,9 +1451,9 @@
   (= {msg} (json/parse body))
   (if (nil? msg) {}
     {do
-      (= {method} method:msg)
-      (= {id} id:msg)
-      (= {params} params:msg)
+      (= {method} msg:method)
+      (= {id} msg:id)
+      (= {params} msg:params)
       (if (nil? method) {}
         {match method
             {"initialize" (do (stderr/write (str "[valk-lsp] <- initialize\n"))
