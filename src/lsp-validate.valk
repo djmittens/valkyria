@@ -17,7 +17,7 @@
 (def {VALIDATE_SPECIAL_FORMS}
   (dict/from-keys {"=" "\\" "def" "fun" "if" "do" "select" "case" "quote"
    "load" "eval" "read" "let" "aio/let" "aio/do" "<-"
-   "type" "match" "sig" "ctx/with" "ctx/with-deadline"}))
+   "type" "match" "sig" "ctx/with" "ctx/with-deadline" "with"}))
 
 (def {VALIDATE_CONSTANTS}
   (dict/from-keys {"true" "false" "nil" "otherwise" "_"}))

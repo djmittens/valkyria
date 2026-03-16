@@ -200,6 +200,26 @@ static valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) 
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args);
 
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args) {
+  if (LVAL_TYPE(func) == LVAL_SYM && func->str[0] == ':') {
+    u64 argc = valk_lval_list_count(args);
+    if (argc != 1)
+      return valk_eval_value(valk_lval_err("Keyword '%s' called with %llu args, expected 1", func->str, argc));
+    valk_lval_t *plist = valk_lval_list_nth(args, 0);
+    if (!plist || LVAL_TYPE(plist) == LVAL_NIL)
+      return valk_eval_value(valk_lval_nil());
+    const char *key_str = func->str;
+    valk_lval_t *curr = plist;
+    while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+      valk_lval_t *k = curr->cons.head;
+      valk_lval_t *rest = curr->cons.tail;
+      if (!rest || LVAL_TYPE(rest) != LVAL_CONS) break;
+      if ((LVAL_TYPE(k) == LVAL_SYM || LVAL_TYPE(k) == LVAL_STR) &&
+          strcmp(k->str, key_str) == 0)
+        return valk_eval_value(rest->cons.head);
+      curr = rest->cons.tail;
+    }
+    return valk_eval_value(valk_lval_nil());
+  }
   if (LVAL_TYPE(func) != LVAL_FUN) {
     return valk_eval_value(valk_lval_err("Cannot call non-function: %s", valk_ltype_name(LVAL_TYPE(func))));
   }

@@ -21,6 +21,14 @@
   {Ok :value ok}
   {Err :error err})
 
+; Parametric type definitions (must be top-level for type transform)
+(type {Item} {:label Str :value Num})
+
+(sig 'get-items {-> Num (List Item)})
+(fun {get-items n} {
+  list (Item :label "a" :value n) (Item :label "b" :value (+ n 1))
+})
+
 (test/run (list
 
   ; === Enum tests ===
@@ -267,6 +275,106 @@
     {do
       (= {check-name} (\ {p} {do (Person:name p)}))
       (test/assert (== (check-name (Person :name "Z" :age 1 :email "z")) "Z") "explicit accessor in lambda")
+    })
+
+
+  ; === parametric type inference ===
+
+  (test "parametric-head-infers-type"
+    {do
+      (= {items} (get-items 10))
+      (= {first} (head items))
+      (test/assert-eq "a" label:first "head of (List Item) infers Item type")
+      (test/assert-eq 10 value:first "field:var on head result")
+    })
+
+  (test "parametric-tail-preserves-type"
+    {do
+      (= {items} (get-items 10))
+      (= {rest} (tail items))
+      (= {second} (head rest))
+      (test/assert-eq "b" label:second "head of tail of (List Item)")
+      (test/assert-eq 11 value:second "field:var on head-of-tail")
+    })
+
+  (test "parametric-filter-preserves-type"
+    {do
+      (= {items} (get-items 10))
+      (= {filtered} (filter (\ {x} {== (Item:label x) "b"}) items))
+      (= {first} (head filtered))
+      (test/assert-eq "b" label:first "head of filter result")
+    })
+
+  (test "parametric-reverse-preserves-type"
+    {do
+      (= {items} (get-items 10))
+      (= {rev} (reverse items))
+      (= {first} (head rev))
+      (test/assert-eq "b" label:first "head of reverse result")
+    })
+
+  ; === record update (with) ===
+
+  (test "with-single-field"
+    {do
+      (= {p} (Person :name "Alice" :age 30 :email "a@b"))
+      (= {p2} (with p :age 31))
+      (test/assert-eq "Alice" name:p2 "unchanged field preserved")
+      (test/assert-eq 31 age:p2 "updated field changed")
+      (test/assert-eq "a@b" email:p2 "other unchanged field preserved")
+    })
+
+  (test "with-multiple-fields"
+    {do
+      (= {p} (Person :name "Bob" :age 25 :email "b@c"))
+      (= {p2} (with p :name "Robert" :email "robert@c"))
+      (test/assert-eq "Robert" name:p2 "first override applied")
+      (test/assert-eq 25 age:p2 "non-overridden field preserved")
+      (test/assert-eq "robert@c" email:p2 "second override applied")
+    })
+
+  (test "with-preserves-type-inference"
+    {do
+      (= {p} (Person :name "Carol" :age 40 :email "c@d"))
+      (= {p2} (with p :age 41))
+      (= {p3} (with p2 :email "carol@d"))
+      (test/assert-eq "Carol" name:p3 "chained with preserves name")
+      (test/assert-eq 41 age:p3 "chained with preserves age update")
+      (test/assert-eq "carol@d" email:p3 "chained with applies email update")
+    })
+
+  (test "with-in-fun-body"
+    {do
+      (= {p} (Person :name "Dan" :age 20 :email "d@e"))
+      (= {p2} (with p :age (+ age:p 1)))
+      (test/assert-eq 21 age:p2 "with in do block works")
+      (test/assert-eq "Dan" name:p2 "with preserves other fields")
+    })
+
+  ; === callable keywords ===
+
+  (test "keyword-as-function"
+    {do
+      (= {pl} (list :name "Alice" :age 30))
+      (test/assert-eq "Alice" (:name pl) "keyword call extracts value")
+      (test/assert-eq 30 (:age pl) "keyword call extracts number")
+    })
+
+  (test "keyword-on-nil"
+    {do
+      (test/assert (nil? (:name nil)) "keyword on nil returns nil")
+    })
+
+  (test "keyword-missing-key"
+    {do
+      (= {pl} (list :name "Alice"))
+      (test/assert (nil? (:age pl)) "missing key returns nil")
+    })
+
+  (test "keyword-nested-access"
+    {do
+      (= {outer} (list :inner (list :value 42)))
+      (test/assert-eq 42 (:value (:inner outer)) "nested keyword access")
     })
 
 
