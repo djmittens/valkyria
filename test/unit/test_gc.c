@@ -3606,6 +3606,96 @@ void test_gc_evacuate_to_heap_null(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_gc_tlab_refill_fragmented_page(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_thread_register();
+  valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
+
+  u8 size_class = valk_gc_size_class(128);
+  u16 slots = valk_gc_slots_per_page(size_class);
+  VALK_TEST_ASSERT(slots > VALK_GC_TLAB_SLOTS * 2, "need enough slots to fragment");
+
+  void **ptrs = malloc(slots * sizeof(void *));
+  for (u16 i = 0; i < slots; i++) {
+    ptrs[i] = valk_gc_heap_alloc(heap, 128);
+    VALK_TEST_ASSERT(ptrs[i] != nullptr, "alloc should succeed");
+  }
+
+  valk_gc_page_list_t *list = &heap->classes[size_class];
+  valk_gc_page_t *page = list->all_pages;
+  VALK_TEST_ASSERT(page != nullptr, "should have a page");
+
+  for (u16 i = 0; i < slots; i += 2) {
+    valk_gc_ptr_location_t loc;
+    if (valk_gc_ptr_to_location(heap, ptrs[i], &loc)) {
+      valk_gc_page_try_mark(loc.page, loc.slot);
+    }
+  }
+
+  valk_gc_heap_collect(heap);
+  valk_gc_rebuild_partial_lists(heap);
+
+  valk_gc_tlab_t tlab;
+  valk_gc_tlab_init(&tlab);
+  bool ok = valk_gc_tlab_refill(&tlab, heap, size_class);
+  VALK_TEST_ASSERT(ok, "refill should succeed on fragmented page");
+
+  free(ptrs);
+  valk_gc_thread_unregister();
+  valk_gc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_tlab_refill_multiple_partial_pages(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_thread_register();
+  valk_gc_heap_t *heap = valk_gc_heap_create(128 * 1024 * 1024);
+
+  u8 size_class = valk_gc_size_class(128);
+  u16 slots = valk_gc_slots_per_page(size_class);
+
+  int pages_to_fill = 3;
+  int total = slots * pages_to_fill;
+  void **ptrs = malloc(total * sizeof(void *));
+  for (int i = 0; i < total; i++) {
+    ptrs[i] = valk_gc_heap_alloc(heap, 128);
+    VALK_TEST_ASSERT(ptrs[i] != nullptr, "alloc %d should succeed", i);
+  }
+
+  for (int i = 0; i < total; i += 2) {
+    valk_gc_ptr_location_t loc;
+    if (valk_gc_ptr_to_location(heap, ptrs[i], &loc)) {
+      valk_gc_page_try_mark(loc.page, loc.slot);
+    }
+  }
+
+  valk_gc_heap_collect(heap);
+  valk_gc_rebuild_partial_lists(heap);
+
+  valk_gc_page_list_t *list = &heap->classes[size_class];
+  int partial_count = 0;
+  for (valk_gc_page_t *p = list->partial_pages; p; p = p->next_partial) {
+    partial_count++;
+  }
+  VALK_TEST_ASSERT(partial_count >= 2, "should have multiple partial pages (got %d)", partial_count);
+
+  valk_gc_tlab_t tlab;
+  valk_gc_tlab_init(&tlab);
+  for (int i = 0; i < partial_count + 1; i++) {
+    valk_gc_tlab_refill(&tlab, heap, size_class);
+    valk_gc_tlab_reset(&tlab);
+  }
+
+  free(ptrs);
+  valk_gc_thread_unregister();
+  valk_gc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -3813,6 +3903,10 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_runtime_double_init", test_gc_runtime_double_init);
   valk_testsuite_add_test(suite, "test_gc_evacuate_to_heap_already_on_heap", test_gc_evacuate_to_heap_already_on_heap);
   valk_testsuite_add_test(suite, "test_gc_evacuate_to_heap_null", test_gc_evacuate_to_heap_null);
+
+  // Phase 25: gc_heap.c coverage — bitmap search and multi-partial-page paths
+  valk_testsuite_add_test(suite, "test_gc_tlab_refill_fragmented_page", test_gc_tlab_refill_fragmented_page);
+  valk_testsuite_add_test(suite, "test_gc_tlab_refill_multiple_partial_pages", test_gc_tlab_refill_multiple_partial_pages);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

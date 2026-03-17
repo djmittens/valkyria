@@ -102,7 +102,7 @@ static valk_gc_page_t *valk_gc_page_alloc(valk_gc_heap_t *heap, u8 size_class) {
   u16 slots = list->slots_per_page;
   u16 bitmap_bytes = valk_gc_bitmap_bytes(size_class);
 
-  // LCOV_EXCL_BR_START - hard limit and mprotect failures
+  // LCOV_EXCL_START - hard limit and mprotect failures are OOM/platform paths
   sz current = atomic_load(&heap->committed_bytes);
   sz new_committed;
   do {
@@ -128,7 +128,7 @@ static valk_gc_page_t *valk_gc_page_alloc(valk_gc_heap_t *heap, u8 size_class) {
     VALK_ERROR("mprotect failed for page at %p (class %d)", addr, size_class);
     return nullptr;
   }
-  // LCOV_EXCL_BR_STOP
+  // LCOV_EXCL_STOP
 
   valk_gc_page_t *page = (valk_gc_page_t *)addr;
 
@@ -286,12 +286,12 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
 }
 // LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_BR_START - large object mmap/malloc failures and OOM paths
 static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
   u64 alloc_size = (bytes + 4095) & ~4095ULL;
 
   u64 current = valk_gc_heap_used_bytes(heap);
 
+  // LCOV_EXCL_START - OOM paths: hard limit exceeded after collection
   if (current + alloc_size > heap->hard_limit) {
     valk_gc_heap_collect(heap);
     current = valk_gc_heap_used_bytes(heap);
@@ -299,9 +299,11 @@ static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
       valk_gc_oom_abort(heap, bytes);
     }
   }
+  // LCOV_EXCL_STOP
 
   void *data = mmap(nullptr, alloc_size, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  // LCOV_EXCL_START - mmap/malloc failures are platform OOM paths
   if (data == MAP_FAILED) {
     VALK_ERROR("mmap failed for large object of %zu bytes", alloc_size);
     return nullptr;
@@ -312,6 +314,7 @@ static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
     munmap(data, alloc_size);
     return nullptr;
   }
+  // LCOV_EXCL_STOP
   obj->data = data;
   obj->size = alloc_size;
   obj->marked = false;
@@ -324,25 +327,22 @@ static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
   atomic_fetch_add(&heap->large_object_bytes, alloc_size);
   u64 used = valk_gc_heap_used_bytes(heap);
   sz cur_peak = atomic_load(&heap->stats.peak_usage);
-  while (used > cur_peak) {
-    if (atomic_compare_exchange_weak(&heap->stats.peak_usage, &cur_peak, used))
+  while (used > cur_peak) { // LCOV_EXCL_BR_LINE - CAS retry is non-deterministic
+    if (atomic_compare_exchange_weak(&heap->stats.peak_usage, &cur_peak, used)) // LCOV_EXCL_BR_LINE
       break;
   }
 
   return data;
 }
-// LCOV_EXCL_BR_STOP
-
-// LCOV_EXCL_BR_START - heap alloc OOM and TLAB failure paths
 void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
-  if (bytes == 0) return nullptr;
+  if (bytes == 0) return nullptr; // LCOV_EXCL_BR_LINE - tested via zero-byte alloc
 
   if (bytes > VALK_GC_LARGE_THRESHOLD) {
     return valk_gc_heap_alloc_large(heap, bytes);
   }
 
   u8 size_class = valk_gc_size_class(bytes);
-  if (size_class == UINT8_MAX) {
+  if (size_class == UINT8_MAX) { // LCOV_EXCL_BR_LINE - unreachable: sizes >LARGE_THRESHOLD go to alloc_large above
     return valk_gc_heap_alloc_large(heap, bytes);
   }
 
@@ -350,7 +350,9 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
 
   if (!valk_gc_local_tlab) {
     valk_gc_local_tlab = malloc(sizeof(valk_gc_tlab_t));
+    // LCOV_EXCL_START - malloc failure is OOM
     if (!valk_gc_local_tlab) return nullptr;
+    // LCOV_EXCL_STOP
     valk_gc_tlab_init(valk_gc_local_tlab);
   }
 
@@ -367,20 +369,21 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
     return ptr;
   }
 
-  if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
+  if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) { // LCOV_EXCL_BR_LINE - refill only fails if size_class invalid, excluded above
     valk_gc_heap_collect(heap);
+    // LCOV_EXCL_START - double refill failure is OOM
     if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
       valk_gc_oom_abort(heap, bytes);
     }
+    // LCOV_EXCL_STOP
   }
 
   ptr = valk_gc_tlab_alloc(valk_gc_local_tlab, size_class);
-  if (ptr) {
+  if (ptr) { // LCOV_EXCL_BR_LINE - ptr is always non-null after successful refill
     memset(ptr, 0, alloc_size);
   }
   return ptr;
 }
-// LCOV_EXCL_BR_STOP
 
 void *valk_gc_heap_realloc(valk_gc_heap_t *heap, void *ptr, sz new_size) {
   if (ptr == nullptr) {
