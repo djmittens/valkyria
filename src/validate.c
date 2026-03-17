@@ -112,7 +112,7 @@ static int find_sym_offset(const char *text, const char *sym,
 
 static const char *SPECIAL_FORMS[] = {
   "=", "\\", "def", "fun", "if", "do", "select", "case", "quote",
-  "load", "eval", "read", "let", "aio/let", "aio/do", "<-",
+  "load", "load-raw", "eval", "read", "let", "aio/let", "aio/do", "<-",
   "type", "match", "sig", "ctx/with", "ctx/with-deadline",
   nullptr
 };

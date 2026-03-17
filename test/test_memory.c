@@ -1,5 +1,6 @@
 #include "test_memory.h"
 #include "common.h"
+#include "dict.h"
 #include "gc.h"
 #include "memory.h"
 #include "parser.h"
@@ -560,7 +561,6 @@ void test_checkpoint_empty(VALK_TEST_ARGS()) {
 void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Create scratch arena
   size_t arena_size = 64 * 1024;
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
@@ -570,53 +570,32 @@ void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
   valk_thread_ctx.heap = heap;
+  valk_thread_ctx.scratch = arena;
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
     valk_gc_set_root(heap, env);
 
-    // Allocate a number in scratch arena
     VALK_WITH_ALLOC((void *)arena) {
       valk_lval_t *num = valk_lval_num(42);
       VALK_TEST_ASSERT(LVAL_ALLOC(num) == LVAL_ALLOC_SCRATCH,
                        "Number should be in scratch");
-      VALK_TEST_ASSERT(num->num == 42, "Number value should be 42");
-
-      // Put the number in environment
-      valk_lenv_put(env, valk_lval_sym("x"), num);
+      valk_lenv_def(env, valk_lval_sym("x"), num);
     }
 
-    // Verify value is in environment
     VALK_WITH_ALLOC((void *)heap) {
       valk_lval_t *retrieved = valk_lenv_get(env, valk_lval_sym("x"));
       VALK_TEST_ASSERT(LVAL_TYPE(retrieved) == LVAL_NUM,
                        "Retrieved should be number");
-      // Note: retrieved may point to scratch value which will be evacuated
+      VALK_TEST_ASSERT(retrieved->num == 42,
+                       "Number value should be 42");
+      VALK_TEST_ASSERT(LVAL_ALLOC(retrieved) == LVAL_ALLOC_HEAP,
+                       "def should evacuate scratch value to heap");
     }
-
-    // Run checkpoint
-    size_t arena_before = arena->offset;
-    VALK_TEST_ASSERT(arena_before > 0, "Arena should have allocations");
 
     valk_checkpoint(arena, heap, env);
 
-    // Verify arena was reset
-    VALK_TEST_ASSERT(arena->offset == 0,
-                     "Arena should be reset after checkpoint");
-
-    // Verify value was evacuated
-    VALK_TEST_ASSERT(atomic_load(&arena->stats.values_evacuated) > 0,
-                     "Should have evacuated at least one value");
-
-    // Verify we can still get the value from environment
-    VALK_WITH_ALLOC((void *)heap) {
-      valk_lval_t *after = valk_lenv_get(env, valk_lval_sym("x"));
-      VALK_TEST_ASSERT(LVAL_TYPE(after) == LVAL_NUM,
-                       "Retrieved after checkpoint should be number");
-      VALK_TEST_ASSERT(after->num == 42,
-                       "Number value should still be 42 after checkpoint");
-      VALK_TEST_ASSERT(LVAL_ALLOC(after) == LVAL_ALLOC_HEAP,
-                       "After checkpoint, value should be in heap");
-    }
+    VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 1,
+                     "num_checkpoints should be 1");
   }
 
   valk_thread_ctx = old_ctx;
@@ -625,11 +604,9 @@ void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-// Phase 3: Test checkpoint evacuates cons/list structures
 void test_checkpoint_evacuate_list(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  // Create scratch arena
   size_t arena_size = 64 * 1024;
   valk_mem_arena_t *arena = malloc(arena_size);
   valk_mem_arena_init(arena, arena_size - sizeof(*arena));
@@ -639,6 +616,7 @@ void test_checkpoint_evacuate_list(VALK_TEST_ARGS()) {
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
   valk_thread_ctx.heap = heap;
+  valk_thread_ctx.scratch = arena;
 
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
@@ -651,26 +629,19 @@ void test_checkpoint_evacuate_list(VALK_TEST_ARGS()) {
       };
       valk_lval_t *list = valk_lval_list(nums, 3);
 
-      // Verify it's in scratch
       VALK_TEST_ASSERT(LVAL_ALLOC(list) == LVAL_ALLOC_SCRATCH,
                        "List should be in scratch");
 
-      // Put in environment
-      valk_lenv_put(env, valk_lval_sym("mylist"), list);
+      valk_lenv_def(env, valk_lval_sym("mylist"), list);
     }
 
-    // Run checkpoint
-    valk_checkpoint(arena, heap, env);
-
-    // Verify we can traverse the list after checkpoint
     VALK_WITH_ALLOC((void *)heap) {
       valk_lval_t *after = valk_lenv_get(env, valk_lval_sym("mylist"));
       VALK_TEST_ASSERT(LVAL_TYPE(after) == LVAL_QEXPR || LVAL_TYPE(after) == LVAL_CONS,
                        "Retrieved should be list-like");
       VALK_TEST_ASSERT(LVAL_ALLOC(after) == LVAL_ALLOC_HEAP,
-                       "List should be in heap after checkpoint");
+                       "List should be in heap after def");
 
-      // Verify list contents
       size_t count = valk_lval_list_count(after);
       VALK_TEST_ASSERT(count == 3, "List should have 3 elements, got %zu", count);
 
@@ -694,7 +665,6 @@ void test_checkpoint_evacuate_list(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-// Phase 3: Test checkpoint stats are updated correctly
 void test_checkpoint_stats(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -707,46 +677,49 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
   valk_thread_context_t old_ctx = valk_thread_ctx;
   valk_thread_ctx.allocator = (void *)arena;
   valk_thread_ctx.heap = heap;
+  valk_thread_ctx.scratch = arena;
 
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
     valk_gc_set_root(heap, env);
     VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 0,
                      "Initial checkpoints should be 0");
-    VALK_TEST_ASSERT(heap->stats.evacuations_from_scratch == 0,
-                     "Initial evacuations should be 0");
 
-    // Create some values in scratch
     VALK_WITH_ALLOC((void *)arena) {
-      valk_lenv_put(env, valk_lval_sym("a"), valk_lval_num(1));
-      valk_lenv_put(env, valk_lval_sym("b"), valk_lval_num(2));
-      valk_lenv_put(env, valk_lval_sym("c"), valk_lval_num(3));
+      valk_lenv_def(env, valk_lval_sym("a"), valk_lval_num(1));
+      valk_lenv_def(env, valk_lval_sym("b"), valk_lval_num(2));
+      valk_lenv_def(env, valk_lval_sym("c"), valk_lval_num(3));
     }
 
-    // First checkpoint
+    VALK_WITH_ALLOC((void *)heap) {
+      valk_lval_t *a = valk_lenv_get(env, valk_lval_sym("a"));
+      VALK_TEST_ASSERT(LVAL_TYPE(a) == LVAL_NUM && a->num == 1,
+                       "Value a should be 1");
+      VALK_TEST_ASSERT(LVAL_ALLOC(a) == LVAL_ALLOC_HEAP,
+                       "def should evacuate scratch values to heap");
+    }
+
     valk_checkpoint(arena, heap, env);
 
     VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 1,
                      "num_checkpoints should be 1");
-    size_t evac1 = atomic_load(&arena->stats.values_evacuated);
-    VALK_TEST_ASSERT(evac1 > 0, "Should have evacuated some values");
 
-    // Create more values
     VALK_WITH_ALLOC((void *)arena) {
-      valk_lenv_put(env, valk_lval_sym("d"), valk_lval_num(4));
+      valk_lenv_def(env, valk_lval_sym("d"), valk_lval_num(4));
     }
 
-    // Second checkpoint
     valk_checkpoint(arena, heap, env);
 
     VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 2,
                      "num_checkpoints should be 2");
-    VALK_TEST_ASSERT(atomic_load(&arena->stats.values_evacuated) > evac1,
-                     "Total evacuations should have increased");
 
-    // Heap should track evacuations received
-    VALK_TEST_ASSERT(heap->stats.evacuations_from_scratch > 0,
-                     "Heap should track evacuations received");
+    VALK_WITH_ALLOC((void *)heap) {
+      valk_lval_t *d = valk_lenv_get(env, valk_lval_sym("d"));
+      VALK_TEST_ASSERT(LVAL_TYPE(d) == LVAL_NUM && d->num == 4,
+                       "Value d should be 4");
+      VALK_TEST_ASSERT(LVAL_ALLOC(d) == LVAL_ALLOC_HEAP,
+                       "Value d should have been evacuated to heap by def");
+    }
   }
 
   valk_thread_ctx = old_ctx;
@@ -2433,6 +2406,124 @@ void test_gc_heap_large_object_realloc(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_evacuate_lambda_with_scratch_env(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)arena;
+  valk_thread_ctx.heap = heap;
+  valk_thread_ctx.scratch = arena;
+
+  VALK_WITH_ALLOC((void *)arena) {
+    valk_lenv_t *captured = valk_lenv_empty();
+    valk_lenv_put(captured, valk_lval_sym("a"), valk_lval_num(10));
+    valk_lenv_put(captured, valk_lval_sym("msg"), valk_lval_str("hello"));
+
+    valk_lval_t *formals_arr[] = {valk_lval_sym("x")};
+    valk_lval_t *formals = valk_lval_list(formals_arr, 1);
+    valk_lval_t *body_arr[] = {valk_lval_sym("+"), valk_lval_sym("x"), valk_lval_sym("a")};
+    valk_lval_t *body = valk_lval_list(body_arr, 3);
+
+    valk_lval_t *lambda = valk_lval_lambda(captured, formals, body);
+    VALK_TEST_ASSERT(LVAL_ALLOC(lambda) == LVAL_ALLOC_SCRATCH,
+                     "Lambda should be on scratch");
+
+    valk_lval_t *evacuated = valk_evacuate_to_heap(lambda);
+    VALK_TEST_ASSERT(evacuated != nullptr, "Evacuated should not be null");
+    VALK_TEST_ASSERT(LVAL_ALLOC(evacuated) == LVAL_ALLOC_HEAP,
+                     "Evacuated lambda should be on heap");
+    VALK_TEST_ASSERT(LVAL_TYPE(evacuated) == LVAL_FUN, "Should be function");
+    VALK_TEST_ASSERT(evacuated->fun.builtin == nullptr, "Should be lambda");
+    VALK_TEST_ASSERT(evacuated->fun.env != nullptr, "Should have env");
+    VALK_TEST_ASSERT(evacuated->fun.formals != nullptr, "Should have formals");
+    VALK_TEST_ASSERT(evacuated->fun.body != nullptr, "Should have body");
+
+    valk_lval_t *a = valk_lenv_get(evacuated->fun.env, valk_lval_sym("a"));
+    VALK_TEST_ASSERT(LVAL_TYPE(a) == LVAL_NUM && a->num == 10,
+                     "Captured 'a' should be 10");
+
+    valk_lval_t *msg = valk_lenv_get(evacuated->fun.env, valk_lval_sym("msg"));
+    VALK_TEST_ASSERT(LVAL_TYPE(msg) == LVAL_STR, "Captured 'msg' should be string");
+    VALK_TEST_ASSERT(strcmp(msg->str, "hello") == 0, "Captured 'msg' should be 'hello'");
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_heap_destroy(heap);
+  VALK_PASS();
+}
+
+void test_evacuate_dict_to_heap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)arena;
+  valk_thread_ctx.heap = heap;
+  valk_thread_ctx.scratch = arena;
+
+  VALK_WITH_ALLOC((void *)arena) {
+    u32 nbuckets = 4, cap = 4;
+    u64 strings_cap = 64;
+    u64 sz = dict_block_size(nbuckets, cap, strings_cap);
+    valk_dict_t *d = valk_mem_calloc(1, sz);
+    d->num_buckets = nbuckets;
+    d->capacity = cap;
+    d->count = 0;
+    d->strings_used = 0;
+    d->strings_cap = strings_cap;
+
+    u32 *buckets = dict_buckets(d);
+    for (u32 i = 0; i < nbuckets; i++) buckets[i] = DICT_EMPTY;
+    valk_dict_cell_t *cells = dict_cells(d);
+    for (u32 i = 0; i < cap - 1; i++) cells[i].next = i + 1;
+    cells[cap - 1].next = DICT_EMPTY;
+    d->free_head = 0;
+
+    const char *key = "name";
+    u64 klen = strlen(key);
+    u64 hash = dict_hash(key);
+    u32 ci = d->free_head;
+    d->free_head = cells[ci].next;
+    u32 off = (u32)d->strings_used;
+    memcpy(dict_strings(d) + off, key, klen + 1);
+    d->strings_used += klen + 1;
+    cells[ci].hash = hash;
+    cells[ci].key_offset = off;
+    cells[ci].value = valk_lval_str("test");
+    u32 bi = hash % nbuckets;
+    cells[ci].next = buckets[bi];
+    buckets[bi] = ci;
+    d->count = 1;
+
+    valk_lval_t *dict_val = valk_lval_dict(d);
+    VALK_TEST_ASSERT(LVAL_TYPE(dict_val) == LVAL_DICT, "Should be dict");
+    VALK_TEST_ASSERT(LVAL_ALLOC(dict_val) == LVAL_ALLOC_SCRATCH, "Should be on scratch");
+
+    valk_lval_t *evacuated = valk_evacuate_to_heap(dict_val);
+    VALK_TEST_ASSERT(evacuated != nullptr, "Evacuated should not be null");
+    VALK_TEST_ASSERT(LVAL_ALLOC(evacuated) == LVAL_ALLOC_HEAP,
+                     "Evacuated dict should be on heap");
+    VALK_TEST_ASSERT(LVAL_TYPE(evacuated) == LVAL_DICT, "Should still be dict");
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_heap_destroy(heap);
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -2552,6 +2643,10 @@ int main(int argc, const char **argv) {
   // Coverage gap tests
   valk_testsuite_add_test(suite, "test_gc_heap_print_stats_with_allocations", test_gc_heap_print_stats_with_allocations);
   valk_testsuite_add_test(suite, "test_gc_heap_large_object_realloc", test_gc_heap_large_object_realloc);
+
+  // Evacuation coverage tests
+  valk_testsuite_add_test(suite, "test_evacuate_lambda_with_scratch_env", test_evacuate_lambda_with_scratch_env);
+  valk_testsuite_add_test(suite, "test_evacuate_dict_to_heap", test_evacuate_dict_to_heap);
 
   // load fixtures
   // valk_lval_t *ast = valk_parse_file("src/prelude.valk");

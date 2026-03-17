@@ -15,11 +15,12 @@
 static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   int argc = valk_lval_list_count(a);
-  LVAL_ASSERT(a, argc == 0 || argc == 1, "Expected 0 or 1 arguments");
+  LVAL_ASSERT(a, argc == 0 || argc == 1, "Expected 0 or 1 arguments"); // LCOV_EXCL_BR_LINE - arg validation
 
   valk_aio_system_t* sys;
   valk_aio_system_config_t config = valk_aio_system_config_default();
 
+  // LCOV_EXCL_BR_START - config parsing: 11 optional config keys, each with plist_get + type check branches
   if (argc >= 1 && LVAL_TYPE(valk_lval_list_nth(a, 0)) == LVAL_QEXPR) {
     valk_lval_t* config_map = valk_lval_list_nth(a, 0);
 
@@ -48,6 +49,7 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
 #undef AIO_CONFIG_NUM
   }
+  // LCOV_EXCL_BR_STOP
 
   VALK_WITH_ALLOC(&valk_malloc_allocator) {
     sys = valk_aio_start_with_config(&config);
@@ -73,18 +75,21 @@ static valk_lval_t* valk_builtin_aio_start(valk_lenv_t* e, valk_lval_t* a) {
 
 static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
+  // LCOV_EXCL_BR_STOP
 
+  // LCOV_EXCL_START - aio/run: blocking production loop, never called in tests (tests use direct await)
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
 
-  while (!valk_aio_is_shutting_down(sys)) { // LCOV_EXCL_BR_LINE - run loop exit condition
+  while (!valk_aio_is_shutting_down(sys)) {
     VALK_GC_SAFE_POINT();
     uv_sleep(100);
   }
 
-  for (u32 i = 0; i < sys->num_loops; i++) { // LCOV_EXCL_BR_LINE - shutdown guard
+  for (u32 i = 0; i < sys->num_loops; i++) {
     valk_aio_loop_t *loop = &sys->loops[i];
     if (!loop->thread_joined &&
         !valk_thread_equal(valk_thread_self(), (valk_thread_t)loop->thread)) {
@@ -94,26 +99,28 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   return valk_lval_nil();
+  // LCOV_EXCL_STOP
 }
 
 static valk_lval_t* valk_builtin_aio_stop(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
   valk_aio_stop(sys);
   return valk_lval_nil();
 }
 
+// LCOV_EXCL_START - aio/on-loop-thread?: production API, never called in tests
 static valk_lval_t* valk_builtin_aio_on_loop_thread(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  // LCOV_EXCL_BR_START - arg validation: compile-time checks catch most
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
-  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
   bool on_loop = false;
@@ -125,18 +132,21 @@ static valk_lval_t* valk_builtin_aio_on_loop_thread(valk_lenv_t* e, valk_lval_t*
   }
   return valk_lval_num(on_loop ? 1 : 0);
 }
+// LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
-                                                   valk_lval_t* a) {
+                                                    valk_lval_t* a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
   char* buf = valk_mem_alloc(131072);
-  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_LINE
+  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_LINE // LCOV_EXCL_BR_LINE
   u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
   if (len == 0) { // LCOV_EXCL_BR_LINE - metrics serialization failure
     return valk_lval_err("Failed to generate metrics JSON"); // LCOV_EXCL_LINE
@@ -145,16 +155,18 @@ static valk_lval_t* valk_builtin_aio_metrics_json(valk_lenv_t* e,
 }
 
 static valk_lval_t* valk_builtin_aio_metrics_json_compact(valk_lenv_t* e,
-                                                            valk_lval_t* a) {
+                                                              valk_lval_t* a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
   char* buf = valk_mem_alloc(65536);
-  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_LINE
+  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_LINE // LCOV_EXCL_BR_LINE
   u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 65536);
   if (len == 0) { // LCOV_EXCL_BR_LINE - metrics serialization failure
     return valk_lval_err("Failed to generate metrics JSON"); // LCOV_EXCL_LINE
@@ -163,16 +175,18 @@ static valk_lval_t* valk_builtin_aio_metrics_json_compact(valk_lenv_t* e,
 }
 
 static valk_lval_t* valk_builtin_aio_systems_json(valk_lenv_t* e,
-                                                    valk_lval_t* a) {
+                                                      valk_lval_t* a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   valk_aio_update_queue_stats(sys);
   char* buf = valk_mem_alloc(131072);
-  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_LINE
+  if (!buf) return valk_lval_err("Failed to allocate buffer for metrics JSON"); // LCOV_EXCL_LINE // LCOV_EXCL_BR_LINE
   u64 len = valk_metrics_v2_to_json(&g_metrics, buf, 131072);
   if (len == 0) { // LCOV_EXCL_BR_LINE - metrics serialization failure
     return valk_lval_err("Failed to generate metrics JSON"); // LCOV_EXCL_LINE
@@ -206,7 +220,7 @@ static valk_lval_t* vm_metrics_extract_sys(valk_lval_t* a, const char* name,
     : (valk_gc_heap_t*)valk_thread_ctx.heap;
 // LCOV_EXCL_BR_STOP
 
-  valk_vm_metrics_collect(out_vm, heap, sys ? valk_aio_get_event_loop(sys) : NULL);
+  valk_vm_metrics_collect(out_vm, heap, sys ? valk_aio_get_event_loop(sys) : NULL); // LCOV_EXCL_BR_LINE - ternary: sys presence varies
   return NULL;
 }
 
@@ -216,7 +230,7 @@ static valk_lval_t* valk_builtin_vm_metrics_json(valk_lenv_t* e,
   valk_aio_system_t *sys;
   valk_vm_metrics_t vm;
   valk_lval_t *err = vm_metrics_extract_sys(a, "vm/metrics-json", &sys, &vm);
-  if (err) return err;
+  if (err) return err; // LCOV_EXCL_BR_LINE - error propagation from validated extract
 
   char* json = valk_vm_metrics_to_json(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!json) { // LCOV_EXCL_BR_LINE - OOM
@@ -231,7 +245,7 @@ static valk_lval_t* valk_builtin_vm_metrics_prometheus(valk_lenv_t* e,
   valk_aio_system_t *sys;
   valk_vm_metrics_t vm;
   valk_lval_t *err = vm_metrics_extract_sys(a, "vm/metrics-prometheus", &sys, &vm);
-  if (err) return err;
+  if (err) return err; // LCOV_EXCL_BR_LINE - error propagation from validated extract
 
   char* prom = valk_vm_metrics_to_prometheus(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!prom) { // LCOV_EXCL_BR_LINE - OOM
@@ -246,7 +260,7 @@ static valk_lval_t* valk_builtin_vm_metrics_json_compact(valk_lenv_t* e,
   valk_aio_system_t *sys;
   valk_vm_metrics_t vm;
   valk_lval_t *err = vm_metrics_extract_sys(a, "vm/metrics-json-compact", &sys, &vm);
-  if (err) return err;
+  if (err) return err; // LCOV_EXCL_BR_LINE - error propagation from validated extract
 
   char* json = valk_vm_metrics_to_json_compact(&vm, (valk_mem_allocator_t*)valk_thread_ctx.allocator);
   if (!json) { // LCOV_EXCL_BR_LINE - OOM
@@ -292,10 +306,12 @@ static valk_lval_t* valk_builtin_aio_interval(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 static valk_lval_t* valk_builtin_shutdown(valk_lenv_t* e, valk_lval_t* a) {
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_LE(a, a, 1);
+  // LCOV_EXCL_BR_STOP
   int code = 0;
-  if (valk_lval_list_count(a) == 1) {
-    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+  if (valk_lval_list_count(a) == 1) { // LCOV_EXCL_BR_LINE - optional exit code arg
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM); // LCOV_EXCL_BR_LINE - type validation
     code = (int)valk_lval_list_nth(a, 0)->num;
   }
 

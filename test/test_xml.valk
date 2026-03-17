@@ -113,4 +113,23 @@
     true
   })
 
+  (test "parse-empty-string"
+    {do
+    (test/assert (error? (xml/parse "")) "empty string should error")
+    true
+  })
+
+  (test "parse-malformed-xml"
+    {do
+    (test/assert (error? (xml/parse "<")) "bare angle bracket should error")
+    (test/assert (error? (xml/parse "not xml at all")) "non-xml text should error")
+    true
+  })
+
+  (test "parse-mismatched-tags"
+    {do
+    (test/assert (error? (xml/parse "<a></b>")) "mismatched tags should error")
+    true
+  })
+
 ) {:suite-name "XML Builtin Tests"})

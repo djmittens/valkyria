@@ -13,14 +13,14 @@
 // ============================================================================
 
 void valk_gc_get_runtime_metrics(valk_gc_heap_t* heap,
-                                  u64* cycles, u64* pause_us_total,
-                                  u64* pause_us_max, sz* reclaimed,
+                                  u64* cycles, u64* pause_ns_total,
+                                  u64* pause_ns_max, sz* reclaimed,
                                   sz* heap_used, sz* heap_total) {
   if (!heap) return;
 
   if (cycles) *cycles = atomic_load(&heap->runtime_metrics.cycles_total);
-  if (pause_us_total) *pause_us_total = atomic_load(&heap->runtime_metrics.pause_us_total);
-  if (pause_us_max) *pause_us_max = atomic_load(&heap->runtime_metrics.pause_us_max);
+  if (pause_ns_total) *pause_ns_total = atomic_load(&heap->runtime_metrics.pause_ns_total);
+  if (pause_ns_max) *pause_ns_max = atomic_load(&heap->runtime_metrics.pause_ns_max);
   if (reclaimed) *reclaimed = atomic_load(&heap->runtime_metrics.reclaimed_bytes_total);
 
   if (heap_used) *heap_used = valk_gc_heap_used_bytes(heap);

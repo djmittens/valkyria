@@ -1,5 +1,6 @@
 #include "gc.h"
 #include "parser.h"
+#include "dict.h"
 #include "memory.h"
 #include "async_handle.h"
 #include "eval_internal.h"
@@ -105,6 +106,23 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
         if (obj->ref.mark)
           obj->ref.mark(obj->ref.ptr, ctx);
         return;
+      case LVAL_DICT: {
+        valk_dict_t *d = obj->dict.data;
+        if (d) {
+          mark_ptr_only(d, ctx);
+          valk_dict_cell_t *cells = dict_cells(d);
+          u32 *buckets = dict_buckets(d);
+          for (u32 b = 0; b < d->num_buckets; b++) {
+            u32 ci = buckets[b];
+            while (ci != DICT_EMPTY) {
+              if (cells[ci].value != nullptr)
+                mark_lval(cells[ci].value, ctx);
+              ci = cells[ci].next;
+            }
+          }
+        }
+        return;
+      }
       default:
         return;
     }
@@ -495,22 +513,24 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
   atomic_store(&heap->gc_in_progress, false);
 
   u64 end_ns = uv_hrtime();
-  u64 pause_us = (end_ns - start_ns) / 1000;
+  u64 pause_ns = end_ns - start_ns;
+  u64 pause_us = pause_ns / 1000;
   heap->last_gc_time_us = end_ns / 1000;
 
   atomic_fetch_add(&heap->runtime_metrics.cycles_total, 1);
-  atomic_fetch_add(&heap->runtime_metrics.pause_us_total, pause_us);
+  atomic_fetch_add(&heap->runtime_metrics.pause_ns_total, pause_ns);
   atomic_fetch_add(&heap->runtime_metrics.reclaimed_bytes_total, reclaimed);
   atomic_store(&heap->runtime_metrics.last_heap_before_gc, bytes_before);
   atomic_store(&heap->runtime_metrics.last_reclaimed, reclaimed);
 
-  u64 current_max = atomic_load(&heap->runtime_metrics.pause_us_max);
-  while (pause_us > current_max) { // LCOV_EXCL_BR_LINE - CAS loop
-    if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_us_max, &current_max, pause_us)) { // LCOV_EXCL_BR_LINE
+  u64 current_max = atomic_load(&heap->runtime_metrics.pause_ns_max);
+  while (pause_ns > current_max) { // LCOV_EXCL_BR_LINE - CAS loop
+    if (atomic_compare_exchange_weak(&heap->runtime_metrics.pause_ns_max, &current_max, pause_ns)) { // LCOV_EXCL_BR_LINE
       break;
     }
   }
 
+  // LCOV_EXCL_START - GC pause histogram: bucket timing is non-deterministic, untestable
   if (pause_us < 1000)
     atomic_fetch_add(&heap->runtime_metrics.pause_0_1ms, 1);
   else if (pause_us < 5000)
@@ -532,14 +552,15 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
             (unsigned long long)bytes_before,
             (unsigned long long)bytes_after);
   }
+  // LCOV_EXCL_STOP
 
   atomic_fetch_add(&valk_sys->parallel_cycles, 1);
-  atomic_fetch_add(&valk_sys->parallel_pause_us_total, pause_us);
+  atomic_fetch_add(&valk_sys->parallel_pause_ns_total, pause_ns);
 
   atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_STW);
 
-  VALK_DEBUG("GC cycle complete: reclaimed %zu bytes in %llu us (%zu threads)",
-             reclaimed, (unsigned long long)pause_us, num_threads);
+  VALK_DEBUG("GC cycle complete: reclaimed %zu bytes in %llu ns (%zu threads)",
+             reclaimed, (unsigned long long)pause_ns, num_threads);
 
   return reclaimed;
 }

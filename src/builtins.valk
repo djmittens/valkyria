@@ -12,6 +12,7 @@
 (sig '* {-> & Num Num})
 ; Integer division.
 (sig '/ {-> & Num Num})
+(sig 'mod {-> Num Num Num})
 
 ; === Comparison ===
 
@@ -156,6 +157,10 @@
 (sig 'str {-> & A Str})
 ; Repeat pattern n times into a string.
 (sig 'make-string {-> A Num Str})
+(sig 'str/starts-with? {-> Str Str Num})
+(sig 'str/ends-with? {-> Str Str Num})
+(sig 'str/join {-> Str (List Str) Str})
+(sig 'str/index-of {-> Str Str Num})
 
 ; === File I/O ===
 
@@ -228,6 +233,7 @@
 (sig 'aio/let {-> QExpr & A (Handle A)})
 ; Bind async handle result in aio/do block.
 (sig '<- {-> (Handle A) A})
+(sig 'aio/dispatch {-> Fun (Handle A)})
 
 ; === Context ===
 
@@ -359,8 +365,6 @@
 (sig 'mem/gc/usage {-> Num})
 ; GC collection threshold in bytes.
 (sig 'mem/gc/threshold {-> Num})
-; Minimum interval between GC runs in microseconds.
-(sig 'mem/gc/min-interval {-> Num})
 ; Force a garbage collection, returns bytes freed.
 (sig 'mem/gc/collect {-> Num})
 ; Print GC statistics.
@@ -371,12 +375,6 @@
 (sig 'mem/checkpoint/stats {-> (List Num)})
 ; Set GC collection threshold, returns old value.
 (sig 'mem/gc/set-threshold {-> Num Num})
-; Set minimum GC interval, returns old value.
-(sig 'mem/gc/set-min-interval {-> Num Num})
-; Set GC pacing multiplier, returns old value.
-(sig 'mem/gc/set-pacing {-> Num Num})
-; Get current GC pacing multiplier.
-(sig 'mem/gc/pacing {-> Num})
 ; Set heap hard limit, returns old value.
 (sig 'mem/heap/set-hard-limit {-> Num Num})
 
@@ -604,3 +602,15 @@
 
 ; Check if stdin has data available without blocking. Returns 1 or 0.
 (sig 'stdin/has-data {-> Num})
+
+; === Pipe I/O ===
+
+(sig 'pipe/stdin-open {-> Ref Ref})
+(sig 'pipe/stdout-open {-> Ref Ref})
+(sig 'pipe/write {-> Ref Str Nil})
+(sig 'pipe/lsp-reader {-> Ref Fun Nil})
+
+; === LSP / Source Utilities ===
+
+(sig 'offsets->line-cols {-> Str (List Num) (List (List Num))})
+(sig 'sem/encode-deltas {-> Str & A List})

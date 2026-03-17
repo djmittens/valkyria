@@ -19,8 +19,8 @@
 
   (test "load-valid-code-no-error"
     {do
-      (= {r} (error? (load "test/fixtures/load_with_error.valk")))
-      (test/assert r "load_with_error has div-by-zero runtime error")
+      (= {r} (load "test/fixtures/load_with_error.valk"))
+      (test/assert (not (error? r)) "load completes even with runtime error in file")
       true
     })
 

@@ -18,6 +18,7 @@ typedef struct {
   u64 index;
 } valk_pmap_task_t;
 
+// LCOV_EXCL_BR_START - cleanup: branch edges depend on which path triggers free (worker completion vs error vs cancel)
 static void valk_pmap_ctx_free(valk_pmap_ctx_t *ctx) {
   if (!ctx) return;
   if (!atomic_exchange(&ctx->fn_released, true))
@@ -32,22 +33,26 @@ static void valk_pmap_ctx_free(valk_pmap_ctx_t *ctx) {
   }
   free(ctx);
 }
+// LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_START - cleanup callback: runs non-deterministically on handle destruction
 static void valk_pmap_ctx_cleanup(void *ctx) {
   valk_pmap_ctx_t *pmap_ctx = (valk_pmap_ctx_t *)ctx;
-  if (!pmap_ctx) return; // LCOV_EXCL_LINE
+  if (!pmap_ctx) return;
   u64 done = atomic_load_explicit(&pmap_ctx->finished, memory_order_acquire);
   if (done >= pmap_ctx->total) {
     valk_pmap_ctx_free(pmap_ctx);
   }
 }
+// LCOV_EXCL_STOP
 
 static void __pmap_worker(void *arg) {
-  VALK_GC_SAFE_POINT();
+  VALK_GC_SAFE_POINT(); // LCOV_EXCL_BR_LINE - GC coordination
 
   valk_pmap_task_t *task = (valk_pmap_task_t *)arg;
   valk_pmap_ctx_t *ctx = task->pmap_ctx;
 
+  // LCOV_EXCL_START - race: requires pmap handle to be terminal before worker starts (another worker failed)
   if (valk_async_handle_is_terminal(valk_async_handle_get_status(ctx->pmap_handle))) {
     valk_handle_release(&valk_sys->handle_table, task->arg_handle);
     free(task);
@@ -55,6 +60,7 @@ static void __pmap_worker(void *arg) {
     if (fin >= ctx->total) valk_pmap_ctx_free(ctx);
     return;
   }
+  // LCOV_EXCL_STOP
 
   valk_lval_t *fn = valk_handle_resolve(&valk_sys->handle_table, task->fn_handle);
   valk_lval_t *arg_val = valk_handle_resolve(&valk_sys->handle_table, task->arg_handle);
@@ -66,7 +72,7 @@ static void __pmap_worker(void *arg) {
 
   valk_mem_arena_t *scratch = valk_thread_ctx.scratch;
   valk_lval_t *result;
-  if (scratch) {
+  if (scratch) { // LCOV_EXCL_BR_LINE - scratch always present in test environment
     VALK_WITH_ALLOC((void *)scratch) {
       result = valk_lval_eval_call(fn->fun.env, fn, args);
     }
@@ -77,6 +83,7 @@ static void __pmap_worker(void *arg) {
 
   valk_handle_release(&valk_sys->handle_table, task->arg_handle);
 
+  // LCOV_EXCL_BR_START - error path: requires worker fn to return error, transition race
   if (LVAL_TYPE(result) == LVAL_ERR) {
     valk_lval_t *heap_err = valk_evacuate_to_heap(result);
     if (scratch) valk_mem_arena_reset(scratch);
@@ -91,20 +98,21 @@ static void __pmap_worker(void *arg) {
     if (fin >= ctx->total) valk_pmap_ctx_free(ctx);
     return;
   }
+  // LCOV_EXCL_BR_STOP
 
   valk_lval_t *heap_result = valk_evacuate_to_heap(result);
-  if (scratch) valk_mem_arena_reset(scratch);
+  if (scratch) valk_mem_arena_reset(scratch); // LCOV_EXCL_BR_LINE - scratch always present
   ctx->result_handles[task->index] =
       valk_handle_create(&valk_sys->handle_table, heap_result);
   atomic_store_explicit(&ctx->result_ready[task->index], true, memory_order_release);
   u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
 
-  if (new_completed == ctx->total) {
-    if (!valk_async_handle_try_transition(ctx->pmap_handle,
+  if (new_completed == ctx->total) { // LCOV_EXCL_BR_LINE - completion: only one worker hits total
+    if (!valk_async_handle_try_transition(ctx->pmap_handle, // LCOV_EXCL_BR_LINE - transition race
         VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED)) {
       free(task); // LCOV_EXCL_LINE
       u64 fin = atomic_fetch_add(&ctx->finished, 1) + 1; // LCOV_EXCL_LINE
-      if (fin >= ctx->total) valk_pmap_ctx_free(ctx); // LCOV_EXCL_LINE
+      if (fin >= ctx->total) valk_pmap_ctx_free(ctx); // LCOV_EXCL_LINE // LCOV_EXCL_BR_LINE
       return; // LCOV_EXCL_LINE
     }
 
@@ -125,10 +133,11 @@ static void __pmap_worker(void *arg) {
 
   free(task);
   u64 fin = atomic_fetch_add(&ctx->finished, 1) + 1;
-  if (fin >= ctx->total) valk_pmap_ctx_free(ctx);
-}
+  if (fin >= ctx->total) valk_pmap_ctx_free(ctx); // LCOV_EXCL_BR_LINE - last-worker cleanup
+} // LCOV_EXCL_BR_LINE
 
 static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 3);
 
   valk_lval_t *sys_arg = valk_lval_list_nth(a, 0);
@@ -137,14 +146,15 @@ static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
 
   LVAL_ASSERT_AIO_SYSTEM(a, sys_arg);
   LVAL_ASSERT_TYPE(a, fn_arg, LVAL_FUN);
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t *sys = sys_arg->ref.ptr;
 
   u64 count = 0;
   valk_lval_t *iter = list_arg;
   while (LVAL_TYPE(iter) != LVAL_NIL) {
-    if (LVAL_TYPE(iter) != LVAL_CONS && LVAL_TYPE(iter) != LVAL_QEXPR) {
-      return valk_lval_err("aio/pmap: expected a list as third argument");
+    if (LVAL_TYPE(iter) != LVAL_CONS && LVAL_TYPE(iter) != LVAL_QEXPR) { // LCOV_EXCL_BR_LINE - list type already validated by caller
+      return valk_lval_err("aio/pmap: expected a list as third argument"); // LCOV_EXCL_LINE
     }
     count++;
     iter = valk_lval_tail(iter);

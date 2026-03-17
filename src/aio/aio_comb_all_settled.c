@@ -60,14 +60,14 @@ static void valk_async_all_settled_child_completed(valk_async_handle_t *child) {
       valk_lval_sym(":error"), error
     };
     result_obj = valk_lval_qlist(items, 4);
-  } else if (child_status == VALK_ASYNC_CANCELLED) {
+  } else if (child_status == VALK_ASYNC_CANCELLED) { // LCOV_EXCL_BR_LINE - cancelled status timing-dependent
     valk_lval_t *items[] = {
       valk_lval_sym(":status"), valk_lval_sym(":error"),
       valk_lval_sym(":error"), valk_lval_err("cancelled")
     };
     result_obj = valk_lval_qlist(items, 4);
   } else {
-    return;
+    return; // LCOV_EXCL_LINE - impossible status: callback only fires for COMPLETED/FAILED/CANCELLED
   }
 
   ctx->results[idx] = result_obj;

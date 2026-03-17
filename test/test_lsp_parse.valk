@@ -34,4 +34,14 @@
     (test/assert (not (error? ast)) (str "lsp-hints.valk should parse: " ast))
     true
   })
+  (test "lsp-loads-without-validation-errors"
+    {do
+    (load "src/symdb.valk")
+    (load "src/lsp-analysis.valk")
+    (load "src/lsp-validate.valk")
+    (load "src/lsp-hints.valk")
+    (load "src/lsp.valk")
+    (test/assert (not (nil? lsp/start)) "lsp/start should be defined after load")
+    true
+  })
 ))

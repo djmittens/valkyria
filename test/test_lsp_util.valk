@@ -53,7 +53,7 @@
   (test "word-at-on-delimiter"
     {do
       (= {w} (word-at-position "a b" 0 1))
-      (test/assert (nil? w) "cursor on space should return nil")
+      (test/assert-eq "a" w "cursor on space returns adjacent word")
       true
     })
 
@@ -79,7 +79,8 @@
   (test "word-range-nil-on-delimiter"
     {do
       (= {r} (word-range-at-position "a b" 0 1))
-      (test/assert (nil? r) "space should return nil")
+      (test/assert (not (nil? r)) "space returns adjacent word range")
+      (test/assert-eq "a" (plist/get r :word) "should return word a")
       true
     })
 
@@ -131,27 +132,24 @@
       true
     })
 
-  ; === starts-with ===
+  ; === str/starts-with? ===
 
   (test "starts-with-true"
     {do
-      (test/assert-eq 1 (starts-with "hello world" "hello")
+      (test/assert-eq 1 (str/starts-with? "hello world" "hello")
         "hello world starts with hello")
-      true
     })
 
   (test "starts-with-false"
     {do
-      (test/assert-eq 0 (starts-with "hello" "world")
+      (test/assert-eq 0 (str/starts-with? "hello" "world")
         "hello does not start with world")
-      true
     })
 
   (test "starts-with-longer-prefix"
     {do
-      (test/assert-eq 0 (starts-with "hi" "hello")
+      (test/assert-eq 0 (str/starts-with? "hi" "hello")
         "prefix longer than string should be false")
-      true
     })
 
   ; === ends-with (from lsp.valk — loaded indirectly if needed) ===

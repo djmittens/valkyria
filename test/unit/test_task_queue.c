@@ -281,6 +281,46 @@ void test_task_queue_shuttingdown_flag(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_task_queue_loop_enqueue_null_loop(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  bool ok = valk_aio_loop_enqueue_task(NULL, simple_task, NULL);
+  ASSERT_FALSE(ok);
+
+  VALK_PASS();
+}
+
+void test_task_queue_loop_enqueue_null_fn(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  uv_loop_t loop;
+  uv_loop_init(&loop);
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
+  valk_aio_task_queue_init(&sys);
+
+  bool ok = valk_aio_loop_enqueue_task(&aio_loop, NULL, NULL);
+  ASSERT_FALSE(ok);
+
+  valk_aio_task_queue_shutdown(&sys);
+  uv_run(&loop, UV_RUN_DEFAULT);
+  uv_loop_close(&loop);
+  VALK_PASS();
+}
+
+void test_task_queue_empty_null_loops(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_system_t sys;
+  memset(&sys, 0, sizeof(sys));
+  sys.loops = NULL;
+  ASSERT_TRUE(valk_aio_task_queue_empty(&sys));
+  ASSERT_EQ(valk_aio_task_queue_size(&sys), 0);
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -297,6 +337,9 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_task_queue_with_context", test_task_queue_with_context);
   valk_testsuite_add_test(suite, "test_task_queue_shutdown_drains", test_task_queue_shutdown_drains);
   valk_testsuite_add_test(suite, "test_task_queue_shuttingdown_flag", test_task_queue_shuttingdown_flag);
+  valk_testsuite_add_test(suite, "test_task_queue_loop_enqueue_null_loop", test_task_queue_loop_enqueue_null_loop);
+  valk_testsuite_add_test(suite, "test_task_queue_loop_enqueue_null_fn", test_task_queue_loop_enqueue_null_fn);
+  valk_testsuite_add_test(suite, "test_task_queue_empty_null_loops", test_task_queue_empty_null_loops);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

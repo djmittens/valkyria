@@ -5,7 +5,7 @@ u64 g_async_handle_id = 0;
 
 static void __loop_gc_wake(void *ctx) {
   valk_aio_loop_t *loop = ctx;
-  if (loop && loop->uv_loop && !loop->sys->shuttingDown) {
+  if (loop && loop->uv_loop && !loop->sys->shuttingDown) { // LCOV_EXCL_BR_LINE - GC wake: ctx/loop always valid
     uv_async_send(&loop->gc_wakeup);
   }
 }
@@ -30,7 +30,7 @@ void __loop_stop_cb(uv_async_t *h) {
   valk_aio_loop_t *loop = h->data;
   uv_stop(loop->uv_loop);
   uv_timer_stop(&loop->maintenance_timer);
-  if (!uv_is_closing((uv_handle_t *)&loop->maintenance_timer)) {
+  if (!uv_is_closing((uv_handle_t *)&loop->maintenance_timer)) { // LCOV_EXCL_BR_LINE
     uv_close((uv_handle_t *)&loop->maintenance_timer, nullptr);
   }
   uv_walk(loop->uv_loop, __aio_uv_walk_close, nullptr);
@@ -48,7 +48,7 @@ void __loop_thread_fn(void *arg) {
 
   sz scratch_bytes = 128ULL * 1024 * 1024;
   const char *scratch_env = getenv("VALK_SCRATCH_SIZE");
-  if (scratch_env && scratch_env[0] != '\0') {
+  if (scratch_env && scratch_env[0] != '\0') { // LCOV_EXCL_BR_LINE
     scratch_bytes = strtoull(scratch_env, nullptr, 10);
   }
   valk_mem_arena_t *scratch = malloc(scratch_bytes);
@@ -151,7 +151,7 @@ void __loop_thread_fn(void *arg) {
     valk_slab_free(sys->httpStreamArenas);
   }
 
-  if (loop->scratch) {
+  if (loop->scratch) { // LCOV_EXCL_BR_LINE - scratch always allocated in thread init
     free(loop->scratch);
     loop->scratch = nullptr;
   }

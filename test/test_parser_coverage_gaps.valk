@@ -784,7 +784,7 @@
   })
   (test "str-concat"
     {do
-    (= {result} (str/concat "hello" " " "world"))
+    (= {result} (str "hello" " " "world"))
     (test/assert-eq "hello world" result "string concatenation")
     true
   })

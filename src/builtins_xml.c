@@ -196,8 +196,8 @@ static valk_lval_t* valk_builtin_xml_parse(valk_lenv_t* e, valk_lval_t* a) {
 
   const char* input = valk_lval_list_nth(a, 0)->str;
   size_t input_len = strlen(input);
-  if (input_len > (size_t)INT_MAX)
-    return valk_lval_err("xml/parse: input too large (%zu bytes)", input_len);
+  if (input_len > (size_t)INT_MAX) // LCOV_EXCL_BR_LINE - requires >2GB string
+    return valk_lval_err("xml/parse: input too large (%zu bytes)", input_len); // LCOV_EXCL_LINE
 
   XML_Parser parser = XML_ParserCreate(NULL);
   if (!parser) // LCOV_EXCL_BR_LINE - OOM
@@ -219,14 +219,16 @@ static valk_lval_t* valk_builtin_xml_parse(valk_lenv_t* e, valk_lval_t* a) {
   enum XML_Status status = XML_Parse(parser, input, (int)input_len, XML_TRUE);
 
   valk_lval_t* result;
+  // LCOV_EXCL_BR_START - ctx.error path requires >1024 nested elements
   if (status == XML_STATUS_ERROR || ctx.error) {
     if (!ctx.error) {
+    // LCOV_EXCL_BR_STOP
       snprintf(ctx.error_msg, sizeof(ctx.error_msg), "xml/parse: %s at line %lu",
                XML_ErrorString(XML_GetErrorCode(parser)),
                XML_GetCurrentLineNumber(parser));
     }
     result = valk_lval_err("%s", ctx.error_msg);
-  } else if (ctx.depth <= 0) {
+  } else if (ctx.depth <= 0) { // LCOV_EXCL_BR_LINE
     result = valk_lval_err("xml/parse: empty document");
   } else {
     result = xml_node_to_lval(ctx.stack[0]);

@@ -195,13 +195,13 @@
   (test "sync-updates-on-change"
     {do
       (= {db} (make-test-db))
-      (symdb/sync-document db "file:///t.valk" "(fun {old-fn} {1})")
-      (symdb/sync-document db "file:///t.valk" "(fun {new-fn} {1})")
+      (= {_} (symdb/sync-document db "file:///t.valk" "(fun {old-fn} {1})"))
+      (= {_} (symdb/sync-document db "file:///t.valk" "(fun {new-fn a} {a})"))
       (= {old} (symdb/find-definition db "old-fn"))
       (= {new} (symdb/find-definition db "new-fn"))
       (test/assert (nil? old) "old-fn should be gone after resync")
       (test/assert (not (nil? new)) "new-fn should exist after resync")
-      (sqlite/close db)
+      (= {_} (sqlite/close db))
       true
     })
 

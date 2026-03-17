@@ -15,22 +15,22 @@ void test_gc_metrics_init(VALK_TEST_ARGS()) {
 
   // Get metrics
   u64 cycles = 999;
-  u64 pause_us_total = 999;
-  u64 pause_us_max = 999;
+  u64 pause_ns_total = 999;
+  u64 pause_ns_max = 999;
   sz reclaimed = 999;
   sz heap_used = 999;
   sz heap_total = 999;
 
-  valk_gc_get_runtime_metrics(heap, &cycles, &pause_us_total, &pause_us_max,
+  valk_gc_get_runtime_metrics(heap, &cycles, &pause_ns_total, &pause_ns_max,
                                &reclaimed, &heap_used, &heap_total);
 
   // Verify initial values
   VALK_TEST_ASSERT(cycles == 0, "Initial cycles should be 0, got %llu",
                    (unsigned long long)cycles);
-  VALK_TEST_ASSERT(pause_us_total == 0, "Initial pause_us_total should be 0, got %llu",
-                   (unsigned long long)pause_us_total);
-  VALK_TEST_ASSERT(pause_us_max == 0, "Initial pause_us_max should be 0, got %llu",
-                   (unsigned long long)pause_us_max);
+  VALK_TEST_ASSERT(pause_ns_total == 0, "Initial pause_ns_total should be 0, got %llu",
+                   (unsigned long long)pause_ns_total);
+  VALK_TEST_ASSERT(pause_ns_max == 0, "Initial pause_ns_max should be 0, got %llu",
+                   (unsigned long long)pause_ns_max);
   VALK_TEST_ASSERT(reclaimed == 0, "Initial reclaimed should be 0, got %llu",
                    (unsigned long long)reclaimed);
   VALK_TEST_ASSERT(heap_total > 0,
@@ -105,21 +105,19 @@ void test_gc_pause_time_recorded(VALK_TEST_ARGS()) {
   // Run collection
   valk_gc_heap_collect(heap);
 
-  // Get pause time metrics
-  u64 pause_us_total = 0;
-  u64 pause_us_max = 0;
-  valk_gc_get_runtime_metrics(heap, nullptr, &pause_us_total, &pause_us_max,
+  u64 pause_ns_total = 0;
+  u64 pause_ns_max = 0;
+  valk_gc_get_runtime_metrics(heap, nullptr, &pause_ns_total, &pause_ns_max,
                                nullptr, nullptr, nullptr);
 
-  // Pause time should be greater than 0 (GC takes some time)
-  VALK_TEST_ASSERT(pause_us_total > 0,
-                   "pause_us_total should be > 0 after collection, got %llu",
-                   (unsigned long long)pause_us_total);
-  VALK_TEST_ASSERT(pause_us_max > 0,
-                   "pause_us_max should be > 0 after collection, got %llu",
-                   (unsigned long long)pause_us_max);
-  VALK_TEST_ASSERT(pause_us_max == pause_us_total,
-                   "pause_us_max should equal pause_us_total after first collection");
+  VALK_TEST_ASSERT(pause_ns_total > 0,
+                   "pause_ns_total should be > 0 after collection, got %llu",
+                   (unsigned long long)pause_ns_total);
+  VALK_TEST_ASSERT(pause_ns_max > 0,
+                   "pause_ns_max should be > 0 after collection, got %llu",
+                   (unsigned long long)pause_ns_max);
+  VALK_TEST_ASSERT(pause_ns_max == pause_ns_total,
+                   "pause_ns_max should equal pause_ns_total after first collection");
 
   valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
@@ -186,33 +184,29 @@ void test_gc_max_pause_tracking(VALK_TEST_ARGS()) {
   // First collection with minimal work
   valk_gc_heap_collect(heap);
 
-  u64 pause_us_max_1 = 0;
-  valk_gc_get_runtime_metrics(heap, nullptr, nullptr, &pause_us_max_1, nullptr, nullptr, nullptr);
+  u64 pause_ns_max_1 = 0;
+  valk_gc_get_runtime_metrics(heap, nullptr, nullptr, &pause_ns_max_1, nullptr, nullptr, nullptr);
 
-  // Add lots of objects for second collection
   for (int i = 0; i < 1000; i++) {
     char name[32];
     snprintf(name, sizeof(name), "var_%d", i);
     valk_lenv_put(env, valk_lval_sym(name), valk_lval_num(i));
   }
 
-  // Second collection with more work - might be slower
   valk_gc_heap_collect(heap);
 
-  u64 pause_us_max_2 = 0;
-  u64 pause_us_total = 0;
-  valk_gc_get_runtime_metrics(heap, nullptr, &pause_us_total, &pause_us_max_2,
+  u64 pause_ns_max_2 = 0;
+  u64 pause_ns_total = 0;
+  valk_gc_get_runtime_metrics(heap, nullptr, &pause_ns_total, &pause_ns_max_2,
                                nullptr, nullptr, nullptr);
 
-  // Max should be >= first pause
-  VALK_TEST_ASSERT(pause_us_max_2 >= pause_us_max_1,
-                   "pause_us_max should not decrease, was %llu now %llu",
-                   (unsigned long long)pause_us_max_1,
-                   (unsigned long long)pause_us_max_2);
+  VALK_TEST_ASSERT(pause_ns_max_2 >= pause_ns_max_1,
+                   "pause_ns_max should not decrease, was %llu now %llu",
+                   (unsigned long long)pause_ns_max_1,
+                   (unsigned long long)pause_ns_max_2);
 
-  // Total should be sum of both pauses
-  VALK_TEST_ASSERT(pause_us_total >= pause_us_max_2,
-                   "pause_us_total should be >= pause_us_max");
+  VALK_TEST_ASSERT(pause_ns_total >= pause_ns_max_2,
+                   "pause_ns_total should be >= pause_ns_max");
 
   valk_gc_thread_unregister();
   valk_thread_ctx = old_ctx;
@@ -225,19 +219,17 @@ void test_gc_metrics_null_heap(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   u64 cycles = 999;
-  u64 pause_us_total = 999;
-  u64 pause_us_max = 999;
+  u64 pause_ns_total = 999;
+  u64 pause_ns_max = 999;
   sz reclaimed = 999;
   sz heap_used = 999;
   sz heap_total = 999;
 
-  // Should not crash with nullptr heap
-  valk_gc_get_runtime_metrics(nullptr, &cycles, &pause_us_total, &pause_us_max,
+  valk_gc_get_runtime_metrics(nullptr, &cycles, &pause_ns_total, &pause_ns_max,
                                &reclaimed, &heap_used, &heap_total);
 
-  // Values should be unchanged
   VALK_TEST_ASSERT(cycles == 999, "cycles should be unchanged with nullptr heap");
-  VALK_TEST_ASSERT(pause_us_total == 999, "pause_us_total should be unchanged");
+  VALK_TEST_ASSERT(pause_ns_total == 999, "pause_ns_total should be unchanged");
 
   VALK_PASS();
 }

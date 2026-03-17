@@ -29,7 +29,7 @@ static valk_lval_t* valk_builtin_math(valk_lval_t* lst, math_op_e op) {
   } else {
     while (valk_lval_list_count(lst) > 0) {
       valk_lval_t* y = valk_lval_pop(lst, 0);
-      switch (op) {
+      switch (op) { // LCOV_EXCL_BR_LINE - all enum values handled
         case MATH_ADD: result += y->num; break;
         case MATH_SUB: result -= y->num; break;
         case MATH_MUL: result *= y->num; break;
@@ -74,18 +74,20 @@ static valk_lval_t* valk_builtin_ord_op(valk_lval_t* a, ord_op_e op) {
   // LCOV_EXCL_BR_STOP
   long x = valk_lval_list_nth(a, 0)->num;
   long y = valk_lval_list_nth(a, 1)->num;
-  switch (op) {
+  switch (op) { // LCOV_EXCL_BR_LINE - all enum values handled, no default
     case ORD_GT: return valk_lval_num(x > y);
     case ORD_LT: return valk_lval_num(x < y);
     case ORD_GE: return valk_lval_num(x >= y);
     case ORD_LE: return valk_lval_num(x <= y);
   }
-  __builtin_unreachable();
+  __builtin_unreachable(); // LCOV_EXCL_LINE
 }
 
 static valk_lval_t* valk_builtin_ord(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  // LCOV_EXCL_BR_STOP
   valk_lval_t* x = valk_lval_list_nth(a, 0);
   valk_lval_t* y = valk_lval_list_nth(a, 1);
   if (LVAL_TYPE(x) == LVAL_NUM && LVAL_TYPE(y) == LVAL_NUM) {
@@ -153,9 +155,11 @@ static valk_lval_t* valk_builtin_str_to_num(valk_lenv_t* e, valk_lval_t* a) {
 
 static valk_lval_t* valk_builtin_modulo(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+  // LCOV_EXCL_BR_STOP
   long x = valk_lval_list_nth(a, 0)->num;
   long y = valk_lval_list_nth(a, 1)->num;
   if (y == 0) return valk_lval_err("Modulo By Zero");
@@ -173,14 +177,16 @@ static valk_lval_t* valk_builtin_rand(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_num(rand());
   }
   if (count == 1) {
-    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM); // LCOV_EXCL_BR_LINE - type validation
     long n = valk_lval_list_nth(a, 0)->num;
     if (n <= 0) return valk_lval_err("rand: bound must be positive, got %ld", n);
     return valk_lval_num(rand() % n);
   }
   if (count == 2) {
+    // LCOV_EXCL_BR_START - type validation
     LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
     LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+    // LCOV_EXCL_BR_STOP
     long lo = valk_lval_list_nth(a, 0)->num;
     long hi = valk_lval_list_nth(a, 1)->num;
     if (hi <= lo) return valk_lval_err("rand: high must be > low");
@@ -191,8 +197,10 @@ static valk_lval_t* valk_builtin_rand(valk_lenv_t* e, valk_lval_t* a) {
 
 static valk_lval_t* valk_builtin_rand_seed(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+  // LCOV_EXCL_BR_STOP
   srand((unsigned)valk_lval_list_nth(a, 0)->num);
   rand_seeded = 1;
   return valk_lval_num(0);

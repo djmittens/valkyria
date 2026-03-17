@@ -19,7 +19,7 @@ valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
   heap->hard_limit = hard_limit > 0 ? hard_limit : VALK_GC_DEFAULT_HARD_LIMIT;
   heap->soft_limit = heap->hard_limit * 3 / 4;
   heap->gc_threshold_pct = 75;
-  heap->gc_pacing_mul = 4;
+
 
   heap->reserved = VALK_GC_VIRTUAL_RESERVE;
   heap->base = mmap(nullptr, heap->reserved, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -29,6 +29,10 @@ valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
     return nullptr;
   }
   // LCOV_EXCL_BR_STOP
+
+#ifdef MADV_NOHUGEPAGE
+  madvise(heap->base, heap->reserved, MADV_NOHUGEPAGE);
+#endif
 
   sz region_size = heap->reserved / VALK_GC_NUM_SIZE_CLASSES;
   region_size = region_size & ~(sz)4095;

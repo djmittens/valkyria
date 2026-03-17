@@ -340,7 +340,7 @@
   (test "aio/do with binding and expression"
     {do
     (= {h} (aio/do {
-      (x <- (aio/pure 10))
+      (<- x (aio/pure 10))
       (aio/pure (* x 2))}))
     (== (aio/status h) :completed)
   })
@@ -487,14 +487,14 @@
     (= {status} (aio/status h))
     (= {__result} (or (or (== status :pending) (== status :running))
         (or (== status :completed) (== status :cancelled))))
-    (aio/await (aio/stop sys))
+    (= {_} (aio/stop sys))
     __result
   })
   (test "aio/sleep with zero delay"
     {do
     (= {sys} (aio/await (aio/start)))
     (= {h} (aio/sleep sys 0))
-    (aio/await (aio/stop sys))
+    (= {_} (aio/stop sys))
     true
   })
   (test "aio/schedule runs callback"
@@ -502,14 +502,14 @@
     (= {sys} (aio/await (aio/start)))
     (test/assert (not (== sys nil)) "aio/start should succeed")
     (= {result} (aio/schedule sys 1 (\ {} {42})))
-    (aio/await (aio/stop sys))
+    (= {_} (aio/stop sys))
     true
   })
   (test "aio/schedule with zero delay"
     {do
     (= {sys} (aio/await (aio/start)))
     (= {result} (aio/schedule sys 0 (\ {} {"immediate"})))
-    (aio/await (aio/stop sys))
+    (= {_} (aio/stop sys))
     true
   })
   (test "aio/pool-stats returns stats"
@@ -517,7 +517,7 @@
     (= {sys} (aio/await (aio/start)))
     (= {stats} (aio/pool-stats sys))
     (= {__result} (not (== stats nil)))
-    (aio/await (aio/stop sys))
+    (= {_} (aio/stop sys))
     __result
   })
   (test "aio/then with nil function result"
@@ -552,58 +552,58 @@
      (== (aio/status h) :completed)
    })
    (test "aio/never creates running handle that never completes"
-     {do
-     (= {sys} (aio/await (aio/start)))
-     (test/assert (not (== sys nil)) "aio/start should succeed")
-      (= {h} (aio/never sys))
-      (= {status} (aio/status h))
-      (= {__result} (== status :running))
-      (aio/await (aio/stop sys))
-      __result
-    })
-   (test "aio/never can be cancelled"
-     {do
-     (= {sys} (aio/await (aio/start)))
-      (= {h} (aio/never sys))
-      (= {cancelled} (aio/cancel h))
-      (= {__result} (== cancelled :true))
-      (aio/await (aio/stop sys))
-      __result
-    })
-    (test "aio/on-loop-thread? returns false from main thread"
-     {do
-     (= {sys} (aio/await (aio/start)))
-      (= {result} (aio/on-loop-thread? sys))
-      (= {__result} (== result 0))
-      (aio/await (aio/stop sys))
-      __result
-    })
-   (test "aio/metrics-json-compact returns JSON string"
-     {do
-     (= {sys} (aio/await (aio/start)))
-      (= {json} (aio/metrics-json-compact sys))
-      (= {__result} (> (len json) 2))
-      (aio/await (aio/stop sys))
-      __result
-    })
-   (test "aio/systems-json returns JSON array string"
-     {do
-     (= {sys} (aio/await (aio/start)))
-      (= {json} (aio/systems-json sys))
-      (= {__result} (== (str/slice json 0 1) "["))
-      (aio/await (aio/stop sys))
-      __result
-    })
-   (test "aio/never in race with immediate value"
       {do
       (= {sys} (aio/await (aio/start)))
-      (= {never-handle} (aio/never sys))
-      (= {immediate-handle} (aio/pure 42))
-       (= {race-result} (aio/race (list never-handle immediate-handle)))
-       (= {__result} (== (aio/status race-result) :completed))
-       (aio/await (aio/stop sys))
+      (test/assert (not (== sys nil)) "aio/start should succeed")
+       (= {h} (aio/never sys))
+       (= {status} (aio/status h))
+       (= {__result} (== status :running))
+       (= {_} (aio/stop sys))
        __result
      })
+   (test "aio/never can be cancelled"
+      {do
+      (= {sys} (aio/await (aio/start)))
+       (= {h} (aio/never sys))
+       (= {cancelled} (aio/cancel h))
+       (= {__result} (== cancelled :true))
+       (= {_} (aio/stop sys))
+       __result
+     })
+     (test "aio/on-loop-thread? returns false from main thread"
+      {do
+      (= {sys} (aio/await (aio/start)))
+       (= {result} (aio/on-loop-thread? sys))
+       (= {__result} (== result 0))
+       (= {_} (aio/stop sys))
+       __result
+     })
+   (test "aio/metrics-json-compact returns JSON string"
+      {do
+      (= {sys} (aio/await (aio/start)))
+       (= {json} (aio/metrics-json-compact sys))
+       (= {__result} (> (len json) 2))
+       (= {_} (aio/stop sys))
+       __result
+     })
+   (test "aio/systems-json returns JSON array string"
+      {do
+      (= {sys} (aio/await (aio/start)))
+       (= {json} (aio/systems-json sys))
+       (= {__result} (== (str/slice json 0 1) "["))
+       (= {_} (aio/stop sys))
+       __result
+     })
+   (test "aio/never in race with immediate value"
+       {do
+       (= {sys} (aio/await (aio/start)))
+       (= {never-handle} (aio/never sys))
+       (= {immediate-handle} (aio/pure 42))
+        (= {race-result} (aio/race (list never-handle immediate-handle)))
+        (= {__result} (== (aio/status race-result) :completed))
+        (= {_} (aio/stop sys))
+        __result
+      })
 
     ; ============================================================================
     ; aio/then - transform error path (fn returns error)

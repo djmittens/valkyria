@@ -480,6 +480,7 @@ bool valk_aio_task_queue_empty(valk_aio_system_t *sys);
 // Per-loop task queue API
 void valk_aio_loop_task_queue_init(valk_aio_loop_t *loop);
 void valk_aio_loop_task_queue_shutdown(valk_aio_loop_t *loop);
+void valk_aio_loop_task_queue_destroy(valk_aio_loop_t *loop);
 bool valk_aio_loop_enqueue_task(valk_aio_loop_t *loop, valk_aio_task_fn fn, void *ctx);
 
 // Per-loop event loop thread (implemented in aio_uv.c)
