@@ -284,11 +284,25 @@
 ; Format hints for LSP response
 ; ---------------------------------------------------------------------------
 
+(sig 'hint/insert-sorted {-> List List List})
+(fun {hint/insert-sorted item sorted} {
+  if (nil? sorted) {list item}
+  {if (<= (plist/get item :offset) (plist/get (head sorted) :offset))
+    {qcons item sorted}
+    {qcons (head sorted) (hint/insert-sorted item (tail sorted))}}
+})
+
+(sig 'hint/sort-by-offset {-> List List List})
+(fun {hint/sort-by-offset hints acc} {
+  if (nil? hints) {acc}
+  {hint/sort-by-offset (tail hints) (hint/insert-sorted (head hints) acc)}
+})
+
 (sig 'hint/format-hints {-> List Str List List})
 (fun {hint/format-hints raw-hints text range} {
   if (nil? raw-hints) {nil}
   {do
-    (= {sorted} (reverse raw-hints))
+    (= {sorted} (hint/sort-by-offset raw-hints nil))
     (= {offsets} (map (\ {h} {plist/get h :offset}) sorted))
     (= {lcs} (offsets->line-cols text offsets))
     (hint/format-with-lcs sorted lcs text range nil)}
@@ -396,7 +410,7 @@
   {do
     (= {inner} (str/slice sig-str 1 (- (len sig-str) 1)))
     (= {tokens} (str/split inner " "))
-    (if (< (len tokens) 3) {nil}
+    (if (< (len tokens) 2) {nil}
       {if (not (== (head tokens) "->")) {nil}
         {hint/parse-sig-tokens (tail tokens) 0 nil nil}})}
 })
@@ -418,8 +432,7 @@
   {do
     (= {sig-types} (hint/query-sig-types db name))
     (if (nil? sig-types) {nil}
-      {if (< (len sig-types) 2) {nil}
-        {last sig-types}})}
+      {last sig-types})}
 })
 
 (sig 'hint/skip-inline-ann {-> List List Num List List})

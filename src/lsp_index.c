@@ -1,0 +1,581 @@
+#include "builtins_internal.h"
+
+#include <string.h>
+
+#include "../vendor/sqlite3/sqlite3.h"
+
+#define SQLITE_REF_TYPE "sqlite_db"
+
+// Token types (must match SEM_* in lsp-analysis.valk)
+enum {
+  TOK_KEYWORD = 0, TOK_FUNCTION = 1, TOK_PARAMETER = 2, TOK_VARIABLE = 3,
+  TOK_NUMBER = 4, TOK_STRING = 5, TOK_TYPE = 6, TOK_OPERATOR = 7,
+  TOK_PROPERTY = 8,
+};
+
+// Max scope depth for lexical chain
+#define MAX_SCOPE_DEPTH 128
+
+typedef struct {
+  int pos;
+  int parent_pos;
+  const char *params[64];
+  bool is_param[64];  // true for fun/lambda params, false for = bindings
+  int param_count;
+} scope_entry_t;
+
+typedef struct {
+  sqlite3 *db;
+  int file_id;
+  const char *text;
+
+  sqlite3_stmt *stmt_node;
+  sqlite3_stmt *stmt_semtok;
+  sqlite3_stmt *stmt_ref;
+  sqlite3_stmt *stmt_scope;
+  sqlite3_stmt *stmt_hint;
+
+  scope_entry_t scopes[MAX_SCOPE_DEPTH];
+  int scope_depth;
+} index_ctx_t;
+
+// Keyword/operator sets (simple linear scan — sets are small)
+static const char *KEYWORDS[] = {
+  "fun", "\\", "def", "=", "if", "match", "select", "case",
+  "do", "let", "type", "sig", "load", "and", "or", "not",
+  "quote", "quasiquote", "unquote", "unquote-splicing", NULL
+};
+
+static const char *OPERATORS[] = {
+  "+", "-", "*", "/", ">", "<", ">=", "<=", "==", "!=", "%", "ord", NULL
+};
+
+static bool in_set(const char *name, const char **set) {
+  for (int i = 0; set[i]; i++)
+    if (strcmp(name, set[i]) == 0) return true;
+  return false;
+}
+
+static int source_len(const char *name) {
+  if (strcmp(name, "quote") == 0) return 1;
+  if (strcmp(name, "quasiquote") == 0) return 1;
+  if (strcmp(name, "unquote") == 0) return 1;
+  if (strcmp(name, "unquote-splicing") == 0) return 2;
+  return (int)strlen(name);
+}
+
+// ---------------------------------------------------------------------------
+// Scope management
+// ---------------------------------------------------------------------------
+
+static int current_scope_pos(index_ctx_t *ctx) {
+  return ctx->scope_depth > 0 ? ctx->scopes[ctx->scope_depth - 1].pos : -1;
+}
+
+static int resolve_scope(index_ctx_t *ctx, const char *name) {
+  for (int i = ctx->scope_depth - 1; i >= 0; i--) {
+    scope_entry_t *s = &ctx->scopes[i];
+    for (int j = 0; j < s->param_count; j++) {
+      if (strcmp(s->params[j], name) == 0) return s->pos;
+    }
+  }
+  return -1;
+}
+
+static bool is_scope_param(index_ctx_t *ctx, const char *name) {
+  for (int i = ctx->scope_depth - 1; i >= 0; i--) {
+    scope_entry_t *s = &ctx->scopes[i];
+    for (int j = 0; j < s->param_count; j++) {
+      if (strcmp(s->params[j], name) == 0) return s->is_param[j];
+    }
+  }
+  return false;
+}
+
+static void push_scope(index_ctx_t *ctx, int pos) {
+  if (ctx->scope_depth >= MAX_SCOPE_DEPTH) return; // LCOV_EXCL_LINE
+  scope_entry_t *s = &ctx->scopes[ctx->scope_depth];
+  s->pos = pos;
+  s->parent_pos = current_scope_pos(ctx);
+  s->param_count = 0;
+
+  // Insert scope record
+  sqlite3_reset(ctx->stmt_scope);
+  sqlite3_bind_int(ctx->stmt_scope, 1, ctx->file_id);
+  sqlite3_bind_int(ctx->stmt_scope, 2, pos);
+  sqlite3_bind_int(ctx->stmt_scope, 3, s->parent_pos);
+  sqlite3_step(ctx->stmt_scope);
+
+  ctx->scope_depth++;
+}
+
+static void add_scope_name(index_ctx_t *ctx, const char *name, bool is_param) {
+  if (ctx->scope_depth <= 0) return;
+  scope_entry_t *s = &ctx->scopes[ctx->scope_depth - 1];
+  if (s->param_count < 64) {
+    s->params[s->param_count] = name;
+    s->is_param[s->param_count] = is_param;
+    s->param_count++;
+  }
+}
+
+static void pop_scope(index_ctx_t *ctx) {
+  if (ctx->scope_depth > 0) ctx->scope_depth--;
+}
+
+// ---------------------------------------------------------------------------
+// Emit functions — insert into prepared statements
+// ---------------------------------------------------------------------------
+
+static void emit_node(index_ctx_t *ctx, int pos, int end, const char *type,
+                      const char *name) {
+  sqlite3_reset(ctx->stmt_node);
+  sqlite3_bind_int(ctx->stmt_node, 1, ctx->file_id);
+  sqlite3_bind_int(ctx->stmt_node, 2, pos);
+  sqlite3_bind_int(ctx->stmt_node, 3, end);
+  sqlite3_bind_text(ctx->stmt_node, 4, type, -1, SQLITE_STATIC);
+  sqlite3_bind_text(ctx->stmt_node, 5, name, -1, SQLITE_STATIC);
+  sqlite3_step(ctx->stmt_node);
+}
+
+static void emit_semtok(index_ctx_t *ctx, int pos, int len, int type,
+                        int mods) {
+  sqlite3_reset(ctx->stmt_semtok);
+  sqlite3_bind_int(ctx->stmt_semtok, 1, ctx->file_id);
+  sqlite3_bind_int(ctx->stmt_semtok, 2, pos);
+  sqlite3_bind_int(ctx->stmt_semtok, 3, len);
+  sqlite3_bind_int(ctx->stmt_semtok, 4, type);
+  sqlite3_bind_int(ctx->stmt_semtok, 5, mods);
+  sqlite3_step(ctx->stmt_semtok);
+}
+
+static void emit_ref(index_ctx_t *ctx, const char *name, int pos, int len,
+                     int scope_id, int is_def) {
+  sqlite3_reset(ctx->stmt_ref);
+  sqlite3_bind_int(ctx->stmt_ref, 1, ctx->file_id);
+  sqlite3_bind_text(ctx->stmt_ref, 2, name, -1, SQLITE_STATIC);
+  sqlite3_bind_int(ctx->stmt_ref, 3, pos);
+  sqlite3_bind_int(ctx->stmt_ref, 4, len);
+  sqlite3_bind_int(ctx->stmt_ref, 5, scope_id);
+  sqlite3_bind_int(ctx->stmt_ref, 6, is_def);
+  sqlite3_step(ctx->stmt_ref);
+}
+
+static void __attribute__((unused)) emit_hint(index_ctx_t *ctx, int pos, const char *label, int kind) {
+  sqlite3_reset(ctx->stmt_hint);
+  sqlite3_bind_int(ctx->stmt_hint, 1, ctx->file_id);
+  sqlite3_bind_int(ctx->stmt_hint, 2, pos);
+  sqlite3_bind_text(ctx->stmt_hint, 3, label, -1, SQLITE_STATIC);
+  sqlite3_bind_int(ctx->stmt_hint, 4, kind);
+  sqlite3_step(ctx->stmt_hint);
+}
+
+// ---------------------------------------------------------------------------
+// AST walker — single pass
+// ---------------------------------------------------------------------------
+
+static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr);
+static void walk_do(index_ctx_t *ctx, valk_lval_t *tl);
+static void walk_each(index_ctx_t *ctx, valk_lval_t *exprs);
+
+static void walk_qexpr_body(index_ctx_t *ctx, valk_lval_t *qexpr);
+
+static void walk_each(index_ctx_t *ctx, valk_lval_t *exprs) {
+  while (exprs && LVAL_TYPE(exprs) == LVAL_CONS) {
+    valk_lval_t *e = exprs->cons.head;
+    if (e && LVAL_TYPE(e) == LVAL_CONS && (e->flags & LVAL_FLAG_QUOTED)) {
+      walk_qexpr_body(ctx, e);
+    } else {
+      walk_expr(ctx, e);
+    }
+    exprs = exprs->cons.tail;
+  }
+}
+
+static void walk_qexpr_body(index_ctx_t *ctx, valk_lval_t *qexpr) {
+  if (!qexpr || LVAL_TYPE(qexpr) != LVAL_CONS) return;
+  valk_lval_t *hd = qexpr->cons.head;
+  if (hd && LVAL_TYPE(hd) == LVAL_SYM) {
+    const char *name = hd->str;
+    if (strcmp(name, "do") == 0) {
+      int dp = (int)LVAL_SRC_POS(hd);
+      if (dp >= 0) emit_semtok(ctx, dp, 2, TOK_KEYWORD, 0);
+      walk_do(ctx, qexpr->cons.tail);
+      return;
+    }
+  }
+  // Walk all elements of the qexpr as code
+  walk_each(ctx, qexpr);
+}
+
+static bool is_qexpr(valk_lval_t *v) {
+  return v && LVAL_TYPE(v) == LVAL_CONS && (v->flags & LVAL_FLAG_QUOTED);
+}
+
+static bool is_keyword_str(const char *s) {
+  return s[0] == ':';
+}
+
+static void collect_param_names(index_ctx_t *ctx, valk_lval_t *formals, int scope_pos) {
+  while (formals && LVAL_TYPE(formals) == LVAL_CONS) {
+    valk_lval_t *p = formals->cons.head;
+    if (LVAL_TYPE(p) == LVAL_SYM) {
+      const char *name = p->str;
+      if (strcmp(name, "&") == 0) break;
+      if (strcmp(name, "::") == 0 || strcmp(name, "->") == 0) {
+        formals = formals->cons.tail; // skip annotation value
+        if (formals && LVAL_TYPE(formals) == LVAL_CONS)
+          formals = formals->cons.tail;
+        continue;
+      }
+      add_scope_name(ctx, name, true);
+      int pos = (int)LVAL_SRC_POS(p);
+      int len = (int)strlen(name);
+      if (pos >= 0) {
+        emit_semtok(ctx, pos, len, TOK_PARAMETER, 1);
+        emit_ref(ctx, name, pos, len, scope_pos, 1);
+        emit_node(ctx, pos, pos + len, "sym", name);
+      }
+    }
+    formals = formals->cons.tail;
+  }
+}
+
+static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is_lambda) {
+  int kw_pos = (int)LVAL_SRC_POS(kw);
+  int kw_len = is_lambda ? 1 : 3;
+  if (kw_pos >= 0) emit_semtok(ctx, kw_pos, kw_len, TOK_KEYWORD, 0);
+
+  u64 tl_len = valk_lval_list_count(tl);
+  if (tl_len < 2) { walk_each(ctx, tl); return; }
+
+  valk_lval_t *formals = tl->cons.head;
+  valk_lval_t *body = valk_lval_list_nth(tl, 1);
+
+  // For fun: first element of formals is the function name
+  valk_lval_t *fname = NULL;
+  valk_lval_t *params = formals;
+  if (!is_lambda && formals && LVAL_TYPE(formals) == LVAL_CONS) {
+    fname = formals->cons.head;
+    params = formals->cons.tail;
+    if (fname && LVAL_TYPE(fname) == LVAL_SYM) {
+      int fp = (int)LVAL_SRC_POS(fname);
+      int fl = (int)strlen(fname->str);
+      if (fp >= 0) {
+        emit_semtok(ctx, fp, fl, TOK_FUNCTION, 1);
+        emit_ref(ctx, fname->str, fp, fl, -1, 1);
+        emit_node(ctx, fp, fp + fl, "sym", fname->str);
+      }
+    }
+  }
+
+  // Create scope at the position of the full expression
+  // We need the position of the enclosing list — use kw_pos - 1 for the '('
+  int scope_pos = kw_pos > 0 ? kw_pos - 1 : kw_pos;
+  push_scope(ctx, scope_pos);
+  collect_param_names(ctx, params, scope_pos);
+
+  // Body is a qexpr {do ...} — unwrap and walk contents as code
+  if (body && LVAL_TYPE(body) == LVAL_CONS && (body->flags & LVAL_FLAG_QUOTED)) {
+    // Walk qexpr contents as code
+    valk_lval_t *inner = body;
+    if (inner->cons.head && LVAL_TYPE(inner->cons.head) == LVAL_SYM &&
+        strcmp(inner->cons.head->str, "do") == 0) {
+      int dp = (int)LVAL_SRC_POS(inner->cons.head);
+      if (dp >= 0) emit_semtok(ctx, dp, 2, TOK_KEYWORD, 0);
+      walk_do(ctx, inner->cons.tail);
+    } else {
+      walk_each(ctx, inner);
+    }
+  } else {
+    walk_expr(ctx, body);
+  }
+  pop_scope(ctx);
+}
+
+static void walk_binding(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl) {
+  int kw_pos = (int)LVAL_SRC_POS(kw);
+  int kw_len = (int)strlen(kw->str);
+  if (kw_pos >= 0) emit_semtok(ctx, kw_pos, kw_len, TOK_KEYWORD, 0);
+
+  if (!tl || LVAL_TYPE(tl) != LVAL_CONS) return;
+  valk_lval_t *binding = tl->cons.head;
+  valk_lval_t *vals = tl->cons.tail;
+
+  bool is_global = strcmp(kw->str, "def") == 0;
+  int scope_id = is_global ? -1 : current_scope_pos(ctx);
+
+  // Emit variable declarations from binding
+  if (binding && is_qexpr(binding)) {
+    valk_lval_t *cur = binding;
+    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+      valk_lval_t *v = cur->cons.head;
+      if (LVAL_TYPE(v) == LVAL_SYM) {
+        int vp = (int)LVAL_SRC_POS(v);
+        int vl = (int)strlen(v->str);
+        if (vp >= 0) {
+          emit_semtok(ctx, vp, vl, TOK_VARIABLE, 1);
+          emit_ref(ctx, v->str, vp, vl, scope_id, 1);
+          emit_node(ctx, vp, vp + vl, "sym", v->str);
+        }
+      }
+      cur = cur->cons.tail;
+    }
+  }
+
+  walk_each(ctx, vals);
+}
+
+static void walk_type(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl) {
+  int kw_pos = (int)LVAL_SRC_POS(kw);
+  if (kw_pos >= 0) emit_semtok(ctx, kw_pos, 4, TOK_KEYWORD, 0);
+
+  // Walk type variants and emit type/property tokens
+  while (tl && LVAL_TYPE(tl) == LVAL_CONS) {
+    valk_lval_t *variant = tl->cons.head;
+    if (variant && is_qexpr(variant)) {
+      valk_lval_t *cur = variant;
+      while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+        valk_lval_t *elem = cur->cons.head;
+        if (LVAL_TYPE(elem) == LVAL_SYM) {
+          const char *name = elem->str;
+          int ep = (int)LVAL_SRC_POS(elem);
+          int el = (int)strlen(name);
+          if (ep >= 0) {
+            int type = is_keyword_str(name) ? TOK_PROPERTY : TOK_TYPE;
+            emit_semtok(ctx, ep, el, type, name[0] != ':' ? 1 : 0);
+            emit_node(ctx, ep, ep + el, "sym", name);
+          }
+        } else if (LVAL_TYPE(elem) == LVAL_CONS) {
+          // Nested type expression — walk for tokens
+          valk_lval_t *inner = elem;
+          while (inner && LVAL_TYPE(inner) == LVAL_CONS) {
+            valk_lval_t *ie = inner->cons.head;
+            if (LVAL_TYPE(ie) == LVAL_SYM) {
+              int ip = (int)LVAL_SRC_POS(ie);
+              int il = (int)strlen(ie->str);
+              if (ip >= 0) {
+                int t = is_keyword_str(ie->str) ? TOK_PROPERTY : TOK_TYPE;
+                emit_semtok(ctx, ip, il, t, 0);
+                emit_node(ctx, ip, ip + il, "sym", ie->str);
+              }
+            }
+            inner = inner->cons.tail;
+          }
+        }
+        cur = cur->cons.tail;
+      }
+    }
+    tl = tl->cons.tail;
+  }
+}
+
+static void walk_do(index_ctx_t *ctx, valk_lval_t *tl) {
+  // do blocks: walk children sequentially, adding = bindings to current scope
+  while (tl && LVAL_TYPE(tl) == LVAL_CONS) {
+    valk_lval_t *child = tl->cons.head;
+    // Check if this is (= {var} ...) — add var to current scope names
+    if (child && LVAL_TYPE(child) == LVAL_CONS) {
+      valk_lval_t *ch = child->cons.head;
+      if (ch && LVAL_TYPE(ch) == LVAL_SYM && strcmp(ch->str, "=") == 0) {
+        valk_lval_t *binding = valk_lval_list_nth(child, 1);
+        if (binding && is_qexpr(binding) && LVAL_TYPE(binding->cons.head) == LVAL_SYM) {
+          add_scope_name(ctx, binding->cons.head->str, false);
+        }
+      }
+    }
+    walk_expr(ctx, child);
+    tl = tl->cons.tail;
+  }
+}
+
+static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
+  const char *name = sym->str;
+  int pos = (int)LVAL_SRC_POS(sym);
+  int len = (int)strlen(name);
+
+  if (pos < 0) return;
+
+  emit_node(ctx, pos, pos + len, "sym", name);
+
+  if (is_keyword_str(name)) {
+    emit_semtok(ctx, pos, len, TOK_PROPERTY, 0);
+    return;
+  }
+
+  int scope_id = resolve_scope(ctx, name);
+  if (scope_id >= 0) {
+    int tok = is_scope_param(ctx, name) ? TOK_PARAMETER : TOK_VARIABLE;
+    emit_semtok(ctx, pos, len, tok, 0);
+  } else {
+    emit_semtok(ctx, pos, len, TOK_VARIABLE, 0);
+  }
+  emit_ref(ctx, name, pos, len, scope_id, 0);
+}
+
+static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
+                           valk_lval_t *tl) {
+  if (LVAL_TYPE(hd) != LVAL_SYM) {
+    walk_each(ctx, expr);
+    return;
+  }
+
+  const char *name = hd->str;
+
+  if (strcmp(name, "fun") == 0)   { walk_fun(ctx, hd, tl, false); return; }
+  if (strcmp(name, "\\") == 0)    { walk_fun(ctx, hd, tl, true); return; }
+  if (strcmp(name, "def") == 0)   { walk_binding(ctx, hd, tl); return; }
+  if (strcmp(name, "=") == 0)     { walk_binding(ctx, hd, tl); return; }
+  if (strcmp(name, "type") == 0)  { walk_type(ctx, hd, tl); return; }
+  if (strcmp(name, "sig") == 0)   { return; } // sig handled by type_env
+  if (strcmp(name, "quote") == 0) { return; }
+
+  if (strcmp(name, "do") == 0) {
+    int kp = (int)LVAL_SRC_POS(hd);
+    if (kp >= 0) emit_semtok(ctx, kp, 2, TOK_KEYWORD, 0);
+    walk_do(ctx, tl);
+    return;
+  }
+
+  int pos = (int)LVAL_SRC_POS(hd);
+  int slen = source_len(name);
+
+  if (in_set(name, KEYWORDS)) {
+    if (pos >= 0) emit_semtok(ctx, pos, slen, TOK_KEYWORD, 0);
+    walk_each(ctx, tl);
+  } else if (in_set(name, OPERATORS)) {
+    if (pos >= 0) {
+      emit_semtok(ctx, pos, slen, TOK_OPERATOR, 0);
+      emit_node(ctx, pos, pos + slen, "sym", name);
+    }
+    int scope_id = resolve_scope(ctx, name);
+    emit_ref(ctx, name, pos, slen, scope_id, 0);
+    walk_each(ctx, tl);
+  } else {
+    if (pos >= 0) {
+      emit_semtok(ctx, pos, slen, TOK_FUNCTION, 0);
+      emit_node(ctx, pos, pos + slen, "sym", name);
+    }
+    int scope_id = resolve_scope(ctx, name);
+    emit_ref(ctx, name, pos, slen, scope_id, 0);
+    walk_each(ctx, tl);
+  }
+}
+
+static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr) {
+  if (!expr || LVAL_TYPE(expr) == LVAL_NIL) return;
+
+  if (LVAL_TYPE(expr) == LVAL_NUM) {
+    int pos = (int)LVAL_SRC_POS(expr);
+    if (pos >= 0) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "%ld", (long)expr->num);
+      int len = (int)strlen(buf);
+      emit_semtok(ctx, pos, len, TOK_NUMBER, 0);
+      emit_node(ctx, pos, pos + len, "num", buf);
+    }
+    return;
+  }
+
+  if (LVAL_TYPE(expr) == LVAL_STR) {
+    int pos = (int)LVAL_SRC_POS(expr);
+    if (pos >= 0) {
+      int len = (int)strlen(expr->str);
+      emit_node(ctx, pos, pos + len + 2, "str", expr->str);
+    }
+    return;
+  }
+
+  if (LVAL_TYPE(expr) == LVAL_SYM) {
+    walk_sym(ctx, expr);
+    return;
+  }
+
+  if (LVAL_TYPE(expr) == LVAL_CONS) {
+    if (expr->flags & LVAL_FLAG_QUOTED) {
+      // qexpr — don't walk as code
+      return;
+    }
+    valk_lval_t *hd = expr->cons.head;
+    valk_lval_t *tl = expr->cons.tail;
+    if (!tl || LVAL_TYPE(tl) == LVAL_NIL) {
+      walk_expr(ctx, hd);
+    } else {
+      walk_list_head(ctx, expr, hd, tl);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public API — called from Valk as (lsp/index-file db file-id ast text)
+// ---------------------------------------------------------------------------
+
+static const char *SQL_DELETE_NODES = "DELETE FROM nodes WHERE file_id=?1";
+static const char *SQL_DELETE_SEMTOK = "DELETE FROM semantic_tokens WHERE file_id=?1";
+static const char *SQL_DELETE_REFS = "DELETE FROM scoped_refs WHERE file_id=?1";
+static const char *SQL_DELETE_SCOPES = "DELETE FROM scopes WHERE file_id=?1";
+static const char *SQL_DELETE_HINTS = "DELETE FROM inlay_hints WHERE file_id=?1";
+
+static const char *SQL_INSERT_NODE =
+    "INSERT INTO nodes (file_id,pos,end_pos,type,name) VALUES (?1,?2,?3,?4,?5)";
+static const char *SQL_INSERT_SEMTOK =
+    "INSERT INTO semantic_tokens (file_id,pos,length,token_type,modifiers) VALUES (?1,?2,?3,?4,?5)";
+static const char *SQL_INSERT_REF =
+    "INSERT INTO scoped_refs (file_id,name,pos,len,scope_id,is_def) VALUES (?1,?2,?3,?4,?5,?6)";
+static const char *SQL_INSERT_SCOPE =
+    "INSERT INTO scopes (file_id,pos,parent_pos) VALUES (?1,?2,?3)";
+static const char *SQL_INSERT_HINT =
+    "INSERT INTO inlay_hints (file_id,pos,label,kind) VALUES (?1,?2,?3,?4)";
+
+valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 4); // LCOV_EXCL_BR_LINE
+
+  valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
+  valk_lval_t *fid_v = valk_lval_list_nth(a, 1);
+  valk_lval_t *ast = valk_lval_list_nth(a, 2);
+  valk_lval_t *text_v = valk_lval_list_nth(a, 3);
+
+  if (LVAL_TYPE(db_ref) != LVAL_REF || strcmp(db_ref->ref.type, SQLITE_REF_TYPE) != 0)
+    return valk_lval_nil(); // LCOV_EXCL_LINE
+
+  sqlite3 *db = db_ref->ref.ptr;
+  int file_id = (int)fid_v->num;
+
+  index_ctx_t ctx = {
+    .db = db,
+    .file_id = file_id,
+    .text = text_v->str,
+    .scope_depth = 0,
+  };
+
+  // Delete old data
+  sqlite3_stmt *del;
+  const char *del_sqls[] = {SQL_DELETE_NODES, SQL_DELETE_SEMTOK, SQL_DELETE_REFS,
+                            SQL_DELETE_SCOPES, SQL_DELETE_HINTS, NULL};
+  for (int i = 0; del_sqls[i]; i++) {
+    sqlite3_prepare_v2(db, del_sqls[i], -1, &del, NULL);
+    sqlite3_bind_int(del, 1, file_id);
+    sqlite3_step(del);
+    sqlite3_finalize(del);
+  }
+
+  // Prepare insert statements
+  sqlite3_prepare_v2(db, SQL_INSERT_NODE, -1, &ctx.stmt_node, NULL);
+  sqlite3_prepare_v2(db, SQL_INSERT_SEMTOK, -1, &ctx.stmt_semtok, NULL);
+  sqlite3_prepare_v2(db, SQL_INSERT_REF, -1, &ctx.stmt_ref, NULL);
+  sqlite3_prepare_v2(db, SQL_INSERT_SCOPE, -1, &ctx.stmt_scope, NULL);
+  sqlite3_prepare_v2(db, SQL_INSERT_HINT, -1, &ctx.stmt_hint, NULL);
+
+  // Single pass
+  walk_each(&ctx, ast);
+
+  // Cleanup
+  sqlite3_finalize(ctx.stmt_node);
+  sqlite3_finalize(ctx.stmt_semtok);
+  sqlite3_finalize(ctx.stmt_ref);
+  sqlite3_finalize(ctx.stmt_scope);
+  sqlite3_finalize(ctx.stmt_hint);
+
+  return valk_lval_nil();
+}

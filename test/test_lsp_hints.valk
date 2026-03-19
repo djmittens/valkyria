@@ -356,9 +356,12 @@
       true
     })
 
-  (test "prefix-sig-too-short"
+  (test "prefix-sig-zero-arg"
     {do
-      (test/assert (nil? (hint/parse-prefix-sig "{-> Num}")) "single type returns nil")
+      (= {r} (hint/parse-prefix-sig "{-> Num}"))
+      (test/assert (not (nil? r)) "zero-arg sig should parse")
+      (test/assert-eq 1 (len r) "should have 1 element (return type)")
+      (test/assert-eq "Num" (head r) "return type is Num")
       true
     })
 

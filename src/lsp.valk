@@ -260,7 +260,10 @@
           {do
             (= {ast} (lsp/get-ast uri text))
             (if (not (error? ast))
-              {lsp/precompute-file-data lsp/db uri ast text}
+              {do
+                (= {path} (uri->path uri))
+                (= {fid} (sqlite/query-value lsp/db "SELECT id FROM files WHERE path=?1" path))
+                (if (not (nil? fid)) {lsp/index-ast lsp/db (plist/get fid :id) ast text} {})}
               {})
             (lsp/invalidate-known-set)}
           {})})})
@@ -309,7 +312,11 @@
                 (= {uri} (str "file://" path))
                 (symdb/sync-file-symbols db uri text fp)
                 (= {ast} (parse text))
-                (if (not (error? ast)) {lsp/precompute-file-data db uri ast text} {})
+                (if (not (error? ast))
+                  {do
+                    (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (uri->path uri)))
+                    (if (not (nil? fid)) {lsp/index-ast db fid:id ast text} {})}
+                  {})
                 1})}}
         {do
           (= {text} (read-file path))
@@ -318,7 +325,11 @@
               (= {uri} (str "file://" path))
               (symdb/sync-file-symbols db uri text fp)
               (= {ast} (parse text))
-              (if (not (error? ast)) {lsp/precompute-file-data db uri ast text} {})
+              (if (not (error? ast))
+                {do
+                  (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (uri->path uri)))
+                  (if (not (nil? fid)) {lsp/index-ast db fid:id ast text} {})}
+                {})
               1})})})
 })
 
@@ -549,19 +560,13 @@
   (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
   (if (nil? file-id) {}
     {do
-      (= {raw-sem} (reverse (sem/walk-each ast nil nil)))
-      (symdb/insert-semtok-batch db file-id raw-sem)
+      (lsp/index-ast db file-id ast text)
       (= {local-params} (hint/collect-local-params ast))
       (= {hctx} (list :local local-params :db db))
       (= {raw-hints} (hint/walk-exprs ast hctx nil))
       (= {type-hints} (hint/collect-type-hints ast db))
       (= {field-hints} (hint/collect-field-hints ast db))
-      (symdb/insert-hint-batch db file-id (join raw-hints (join type-hints field-hints)))
-      (= {refs} (ref/collect-refs-from-ast ast))
-      (symdb/insert-scoped-ref-batch db file-id refs)
-      (sqlite/exec db "DELETE FROM scopes WHERE file_id=?1" file-id)
-      (= {scope-entries} (ref/collect-scopes-from-ast ast))
-      (symdb/insert-scopes db file-id scope-entries)})
+      (symdb/insert-hint-batch db file-id (join raw-hints (join type-hints field-hints)))})
 })
 
 (sig 'handle-hover {-> Num List Nil})

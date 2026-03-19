@@ -1,4 +1,5 @@
 #include "builtins_internal.h"
+extern valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a);
 
 #include <dirent.h>
 #include <errno.h>
@@ -847,6 +848,7 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "file/size", valk_builtin_file_size);
   valk_lenv_put_builtin(env, "file/fingerprint", valk_builtin_file_fingerprint);
   valk_lenv_put_builtin(env, "sem/encode-deltas", valk_builtin_sem_encode_deltas);
+  valk_lenv_put_builtin(env, "lsp/index-ast", valk_builtin_lsp_index_file);
   valk_lenv_put_builtin(env, "offsets->line-cols", valk_builtin_offsets_to_lines);
   valk_lenv_put_builtin(env, "write-file", valk_builtin_write_file);
   valk_lenv_put_builtin(env, "file/exists?", valk_builtin_file_exists);
@@ -863,3 +865,4 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "file/write", valk_builtin_file_write_str);
   valk_lenv_put_builtin(env, "file/close", valk_builtin_file_close);
 }
+
