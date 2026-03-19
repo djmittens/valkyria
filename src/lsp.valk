@@ -663,16 +663,11 @@
       {do
         (= {ntype} (plist/get node :type))
         (= {nname} (plist/get node :name))
+        (= {nctx} (plist/get node :context))
         (if (not (== ntype "sym")) {nil}
           {if (not (> (len nname) 0)) {nil}
           {if (not (== (str/slice nname 0 1) ":")) {nil}
-            {do
-              (= {field-def} (symdb/find-field-definition db nname))
-              (if (not (nil? field-def)) {field-def}
-                {do
-                  (= {npos} (plist/get node :pos))
-                  (= {var-ref} (symdb/get-ref-at-offset db path (- npos 1)))
-                  var-ref})}}})})}
+            {symdb/find-field-definition db nname nctx}}})})}
 })
 
 (sig 'lsp/respond-def-offset {-> Num Str Str List Nil})
@@ -804,7 +799,7 @@
 (type {CompletionRow} {:name Str :kind Num :sig Str :doc Str})
 
 (sig 'make-sym-completion-item {-> CompletionRow List})
-(fun {make-sym-completion-item s} {do
+(fun {make-sym-completion-item s} { do
   (= {name} s:name)
   (= {kind} s:kind)
   (= {sig} s:sig)

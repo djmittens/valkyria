@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   pos INTEGER NOT NULL,
   end_pos INTEGER NOT NULL,
   type TEXT NOT NULL,
-  name TEXT NOT NULL
+  name TEXT NOT NULL,
+  context TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_lookup ON nodes(file_id, pos, end_pos);
 
@@ -569,7 +570,7 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 (fun {symdb/node-at-offset db path offset} {
   if (nil? db) {nil}
   {sqlite/query-maybe db
-    "SELECT n.type, n.name, n.pos, n.end_pos FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.pos<=?2 AND n.end_pos>?2 LIMIT 1"
+    "SELECT n.type, n.name, n.pos, n.end_pos, n.context FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.pos<=?2 AND n.end_pos>?2 LIMIT 1"
     path offset}
 })
 
@@ -701,24 +702,44 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
           {symdb/find-def-in-scope-chain db path name (plist/get parent :parent_pos)})})}}
 })
 
-(sig 'symdb/find-field-definition {-> Ref Str List})
-(fun {symdb/find-field-definition db field-name} {
+(sig 'symdb/find-field-definition {-> Ref Str Str List})
+(fun {symdb/find-field-definition db field-name context} {
   if (nil? db) {nil}
   {do
-    (= {ctor} (sqlite/query-maybe db
-      "SELECT s.name, f.path, s.line, s.col FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.kind=4 AND s.sig LIKE ?1 LIMIT 1"
-      (str "%" field-name " %")))
+    (= {ctor-name} (if (nil? context) {nil}
+      {symdb/resolve-var-type db context}))
+    (= {ctor} (if (nil? ctor-name)
+      {sqlite/query-maybe db
+        "SELECT s.name, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.kind=4 AND s.sig LIKE ?1 LIMIT 1"
+        (str "%" field-name " %")}
+      {sqlite/query-maybe db
+        "SELECT s.name, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.kind=4 AND s.name=?1 AND s.sig LIKE ?2 LIMIT 1"
+        ctor-name (str "%" field-name " %")}))
     (if (nil? ctor) {nil}
       {do
         (= {ctor-path} (plist/get ctor :path))
         (= {field-node} (sqlite/query-maybe db
-          "SELECT n.pos, n.end_pos FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.type='sym' AND n.name=?2 LIMIT 1"
+          "SELECT n.pos, n.end_pos FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.type='sym' AND n.name=?2 AND n.context IS NULL LIMIT 1"
           ctor-path field-name))
         (if (nil? field-node) {nil}
           {list :pos (plist/get field-node :pos)
                 :len (- (plist/get field-node :end_pos) (plist/get field-node :pos))
                 :path ctor-path})})}
 })
+
+(sig 'symdb/resolve-var-type {-> Ref Str Str})
+(fun {symdb/resolve-var-type db context} {
+  if (nil? db) {nil}
+  {if (nil? context) {nil}
+  {do
+    ; Check if context is directly a constructor name
+    (= {direct} (sqlite/query-maybe db
+      "SELECT name FROM symbols WHERE name=?1 AND kind=4 LIMIT 1"
+      context))
+    (if (not (nil? direct)) {context}
+      {nil})}}
+})
+
 
 
 

@@ -28,6 +28,7 @@ typedef struct {
   sqlite3 *db;
   int file_id;
   const char *text;
+  const char *current_call;
 
   sqlite3_stmt *stmt_node;
   sqlite3_stmt *stmt_semtok;
@@ -127,15 +128,24 @@ static void pop_scope(index_ctx_t *ctx) {
 // Emit functions — insert into prepared statements
 // ---------------------------------------------------------------------------
 
-static void emit_node(index_ctx_t *ctx, int pos, int end, const char *type,
-                      const char *name) {
+static void emit_node_ctx(index_ctx_t *ctx, int pos, int end, const char *type,
+                          const char *name, const char *context) {
   sqlite3_reset(ctx->stmt_node);
   sqlite3_bind_int(ctx->stmt_node, 1, ctx->file_id);
   sqlite3_bind_int(ctx->stmt_node, 2, pos);
   sqlite3_bind_int(ctx->stmt_node, 3, end);
   sqlite3_bind_text(ctx->stmt_node, 4, type, -1, SQLITE_STATIC);
   sqlite3_bind_text(ctx->stmt_node, 5, name, -1, SQLITE_STATIC);
+  if (context)
+    sqlite3_bind_text(ctx->stmt_node, 6, context, -1, SQLITE_STATIC);
+  else
+    sqlite3_bind_null(ctx->stmt_node, 6);
   sqlite3_step(ctx->stmt_node);
+}
+
+static void emit_node(index_ctx_t *ctx, int pos, int end, const char *type,
+                      const char *name) {
+  emit_node_ctx(ctx, pos, end, type, name, NULL);
 }
 
 static void emit_semtok(index_ctx_t *ctx, int pos, int len, int type,
@@ -174,6 +184,7 @@ static void __attribute__((unused)) emit_hint(index_ctx_t *ctx, int pos, const c
 // AST walker — single pass
 // ---------------------------------------------------------------------------
 
+static void emit_node_ctx(index_ctx_t *ctx, int pos, int end, const char *type, const char *name, const char *context);
 static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr);
 static void walk_do(index_ctx_t *ctx, valk_lval_t *tl);
 static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd, valk_lval_t *tl);
@@ -479,7 +490,7 @@ static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
   if (pos < 0) return;
 
   if (is_keyword_str(name)) {
-    emit_node(ctx, pos, pos + len, "sym", name);
+    emit_node_ctx(ctx, pos, pos + len, "sym", name, ctx->current_call);
     emit_semtok(ctx, pos, len, TOK_PROPERTY, 0);
     return;
   }
@@ -584,7 +595,10 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
     }
     int scope_id = resolve_scope(ctx, name);
     emit_ref(ctx, name, pos, slen, scope_id, 0);
+    const char *prev_call = ctx->current_call;
+    ctx->current_call = name;
     walk_each(ctx, tl);
+    ctx->current_call = prev_call;
   }
 }
 
@@ -644,7 +658,7 @@ static const char *SQL_DELETE_SCOPES = "DELETE FROM scopes WHERE file_id=?1";
 static const char *SQL_DELETE_HINTS = "DELETE FROM inlay_hints WHERE file_id=?1";
 
 static const char *SQL_INSERT_NODE =
-    "INSERT INTO nodes (file_id,pos,end_pos,type,name) VALUES (?1,?2,?3,?4,?5)";
+    "INSERT INTO nodes (file_id,pos,end_pos,type,name,context) VALUES (?1,?2,?3,?4,?5,?6)";
 static const char *SQL_INSERT_SEMTOK =
     "INSERT INTO semantic_tokens (file_id,pos,length,token_type,modifiers) VALUES (?1,?2,?3,?4,?5)";
 static const char *SQL_INSERT_REF =
