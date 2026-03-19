@@ -299,7 +299,7 @@
 
   (test "make-sym-completion-item-with-sig"
     {do
-      (= {s} (list :name "add" :kind SYMKIND_FUNCTION :sig "-> Num Num" :doc nil))
+      (= {s} (CompletionRow :name "add" :kind SYMKIND_FUNCTION :sig "-> Num Num" :doc nil))
       (= {item} (make-sym-completion-item s))
       (test/assert-eq "add" item:label "label")
       (test/assert-eq 3 item:kind "function kind")
@@ -309,7 +309,7 @@
 
   (test "make-sym-completion-item-with-doc"
     {do
-      (= {s} (list :name "x" :kind SYMKIND_VARIABLE :sig nil :doc "some doc"))
+      (= {s} (CompletionRow :name "x" :kind SYMKIND_VARIABLE :sig nil :doc "some doc"))
       (= {item} (make-sym-completion-item s))
       (= {doc-obj} item:documentation)
       (test/assert (not (nil? doc-obj)) "should have documentation")
@@ -319,7 +319,7 @@
 
   (test "make-sym-completion-item-no-sig-no-doc"
     {do
-      (= {s} (list :name "y" :kind SYMKIND_VARIABLE :sig nil :doc nil))
+      (= {s} (CompletionRow :name "y" :kind SYMKIND_VARIABLE :sig nil :doc nil))
       (= {item} (make-sym-completion-item s))
       (test/assert-eq "" item:detail "no sig = empty detail")
       (test/assert (nil? item:documentation) "no doc field")

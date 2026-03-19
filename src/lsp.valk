@@ -774,7 +774,9 @@
     {6}}}}
 })
 
-(sig 'make-sym-completion-item {-> List List})
+(type {CompletionRow} {:name Str :kind Num :sig Str :doc Str})
+
+(sig 'make-sym-completion-item {-> CompletionRow List})
 (fun {make-sym-completion-item s} {do
   (= {name} s:name)
   (= {kind} s:kind)
@@ -787,6 +789,11 @@
                    :sortText (str "1-" name)))
   (if (nil? doc) {item}
     {plist/set item :documentation (list :kind "markdown" :value doc)})
+})
+
+(sig 'row->completion-row {-> List CompletionRow})
+(fun {row->completion-row r} {
+  CompletionRow (plist/get r :name) (plist/get r :kind) (plist/get r :sig) (plist/get r :doc)
 })
 
 (sig 'handle-completion {-> Num List Nil})
@@ -808,7 +815,7 @@
             (= {syms} (if (== prefix "")
               {symdb/completion-all lsp/db}
               {symdb/completion-symbols lsp/db prefix}))
-            (map make-sym-completion-item syms)}))
+            (map make-sym-completion-item (map row->completion-row syms))}))
         (= {all-items} (join snippet-items (if (nil? sym-items) {nil} {sym-items})))
         (lsp/send-response id (list :isIncomplete :false :items all-items))}})
 })
