@@ -490,12 +490,42 @@ static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_l
 
   scope_add(scope, var_name, NULL);
 
+  // Handle direct symbol RHS (e.g., o:inner field access)
+  if (LVAL_TYPE(rhs) == LVAL_SYM) {
+    const char *sym = rhs->str;
+    const char *colon = strchr(sym, ':');
+    if (colon && colon != sym) {
+      size_t vlen = (size_t)(colon - sym);
+      char src_var[256];
+      if (vlen < sizeof(src_var)) {
+        memcpy(src_var, sym, vlen);
+        src_var[vlen] = 0;
+        const char *src_type = scope_find_type(scope, src_var);
+        if (src_type) {
+          valk_constructor_t *ctor = valk_type_env_find_constructor(env, src_type);
+          if (!ctor) ctor = find_constructor_by_short_name(env, src_type);
+          if (ctor) {
+            for (u64 f = 0; f < ctor->field_count; f++) {
+              if (strcmp(ctor->fields[f].name, colon) == 0 && ctor->fields[f].type_name) {
+                const char *ft_resolved = resolve_type_name(env, ctor->fields[f].type_name);
+                if (ft_resolved) { scope_add(scope, var_name, ft_resolved); return; }
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+    return;
+  }
+
   if (LVAL_TYPE(rhs) != LVAL_CONS || (rhs->flags & LVAL_FLAG_QUOTED) ||
       LVAL_TYPE(rhs->cons.head) != LVAL_SYM) return;
   const char *rhs_name = rhs->cons.head->str;
 
   const char *resolved = resolve_type_name(env, rhs_name);
   if (resolved) { scope_add(scope, var_name, resolved); return; }
+
 
   if (strcmp(rhs_name, "head") == 0 && valk_lval_list_count(rhs) == 2) {
     valk_lval_t *arg = valk_lval_list_nth(rhs, 1);
@@ -929,10 +959,38 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
         memcpy(fbuf, rest, flen);
         fbuf[flen] = '\0';
 
+        // Before resolving, find the field's result type for the next chain step
+        const char *next_type = NULL;
+        if (cur_var) {
+          const char *cur_type = scope_find_type(scope, cur_var);
+          if (cur_type) {
+            valk_constructor_t *ctor = valk_type_env_find_constructor(env, cur_type);
+            if (!ctor) ctor = find_constructor_by_short_name(env, cur_type);
+            if (ctor) {
+              char fkey[flen + 2];
+              fkey[0] = ':';
+              memcpy(fkey + 1, fbuf, flen);
+              fkey[flen + 1] = 0;
+              for (u64 fi = 0; fi < ctor->field_count; fi++) {
+                if (strcmp(ctor->fields[fi].name, fkey) == 0) {
+                  next_type = ctor->fields[fi].type_name;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
         result = resolve_field_access(env, scope, result, cur_var, fbuf);
         if (LVAL_TYPE(result) == LVAL_ERR) return result;
 
-        cur_var = NULL;
+        // Use a synthetic scope entry for the intermediate result
+        if (next_type) {
+          scope_add(scope, "__chain__", next_type);
+          cur_var = "__chain__";
+        } else {
+          cur_var = NULL;
+        }
         rest = next_colon ? next_colon + 1 : rest + flen;
       }
       return result;

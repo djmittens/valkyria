@@ -29,6 +29,27 @@
 
 (type {FormSnippet}
   {:label Str :detail Str :snippet Str :sort Str})
+
+; LSP request parameter types
+(type {LspTextDoc} {:uri Str})
+(type {LspTextDocText} {:uri Str :text Str})
+(type {LspPosition} {:line Num :character Num})
+(type {LspRange} {:start LspPosition :end LspPosition})
+
+(type {DocParams} {:textDocument LspTextDoc})
+(type {TextDocPosParams} {:textDocument LspTextDoc :position LspPosition})
+(type {OpenParams} {:textDocument LspTextDocText})
+(type {ChangeParams} {:textDocument LspTextDoc :contentChanges List})
+(type {SaveParams} {:textDocument LspTextDoc :text Str})
+(type {InitParams} {:rootUri Str})
+(type {RangeParams} {:textDocument LspTextDoc :range LspRange})
+(type {HintParams} {:textDocument LspTextDoc :range LspRange})
+(type {RenameParams} {:textDocument LspTextDoc :position LspPosition :newName Str})
+(type {QueryParams} {:query Str})
+(type {CodeActionContext} {:diagnostics List})
+(type {CodeActionParams} {:textDocument LspTextDoc :range LspRange :context CodeActionContext})
+(type {SelectionParams} {:textDocument LspTextDoc :positions List})
+(type {LinkParams} {:textDocument LspTextDoc})
 ; ---------------------------------------------------------------------------
 ; LSP I/O — Content-Length framing over uv_pipe_t
 ; ---------------------------------------------------------------------------
@@ -87,24 +108,26 @@
   (= {cached} (dict/get lsp/ast-cache uri))
   (if (nil? cached) {parse text} {cached})})
 
-(sig 'lsp/get-doc {-> List DocCtx})
+(sig 'lsp/get-doc {-> DocParams DocCtx})
 (fun {lsp/get-doc params} {do
-  (= {uri} params:textDocument:uri)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
     {(DocCtx :uri uri :text text :ast (lsp/get-ast uri text))})
 })
 
-(sig 'lsp/get-text-pos {-> List TextPosCtx})
+(sig 'lsp/get-text-pos {-> TextDocPosParams TextPosCtx})
 (fun {lsp/get-text-pos params} {do
-  (= {uri} params:textDocument:uri)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
     {(TextPosCtx :uri uri :text text :ast (lsp/get-ast uri text)
                  :line params:position:line :col params:position:character)})
 })
 
-(sig 'lsp/get-word-ctx {-> List WordCtx})
+(sig 'lsp/get-word-ctx {-> TextDocPosParams WordCtx})
 (fun {lsp/get-word-ctx params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {nil}
@@ -421,7 +444,7 @@
   (sqlite/exec db "COMMIT")
   indexed})
 
-(sig 'handle-initialize {-> Num List Nil})
+(sig 'handle-initialize {-> Num InitParams Nil})
 (fun {handle-initialize id params} {do
   (= {root-uri} params:rootUri)
   (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
@@ -437,10 +460,11 @@
 
 (def {lsp/noop-cb} (\ {_} {}))
 
-(sig 'handle-did-open {-> List Nil})
+(sig 'handle-did-open {-> OpenParams Nil})
 (fun {handle-did-open params} {do
-  (= {uri} params:textDocument:uri)
-  (= {text} params:textDocument:text)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {text} td:text)
   (lsp/doc-store uri text)
   (aio/dispatch lsp/sys
     (\ {_} {do (lsp/cache-ast uri text)
@@ -449,9 +473,10 @@
                nil})
     nil lsp/noop-cb)})
 
-(sig 'handle-did-change {-> List Nil})
+(sig 'handle-did-change {-> ChangeParams Nil})
 (fun {handle-did-change params} {do
-  (= {uri} params:textDocument:uri)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (= {changes} params:contentChanges)
   (if (nil? changes) {}
     {do
@@ -465,17 +490,19 @@
                    nil})
         nil lsp/noop-cb)})})
 
-(sig 'handle-did-close {-> List Nil})
+(sig 'handle-did-close {-> DocParams Nil})
 (fun {handle-did-close params} {do
-  (= {uri} params:textDocument:uri)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (dict/remove! lsp/documents uri)
   (dict/remove! lsp/ast-cache uri)
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics nil))})
 
-(sig 'handle-did-save {-> List Nil})
+(sig 'handle-did-save {-> SaveParams Nil})
 (fun {handle-did-save params} {do
-  (= {uri} params:textDocument:uri)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (= {text} params:text)
   (= {save-text} (if (nil? text) {lsp/doc-get uri} {text}))
   (if (nil? save-text) {}
@@ -569,7 +596,7 @@
       (symdb/insert-hint-batch db file-id (join raw-hints (join type-hints field-hints)))})
 })
 
-(sig 'handle-hover {-> Num List Nil})
+(sig 'handle-hover {-> Num TextDocPosParams Nil})
 (fun {handle-hover id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
@@ -612,7 +639,7 @@
                     :end (list :line start-line :character (+ start-col wlen)))))})})
 })
 
-(sig 'handle-definition {-> Num List Nil})
+(sig 'handle-definition {-> Num TextDocPosParams Nil})
 (fun {handle-definition id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id (None)}
@@ -697,7 +724,7 @@
           :end (list :line (head lc) :character (+ (head (tail lc)) (len rname)))))
 })
 
-(sig 'handle-references {-> Num List Nil})
+(sig 'handle-references {-> Num TextDocPosParams Nil})
 (fun {handle-references id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -818,7 +845,7 @@
   CompletionRow (plist/get r :name) (plist/get r :kind) (plist/get r :sig) (plist/get r :doc)
 })
 
-(sig 'handle-completion {-> Num List Nil})
+(sig 'handle-completion {-> Num TextDocPosParams Nil})
 (fun {handle-completion id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -842,9 +869,10 @@
         (lsp/send-response id (list :isIncomplete :false :items all-items))}})
 })
 
-(sig 'handle-document-symbols {-> Num List Nil})
+(sig 'handle-document-symbols {-> Num DocParams Nil})
 (fun {handle-document-symbols id params} {do
-  (= {uri} params:textDocument:uri)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {path} (uri->path uri))
@@ -865,7 +893,7 @@
       }) syms))
       (lsp/send-response id lsp-syms)})})
 
-(sig 'handle-workspace-symbols {-> Num List Nil})
+(sig 'handle-workspace-symbols {-> Num QueryParams Nil})
 (fun {handle-workspace-symbols id params} {do
   (= {query} params:query)
   (if (nil? lsp/db) {lsp/send-response id nil}
@@ -890,7 +918,7 @@
       }) syms))
       (lsp/send-response id lsp-syms)})})
 
-(sig 'handle-semantic-tokens {-> Num List Nil})
+(sig 'handle-semantic-tokens {-> Num DocParams Nil})
 (fun {handle-semantic-tokens id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id (list :data nil)}
@@ -977,7 +1005,7 @@
     (rename/make-doc-changes-walk (tail (tail pairs)) (qcons doc-edit acc))}
 })
 
-(sig 'handle-rename {-> Num List Nil})
+(sig 'handle-rename {-> Num RenameParams Nil})
 (fun {handle-rename id params} {do
   (= {new-name} params:newName)
   (= {ctx} (lsp/get-word-ctx params))
@@ -1013,7 +1041,7 @@
 ; Inlay hints — parameter name hints for function calls
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-inlay-hints {-> Num List Nil})
+(sig 'handle-inlay-hints {-> Num RangeParams Nil})
 (fun {handle-inlay-hints id params} {do
   (= {range} (plist/get params :range))
   (= {ctx} (lsp/get-doc params))
@@ -1093,7 +1121,7 @@
       (plist/get local name)})
 })
 
-(sig 'handle-signature-help {-> Num List Nil})
+(sig 'handle-signature-help {-> Num TextDocPosParams Nil})
 (fun {handle-signature-help id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
@@ -1152,7 +1180,7 @@
   :kind kind)
 })
 
-(sig 'handle-document-highlight {-> Num List Nil})
+(sig 'handle-document-highlight {-> Num TextDocPosParams Nil})
 (fun {handle-document-highlight id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -1233,7 +1261,7 @@
           :target (str "file://" full-path)) acc)})}
 })
 
-(sig 'handle-document-link {-> Num List Nil})
+(sig 'handle-document-link {-> Num DocParams Nil})
 (fun {handle-document-link id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -1364,7 +1392,7 @@
           :parent (sel/build-nested-walk (tail ranges))}}
 })
 
-(sig 'handle-selection-range {-> Num List Nil})
+(sig 'handle-selection-range {-> Num SelectionParams Nil})
 (fun {handle-selection-range id params} {do
   (= {positions} params:positions)
   (= {ctx} (lsp/get-doc params))
@@ -1376,9 +1404,10 @@
 ; Code lens — show reference counts above function definitions
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-code-lens {-> Num List Nil})
+(sig 'handle-code-lens {-> Num DocParams Nil})
 (fun {handle-code-lens id params} {do
-  (= {uri} params:textDocument:uri)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
       (= {path} (uri->path uri))
@@ -1411,9 +1440,10 @@
 ; Code action — quick fixes for undefined symbols
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-code-action {-> Num List Nil})
+(sig 'handle-code-action {-> Num CodeActionParams Nil})
 (fun {handle-code-action id params} {do
-  (= {uri} params:textDocument:uri)
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
   (= {context} params:context)
   (= {diagnostics} context:diagnostics)
   (if (nil? diagnostics) {lsp/send-response id nil}
@@ -1479,7 +1509,7 @@
 ; Semantic tokens range — tokens for visible viewport only
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-semantic-tokens-range {-> Num List Nil})
+(sig 'handle-semantic-tokens-range {-> Num RangeParams Nil})
 (fun {handle-semantic-tokens-range id params} {do
   (= {range} (plist/get params :range))
   (= {ctx} (lsp/get-doc params))
@@ -1667,26 +1697,87 @@
     {_ (lsp/dispatch-to-worker method id params)}
 })
 
+(sig 'lsp/make-text-doc {-> List LspTextDoc})
+(fun {lsp/make-text-doc raw} {
+  LspTextDoc (plist/get raw :uri)
+})
+
+(sig 'lsp/make-text-doc-text {-> List LspTextDocText})
+(fun {lsp/make-text-doc-text raw} {
+  LspTextDocText (plist/get raw :uri) (plist/get raw :text)
+})
+
+(sig 'lsp/make-position {-> List LspPosition})
+(fun {lsp/make-position raw} {
+  LspPosition (plist/get raw :line) (plist/get raw :character)
+})
+
+(sig 'lsp/make-range {-> List LspRange})
+(fun {lsp/make-range raw} {
+  LspRange (lsp/make-position (plist/get raw :start)) (lsp/make-position (plist/get raw :end))
+})
+
+(sig 'lsp/to-doc-params {-> List DocParams})
+(fun {lsp/to-doc-params raw} {
+  DocParams (lsp/make-text-doc (plist/get raw :textDocument))
+})
+
+(sig 'lsp/to-tdp-params {-> List TextDocPosParams})
+(fun {lsp/to-tdp-params raw} {
+  TextDocPosParams (lsp/make-text-doc (plist/get raw :textDocument))
+                   (lsp/make-position (plist/get raw :position))
+})
+
+(sig 'lsp/to-open-params {-> List OpenParams})
+(fun {lsp/to-open-params raw} {
+  OpenParams (lsp/make-text-doc-text (plist/get raw :textDocument))
+})
+
+(sig 'lsp/to-change-params {-> List ChangeParams})
+(fun {lsp/to-change-params raw} {
+  ChangeParams (lsp/make-text-doc (plist/get raw :textDocument))
+               (plist/get raw :contentChanges)
+})
+
+(sig 'lsp/to-save-params {-> List SaveParams})
+(fun {lsp/to-save-params raw} {
+  SaveParams (lsp/make-text-doc (plist/get raw :textDocument))
+             (plist/get raw :text)
+})
+
+(sig 'lsp/to-range-params {-> List RangeParams})
+(fun {lsp/to-range-params raw} {
+  RangeParams (lsp/make-text-doc (plist/get raw :textDocument))
+              (lsp/make-range (plist/get raw :range))
+})
+
+(sig 'lsp/to-rename-params {-> List RenameParams})
+(fun {lsp/to-rename-params raw} {
+  RenameParams (lsp/make-text-doc (plist/get raw :textDocument))
+               (lsp/make-position (plist/get raw :position))
+               (plist/get raw :newName)
+})
+
 (sig 'lsp/handle-readonly {-> Str Any List Nil})
 (fun {lsp/handle-readonly method id params} {
   match method
-    {"textDocument/hover" (handle-hover id params)}
-    {"textDocument/definition" (handle-definition id params)}
-    {"textDocument/references" (handle-references id params)}
-    {"textDocument/completion" (handle-completion id params)}
-    {"textDocument/documentSymbol" (handle-document-symbols id params)}
+    {"textDocument/hover" (handle-hover id (lsp/to-tdp-params params))}
+    {"textDocument/definition" (handle-definition id (lsp/to-tdp-params params))}
+    {"textDocument/references" (handle-references id (lsp/to-tdp-params params))}
+    {"textDocument/completion" (handle-completion id (lsp/to-tdp-params params))}
+    {"textDocument/documentSymbol" (handle-document-symbols id (lsp/to-doc-params params))}
     {"workspace/symbol" (handle-workspace-symbols id params)}
-    {"textDocument/semanticTokens/full" (handle-semantic-tokens id params)}
-    {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id params)}
-    {"textDocument/prepareRename" (handle-prepare-rename id params)}
-    {"textDocument/rename" (handle-rename id params)}
-    {"textDocument/inlayHint" (handle-inlay-hints id params)}
-    {"textDocument/signatureHelp" (handle-signature-help id params)}
-    {"textDocument/documentHighlight" (handle-document-highlight id params)}
-    {"textDocument/documentLink" (handle-document-link id params)}
+    {"textDocument/semanticTokens/full" (handle-semantic-tokens id (lsp/to-doc-params params))}
+    {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id (lsp/to-range-params params))}
+    {"textDocument/prepareRename" (handle-prepare-rename id (lsp/to-tdp-params params))}
+    {"textDocument/rename" (handle-rename id (lsp/to-rename-params params))}
+    {"textDocument/inlayHint" (handle-inlay-hints id (lsp/to-range-params params))}
+    {"textDocument/signatureHelp" (handle-signature-help id (lsp/to-tdp-params params))}
+    {"textDocument/documentHighlight" (handle-document-highlight id (lsp/to-tdp-params params))}
+    {"textDocument/documentLink" (handle-document-link id (lsp/to-doc-params params))}
     {"textDocument/foldingRange" (handle-folding-range id params)}
     {"textDocument/selectionRange" (handle-selection-range id params)}
-    {"textDocument/codeLens" (handle-code-lens id params)}
+    {"textDocument/codeLens" (handle-code-lens id (lsp/to-doc-params params))}
     {"textDocument/codeAction" (handle-code-action id params)}
     {_ (if (num? id)
          {lsp/send-error id -32601 (str "Method not found: " method)} {})}
@@ -1707,7 +1798,7 @@
       (if (nil? method) {}
         {match method
             {"initialize" (do (stderr/write (str "[valk-lsp] <- initialize\n"))
-                              (handle-initialize id params)
+                              (handle-initialize id (InitParams (plist/get params :rootUri)))
                               (def {lsp/initialized} 1))}
             {"initialized" (do
               (if (not (nil? lsp/db))
@@ -1730,10 +1821,10 @@
                  {if (num? id)
                    {lsp/send-error id -32002 "Server not initialized"} {}}
                  {match method
-                   {"textDocument/didOpen" (handle-did-open params)}
-                   {"textDocument/didChange" (handle-did-change params)}
-                   {"textDocument/didClose" (handle-did-close params)}
-                   {"textDocument/didSave" (handle-did-save params)}
+                   {"textDocument/didOpen" (handle-did-open (lsp/to-open-params params))}
+                   {"textDocument/didChange" (handle-did-change (lsp/to-change-params params))}
+                   {"textDocument/didClose" (handle-did-close (lsp/to-doc-params params))}
+                   {"textDocument/didSave" (handle-did-save (lsp/to-save-params params))}
                    {"$/cancelRequest" {}}
                    {_ (if (num? id)
                          {lsp/dispatch-request method id params}
