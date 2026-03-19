@@ -41,7 +41,7 @@ typedef struct {
 
 // Keyword/operator sets (simple linear scan — sets are small)
 static const char *KEYWORDS[] = {
-  "fun", "\\", "def", "=", "if", "match", "select", "case",
+  "fun", "\\", "def", "=", "if", "select", "case",
   "do", "let", "type", "sig", "load", "and", "or", "not",
   "quote", "quasiquote", "unquote", "unquote-splicing", NULL
 };
@@ -176,9 +176,86 @@ static void __attribute__((unused)) emit_hint(index_ctx_t *ctx, int pos, const c
 
 static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr);
 static void walk_do(index_ctx_t *ctx, valk_lval_t *tl);
-static void walk_each(index_ctx_t *ctx, valk_lval_t *exprs);
-
+static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd, valk_lval_t *tl);
 static void walk_qexpr_body(index_ctx_t *ctx, valk_lval_t *qexpr);
+static void walk_each(index_ctx_t *ctx, valk_lval_t *exprs);
+static void walk_match(index_ctx_t *ctx, valk_lval_t *tl) {
+  if (!tl || LVAL_TYPE(tl) != LVAL_CONS) return;
+
+  // First arg is the value being matched
+  walk_expr(ctx, tl->cons.head);
+  tl = tl->cons.tail;
+
+  // Rest are clauses: {(Pattern var1 var2) body}
+  while (tl && LVAL_TYPE(tl) == LVAL_CONS) {
+    valk_lval_t *clause = tl->cons.head;
+    if (clause && LVAL_TYPE(clause) == LVAL_CONS && (clause->flags & LVAL_FLAG_QUOTED)) {
+      valk_lval_t *pattern = clause->cons.head;
+      valk_lval_t *body_list = clause->cons.tail;
+
+      // Create scope for this match arm
+      int clause_pos = (int)LVAL_SRC_POS(clause);
+      if (clause_pos < 0 && pattern) clause_pos = (int)LVAL_SRC_POS(pattern);
+      push_scope(ctx, clause_pos);
+
+      // Walk pattern — first element is constructor, rest are bound variables
+      if (pattern && LVAL_TYPE(pattern) == LVAL_CONS) {
+        valk_lval_t *ctor = pattern->cons.head;
+        if (ctor && LVAL_TYPE(ctor) == LVAL_SYM) {
+          int cp = (int)LVAL_SRC_POS(ctor);
+          int cl = (int)strlen(ctor->str);
+          if (cp >= 0) {
+            emit_semtok(ctx, cp, cl, TOK_TYPE, 0);
+            emit_node(ctx, cp, cp + cl, "sym", ctor->str);
+          }
+        }
+        // Bind pattern variables
+        valk_lval_t *vars = pattern->cons.tail;
+        while (vars && LVAL_TYPE(vars) == LVAL_CONS) {
+          valk_lval_t *v = vars->cons.head;
+          if (v && LVAL_TYPE(v) == LVAL_SYM) {
+            const char *vname = v->str;
+            int vp = (int)LVAL_SRC_POS(v);
+            int vl = (int)strlen(vname);
+            add_scope_name(ctx, vname, true);
+            if (vp >= 0) {
+              emit_semtok(ctx, vp, vl, TOK_PARAMETER, 1);
+              emit_ref(ctx, vname, vp, vl, clause_pos, 1);
+              emit_node(ctx, vp, vp + vl, "sym", vname);
+            }
+          }
+          vars = vars->cons.tail;
+        }
+      } else if (pattern && LVAL_TYPE(pattern) == LVAL_SYM) {
+        // Simple pattern: just a symbol (wildcard or var)
+        const char *pname = pattern->str;
+        int pp = (int)LVAL_SRC_POS(pattern);
+        int pl = (int)strlen(pname);
+        if (pp >= 0 && strcmp(pname, "_") != 0) {
+          add_scope_name(ctx, pname, true);
+          emit_semtok(ctx, pp, pl, TOK_PARAMETER, 1);
+          emit_ref(ctx, pname, pp, pl, clause_pos, 1);
+          emit_node(ctx, pp, pp + pl, "sym", pname);
+        }
+      }
+
+      // Walk body expressions
+      while (body_list && LVAL_TYPE(body_list) == LVAL_CONS) {
+        valk_lval_t *be = body_list->cons.head;
+        if (be && LVAL_TYPE(be) == LVAL_CONS && (be->flags & LVAL_FLAG_QUOTED)) {
+          walk_qexpr_body(ctx, be);
+        } else {
+          walk_expr(ctx, be);
+        }
+        body_list = body_list->cons.tail;
+      }
+      pop_scope(ctx);
+    }
+    tl = tl->cons.tail;
+  }
+}
+
+
 
 static void walk_each(index_ctx_t *ctx, valk_lval_t *exprs) {
   while (exprs && LVAL_TYPE(exprs) == LVAL_CONS) {
@@ -204,8 +281,13 @@ static void walk_qexpr_body(index_ctx_t *ctx, valk_lval_t *qexpr) {
       return;
     }
   }
-  // Walk all elements of the qexpr as code
-  walk_each(ctx, qexpr);
+  // Treat qexpr as a single expression (e.g. {+ x 1}, {print msg})
+  if (hd && LVAL_TYPE(hd) == LVAL_SYM && qexpr->cons.tail &&
+      LVAL_TYPE(qexpr->cons.tail) == LVAL_CONS) {
+    walk_list_head(ctx, qexpr, hd, qexpr->cons.tail);
+  } else {
+    walk_each(ctx, qexpr);
+  }
 }
 
 static bool is_qexpr(valk_lval_t *v) {
@@ -285,7 +367,7 @@ static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is
       if (dp >= 0) emit_semtok(ctx, dp, 2, TOK_KEYWORD, 0);
       walk_do(ctx, inner->cons.tail);
     } else {
-      walk_each(ctx, inner);
+      walk_qexpr_body(ctx, inner);
     }
   } else {
     walk_expr(ctx, body);
@@ -396,13 +478,51 @@ static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
 
   if (pos < 0) return;
 
-  emit_node(ctx, pos, pos + len, "sym", name);
-
   if (is_keyword_str(name)) {
+    emit_node(ctx, pos, pos + len, "sym", name);
     emit_semtok(ctx, pos, len, TOK_PROPERTY, 0);
     return;
   }
 
+  // Check for var:field pattern (lowercase:anything)
+  const char *colon = strchr(name, ':');
+  if (colon && colon != name) {
+    // Split: var part + field parts
+    int var_len = (int)(colon - name);
+    char var_name[256];
+    if (var_len >= (int)sizeof(var_name)) var_len = (int)sizeof(var_name) - 1;
+    memcpy(var_name, name, var_len);
+    var_name[var_len] = 0;
+
+    // Emit var as scoped ref
+    int scope_id = resolve_scope(ctx, var_name);
+    int tok = (scope_id >= 0 && is_scope_param(ctx, var_name)) ? TOK_PARAMETER : TOK_VARIABLE;
+    emit_semtok(ctx, pos, var_len, tok, 0);
+    emit_ref(ctx, var_name, pos, var_len, scope_id, 0);
+    emit_node(ctx, pos, pos + var_len, "sym", var_name);
+
+    // Emit each :field segment as property
+    const char *p = colon;
+    int field_pos = pos + var_len;
+    while (*p == ':') {
+      const char *next = strchr(p + 1, ':');
+      int flen = next ? (int)(next - p) : (int)strlen(p);
+      emit_semtok(ctx, field_pos, flen, TOK_PROPERTY, 0);
+      emit_node(ctx, field_pos, field_pos + flen, "sym", p);
+      field_pos += flen;
+      p = next ? next : p + flen;
+    }
+    return;
+  }
+
+  // Check for Type:accessor (uppercase first char + colon)
+  if (name[0] >= 'A' && name[0] <= 'Z' && colon) {
+    emit_node(ctx, pos, pos + len, "sym", name);
+    emit_semtok(ctx, pos, len, TOK_TYPE, 0);
+    return;
+  }
+
+  emit_node(ctx, pos, pos + len, "sym", name);
   int scope_id = resolve_scope(ctx, name);
   if (scope_id >= 0) {
     int tok = is_scope_param(ctx, name) ? TOK_PARAMETER : TOK_VARIABLE;
@@ -427,6 +547,12 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
   if (strcmp(name, "def") == 0)   { walk_binding(ctx, hd, tl); return; }
   if (strcmp(name, "=") == 0)     { walk_binding(ctx, hd, tl); return; }
   if (strcmp(name, "type") == 0)  { walk_type(ctx, hd, tl); return; }
+  if (strcmp(name, "match") == 0) {
+    int kp = (int)LVAL_SRC_POS(hd);
+    if (kp >= 0) emit_semtok(ctx, kp, 5, TOK_KEYWORD, 0);
+    walk_match(ctx, tl);
+    return;
+  }
   if (strcmp(name, "sig") == 0)   { return; } // sig handled by type_env
   if (strcmp(name, "quote") == 0) { return; }
 
@@ -481,6 +607,7 @@ static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr) {
     int pos = (int)LVAL_SRC_POS(expr);
     if (pos >= 0) {
       int len = (int)strlen(expr->str);
+      emit_semtok(ctx, pos, len + 2, TOK_STRING, 0);
       emit_node(ctx, pos, pos + len + 2, "str", expr->str);
     }
     return;
