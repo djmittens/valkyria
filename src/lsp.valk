@@ -638,13 +638,13 @@
   (= {db-def} (if (nil? lsp/db) {nil}
     {do
       (= {target} (symdb/get-ref-at-offset lsp/db path offset))
-      (= {target} (if (not (nil? target)) {target}
-        {lsp/find-var-for-field lsp/db path offset word}))
-      (if (nil? target) {nil}
+      (if (not (nil? target))
         {do
           (= {sid} (plist/get target :scope_id))
-          (if (< sid 0) {nil}
-            {symdb/find-def-in-scope-chain lsp/db path (plist/get target :name) sid})})}))
+          (if (nil? sid) {nil}
+            {if (< sid 0) {nil}
+              {symdb/find-def-in-scope-chain lsp/db path (plist/get target :name) sid}})}
+        {lsp/find-var-for-field lsp/db path offset word})}))
   (if (not (nil? db-def)) {db-def}
     {do
       (= {ast-local} (ref/find-scoped-refs-from-ast ast text line col))
