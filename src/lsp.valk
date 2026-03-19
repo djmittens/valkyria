@@ -667,18 +667,25 @@
           {if (not (> (len nname) 0)) {nil}
           {if (not (== (str/slice nname 0 1) ":")) {nil}
             {do
-              (= {npos} (plist/get node :pos))
-              (= {var-ref} (symdb/get-ref-at-offset db path (- npos 1)))
-              var-ref}}})})}
+              (= {field-def} (symdb/find-field-definition db nname))
+              (if (not (nil? field-def)) {field-def}
+                {do
+                  (= {npos} (plist/get node :pos))
+                  (= {var-ref} (symdb/get-ref-at-offset db path (- npos 1)))
+                  var-ref})}}})})}
 })
 
 (sig 'lsp/respond-def-offset {-> Num Str Str List Nil})
 (fun {lsp/respond-def-offset id uri text def-ref} {do
   (= {pos} (if (plist/get def-ref :pos) {plist/get def-ref :pos} {plist/get def-ref :offset}))
   (= {rlen} (plist/get def-ref :len))
-  (= {dlc} (offset->line-col text pos))
+  (= {def-path} (plist/get def-ref :path))
+  (= {target-uri} (if (nil? def-path) {uri} {str "file://" def-path}))
+  (= {target-text} (if (nil? def-path) {text} {read-file def-path}))
+  (= {target-text} (if (error? target-text) {text} {target-text}))
+  (= {dlc} (offset->line-col target-text pos))
   (lsp/send-response id
-    (list :uri uri
+    (list :uri target-uri
           :range (list
             :start (list :line (head dlc) :character (head (tail dlc)))
             :end (list :line (head dlc) :character (+ (head (tail dlc)) (if (nil? rlen) {1} {rlen}))))))

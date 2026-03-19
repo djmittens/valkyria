@@ -701,6 +701,26 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
           {symdb/find-def-in-scope-chain db path name (plist/get parent :parent_pos)})})}}
 })
 
+(sig 'symdb/find-field-definition {-> Ref Str List})
+(fun {symdb/find-field-definition db field-name} {
+  if (nil? db) {nil}
+  {do
+    (= {ctor} (sqlite/query-maybe db
+      "SELECT s.name, f.path, s.line, s.col FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.kind=4 AND s.sig LIKE ?1 LIMIT 1"
+      (str "%" field-name " %")))
+    (if (nil? ctor) {nil}
+      {do
+        (= {ctor-path} (plist/get ctor :path))
+        (= {field-node} (sqlite/query-maybe db
+          "SELECT n.pos, n.end_pos FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.type='sym' AND n.name=?2 LIMIT 1"
+          ctor-path field-name))
+        (if (nil? field-node) {nil}
+          {list :pos (plist/get field-node :pos)
+                :len (- (plist/get field-node :end_pos) (plist/get field-node :pos))
+                :path ctor-path})})}
+})
+
+
 
 (sig 'symdb/sync-file-symbols {-> Ref Str Str Str Nil})
 (fun {symdb/sync-file-symbols db uri text hash} {do
