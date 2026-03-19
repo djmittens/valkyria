@@ -1,11 +1,6 @@
 #pragma once
 #include "parser.h"
 
-#define VALK_TYPE_MAX_TYPES 256
-#define VALK_TYPE_MAX_CONSTRUCTORS 512
-#define VALK_TYPE_MAX_FIELDS 16
-#define VALK_TYPE_MAX_PARAMS 8
-
 typedef struct {
   char *name;
   char *type_name;
@@ -15,44 +10,47 @@ typedef struct {
 typedef struct {
   char *name;
   char *type_name;
-  valk_field_t fields[VALK_TYPE_MAX_FIELDS];
+  valk_field_t *fields;
   u64 field_count;
+  u64 field_capacity;
 } valk_constructor_t;
 
 typedef struct {
   char *name;
-  char *params[VALK_TYPE_MAX_PARAMS];
+  char **params;
   u64 param_count;
-  valk_constructor_t *constructors[VALK_TYPE_MAX_CONSTRUCTORS];
+  u64 param_capacity;
+  valk_constructor_t **constructors;
   u64 constructor_count;
+  u64 constructor_capacity;
   bool is_product;
 } valk_type_decl_t;
 
-#define VALK_TYPE_MAX_SCOPE_ENTRIES 64
-
 typedef struct valk_type_scope {
-  struct { const char *var; const char *type; } entries[VALK_TYPE_MAX_SCOPE_ENTRIES];
+  struct { const char *var; const char *type; } *entries;
   u64 count;
+  u64 capacity;
   struct valk_type_scope *parent;
 } valk_type_scope_t;
 
-#define VALK_TYPE_MAX_SIGS 512
-#define VALK_TYPE_MAX_SIG_PARAMS 16
-
 typedef struct {
   char *name;
-  char *param_types[VALK_TYPE_MAX_SIG_PARAMS];
+  char **param_types;
   u64 param_count;
+  u64 param_capacity;
   char *return_type;
 } valk_type_sig_t;
 
 typedef struct {
-  valk_type_decl_t *types[VALK_TYPE_MAX_TYPES];
+  valk_type_decl_t **types;
   u64 type_count;
-  valk_constructor_t *constructors[VALK_TYPE_MAX_CONSTRUCTORS];
+  u64 type_capacity;
+  valk_constructor_t **constructors;
   u64 constructor_count;
-  valk_type_sig_t *sigs[VALK_TYPE_MAX_SIGS];
+  u64 constructor_capacity;
+  valk_type_sig_t **sigs;
   u64 sig_count;
+  u64 sig_capacity;
 } valk_type_env_t;
 
 valk_type_env_t *valk_type_env_new(void);

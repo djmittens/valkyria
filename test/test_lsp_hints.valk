@@ -656,4 +656,82 @@
       true
     })
 
+
+  ; --- Field-access type hints ---
+
+  (test "field-access-hint-from-sig"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "get-info" "{-> Str SymInfo}")
+      (= {text} "(type {SymInfo} {:name Str :kind Num :doc Any})\n(sig 'get-info {-> Str SymInfo})\n(fun {get-info x} {do\n  (= {info} (SymInfo x 1 nil))\n  info})\n(sig 'use-info {-> SymInfo Str})\n(fun {use-info info} {do\n  (= {n} info:name)\n  n})")
+      (= {hints} (hint/collect text db nil))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
+      (= {labels} (map (\ {h} {h:label}) type-hints))
+      (test/assert (member? ":: Str" labels) "field access should show field type")
+      true
+    })
+
+  (test "field-access-hint-from-ctor"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "dist" "{-> Point Num}")
+      (= {text} "(type {Point} {:x Num :y Num})\n(fun {dist p} {do\n  (= {px} p:x)\n  px})")
+      (= {hints} (hint/collect text db nil))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
+      (= {labels} (map (\ {h} {h:label}) type-hints))
+      (test/assert (member? ":: Num" labels) "ctor field should show Num")
+      true
+    })
+
+  (test "field-access-no-hint-untyped"
+    {do
+      (= {text} "(fun {foo x} {do\n  (= {n} x:name)\n  n})")
+      (= {hints} (hint/collect text nil nil))
+      (= {fa-hints} (filter (\ {h} {do (== h:kind 1) }) hints))
+      (= {labels} (map (\ {h} {h:label}) fa-hints))
+      (test/assert (not (member? ":: Str" labels)) "untyped var should not get field hint")
+      true
+    })
+
+  (test "field-access-cross-file-via-db"
+    {do
+      (= {db} (make-sig-db))
+      (sqlite/exec db
+        "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('SymInfo', 1, 0, 0, 4, 3, ':name Str :kind Num :doc Str')")
+      (seed-sig db "get-info" "{-> Str SymInfo}")
+      (= {text} "(sig 'get-info {-> Str SymInfo})\n(fun {use-it x} {do\n  (= {info} (get-info x))\n  (= {n} info:name)\n  n})")
+      (= {hints} (hint/collect text db nil))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
+      (= {labels} (map (\ {h} {h:label}) type-hints))
+      (test/assert (member? ":: Str" labels) "cross-file field should resolve via db")
+      true
+    })
+
+  (test "field-access-from-function-return-type"
+    {do
+      (= {db} (make-sig-db))
+      (= {text} "(type {Point} {:x Num :y Num})\n(sig 'make-pt {-> Num Num Point})\n(fun {use-pt a b} {do\n  (= {p} (make-pt a b))\n  (= {px} p:x)\n  px})")
+      (seed-sig db "make-pt" "{-> Num Num Point}")
+      (= {hints} (hint/collect text db nil))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
+      (= {labels} (map (\ {h} {h:label}) type-hints))
+      (test/assert (member? ":: Num" labels) "return type inferred field should show Num")
+      true
+    })
+
+  (test "field-access-suppresses-any"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "get-thing" "{-> Str ThingInfo}")
+      (sqlite/exec db
+        "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('ThingInfo', 1, 0, 0, 4, 2, ':name Str :data Any')")
+      (= {text} "(sig 'get-thing {-> Str ThingInfo})\n(fun {use-it x} {do\n  (= {info} (get-thing x))\n  (= {d} info:data)\n  d})")
+      (= {hints} (hint/collect text db nil))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
+      (= {labels} (map (\ {h} {h:label}) type-hints))
+      (test/assert (not (member? ":: Any" labels)) "Any field type should be suppressed")
+      true
+    })
+
+
 ))

@@ -256,7 +256,14 @@
   (lsp/doc-store uri text)
   (if (nil? lsp/db) {}
     {do (= {changed} (symdb/sync-document lsp/db uri text))
-        (if (> changed 0) {lsp/invalidate-known-set} {})})})
+        (if (> changed 0)
+          {do
+            (= {ast} (lsp/get-ast uri text))
+            (if (not (error? ast))
+              {lsp/precompute-file-data lsp/db uri ast text}
+              {})
+            (lsp/invalidate-known-set)}
+          {})})})
 
 (sig 'lsp/sync-doc-text {-> Str Str Nil})
 (fun {lsp/sync-doc-text uri text} {do
@@ -270,16 +277,50 @@
         {if (== existing:hash hash) {}
           {do (sqlite/exec lsp/db "BEGIN")
               (symdb/sync-file-symbols lsp/db uri text hash)
+              (= {ast} (lsp/get-ast uri text))
+              (lsp/precompute-file-data lsp/db uri ast text)
               (sqlite/exec lsp/db "COMMIT")
               (lsp/invalidate-known-set)}}
         {do (sqlite/exec lsp/db "BEGIN")
             (symdb/sync-file-symbols lsp/db uri text hash)
+            (= {ast} (lsp/get-ast uri text))
+            (lsp/precompute-file-data lsp/db uri ast text)
             (sqlite/exec lsp/db "COMMIT")
             (lsp/invalidate-known-set)})})})
 
 ; ---------------------------------------------------------------------------
 ; Method handlers — notifications
 ; ---------------------------------------------------------------------------
+
+(sig 'lsp/sync-file {-> Ref Str Num})
+(fun {lsp/sync-file db path} {do
+  (= {fp} (file/fingerprint path))
+  (if (error? fp) {0}
+    {do
+      (= {fpath} (uri->path (str "file://" path)))
+      (= {existing} (sqlite/query-maybe db
+        "SELECT hash FROM files WHERE path=?1" fpath))
+      (if (not (nil? existing))
+        {if (== existing:hash fp) {0}
+          {do
+            (= {text} (read-file path))
+            (if (error? text) {0}
+              {do
+                (= {uri} (str "file://" path))
+                (symdb/sync-file-symbols db uri text fp)
+                (= {ast} (parse text))
+                (if (not (error? ast)) {lsp/precompute-file-data db uri ast text} {})
+                1})}}
+        {do
+          (= {text} (read-file path))
+          (if (error? text) {0}
+            {do
+              (= {uri} (str "file://" path))
+              (symdb/sync-file-symbols db uri text fp)
+              (= {ast} (parse text))
+              (if (not (error? ast)) {lsp/precompute-file-data db uri ast text} {})
+              1})})})
+})
 
 (sig 'lsp/seed-file {-> Ref Str Num})
 (fun {lsp/seed-file db path} {do
@@ -383,6 +424,8 @@
     {})
   (lsp/send-response id lsp/capabilities)})
 
+(def {lsp/noop-cb} (\ {_} {}))
+
 (sig 'handle-did-open {-> List Nil})
 (fun {handle-did-open params} {do
   (= {uri} params:textDocument:uri)
@@ -404,8 +447,12 @@
       (= {text} (plist/get (head changes) :text))
       (lsp/doc-store uri text)
       (dict/remove! lsp/ast-cache uri)
-      (lsp/send-notification "textDocument/publishDiagnostics"
-        (list :uri uri :diagnostics nil))})})
+      (aio/dispatch lsp/sys
+        (\ {_} {do (lsp/cache-ast uri text)
+                   (lsp/sync-doc uri text)
+                   (lsp/publish-diagnostics-fast uri text)
+                   nil})
+        nil lsp/noop-cb)})})
 
 (sig 'handle-did-close {-> List Nil})
 (fun {handle-did-close params} {do
@@ -432,7 +479,7 @@
 ; Method handlers — requests
 ; ---------------------------------------------------------------------------
 
-(sig 'hover/format-markdown {-> List Str Str})
+(sig 'hover/format-markdown {-> SymInfo Str Str})
 (fun {hover/format-markdown info word} {do
   (= {name} info:name)
   (= {type-sig} info:sig)
@@ -460,43 +507,158 @@
   (str/join (reverse sections) "\n\n---\n\n")
 })
 
+; ---------------------------------------------------------------------------
+; Hover — AST-node-aware via symdb nodes table
+; ---------------------------------------------------------------------------
+
+(sig 'hover/describe {-> List Ref Str})
+(fun {hover/describe info db} {
+  if (nil? info) {nil}
+  {do
+    (= {ntype} (plist/get info :type))
+    (= {name} (plist/get info :name))
+    (if (== ntype "str") {str "```valk\n\"" name "\" :: Str\n```"}
+    {if (== ntype "num") {str "```valk\n" name " :: Num\n```"}
+    {if (== ntype "sym")
+      {if (> (len name) 0)
+        {if (== (str/slice name 0 1) ":")
+          {str "```valk\n" name " :: Keyword\n```"}
+          {hover/sym-describe name db}}
+        {nil}}
+    {nil}}})}
+})
+
+(sig 'hover/sym-describe {-> Str Ref Str})
+(fun {hover/sym-describe name db} {
+  if (nil? db) {str "```valk\n" name "\n```"}
+  {do
+    (= {info} (symdb/symbol-hover db name))
+    (if (nil? info) {str "```valk\n" name "\n```"}
+      {hover/format-markdown info name})}
+})
+
+
+; ---------------------------------------------------------------------------
+; Precompute: store semantic tokens, hints, scoped refs during file sync
+; Called after symdb/sync-file-symbols when all analysis modules are loaded
+; ---------------------------------------------------------------------------
+
+(sig 'lsp/precompute-file-data {-> Ref Str List Str Nil})
+(fun {lsp/precompute-file-data db uri ast text} {do
+  (= {path} (uri->path uri))
+  (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
+  (if (nil? file-id) {}
+    {do
+      (= {raw-sem} (reverse (sem/walk-each ast nil nil)))
+      (symdb/insert-semtok-batch db file-id raw-sem)
+      (= {local-params} (hint/collect-local-params ast))
+      (= {hctx} (list :local local-params :db db))
+      (= {raw-hints} (hint/walk-exprs ast hctx nil))
+      (= {type-hints} (hint/collect-type-hints ast db))
+      (= {field-hints} (hint/collect-field-hints ast db))
+      (symdb/insert-hint-batch db file-id (join raw-hints (join type-hints field-hints)))
+      (= {refs} (ref/collect-refs-from-ast ast))
+      (symdb/insert-scoped-ref-batch db file-id refs)
+      (sqlite/exec db "DELETE FROM scopes WHERE file_id=?1" file-id)
+      (= {scope-entries} (ref/collect-scopes-from-ast ast))
+      (symdb/insert-scopes db file-id scope-entries)})
+})
+
 (sig 'handle-hover {-> Num List Nil})
 (fun {handle-hover id params} {do
-  (= {ctx} (lsp/get-word-ctx params))
+  (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {path} (uri->path ctx:uri))
       (= {info} (if (nil? lsp/db) {nil}
-        {symdb/symbol-hover lsp/db ctx:word}))
-      (= {hover-str} (if (nil? info)
-        {str "```valk\n" ctx:word "\n```"}
-        {hover/format-markdown info ctx:word}))
-      (lsp/send-response id
-        (list :contents
-          (list :kind "markdown" :value hover-str)
-          :range
-          (list :start (list :line ctx:line :character ctx:col)
-                :end (list :line ctx:line :character (+ ctx:col (len ctx:word))))))})
+        {symdb/node-at-offset lsp/db path offset}))
+      (= {wr} (word-range-at-position ctx:text ctx:line ctx:col))
+      (= {word} (if (nil? info)
+        {if (nil? wr) {nil} {wr:word}}
+        {plist/get info :name}))
+      (if (nil? word) {lsp/send-response id (None)}
+        {do
+          (= {hover-str} (hover/describe info lsp/db))
+          (= {hover-str} (if (nil? hover-str)
+            {do
+              (= {fallback-info} (if (nil? lsp/db) {nil}
+                {symdb/symbol-hover lsp/db word}))
+              (if (nil? fallback-info)
+                {str "```valk\n" word "\n```"}
+                {hover/format-markdown fallback-info word})}
+            {hover-str}))
+          (= {start-line} ctx:line)
+          (= {start-col} (if (nil? wr) {ctx:col} {wr:start}))
+          (= {ntype} (if (nil? info) {nil} {plist/get info :type}))
+          (= {wlen} (if (nil? word) {0}
+            {if (== ntype "str") {+ (len word) 2} {len word}}))
+          (if (not (nil? info))
+            {do
+              (= {node-lc} (offset->line-col ctx:text (plist/get info :pos)))
+              (= {start-line} (head node-lc))
+              (= {start-col} (head (tail node-lc)))}
+            {})
+          (lsp/send-response id
+            (list :contents
+              (list :kind "markdown" :value hover-str)
+              :range
+              (list :start (list :line start-line :character start-col)
+                    :end (list :line start-line :character (+ start-col wlen)))))})})
 })
 
 (sig 'handle-definition {-> Num List Nil})
 (fun {handle-definition id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id (None)}
-  {if (nil? lsp/db) {lsp/send-response id (None)}
     {do
-      (= {defn} (symdb/find-definition lsp/db ctx:word))
-      (if (nil? defn)
-        {lsp/send-response id (None)}
+      (= {path} (uri->path ctx:uri))
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {local-def} (lsp/find-local-def ctx:ast ctx:text ctx:line ctx:col ctx:word path offset))
+      (if (not (nil? local-def))
+        {lsp/respond-def-offset id ctx:uri ctx:text local-def}
         {do
-          (= {def-path} defn:path)
-          (= {def-line} defn:line)
-          (= {def-col} defn:col)
-          (lsp/send-response id
-            (list :uri (str "file://" def-path)
-                  :range (list
-                    :start (list :line def-line :character def-col)
-                    :end (list :line def-line :character (+ def-col (len ctx:word))))))})}})
+          (= {defn} (if (nil? lsp/db) {nil} {symdb/find-definition lsp/db ctx:word}))
+          (if (nil? defn) {lsp/send-response id (None)}
+            {lsp/send-response id
+              (list :uri (str "file://" (plist/get defn :path))
+                    :range (list
+                      :start (list :line (plist/get defn :line) :character (plist/get defn :col))
+                      :end (list :line (plist/get defn :line) :character (+ (plist/get defn :col) (len ctx:word)))))})})}
+  )
 })
+
+(sig 'lsp/find-local-def {-> List Str Num Num Str Str Num List})
+(fun {lsp/find-local-def ast text line col word path offset} {do
+  (= {db-def} (if (nil? lsp/db) {nil}
+    {do
+      (= {target} (symdb/get-ref-at-offset lsp/db path offset))
+      (if (nil? target) {nil}
+        {do
+          (= {sid} (plist/get target :scope_id))
+          (if (< sid 0) {nil}
+            {symdb/find-def-in-scope-chain lsp/db path (plist/get target :name) sid})})}))
+  (if (not (nil? db-def)) {db-def}
+    {do
+      (= {ast-local} (ref/find-scoped-refs-from-ast ast text line col))
+      (if (nil? ast-local) {nil}
+        {do
+          (= {defs} (filter (\ {r} {== (plist/get r :is-def) 1}) ast-local))
+          (if (nil? defs) {nil} {head defs})})})
+})
+
+(sig 'lsp/respond-def-offset {-> Num Str Str List Nil})
+(fun {lsp/respond-def-offset id uri text def-ref} {do
+  (= {pos} (if (plist/get def-ref :pos) {plist/get def-ref :pos} {plist/get def-ref :offset}))
+  (= {rlen} (plist/get def-ref :len))
+  (= {dlc} (offset->line-col text pos))
+  (lsp/send-response id
+    (list :uri uri
+          :range (list
+            :start (list :line (head dlc) :character (head (tail dlc)))
+            :end (list :line (head dlc) :character (+ (head (tail dlc)) (if (nil? rlen) {1} {rlen}))))))
+})
+
 
 (sig 'ref->lsp-location {-> Str Str List List})
 (fun {ref->lsp-location uri text r} {do
@@ -513,18 +675,36 @@
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
     {do
-      (= {local-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
+      (= {path} (uri->path ctx:uri))
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {target} (if (nil? lsp/db) {nil}
+        {symdb/get-ref-at-offset lsp/db path offset}))
+      (= {local-refs} (if (nil? target) {nil}
+        {do
+          (= {sid} (plist/get target :scope_id))
+          (if (== sid -1) {nil}
+            {symdb/get-scoped-refs lsp/db path (plist/get target :name) sid})}))
       (if (not (nil? local-refs))
-        {lsp/send-response id (map (\ {r} {ref->lsp-location ctx:uri ctx:text r}) local-refs)}
-        {if (nil? lsp/db) {lsp/send-response id nil}
-          {do
-            (= {refs} (symdb/find-refs lsp/db ctx:word))
-            (lsp/send-response id (map (\ {r} {
-              list :uri (str "file://" r:path)
-                   :range (list
-                     :start (list :line r:line :character r:col)
-                     :end (list :line r:line :character (+ r:col (len ctx:word))))
-            }) refs))}})})
+        {lsp/send-response id
+          (map (\ {r} {do
+            (= {rlc} (offset->line-col ctx:text (plist/get r :pos)))
+            (list :uri ctx:uri :range (list
+              :start (list :line (head rlc) :character (head (tail rlc)))
+              :end (list :line (head rlc) :character (+ (head (tail rlc)) (plist/get r :len)))))
+          }) local-refs)}
+        {do
+          (= {ast-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
+          (if (not (nil? ast-refs))
+            {lsp/send-response id (map (\ {r} {ref->lsp-location ctx:uri ctx:text r}) ast-refs)}
+            {if (nil? lsp/db) {lsp/send-response id nil}
+              {do
+                (= {refs} (symdb/find-refs lsp/db ctx:word))
+                (lsp/send-response id (map (\ {r} {
+                  list :uri (str "file://" (plist/get r :path))
+                       :range (list
+                         :start (list :line (plist/get r :line) :character (plist/get r :col))
+                         :end (list :line (plist/get r :line) :character (+ (plist/get r :col) (len ctx:word))))
+                }) refs))}})})})
 })
 
 ; ---------------------------------------------------------------------------
@@ -679,9 +859,24 @@
 (sig 'handle-semantic-tokens {-> Num List Nil})
 (fun {handle-semantic-tokens id params} {do
   (= {ctx} (lsp/get-doc params))
-  (if (nil? ctx)
-    {lsp/send-response id (list :data nil)}
-    {lsp/send-response id (list :data (sem/tokenize-ast ctx:ast ctx:text))})
+  (if (nil? ctx) {lsp/send-response id (list :data nil)}
+    {do
+      (= {path} (uri->path ctx:uri))
+      (= {rows} (if (nil? lsp/db) {nil} {symdb/get-semantic-tokens lsp/db path}))
+      (= {data} (if (nil? rows)
+        {sem/tokenize-ast ctx:ast ctx:text}
+        {sem/encode-deltas ctx:text (symdb/rows-to-token-groups rows)}))
+      (lsp/send-response id (list :data data))})
+})
+
+(sig 'symdb/rows-to-token-groups {-> List List})
+(fun {symdb/rows-to-token-groups rows} {
+  if (nil? rows) {nil}
+  {do
+    (= {r} (head rows))
+    (qcons (list (plist/get r :pos) (plist/get r :length)
+                 (plist/get r :token_type) (plist/get r :modifiers))
+      (symdb/rows-to-token-groups (tail rows)))}
 })
 
 ; ---------------------------------------------------------------------------
@@ -786,11 +981,17 @@
 
 (sig 'handle-inlay-hints {-> Num List Nil})
 (fun {handle-inlay-hints id params} {do
-  (= {range} params:range)
+  (= {range} (plist/get params :range))
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
-    {do (= {hints} (hint/collect-from-ast ctx:ast ctx:text lsp/db range))
-        (lsp/send-response id hints)})
+    {do
+      (= {path} (uri->path ctx:uri))
+      (= {rows} (if (nil? lsp/db) {nil}
+        {symdb/get-inlay-hints lsp/db path 0 999999}))
+      (= {hints} (if (nil? rows)
+        {hint/collect-from-ast ctx:ast ctx:text lsp/db range}
+        {hint/format-db-rows rows ctx:text range}))
+      (lsp/send-response id hints)})
 })
 
 ; ---------------------------------------------------------------------------
@@ -849,6 +1050,15 @@
     {hint/query-db-params db name})
 })
 
+(sig 'sig/lookup-params-db-first {-> Str Ref List Any})
+(fun {sig/lookup-params-db-first name db ast} {do
+  (= {db-params} (hint/query-db-params db name))
+  (if (not (nil? db-params)) {db-params}
+    {do
+      (= {local} (hint/collect-local-params ast))
+      (plist/get local name)})
+})
+
 (sig 'handle-signature-help {-> Num List Nil})
 (fun {handle-signature-help id params} {do
   (= {ctx} (lsp/get-text-pos params))
@@ -861,7 +1071,7 @@
           (= {name} (sig/extract-name ctx:text open-pos))
           (if (nil? name) {lsp/send-response id (None)}
             {do
-              (= {fn-params} (sig/lookup-params name ctx:ast lsp/db))
+              (= {fn-params} (sig/lookup-params-db-first name lsp/db ctx:ast))
               (if (nil? fn-params) {lsp/send-response id (None)}
                 {do
                   (= {name-end} (+ open-pos 1 (len name)))
@@ -894,18 +1104,50 @@
   :kind kind)
 })
 
+(sig 'ref->highlight-db {-> Str List List})
+(fun {ref->highlight-db text r} {do
+  (= {rpos} (plist/get r :pos))
+  (= {rname} (plist/get r :name))
+  (= {rlen} (plist/get r :len))
+  (= {rdef} (plist/get r :is_def))
+  (= {lc} (offset->line-col text rpos))
+  (= {kind} (if (== rdef 1) {3} {2}))
+  (list :range (list
+    :start (list :line (head lc) :character (head (tail lc)))
+    :end (list :line (head lc) :character (+ (head (tail lc)) (if (nil? rlen) {(len rname)} {rlen}))))
+  :kind kind)
+})
+
 (sig 'handle-document-highlight {-> Num List Nil})
 (fun {handle-document-highlight id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
     {do
-      (= {local-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
-      (= {refs} (if (not (nil? local-refs)) {local-refs}
+      (= {path} (uri->path ctx:uri))
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {target} (if (nil? lsp/db) {nil}
+        {symdb/get-ref-at-offset lsp/db path offset}))
+      (= {db-refs} (if (nil? target) {nil}
         {do
-          (= {all-refs} (ref/collect-refs-from-ast ctx:ast))
-          (filter (\ {r} {== r:name ctx:word}) all-refs)}))
-      (lsp/send-response id (map (\ {r} {ref->highlight ctx:text r}) refs))})
+          (= {sid} (plist/get target :scope_id))
+          (= {tname} (plist/get target :name))
+          (if (== sid -1)
+            {symdb/get-all-file-refs lsp/db path tname}
+            {symdb/get-scoped-refs lsp/db path tname sid})}))
+      (= {refs} (if (not (nil? db-refs)) {db-refs}
+        {do
+          (= {ast-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
+          (if (not (nil? ast-refs)) {ast-refs}
+            {do
+              (= {all-refs} (ref/collect-refs-from-ast ctx:ast))
+              (filter (\ {r} {== (plist/get r :name) ctx:word}) all-refs)})}))
+      (lsp/send-response id (map (\ {r} {
+        if (plist/get r :pos)
+          {ref->highlight-db ctx:text r}
+          {ref->highlight ctx:text r}
+      }) refs))})
 })
+
 
 ; ---------------------------------------------------------------------------
 ; Document links — make (load "path") clickable
@@ -1205,15 +1447,19 @@
 
 (sig 'handle-semantic-tokens-range {-> Num List Nil})
 (fun {handle-semantic-tokens-range id params} {do
-  (= {range} params:range)
+  (= {range} (plist/get params :range))
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id (list :data nil)}
     {do
-      (= {start-pos} range:start)
-      (= {end-pos} range:end)
-      (= {start-line} start-pos:line)
-      (= {end-line} end-pos:line)
-      (= {data} (sem/tokenize-ast ctx:ast ctx:text))
+      (= {start-pos} (plist/get range :start))
+      (= {end-pos} (plist/get range :end))
+      (= {start-line} (plist/get start-pos :line))
+      (= {end-line} (plist/get end-pos :line))
+      (= {path} (uri->path ctx:uri))
+      (= {rows} (if (nil? lsp/db) {nil} {symdb/get-semantic-tokens lsp/db path}))
+      (= {data} (if (nil? rows)
+        {sem/tokenize-ast ctx:ast ctx:text}
+        {sem/encode-deltas ctx:text (symdb/rows-to-token-groups rows)}))
       (= {filtered} (sem/filter-range data start-line end-line 0 nil))
       (lsp/send-response id (list :data filtered))})
 })
@@ -1293,25 +1539,7 @@
 ; Unified file sync helper
 ; ---------------------------------------------------------------------------
 
-(sig 'lsp/sync-file {-> Ref Str Num})
-(fun {lsp/sync-file db path} {do
-  (= {fp} (file/fingerprint path))
-  (if (error? fp) {0}
-    {do
-      (= {fpath} (uri->path (str "file://" path)))
-      (= {existing} (sqlite/query-maybe db
-        "SELECT hash FROM files WHERE path=?1" fpath))
-      (if (not (nil? existing))
-        {if (== existing:hash fp) {0}
-          {do
-            (= {text} (read-file path))
-            (if (error? text) {0}
-              {do (symdb/sync-file-symbols db (str "file://" path) text fp) 1})}}
-        {do
-          (= {text} (read-file path))
-          (if (error? text) {0}
-            {do (symdb/sync-file-symbols db (str "file://" path) text fp) 1})})})
-})
+
 
 ; ---------------------------------------------------------------------------
 ; Progress support
@@ -1355,7 +1583,6 @@
 ; Dispatch
 ; ---------------------------------------------------------------------------
 
-(def {lsp/noop-cb} (\ {_} {}))
 (def {lsp/sem-version} 0)
 (def {lsp/comp-version} 0)
 (def {lsp/hint-version} 0)

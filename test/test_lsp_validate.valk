@@ -661,4 +661,297 @@
       true
     })
 
+
+  ; === Arity checking tests ===
+
+  (test "arity-too-many-args"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('add', 1, 0, 0, 1, 2, '{-> Num Num Num}')")
+      (= {n} (diag-count-with-db db "(add 1 2 3)"))
+      (sqlite/close db)
+      (test/assert-eq 1 n "too many args should produce 1 diagnostic")
+      true
+    })
+
+  (test "arity-too-few-args"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('greet', 1, 0, 0, 1, 1, '{-> Str Str}')")
+      (= {n} (diag-count-with-db db "(greet)"))
+      (sqlite/close db)
+      (test/assert-eq 1 n "too few args should produce 1 diagnostic")
+      true
+    })
+
+  (test "arity-correct-no-diag"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('add', 1, 0, 0, 1, 2, '{-> Num Num Num}')")
+      (= {n} (diag-count-with-db db "(add 1 2)"))
+      (sqlite/close db)
+      (test/assert-eq 0 n "correct arity should produce 0 diagnostics")
+      true
+    })
+
+  (test "arity-varargs-ok"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('variadic', 1, 0, 0, 1, -1, '{-> & Num Num}')")
+      (= {n} (diag-count-with-db db "(variadic 1 2 3 4 5)"))
+      (sqlite/close db)
+      (test/assert-eq 0 n "varargs with many args should be ok")
+      true
+    })
+
+  (test "arity-message-format"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('foo', 1, 0, 0, 1, 1, '{-> Str Str}')")
+      (= {diags} (vd/validate db (parse "(foo 1 2)") "(foo 1 2)"))
+      (test/assert (> (len diags) 0) "should have diag")
+      (= {msg} (plist/get (head diags) :message))
+      (test/assert (>= (str/index-of msg "expects 1") 0) "message should say expects 1")
+      (test/assert (>= (str/index-of msg "got 2") 0) "message should say got 2")
+      (sqlite/close db)
+      true
+    })
+
+  ; === Special form arity tests ===
+
+  (test "special-form-if-too-few"
+    {do
+      (= {d} (first-diag "(if true)"))
+      (test/assert (not (nil? d)) "if with 1 arg should produce diagnostic")
+      (test/assert (>= (str/index-of (plist/get d :message) "2-3") 0) "message mentions 2-3")
+      true
+    })
+
+  (test "special-form-if-too-many"
+    {do
+      (= {d} (first-diag "(if true 1 2 3)"))
+      (test/assert (not (nil? d)) "if with 4 args should produce diagnostic")
+      true
+    })
+
+  (test "special-form-if-correct"
+    {do
+      (= {n} (diag-count "(if true 1 2)"))
+      (test/assert-eq 0 n "if with 3 args is correct")
+      true
+    })
+
+  (test "special-form-fun-no-body"
+    {do
+      (= {d} (first-diag "(fun {x})"))
+      (test/assert (not (nil? d)) "fun with no body should produce diagnostic")
+      true
+    })
+
+  (test "special-form-def-no-value"
+    {do
+      (= {d} (first-diag "(def {x})"))
+      (test/assert (not (nil? d)) "def with no value should produce diagnostic")
+      true
+    })
+
+  (test "special-form-match-no-clauses"
+    {do
+      (= {d} (first-diag "(match x)"))
+      (test/assert (not (nil? d)) "match with no clauses should produce diagnostic")
+      true
+    })
+
+  (test "special-form-load-no-args"
+    {do
+      (= {d} (first-diag "(load)"))
+      (test/assert (not (nil? d)) "load with no args should produce diagnostic")
+      true
+    })
+
+  ; === Constructor arity tests ===
+
+  (test "ctor-arity-mismatch"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('Point', 1, 0, 0, 4, 2, ':x Num :y Num')")
+      (= {n} (diag-count-with-db db "(Point 1)"))
+      (sqlite/close db)
+      (test/assert-eq 1 n "constructor with wrong field count should produce 1 diagnostic")
+      true
+    })
+
+  (test "ctor-arity-correct"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('Point', 1, 0, 0, 4, 2, ':x Num :y Num')")
+      (= {n} (diag-count-with-db db "(Point 1 2)"))
+      (sqlite/close db)
+      (test/assert-eq 0 n "constructor with correct field count should produce 0 diagnostics")
+      true
+    })
+
+  ; === Division by zero tests ===
+
+  (test "div-zero-literal"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('/', 1, 0, 0, 1, 2, '{-> & Num Num}')")
+      (= {diags} (vd/validate db (parse "(/ 10 0)") "(/ 10 0)"))
+      (= {warnings} (filter (\ {d} {== (plist/get d :severity) 2}) diags))
+      (sqlite/close db)
+      (test/assert (> (len warnings) 0) "division by literal 0 should produce warning")
+      true
+    })
+
+  (test "div-zero-non-literal-ok"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('/', 1, 0, 0, 1, 2, '{-> & Num Num}')")
+      (= {diags} (vd/validate db (parse "(/ 10 x)") "(/ 10 x)"))
+      (= {warnings} (filter (\ {d} {== (plist/get d :severity) 2}) diags))
+      (sqlite/close db)
+      (test/assert-eq 0 (len warnings) "division by variable should not warn")
+      true
+    })
+
+  (test "mod-zero-literal"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('mod', 1, 0, 0, 1, 2, '{-> Num Num Num}')")
+      (= {diags} (vd/validate db (parse "(mod 10 0)") "(mod 10 0)"))
+      (= {warnings} (filter (\ {d} {== (plist/get d :severity) 2}) diags))
+      (sqlite/close db)
+      (test/assert (> (len warnings) 0) "modulo by literal 0 should produce warning")
+      true
+    })
+
+
+  ; === Argument type checking tests ===
+
+  (test "type-check-str-to-num-fn"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('+', 1, 0, 0, 1, -1, '{-> & Num Num}')")
+      (= {diags} (vd/validate db (parse "(+ \"hello\" 1)") "(+ \"hello\" 1)"))
+      (= {type-errs} (filter (\ {d} {>= (str/index-of (plist/get d :message) "expects") 0}) diags))
+      (sqlite/close db)
+      (test/assert (> (len type-errs) 0) "string to numeric fn should produce type error")
+      true
+    })
+
+  (test "type-check-num-to-str-fn"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('str/split', 1, 0, 0, 1, 2, '{-> Str Str (List Str)}')")
+      (= {diags} (vd/validate db (parse "(str/split 42 \" \")") "(str/split 42 \" \")"))
+      (= {type-errs} (filter (\ {d} {>= (str/index-of (plist/get d :message) "expects") 0}) diags))
+      (sqlite/close db)
+      (test/assert (> (len type-errs) 0) "num to str fn should produce type error")
+      true
+    })
+
+  (test "type-check-correct-no-diag"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('+', 1, 0, 0, 1, -1, '{-> & Num Num}')")
+      (= {n} (diag-count-with-db db "(+ 1 2 3)"))
+      (sqlite/close db)
+      (test/assert-eq 0 n "correct types should produce 0 diagnostics")
+      true
+    })
+
+  (test "type-check-generic-accepts-anything"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('==', 1, 0, 0, 1, 2, '{-> A B Num}')")
+      (= {n} (diag-count-with-db db "(== 1 \"hello\")"))
+      (sqlite/close db)
+      (test/assert-eq 0 n "generic params should accept any type")
+      true
+    })
+
+  (test "type-check-message-format"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('mod', 1, 0, 0, 1, 2, '{-> Num Num Num}')")
+      (= {diags} (vd/validate db (parse "(mod \"x\" 2)") "(mod \"x\" 2)"))
+      (= {type-errs} (filter (\ {d} {>= (str/index-of (plist/get d :message) "expects Num") 0}) diags))
+      (sqlite/close db)
+      (test/assert (> (len type-errs) 0) "message should say expects Num")
+      (= {msg} (plist/get (head type-errs) :message))
+      (test/assert (>= (str/index-of msg "got Str") 0) "message should say got Str")
+      true
+    })
+
+  ; --- Constructor keyword tests ---
+
+  (test "ctor-keyword-correct"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('Point', 1, 0, 0, 4, 2, ':x Num :y Num')")
+      (= {n} (diag-count-with-db db "(Point :x 1 :y 2)"))
+      (sqlite/close db)
+      (test/assert-eq 0 n "keyword ctor with correct fields should produce 0 diagnostics")
+      true
+    })
+
+  (test "ctor-keyword-wrong-field"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('Point', 1, 0, 0, 4, 2, ':x Num :y Num')")
+      (= {diags} (vd/validate db (parse "(Point :x 1 :z 2)") "(Point :x 1 :z 2)"))
+      (sqlite/close db)
+      (test/assert (> (len diags) 0) "wrong field name should produce diagnostic")
+      (= {msg} (plist/get (head diags) :message))
+      (test/assert (>= (str/index-of msg ":z") 0) "message should mention :z")
+      true
+    })
+
+  (test "ctor-keyword-wrong-count"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
+      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('Point', 1, 0, 0, 4, 2, ':x Num :y Num')")
+      (= {diags} (vd/validate db (parse "(Point :x 1)") "(Point :x 1)"))
+      (sqlite/close db)
+      (test/assert (> (len diags) 0) "missing keyword pair should produce diagnostic")
+      true
+    })
+
 ) {:suite-name "LSP Validate" :debug 0})

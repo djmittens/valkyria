@@ -208,8 +208,7 @@
 
   (test "hover-format-with-sig"
     {do
-      (= {info} (list :name "add" :sig "-> Num Num Num" :formals "(add a b)"
-                       :doc "Adds numbers" :path "/test/math.valk" :line 10))
+      (= {info} (SymInfo "add" 1 2 "Adds numbers" "-> Num Num Num" "/test/math.valk" 10 0 "(add a b)"))
       (= {md} (hover/format-markdown info "add"))
       (test/assert (str/starts-with? md "```valk") "should start with code block")
       (test/assert (not (== -1 (str/index-of md "-> Num Num Num"))) "should contain sig")
@@ -219,21 +218,21 @@
 
   (test "hover-format-minimal"
     {do
-      (= {info} (list :name "x" :sig nil :formals nil :doc nil :path nil :line nil))
+      (= {info} (SymInfo "x" 0 0 nil nil "/test.valk" 0 0 nil))
       (= {md} (hover/format-markdown info "x"))
       (test/assert (not (== -1 (str/index-of md "x"))) "should contain word")
     })
 
   (test "hover-format-formals-no-sig"
     {do
-      (= {info} (list :name "f" :sig nil :formals "(f a b)" :doc nil :path nil :line nil))
+      (= {info} (SymInfo "f" 1 2 nil nil "/test.valk" 0 0 "(f a b)"))
       (= {md} (hover/format-markdown info "f"))
       (test/assert (not (== -1 (str/index-of md "(f a b)"))) "should show formals")
     })
 
   (test "hover-format-path-no-line"
     {do
-      (= {info} (list :name "g" :sig nil :formals nil :doc nil :path "/a.valk" :line 0))
+      (= {info} (SymInfo "g" 0 0 nil nil "/a.valk" 0 0 nil))
       (= {md} (hover/format-markdown info "g"))
       (test/assert (not (== -1 (str/index-of md "/a.valk"))) "should contain path")
     })

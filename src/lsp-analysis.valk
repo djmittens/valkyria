@@ -732,6 +732,60 @@
   {ref/walk-exprs ast nil nil}
 })
 
+(sig 'ref/collect-scopes-from-ast {-> List List})
+(fun {ref/collect-scopes-from-ast ast} {
+  if (error? ast) {nil}
+  {ref/scope-walk ast nil nil}
+})
+
+(sig 'ref/scope-walk {-> List List List List})
+(fun {ref/scope-walk exprs scopes acc} {
+  if (nil? exprs) {acc}
+  {ref/scope-walk (tail exprs) scopes
+    (ref/scope-one (head exprs) scopes acc)}
+})
+
+(sig 'ref/scope-one {-> Any List List List})
+(fun {ref/scope-one expr scopes acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {ref/scope-dispatch expr (head expr) (tail expr) scopes acc}}
+})
+
+(sig 'ref/scope-dispatch {-> List Any List List List List})
+(fun {ref/scope-dispatch expr hd tl scopes acc} {
+  if (not (sym? hd)) {ref/scope-walk expr scopes acc}
+  {do
+    (= {name} (str hd))
+    (if (== name "fun") {ref/scope-fun expr tl scopes acc}
+    {if (== name "\\") {ref/scope-lambda expr tl scopes acc}
+    {if (== name "do") {ref/scope-walk tl scopes acc}
+    {ref/scope-walk tl scopes acc}}})}
+})
+
+(sig 'ref/scope-fun {-> List List List List List})
+(fun {ref/scope-fun expr tl scopes acc} {
+  if (< (len tl) 2) {acc}
+  {do
+    (= {scope-id} (src-pos expr))
+    (= {parent-id} (if (nil? scopes) {-1} {(plist/get (head scopes) :pos)}))
+    (= {new-scope} (list :pos scope-id :parent parent-id))
+    (= {new-scopes} (qcons new-scope scopes))
+    (ref/scope-walk (tail tl) new-scopes (qcons new-scope acc))}
+})
+
+(sig 'ref/scope-lambda {-> List List List List List})
+(fun {ref/scope-lambda expr tl scopes acc} {
+  if (< (len tl) 2) {acc}
+  {do
+    (= {scope-id} (src-pos expr))
+    (= {parent-id} (if (nil? scopes) {-1} {(plist/get (head scopes) :pos)}))
+    (= {new-scope} (list :pos scope-id :parent parent-id))
+    (= {new-scopes} (qcons new-scope scopes))
+    (ref/scope-walk (tail tl) new-scopes (qcons new-scope acc))}
+})
+
+
 (sig 'ref/find-at-offset {-> List Num Any})
 (fun {ref/find-at-offset refs offset} {
   if (nil? refs) {nil}

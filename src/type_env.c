@@ -6,6 +6,13 @@
 
 #include "memory.h"
 
+#define GROW_ARRAY(arr, count, cap, type) do {  \
+  if ((count) >= (cap)) {                       \
+    (cap) = (cap) ? (cap) * 2 : 16;            \
+    (arr) = realloc((arr), sizeof(type) * (cap)); \
+  }                                             \
+} while (0)
+
 valk_type_env_t *valk_type_env_new(void) {
   valk_type_env_t *env = calloc(1, sizeof(valk_type_env_t));
   return env;
@@ -17,25 +24,32 @@ void valk_type_env_free(valk_type_env_t *env) {
     valk_type_decl_t *t = env->types[i];
     free(t->name);
     for (u64 p = 0; p < t->param_count; p++) free(t->params[p]);
+    free(t->params);
     for (u64 c = 0; c < t->constructor_count; c++) {
       valk_constructor_t *ctor = t->constructors[c];
       free(ctor->name);
-      free(ctor->type_name);
+      if (ctor->type_name) free(ctor->type_name);
       for (u64 f = 0; f < ctor->field_count; f++) {
         free(ctor->fields[f].name);
-        free(ctor->fields[f].type_name);
+        if (ctor->fields[f].type_name) free(ctor->fields[f].type_name);
       }
+      free(ctor->fields);
       free(ctor);
     }
+    free(t->constructors);
     free(t);
   }
+  free(env->types);
+  free(env->constructors);
   for (u64 i = 0; i < env->sig_count; i++) {
     valk_type_sig_t *s = env->sigs[i];
     free(s->name);
     for (u64 p = 0; p < s->param_count; p++) free(s->param_types[p]);
+    free(s->param_types);
     free(s->return_type);
     free(s);
   }
+  free(env->sigs);
   free(env);
 }
 
@@ -82,6 +96,7 @@ static valk_constructor_t *parse_constructor(const char *name, const char *type_
     if (LVAL_TYPE(curr) == LVAL_NIL) break; // LCOV_EXCL_BR_LINE — parser pairs keywords with types
     valk_lval_t *type_sym = curr->cons.head;
 
+    GROW_ARRAY(ctor->fields, pos, ctor->field_capacity, valk_field_t);
     ctor->fields[pos].name = strdup(key->str);
     ctor->fields[pos].type_name = (LVAL_TYPE(type_sym) == LVAL_SYM) ? strdup(type_sym->str) : strdup("Any"); // LCOV_EXCL_BR_LINE — parser produces symbol types
     ctor->fields[pos].position = pos;
@@ -124,6 +139,7 @@ valk_lval_t *valk_type_env_register(valk_type_env_t *env, valk_lval_t *type_form
   while (LVAL_TYPE(param_iter) != LVAL_NIL) {
     valk_lval_t *p = param_iter->cons.head;
     if (LVAL_TYPE(p) == LVAL_SYM) { // LCOV_EXCL_BR_LINE — parser always produces symbol params
+      GROW_ARRAY(decl->params, decl->param_count, decl->param_capacity, char *);
       decl->params[decl->param_count++] = strdup(p->str);
     }
     param_iter = param_iter->cons.tail;
@@ -142,7 +158,9 @@ valk_lval_t *valk_type_env_register(valk_type_env_t *env, valk_lval_t *type_form
   if (is_product) {
     decl->is_product = true;
     valk_constructor_t *ctor = parse_constructor(type_name, type_name, first_variant);
+    GROW_ARRAY(decl->constructors, decl->constructor_count, decl->constructor_capacity, valk_constructor_t *);
     decl->constructors[decl->constructor_count++] = ctor;
+    GROW_ARRAY(env->constructors, env->constructor_count, env->constructor_capacity, valk_constructor_t *);
     env->constructors[env->constructor_count++] = ctor;
   } else {
     decl->is_product = false;
@@ -165,11 +183,14 @@ valk_lval_t *valk_type_env_register(valk_type_env_t *env, valk_lval_t *type_form
       }
 
       valk_constructor_t *ctor = parse_constructor(qualified, type_name, variant->cons.tail);
+      GROW_ARRAY(decl->constructors, decl->constructor_count, decl->constructor_capacity, valk_constructor_t *);
       decl->constructors[decl->constructor_count++] = ctor;
+      GROW_ARRAY(env->constructors, env->constructor_count, env->constructor_capacity, valk_constructor_t *);
       env->constructors[env->constructor_count++] = ctor;
     }
   }
 
+  GROW_ARRAY(env->types, env->type_count, env->type_capacity, valk_type_decl_t *);
   env->types[env->type_count++] = decl;
   return NULL;
 }
@@ -268,11 +289,18 @@ static const char *scope_find_type(valk_type_scope_t *scope, const char *var) {
 }
 
 static void scope_add(valk_type_scope_t *scope, const char *var, const char *type) {
-  if (scope->count < VALK_TYPE_MAX_SCOPE_ENTRIES) {
-    scope->entries[scope->count].var = var;
-    scope->entries[scope->count].type = type;
-    scope->count++;
-  }
+  GROW_ARRAY(scope->entries, scope->count, scope->capacity,
+             typeof(scope->entries[0]));
+  scope->entries[scope->count].var = var;
+  scope->entries[scope->count].type = type;
+  scope->count++;
+}
+
+static void scope_cleanup(valk_type_scope_t *scope) {
+  free(scope->entries);
+  scope->entries = NULL;
+  scope->count = 0;
+  scope->capacity = 0;
 }
 
 static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scope, valk_lval_t *expr);
@@ -425,15 +453,16 @@ static void valk_type_env_register_sig(valk_type_env_t *env, valk_lval_t *sig_fo
   if (types[0] && strcmp(types[0], "&") == 0) start = 1;
 
   sig->return_type = types[type_count - 1];
-  for (u64 i = start; i < type_count - 1 && sig->param_count < VALK_TYPE_MAX_SIG_PARAMS; i++) {
+  for (u64 i = start; i < type_count - 1; i++) {
+    GROW_ARRAY(sig->param_types, sig->param_count, sig->param_capacity, char *);
     sig->param_types[sig->param_count++] = types[i];
     types[i] = NULL;
   }
   if (types[0] && start == 1) { free(types[0]); types[0] = NULL; }
   for (u64 i = 0; i < type_count - 1; i++) { free(types[i]); }
 
-  if (env->sig_count < VALK_TYPE_MAX_SIGS)
-    env->sigs[env->sig_count++] = sig;
+  GROW_ARRAY(env->sigs, env->sig_count, env->sig_capacity, valk_type_sig_t *);
+  env->sigs[env->sig_count++] = sig;
 }
 
 static const char *resolve_type_name(valk_type_env_t *env, const char *name) {
@@ -570,7 +599,7 @@ static valk_lval_t *transform_record_update(valk_type_env_t *env, valk_type_scop
   if (!ctor) return valk_lval_err("with: no constructor for type '%s'", type_name);
 
   u64 count = valk_lval_list_count(expr);
-  struct { const char *field; valk_lval_t *value; } overrides[VALK_TYPE_MAX_FIELDS];
+  struct { const char *field; valk_lval_t *value; } overrides[64];
   u64 override_count = 0;
 
   for (u64 i = 2; i + 1 < count; i += 2) {
@@ -849,6 +878,7 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
       valk_lval_t *result = valk_lval_nil();
       for (u64 i = count; i > 0; i--)
         result = valk_lval_qcons(items[i - 1], result);
+      scope_cleanup(&child);
       return result;
     }
 
@@ -962,6 +992,7 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
     valk_lval_t *result = valk_lval_nil();
     for (u64 i = count; i > 0; i--)
       result = valk_lval_cons(items[i - 1], result);
+    scope_cleanup(&child);
     return result;
   }
 
@@ -984,6 +1015,7 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
     valk_lval_t *result = valk_lval_nil();
     for (u64 i = count; i > 0; i--)
       result = valk_lval_cons(items[i - 1], result);
+    scope_cleanup(&child);
     return result;
   }
 

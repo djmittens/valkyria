@@ -4,6 +4,11 @@
 
 (type {WordRange}
   {:word Str :start Num :end Num})
+
+(type {SymInfo}
+  {:name Str :kind Num :arity Num :doc Str :sig Str
+   :path Str :line Num :col Num :formals Str})
+
 ; === Symbol kind constants ===
 (def {SYMKIND_FUNCTION} 1)
 (def {SYMKIND_VARIABLE} 2)
@@ -54,6 +59,66 @@ CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_refs_name ON refs(name);
 CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
+
+CREATE TABLE IF NOT EXISTS nodes (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  pos INTEGER NOT NULL,
+  end_pos INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nodes_lookup ON nodes(file_id, pos, end_pos);
+
+CREATE TABLE IF NOT EXISTS semantic_tokens (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  pos INTEGER NOT NULL,
+  length INTEGER NOT NULL,
+  token_type INTEGER NOT NULL,
+  modifiers INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_semtok_file ON semantic_tokens(file_id, pos);
+
+CREATE TABLE IF NOT EXISTS inlay_hints (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  pos INTEGER NOT NULL,
+  label TEXT NOT NULL,
+  kind INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hints_file ON inlay_hints(file_id, pos);
+
+CREATE TABLE IF NOT EXISTS scoped_refs (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  name TEXT NOT NULL,
+  pos INTEGER NOT NULL,
+  len INTEGER NOT NULL,
+  scope_id INTEGER NOT NULL,
+  is_def INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_scopedrefs_file ON scoped_refs(file_id, name);
+CREATE INDEX IF NOT EXISTS idx_scopedrefs_scope ON scoped_refs(file_id, scope_id);
+
+CREATE TABLE IF NOT EXISTS scopes (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  pos INTEGER NOT NULL,
+  parent_pos INTEGER NOT NULL DEFAULT -1
+);
+CREATE INDEX IF NOT EXISTS idx_scopes_file ON scopes(file_id, pos);
+
+CREATE TABLE IF NOT EXISTS diagnostics (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  line INTEGER NOT NULL,
+  col INTEGER NOT NULL,
+  end_col INTEGER NOT NULL,
+  severity INTEGER NOT NULL,
+  message TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 ")
 
 ; === Lifecycle ===
@@ -316,6 +381,11 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (join type-sym ctors)})
 })
 
+(sig 'symdb/serialize-fields {-> List Str})
+(fun {symdb/serialize-fields elems} {
+  str/join (map str elems) " "
+})
+
 (sig 'symdb/extract-ctors {-> List Str Str List})
 (fun {symdb/extract-ctors variants text type-name} {
   if (nil? variants) {nil}
@@ -323,14 +393,21 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (= {ctor} (head variants))
       (if (not (list? ctor)) {symdb/extract-ctors (tail variants) text type-name}
         {do
-          (= {ctor-name} (str (head ctor)))
-          (= {ctor-arity} (- (len ctor) 1))
+          (= {first-str} (str (head ctor)))
+          (= {is-product} (if (> (len first-str) 0)
+            {== (str/slice first-str 0 1) ":"}
+            {0}))
+          (= {ctor-name} (if is-product {type-name} {first-str}))
+          (= {fields} (if is-product {ctor} {(tail ctor)}))
+          (= {fields-sig} (symdb/serialize-fields fields))
+          (= {ctor-arity} (if is-product {(/ (len ctor) 2)} {(- (len ctor) 1)}))
           (= {lc} (offset->line-col text (src-pos (head ctor))))
           (= {line} (head lc))
           (= {col} (head (tail lc)))
           (= {sym} (list (list :name ctor-name :line line :col col
                                 :kind SYMKIND_CONSTRUCTOR :arity ctor-arity
-                                :doc (str type-name "::" ctor-name))))
+                                :doc (str type-name "::" ctor-name)
+                                :sig fields-sig)))
           (join sym (symdb/extract-ctors (tail variants) text type-name))})}
 })
 
@@ -421,19 +498,209 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
 (sig 'symdb/sync-document {-> Ref Str Str Nil})
 (fun {symdb/sync-document db uri text} {do
   (= {path} (uri->path uri))
-  (= {hash} (file/fingerprint path))
-  (= {hash} (if (error? hash) {str "text:" (len text)} {hash}))
+  (= {mem-hash} (str "mem:" (len text)))
   (= {existing} (sqlite/query-maybe db
     "SELECT hash FROM files WHERE path=?1" path))
   (if (not (nil? existing))
-    {if (== existing:hash hash) {0}
+    {if (== (plist/get existing :hash) mem-hash) {0}
       {do (sqlite/exec db "BEGIN")
-          (symdb/sync-file-symbols db uri text hash)
+          (symdb/sync-file-symbols db uri text mem-hash)
           (sqlite/exec db "COMMIT") 1}}
     {do (sqlite/exec db "BEGIN")
-        (symdb/sync-file-symbols db uri text hash)
+        (symdb/sync-file-symbols db uri text mem-hash)
         (sqlite/exec db "COMMIT") 1})
 })
+
+(sig 'symdb/node-span {-> Any Num})
+(fun {symdb/node-span node} {
+  if (sym? node) {len (str node)}
+  {if (str? node) {+ (len (str node)) 2}
+  {if (num? node) {len (str node)}
+  {0}}}
+})
+
+(sig 'symdb/collect-nodes {-> List List List})
+(fun {symdb/collect-nodes exprs acc} {
+  if (nil? exprs) {acc}
+  {symdb/collect-nodes (tail exprs)
+    (symdb/collect-from-expr (head exprs) acc)}
+})
+
+(sig 'symdb/collect-from-expr {-> Any List List})
+(fun {symdb/collect-from-expr expr acc} {
+  if (not (list? expr))
+    {symdb/maybe-add-node expr acc}
+  {if (nil? expr) {acc}
+  {symdb/collect-node-children expr acc}}
+})
+
+(sig 'symdb/collect-node-children {-> List List List})
+(fun {symdb/collect-node-children expr acc} {
+  if (nil? expr) {acc}
+  {symdb/collect-node-children (tail expr)
+    (symdb/collect-from-expr (head expr) acc)}
+})
+
+(sig 'symdb/maybe-add-node {-> Any List List})
+(fun {symdb/maybe-add-node node acc} {
+  if (< (src-pos node) 0) {acc}
+  {do
+    (= {start} (src-pos node))
+    (= {nlen} (symdb/node-span node))
+    (if (<= nlen 0) {acc}
+      {do
+        (= {ntype} (if (sym? node) {"sym"} {if (str? node) {"str"} {if (num? node) {"num"} {"?"}}}))
+        (= {name} (str node))
+        (qcons (list :pos start :end (+ start nlen) :type ntype :name name) acc)})}
+})
+
+(sig 'symdb/insert-nodes {-> Ref Num List Nil})
+(fun {symdb/insert-nodes db file-id nodes} {
+  if (nil? nodes) {nil}
+  {do
+    (= {n} (head nodes))
+    (sqlite/exec db
+      "INSERT INTO nodes (file_id, pos, end_pos, type, name) VALUES (?1, ?2, ?3, ?4, ?5)"
+      file-id (plist/get n :pos) (plist/get n :end) (plist/get n :type) (plist/get n :name))
+    (symdb/insert-nodes db file-id (tail nodes))}
+})
+
+(sig 'symdb/node-at-offset {-> Ref Str Num List})
+(fun {symdb/node-at-offset db path offset} {
+  if (nil? db) {nil}
+  {sqlite/query-maybe db
+    "SELECT n.type, n.name, n.pos, n.end_pos FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.pos<=?2 AND n.end_pos>?2 LIMIT 1"
+    path offset}
+})
+
+
+; ---------------------------------------------------------------------------
+; Precomputed data: store semantic tokens, hints, scoped refs during indexing
+; ---------------------------------------------------------------------------
+
+
+
+(sig 'symdb/insert-semtok-batch {-> Ref Num List Nil})
+(fun {symdb/insert-semtok-batch db file-id tokens} {
+  if (nil? tokens) {nil}
+  {if (< (len tokens) 4) {nil}
+  {do
+    (= {pos} (head tokens))
+    (= {tlen} (nth 2 tokens))
+    (= {ttype} (nth 3 tokens))
+    (= {tmods} (nth 4 tokens))
+    (sqlite/exec db
+      "INSERT INTO semantic_tokens (file_id, pos, length, token_type, modifiers) VALUES (?1, ?2, ?3, ?4, ?5)"
+      file-id pos tlen ttype tmods)
+    (symdb/insert-semtok-batch db file-id (tail (tail (tail (tail tokens)))))}}
+})
+
+
+
+(sig 'symdb/insert-hint-batch {-> Ref Num List Nil})
+(fun {symdb/insert-hint-batch db file-id hints} {
+  if (nil? hints) {nil}
+  {do
+    (= {h} (head hints))
+    (sqlite/exec db
+      "INSERT INTO inlay_hints (file_id, pos, label, kind) VALUES (?1, ?2, ?3, ?4)"
+      file-id h:offset h:label h:kind)
+    (symdb/insert-hint-batch db file-id (tail hints))}
+})
+
+
+
+(sig 'symdb/insert-scoped-ref-batch {-> Ref Num List Nil})
+(fun {symdb/insert-scoped-ref-batch db file-id refs} {
+  if (nil? refs) {nil}
+  {do
+    (= {r} (head refs))
+    (sqlite/exec db
+      "INSERT INTO scoped_refs (file_id, name, pos, len, scope_id, is_def) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+      file-id r:name r:offset r:len r:scope-id r:is-def)
+    (symdb/insert-scoped-ref-batch db file-id (tail refs))}
+})
+
+; ---------------------------------------------------------------------------
+; Query functions for precomputed data
+; ---------------------------------------------------------------------------
+
+(sig 'symdb/get-semantic-tokens {-> Ref Str List})
+(fun {symdb/get-semantic-tokens db path} {
+  if (nil? db) {nil}
+  {sqlite/query db
+    "SELECT pos, length, token_type, modifiers FROM semantic_tokens t JOIN files f ON t.file_id=f.id WHERE f.path=?1 ORDER BY t.pos"
+    path}
+})
+
+(sig 'symdb/get-inlay-hints {-> Ref Str Num Num List})
+(fun {symdb/get-inlay-hints db path start-line end-line} {
+  if (nil? db) {nil}
+  {sqlite/query db
+    "SELECT h.pos, h.label, h.kind FROM inlay_hints h JOIN files f ON h.file_id=f.id WHERE f.path=?1 ORDER BY h.pos"
+    path}
+})
+
+(sig 'symdb/get-scoped-refs {-> Ref Str Str Num List})
+(fun {symdb/get-scoped-refs db path name scope-id} {
+  if (nil? db) {nil}
+  {sqlite/query db
+    "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.name=?2 AND r.scope_id=?3 ORDER BY r.pos"
+    path name scope-id}
+})
+
+(sig 'symdb/get-ref-at-offset {-> Ref Str Num List})
+(fun {symdb/get-ref-at-offset db path offset} {
+  if (nil? db) {nil}
+  {sqlite/query-maybe db
+    "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.pos<=?2 AND (r.pos+r.len)>?2 LIMIT 1"
+    path offset}
+})
+
+(sig 'symdb/get-all-file-refs {-> Ref Str Str List})
+(fun {symdb/get-all-file-refs db path name} {
+  if (nil? db) {nil}
+  {sqlite/query db
+    "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.name=?2 ORDER BY r.pos"
+    path name}
+})
+
+(sig 'symdb/find-scoped-def {-> Ref Str Str Num List})
+(fun {symdb/find-scoped-def db path name scope-id} {
+  if (nil? db) {nil}
+  {sqlite/query-maybe db
+    "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.name=?2 AND r.scope_id=?3 AND r.is_def=1 LIMIT 1"
+    path name scope-id}
+})
+
+(sig 'symdb/insert-scopes {-> Ref Num List Nil})
+(fun {symdb/insert-scopes db file-id scopes} {
+  if (nil? scopes) {nil}
+  {do
+    (= {s} (head scopes))
+    (sqlite/exec db
+      "INSERT INTO scopes (file_id, pos, parent_pos) VALUES (?1, ?2, ?3)"
+      file-id (plist/get s :pos) (plist/get s :parent))
+    (symdb/insert-scopes db file-id (tail scopes))}
+})
+
+(sig 'symdb/find-def-in-scope-chain {-> Ref Str Str Num List})
+(fun {symdb/find-def-in-scope-chain db path name scope-pos} {
+  if (nil? db) {nil}
+  {if (< scope-pos 0) {nil}
+  {do
+    (= {found} (sqlite/query-maybe db
+      "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.name=?2 AND r.scope_id=?3 AND r.is_def=1 LIMIT 1"
+      path name scope-pos))
+    (if (not (nil? found)) {found}
+      {do
+        (= {parent} (sqlite/query-maybe db
+          "SELECT parent_pos FROM scopes s JOIN files f ON s.file_id=f.id WHERE f.path=?1 AND s.pos=?2 LIMIT 1"
+          path scope-pos))
+        (if (nil? parent) {nil}
+          {symdb/find-def-in-scope-chain db path name (plist/get parent :parent_pos)})})}}
+})
+
 
 (sig 'symdb/sync-file-symbols {-> Ref Str Str Str Nil})
 (fun {symdb/sync-file-symbols db uri text hash} {do
@@ -450,7 +717,13 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
       (= {syms} (symdb/extract-symbols-from-ast ast text))
       (symdb/insert-symbols db file-id syms)
       (= {refs} (symdb/extract-refs-from-ast ast text))
-      (symdb/insert-refs db file-id refs)})
+      (symdb/insert-refs db file-id refs)
+      (sqlite/exec db "DELETE FROM nodes WHERE file_id=?1" file-id)
+      (= {nodes} (symdb/collect-nodes ast nil))
+      (symdb/insert-nodes db file-id nodes)
+      (sqlite/exec db "DELETE FROM semantic_tokens WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM inlay_hints WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM scoped_refs WHERE file_id=?1" file-id)})
 })
 
 (sig 'symdb/insert-symbols {-> Ref Num List Nil})
@@ -557,7 +830,7 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
     name
 })
 
-(sig 'symdb/symbol-hover {-> Ref Str Any})
+(sig 'symdb/symbol-hover {-> Ref Str SymInfo})
 (fun {symdb/symbol-hover db name} {do
   (= {def-row} (sqlite/query-maybe db
     "SELECT s.name, s.kind, s.arity, s.doc, s.sig, f.path, s.line, s.col FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.line > 0 ORDER BY s.id LIMIT 1"
@@ -577,17 +850,16 @@ CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
             (= {sig-doc} (if (nil? sig-row) {nil} {sig-row:doc}))
             (= {fb-doc} fallback:doc)
             (= {final-doc} (if (nil? fb-doc) {sig-doc} {fb-doc}))
-            (plist/set (plist/set fallback :sig type-sig) :doc final-doc)})}}
+            (SymInfo fallback:name fallback:kind fallback:arity
+              final-doc type-sig fallback:path fallback:line fallback:col nil)})}}
     {do
       (= {type-sig} (if (nil? sig-row) {nil} {sig-row:sig}))
       (= {formals} def-row:sig)
       (= {def-doc} def-row:doc)
       (= {sig-doc} (if (nil? sig-row) {nil} {sig-row:doc}))
       (= {final-doc} (if (nil? def-doc) {sig-doc} {def-doc}))
-      (plist/set (plist/set (plist/set def-row
-        :sig type-sig)
-        :formals formals)
-        :doc final-doc)})
+      (SymInfo def-row:name def-row:kind def-row:arity
+        final-doc type-sig def-row:path def-row:line def-row:col formals)})
 })
 
 ; === Reference counting ===
