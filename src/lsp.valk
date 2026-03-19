@@ -263,7 +263,7 @@
               {do
                 (= {path} (uri->path uri))
                 (= {fid} (sqlite/query-value lsp/db "SELECT id FROM files WHERE path=?1" path))
-                (if (not (nil? fid)) {lsp/index-ast lsp/db (plist/get fid :id) ast text} {})}
+                (if (not (nil? fid)) {lsp/index-ast lsp/db fid ast text} {})}
               {})
             (lsp/invalidate-known-set)}
           {})})})
@@ -315,7 +315,7 @@
                 (if (not (error? ast))
                   {do
                     (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (uri->path uri)))
-                    (if (not (nil? fid)) {lsp/index-ast db fid:id ast text} {})}
+                    (if (not (nil? fid)) {lsp/index-ast db fid ast text} {})}
                   {})
                 1})}}
         {do
@@ -328,7 +328,7 @@
               (if (not (error? ast))
                 {do
                   (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (uri->path uri)))
-                  (if (not (nil? fid)) {lsp/index-ast db fid:id ast text} {})}
+                  (if (not (nil? fid)) {lsp/index-ast db fid ast text} {})}
                 {})
               1})})})
 })
