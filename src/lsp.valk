@@ -992,10 +992,10 @@
           (lsp/send-response id (list :documentChanges (list doc-edit)))}
         {if (nil? lsp/db) {lsp/send-error id -32602 "No workspace"}
           {do
-            (= {word-len} (len ctx:word))
-            (= {db-refs} (symdb/find-refs lsp/db ctx:word))
-            (= {db-defs} (symdb/find-definitions lsp/db ctx:word))
-            (= {all-locs} (join
+            (= 'word-len (len ctx:word))
+            (= 'db-refs (symdb/find-refs lsp/db ctx:word))
+            (= 'db-defs (symdb/find-definitions lsp/db ctx:word))
+            (= 'all-locs (join
               (map (\ {r} {
                 list :uri (str "file://" r:path)
                      :edit (db-ref->lsp-edit r word-len new-name)
@@ -1004,8 +1004,8 @@
                 list :uri (str "file://" d:path)
                      :edit (db-ref->lsp-edit d word-len new-name)
               }) db-defs)))
-            (= {grouped} (rename/group-by-uri all-locs nil))
-            (= {doc-changes} (rename/make-doc-changes grouped))
+            (= 'grouped (rename/group-by-uri all-locs nil))
+            (= 'doc-changes (rename/make-doc-changes grouped))
             (lsp/send-response id (list :documentChanges doc-changes))}})})
 })
 
@@ -1284,12 +1284,12 @@
   (= {start-pos} (src-pos expr))
   (if (< start-pos 0) {acc}
     {do
-      (= {start-lc} (offset->line-col text start-pos))
-      (= {start-line} (head start-lc))
-      (= {expr-str} (str expr))
-      (= {end-offset} (+ start-pos (len expr-str)))
-      (= {end-lc} (offset->line-col text end-offset))
-      (= {end-line} (head end-lc))
+      (= 'start-lc (offset->line-col text start-pos))
+      (= 'start-line (head start-lc))
+      (= 'expr-str (str expr))
+      (= 'end-offset (+ start-pos (len expr-str)))
+      (= 'end-lc (offset->line-col text end-offset))
+      (= 'end-line (head end-lc))
       (if (<= end-line start-line) {acc}
         {qcons (list :startLine start-line
                      :endLine end-line

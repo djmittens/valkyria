@@ -519,7 +519,7 @@ static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
       const char *next = strchr(p + 1, ':');
       int flen = next ? (int)(next - p) : (int)strlen(p);
       emit_semtok(ctx, field_pos, flen, TOK_PROPERTY, 0);
-      emit_node(ctx, field_pos, field_pos + flen, "sym", p);
+      emit_node_ctx(ctx, field_pos, field_pos + flen, "sym", p, var_name);
       field_pos += flen;
       p = next ? next : p + flen;
     }

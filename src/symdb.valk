@@ -710,17 +710,19 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
       {symdb/resolve-var-type db context}))
     (= {ctor} (if (nil? ctor-name)
       {sqlite/query-maybe db
-        "SELECT s.name, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.kind=4 AND s.sig LIKE ?1 LIMIT 1"
+        "SELECT s.name, f.path, n.pos FROM symbols s JOIN files f ON s.file_id=f.id LEFT JOIN nodes n ON n.file_id=s.file_id AND n.name=s.name AND n.type='sym' WHERE s.kind=4 AND s.sig LIKE ?1 LIMIT 1"
         (str "%" field-name " %")}
       {sqlite/query-maybe db
-        "SELECT s.name, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.kind=4 AND s.name=?1 AND s.sig LIKE ?2 LIMIT 1"
+        "SELECT s.name, f.path, n.pos FROM symbols s JOIN files f ON s.file_id=f.id LEFT JOIN nodes n ON n.file_id=s.file_id AND n.name=s.name AND n.type='sym' WHERE s.kind=4 AND s.name=?1 AND s.sig LIKE ?2 LIMIT 1"
         ctor-name (str "%" field-name " %")}))
     (if (nil? ctor) {nil}
       {do
         (= {ctor-path} (plist/get ctor :path))
+        (= {ctor-pos} (plist/get ctor :col))
+        (= {ctor-line} (plist/get ctor :line))
         (= {field-node} (sqlite/query-maybe db
-          "SELECT n.pos, n.end_pos FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.type='sym' AND n.name=?2 AND n.context IS NULL LIMIT 1"
-          ctor-path field-name))
+          "SELECT n.pos, n.end_pos FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.type='sym' AND n.name=?2 AND n.context IS NULL AND n.pos > ?3 ORDER BY n.pos LIMIT 1"
+          ctor-path field-name (plist/get ctor :pos)))
         (if (nil? field-node) {nil}
           {list :pos (plist/get field-node :pos)
                 :len (- (plist/get field-node :end_pos) (plist/get field-node :pos))
@@ -732,13 +734,91 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
   if (nil? db) {nil}
   {if (nil? context) {nil}
   {do
-    ; Check if context is directly a constructor name
+    ; 1. Check if context is directly a constructor name
     (= {direct} (sqlite/query-maybe db
       "SELECT name FROM symbols WHERE name=?1 AND kind=4 LIMIT 1"
       context))
     (if (not (nil? direct)) {context}
-      {nil})}}
+    {do
+      ; 2. Check if context is a var — find its type from the enclosing function sig
+      ;    Look at scoped_refs: find where context is defined (is_def=1), get scope_id
+      ;    The scope_id is the fun's position. Find the fun's name from symbols.
+      ;    Query the sig for the param at the right position.
+      (= {def-ref} (sqlite/query-maybe db
+        "SELECT scope_id FROM scoped_refs WHERE name=?1 AND is_def=1 LIMIT 1"
+        context))
+      (if (nil? def-ref) {nil}
+        {do
+          (= {scope-pos} (plist/get def-ref :scope_id))
+          ; Find function name that starts at scope-pos (the fun keyword is at scope-pos+1)
+          (= {fn-ref} (sqlite/query-maybe db
+            "SELECT name FROM scoped_refs WHERE is_def=1 AND scope_id=-1 AND pos > ?1 AND pos < ?1 + 20 ORDER BY pos LIMIT 1"
+            scope-pos))
+          (if (nil? fn-ref) {nil}
+            {do
+              (= {fname} (plist/get fn-ref :name))
+              (= {param-type} (symdb/resolve-param-type db fname context))
+              param-type})})})}}
 })
+
+(sig 'symdb/resolve-param-type {-> Ref Str Str Str})
+(fun {symdb/resolve-param-type db fname param-name} {
+  if (nil? db) {nil}
+  {do
+    ; Get the function sig
+    (= {sig-row} (sqlite/query-maybe db
+      "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{->%' LIMIT 1"
+      fname))
+    (if (nil? sig-row) {nil}
+      {do
+        ; Get formals to find param position
+        (= {formals-row} (sqlite/query-maybe db
+          "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '(fun%' LIMIT 1"
+          fname))
+        (if (nil? formals-row) {nil}
+          {do
+            (= {sig-str} (plist/get sig-row :sig))
+            (= {formals-str} (plist/get formals-row :sig))
+            (= {param-idx} (symdb/find-param-index formals-str param-name))
+            (if (< param-idx 0) {nil}
+              {symdb/get-sig-type-at sig-str param-idx})})})}
+})
+
+(sig 'symdb/find-param-index {-> Str Str Num})
+(fun {symdb/find-param-index formals-str param-name} {
+  if (nil? formals-str) {-1}
+  {do
+    ; formals-str is like "(fun {fname p1 p2 p3} ...)"
+    ; Extract params between first { and }
+    (= {open} (str/index-of formals-str "{"))
+    (= {close} (str/index-of formals-str "}"))
+    (if (or (< open 0) (< close 0)) {-1}
+      {do
+        (= {inner} (str/slice formals-str (+ open 1) close))
+        (= {parts} (str/split inner " "))
+        ; Skip first (function name), find param-name in rest
+        (symdb/find-in-parts (tail parts) param-name 0)})}
+})
+
+(sig 'symdb/find-in-parts {-> List Str Num Num})
+(fun {symdb/find-in-parts parts name idx} {
+  if (nil? parts) {-1}
+  {if (== (head parts) name) {idx}
+  {symdb/find-in-parts (tail parts) name (+ idx 1)}}
+})
+
+(sig 'symdb/get-sig-type-at {-> Str Num Str})
+(fun {symdb/get-sig-type-at sig-str idx} {
+  if (nil? sig-str) {nil}
+  {if (< (len sig-str) 4) {nil}
+  {do
+    (= {inner} (str/slice sig-str 4 (- (len sig-str) 1)))
+    (= {parts} (str/split inner " "))
+    (= {parts} (filter (\ {p} {not (== p "&")}) parts))
+    (if (>= idx (- (len parts) 1)) {nil}
+      {nth (+ idx 1) parts})}}
+})
+
 
 
 
