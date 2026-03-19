@@ -638,6 +638,8 @@
   (= {db-def} (if (nil? lsp/db) {nil}
     {do
       (= {target} (symdb/get-ref-at-offset lsp/db path offset))
+      (= {target} (if (not (nil? target)) {target}
+        {lsp/find-var-for-field lsp/db path offset word}))
       (if (nil? target) {nil}
         {do
           (= {sid} (plist/get target :scope_id))
@@ -650,6 +652,24 @@
         {do
           (= {defs} (filter (\ {r} {== (plist/get r :is-def) 1}) ast-local))
           (if (nil? defs) {nil} {head defs})})})
+})
+
+(sig 'lsp/find-var-for-field {-> Ref Str Num Str List})
+(fun {lsp/find-var-for-field db path offset word} {
+  if (nil? db) {nil}
+  {do
+    (= {node} (symdb/node-at-offset db path offset))
+    (if (nil? node) {nil}
+      {do
+        (= {ntype} (plist/get node :type))
+        (= {nname} (plist/get node :name))
+        (if (not (== ntype "sym")) {nil}
+          {if (not (> (len nname) 0)) {nil}
+          {if (not (== (str/slice nname 0 1) ":")) {nil}
+            {do
+              (= {npos} (plist/get node :pos))
+              (= {var-ref} (symdb/get-ref-at-offset db path (- npos 1)))
+              var-ref}}})})}
 })
 
 (sig 'lsp/respond-def-offset {-> Num Str Str List Nil})
