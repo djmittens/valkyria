@@ -1064,7 +1064,9 @@
 (fun {vd/infer-by-callee-db name ctx} {do
   (= {found} (vd/query-fun-sig ctx:db name))
   (if (not (nil? found)) {1}
-    {if (vd/scope-has-callable name ctx:scope) {1} {nil}})
+    {if (vd/scope-has-callable name ctx:scope) {1}
+    {if (vd/is-ctor-call name) {1}
+      {nil}}})
 })
 
 (sig 'vd/param-has-annotation {-> List Num})

@@ -614,3 +614,4 @@
 
 (sig 'offsets->line-cols {-> Str (List Num) (List (List Num))})
 (sig 'sem/encode-deltas {-> Str & A List})
+(sig 'lsp/index-ast {-> Ref Num List Str Nil})

@@ -32,6 +32,7 @@
   nil
 })
 
+(fun {lsp/send-request id method params} {nil})
 (fun {aio/stop sys} {def {*aio-stopped*} 1})
 (fun {aio/dispatch sys fn arg cb} {do (= {r} (fn arg)) (cb r)})
 
@@ -66,6 +67,9 @@
   (def {lsp/root-path} nil)
   (def {lsp/known-set-cache} nil)
   (def {lsp/progress-token} 0)
+  (def {lsp/doc-version} 0)
+  (def {lsp/line-index-cache} (dict/new))
+  (def {lsp/ast-cache} (dict/new))
   (reset-captures)
 })
 
@@ -747,8 +751,8 @@
       (lsp/doc-store "file:///tr.valk" "(fun {f x}\n  (+ x 1))")
       (reset-captures)
       (handle-semantic-tokens-range 8
-        (list :textDocument (list :uri "file:///tr.valk")
-              :range (list :start (list :line 0) :end (list :line 0))))
+        (RangeParams :textDocument (LspTextDoc :uri "file:///tr.valk")
+              :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 99))))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
     })
@@ -827,6 +831,163 @@
       (test/assert (nil? resp:result) "no doc -> nil")
     })
 
+  ; =========================================================================
+  ; Incremental text sync
+  ; =========================================================================
+
+  (test "apply-one-change-full-replace"
+    {do
+      (= {result} (lsp/apply-one-change "hello world" (list :text "goodbye")))
+      (test/assert-eq "goodbye" result "nil range = full replace")
+    })
+
+  (test "apply-one-change-insert"
+    {do
+      (= {result} (lsp/apply-one-change "hello world"
+        (list :range (list :start (list :line 0 :character 5)
+                           :end (list :line 0 :character 5))
+              :text " beautiful")))
+      (test/assert-eq "hello beautiful world" result "insert at position 5")
+    })
+
+  (test "apply-one-change-delete"
+    {do
+      (= {result} (lsp/apply-one-change "hello world"
+        (list :range (list :start (list :line 0 :character 5)
+                           :end (list :line 0 :character 11))
+              :text "")))
+      (test/assert-eq "hello" result "delete from pos 5 to end")
+    })
+
+  (test "apply-one-change-replace"
+    {do
+      (= {result} (lsp/apply-one-change "hello world"
+        (list :range (list :start (list :line 0 :character 6)
+                           :end (list :line 0 :character 11))
+              :text "earth")))
+      (test/assert-eq "hello earth" result "replace world with earth")
+    })
+
+  (test "apply-one-change-multiline"
+    {do
+      (= {result} (lsp/apply-one-change "line1\nline2\nline3"
+        (list :range (list :start (list :line 0 :character 5)
+                           :end (list :line 1 :character 5))
+              :text "\nnew")))
+      (test/assert-eq "line1\nnew\nline3" result "replace across lines")
+    })
+
+  (test "apply-changes-empty"
+    {do
+      (= {result} (lsp/apply-changes "unchanged" nil))
+      (test/assert-eq "unchanged" result "empty changes = no change")
+    })
+
+  ; =========================================================================
+  ; Line index
+  ; =========================================================================
+
+  (test "build-line-index-single-line"
+    {do
+      (= {idx} (lsp/build-line-index "hello"))
+      (test/assert-eq 1 (len idx) "single line = 1 entry")
+      (test/assert-eq 0 (head idx) "starts at 0")
+    })
+
+  (test "build-line-index-multi-line"
+    {do
+      (= {idx} (lsp/build-line-index "ab\ncd\nef"))
+      (test/assert-eq 3 (len idx) "3 lines = 3 entries")
+      (test/assert-eq 0 (nth 1 idx) "line 0 at 0")
+      (test/assert-eq 3 (nth 2 idx) "line 1 at 3")
+      (test/assert-eq 6 (nth 3 idx) "line 2 at 6")
+    })
+
+  (test "lc-to-offset-basic"
+    {do
+      (= {idx} (lsp/build-line-index "ab\ncd\nef"))
+      (test/assert-eq 0 (lsp/lc->offset idx 0 0) "line 0 col 0")
+      (test/assert-eq 1 (lsp/lc->offset idx 0 1) "line 0 col 1")
+      (test/assert-eq 3 (lsp/lc->offset idx 1 0) "line 1 col 0")
+      (test/assert-eq 7 (lsp/lc->offset idx 2 1) "line 2 col 1")
+    })
+
+  (test "offset-to-lc-basic"
+    {do
+      (= {idx} (lsp/build-line-index "ab\ncd\nef"))
+      (= {lc0} (lsp/offset->lc idx 0))
+      (test/assert-eq 0 (head lc0) "offset 0 = line 0")
+      (= {lc4} (lsp/offset->lc idx 4))
+      (test/assert-eq 1 (head lc4) "offset 4 = line 1")
+      (test/assert-eq 1 (head (tail lc4)) "offset 4 = col 1")
+    })
+
+  ; =========================================================================
+  ; Incremental didChange flow
+  ; =========================================================================
+
+  (test "did-change-incremental-updates-text"
+    {do
+      (reset-state)
+      (lsp/doc-store "file:///inc.valk" "(+ 1 2)")
+      (reset-captures)
+      (handle-did-change
+        (ChangeParams
+          :textDocument (LspTextDoc :uri "file:///inc.valk")
+          :contentChanges (list
+            (list :range (list :start (list :line 0 :character 3)
+                               :end (list :line 0 :character 4))
+                  :text "10"))))
+      (= {stored} (lsp/doc-get "file:///inc.valk"))
+      (test/assert-eq "(+ 10 2)" stored "text should be incrementally updated")
+    })
+
+  (test "did-change-full-fallback"
+    {do
+      (reset-state)
+      (lsp/doc-store "file:///full.valk" "old")
+      (reset-captures)
+      (handle-did-change
+        (ChangeParams
+          :textDocument (LspTextDoc :uri "file:///full.valk")
+          :contentChanges (list (list :text "new"))))
+      (= {stored} (lsp/doc-get "file:///full.valk"))
+      (test/assert-eq "new" stored "full replace when no range")
+    })
+
+  (test "did-change-bumps-version"
+    {do
+      (reset-state)
+      (lsp/doc-store "file:///ver.valk" "x")
+      (= {v1} lsp/doc-version)
+      (handle-did-change
+        (ChangeParams
+          :textDocument (LspTextDoc :uri "file:///ver.valk")
+          :contentChanges (list (list :text "y"))))
+      (test/assert (> lsp/doc-version v1) "version should increment")
+    })
+
+  (test "did-open-bumps-version"
+    {do
+      (reset-state)
+      (= {v1} lsp/doc-version)
+      (handle-did-open
+        (OpenParams :textDocument (LspTextDocText :uri "file:///op.valk" :text "hello")))
+      (test/assert (> lsp/doc-version v1) "version should increment on open")
+      (test/assert-eq "hello" (lsp/doc-get "file:///op.valk") "text stored")
+    })
+
+  (test "did-close-clears-caches"
+    {do
+      (reset-state)
+      (lsp/doc-store "file:///cl.valk" "text")
+      (lsp/get-line-index "file:///cl.valk" "text")
+      (reset-captures)
+      (handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
+      (test/assert (nil? (lsp/doc-get "file:///cl.valk")) "doc removed")
+      (test/assert (nil? (dict/get lsp/line-index-cache "file:///cl.valk")) "line index removed")
+    })
+
   ; --- handle-selection-range ---
 
   (test "handle-selection-range-with-doc"
@@ -835,7 +996,7 @@
       (lsp/doc-store "file:///sel.valk" "(fun {f x} (+ x 1))")
       (reset-captures)
       (handle-selection-range 15
-        (list :textDocument (list :uri "file:///sel.valk")
+        (SelectionParams :textDocument (LspTextDoc :uri "file:///sel.valk")
               :positions (list (list :line 0 :character 14))))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -850,8 +1011,8 @@
       (lsp/doc-store "file:///ih.valk" "(fun {add a b} {+ a b})\n(add 1 2)")
       (reset-captures)
       (handle-inlay-hints 16
-        (list :textDocument (list :uri "file:///ih.valk")
-              :range (list :start (list :line 0) :end (list :line 10))))
+        (RangeParams :textDocument (LspTextDoc :uri "file:///ih.valk")
+              :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 10 :character 0))))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
     })
@@ -861,8 +1022,8 @@
       (reset-state)
       (reset-captures)
       (handle-inlay-hints 17
-        (list :textDocument (list :uri "file:///nope")
-              :range nil))
+        (RangeParams :textDocument (LspTextDoc :uri "file:///nope")
+              :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 0))))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no doc -> nil")
     })
@@ -993,8 +1154,9 @@
       (reset-state)
       (reset-captures)
       (handle-code-action 28
-        (list :textDocument (list :uri "file:///ca.valk")
-              :context (list :diagnostics nil)))
+        (CodeActionParams :textDocument (LspTextDoc :uri "file:///ca.valk")
+              :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 0))
+              :context (CodeActionContext :diagnostics nil)))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no diags -> nil")
     })
@@ -1004,8 +1166,9 @@
       (reset-state)
       (reset-captures)
       (handle-code-action 29
-        (list :textDocument (list :uri "file:///ca.valk")
-              :context (list :diagnostics
+        (CodeActionParams :textDocument (LspTextDoc :uri "file:///ca.valk")
+              :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 5))
+              :context (CodeActionContext :diagnostics
                 (list (list :message "Some other error"
                             :range (list :start (list :line 0 :character 0)
                                          :end (list :line 0 :character 5)))))))
@@ -1020,8 +1183,8 @@
       (reset-state)
       (reset-captures)
       (handle-rename 30
-        (list :textDocument (list :uri "file:///nope")
-              :position (list :line 0 :character 0)
+        (RenameParams :textDocument (LspTextDoc :uri "file:///nope")
+              :position (LspPosition :line 0 :character 0)
               :newName "renamed"))
       (= {err} (last-error))
       (test/assert (not (nil? err)) "should send error")
@@ -1215,8 +1378,9 @@
       (seed-doc "file:///test/ca.valk" "(fun {println x} {x})")
       (reset-captures)
       (handle-code-action 37
-        (list :textDocument (list :uri "file:///test/ca.valk")
-              :context (list :diagnostics
+        (CodeActionParams :textDocument (LspTextDoc :uri "file:///test/ca.valk")
+              :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 6))
+              :context (CodeActionContext :diagnostics
                 (list (list :message "Function 'printl' is not defined"
                             :range (list :start (list :line 0 :character 0)
                                          :end (list :line 0 :character 6)))))))
@@ -1233,8 +1397,8 @@
       (lsp/doc-store "file:///rn.valk" "(fun {f x}\n  (+ x 1))")
       (reset-captures)
       (handle-rename 38
-        (list :textDocument (list :uri "file:///rn.valk")
-              :position (list :line 1 :character 5)
+        (RenameParams :textDocument (LspTextDoc :uri "file:///rn.valk")
+              :position (LspPosition :line 1 :character 5)
               :newName "y"))
       (= {resp} (last-response))
       (= {result} resp:result)

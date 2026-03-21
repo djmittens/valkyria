@@ -124,7 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 
 ; === Lifecycle ===
 
-(def {SYMDB_VERSION} 2)
+(def {SYMDB_VERSION} 3)
 
 (sig 'symdb/init {-> Str Ref})
 (fun {symdb/init path} {do
@@ -132,6 +132,11 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
   (= {ver} (sqlite/query-value db "PRAGMA user_version"))
   (if (not (== ver SYMDB_VERSION))
     {do
+      (sqlite/exec db "DROP TABLE IF EXISTS diagnostics")
+      (sqlite/exec db "DROP TABLE IF EXISTS inlay_hints")
+      (sqlite/exec db "DROP TABLE IF EXISTS semantic_tokens")
+      (sqlite/exec db "DROP TABLE IF EXISTS scopes")
+      (sqlite/exec db "DROP TABLE IF EXISTS nodes")
       (sqlite/exec db "DROP TABLE IF EXISTS refs")
       (sqlite/exec db "DROP TABLE IF EXISTS symbols")
       (sqlite/exec db "DROP TABLE IF EXISTS files")
@@ -634,6 +639,16 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
     path}
 })
 
+; Range-filtered semantic tokens: only return tokens whose byte offset
+; falls within [start-offset, end-offset).
+(sig 'symdb/get-semantic-tokens-range {-> Ref Str Num Num List})
+(fun {symdb/get-semantic-tokens-range db path start-offset end-offset} {
+  if (nil? db) {nil}
+  {sqlite/query db
+    "SELECT pos, length, token_type, modifiers FROM semantic_tokens t JOIN files f ON t.file_id=f.id WHERE f.path=?1 AND t.pos>=?2 AND t.pos<?3 ORDER BY t.pos"
+    path start-offset end-offset}
+})
+
 (sig 'symdb/get-inlay-hints {-> Ref Str Num Num List})
 (fun {symdb/get-inlay-hints db path start-line end-line} {
   if (nil? db) {nil}
@@ -822,6 +837,31 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 
 
 
+
+; Sync with pre-parsed AST — avoids double-parse in parallel scan
+(sig 'symdb/sync-file-with-ast {-> Ref Str Str Str List Nil})
+(fun {symdb/sync-file-with-ast db uri text hash ast} {do
+  (= {path} (uri->path uri))
+  (if (error? ast) {}
+    {do
+      (sqlite/exec db
+        "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
+        path hash)
+      (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
+      (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
+      (= {syms} (symdb/extract-symbols-from-ast ast text))
+      (symdb/insert-symbols db file-id syms)
+      (= {refs} (symdb/extract-refs-from-ast ast text))
+      (symdb/insert-refs db file-id refs)
+      (sqlite/exec db "DELETE FROM nodes WHERE file_id=?1" file-id)
+      (= {nodes} (symdb/collect-nodes ast nil))
+      (symdb/insert-nodes db file-id nodes)
+      (sqlite/exec db "DELETE FROM semantic_tokens WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM inlay_hints WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM scoped_refs WHERE file_id=?1" file-id)
+      (if (not (nil? file-id)) {lsp/index-ast db file-id ast text} {})})
+})
 
 (sig 'symdb/sync-file-symbols {-> Ref Str Str Str Nil})
 (fun {symdb/sync-file-symbols db uri text hash} {do

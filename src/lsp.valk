@@ -30,6 +30,14 @@
 (type {FormSnippet}
   {:label Str :detail Str :snippet Str :sort Str})
 
+; Document snapshot — captured on main thread, passed to workers
+(type {DocSnapshot}
+  {:uri Str :text Str :version Num})
+
+; Hint context for inlay hint walker
+(type {HintCtx}
+  {:local List :db Ref})
+
 ; LSP request parameter types
 (type {LspTextDoc} {:uri Str})
 (type {LspTextDocText} {:uri Str :text Str})
@@ -96,6 +104,7 @@
   {dict/get lsp/documents uri})
 
 (def {lsp/ast-cache} (dict/new))
+(def {lsp/line-index-cache} (dict/new))
 
 (sig 'lsp/cache-ast {-> Str Str List})
 (fun {lsp/cache-ast uri text} {do
@@ -107,6 +116,94 @@
 (fun {lsp/get-ast uri text} {do
   (= {cached} (dict/get lsp/ast-cache uri))
   (if (nil? cached) {parse text} {cached})})
+
+; ---------------------------------------------------------------------------
+; Line index — O(1) line:col <-> offset conversion
+; ---------------------------------------------------------------------------
+; A line index is a list of byte offsets where each line starts.
+; Line 0 starts at offset 0. Line N starts at (nth line-index N).
+
+(sig 'lsp/build-line-index {-> Str List})
+(fun {lsp/build-line-index text} {
+  lsp/build-line-index-walk text 0 (len text) (list 0)
+})
+
+(sig 'lsp/build-line-index-walk {-> Str Num Num List List})
+(fun {lsp/build-line-index-walk text pos end acc} {
+  if (>= pos end) {reverse acc}
+  {if (== (str/slice text pos (+ pos 1)) "\n")
+    {lsp/build-line-index-walk text (+ pos 1) end (qcons (+ pos 1) acc)}
+    {lsp/build-line-index-walk text (+ pos 1) end acc}}
+})
+
+(sig 'lsp/get-line-index {-> Str Str List})
+(fun {lsp/get-line-index uri text} {do
+  (= {cached} (dict/get lsp/line-index-cache uri))
+  (if (nil? cached)
+    {do
+      (= {idx} (lsp/build-line-index text))
+      (dict/set! lsp/line-index-cache uri idx)
+      idx}
+    {cached})
+})
+
+; O(1) line-col to byte offset using line index (nth is 1-indexed)
+(sig 'lsp/lc->offset {-> List Num Num Num})
+(fun {lsp/lc->offset line-index line col} {do
+  (= {line-start} (nth (+ line 1) line-index))
+  (if (nil? line-start) {0} {+ line-start col})
+})
+
+; O(log n) byte offset to line-col using line index (binary search)
+(sig 'lsp/offset->lc {-> List Num List})
+(fun {lsp/offset->lc line-index offset} {
+  lsp/offset->lc-scan line-index offset 0
+})
+
+(sig 'lsp/offset->lc-scan {-> List Num Num List})
+(fun {lsp/offset->lc-scan lines offset line-num} {
+  if (nil? lines) {list 0 offset}
+  {if (nil? (tail lines))
+    {list line-num (- offset (head lines))}
+    {if (> (head (tail lines)) offset)
+      {list line-num (- offset (head lines))}
+      {lsp/offset->lc-scan (tail lines) offset (+ line-num 1)}}}
+})
+
+; Snapshot the current document state on the main thread
+(sig 'lsp/snapshot {-> Str List})
+(fun {lsp/snapshot uri} {do
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {nil}
+    {list :uri uri :text text :version lsp/doc-version})
+})
+
+; ---------------------------------------------------------------------------
+; Incremental text sync — apply content changes to stored text
+; ---------------------------------------------------------------------------
+; Each change is a plist with :range (optional) and :text.
+; If :range is nil, it's a full document replacement.
+; Range has :start {:line N :character N} and :end {:line N :character N}.
+
+(sig 'lsp/apply-changes {-> Str List Str})
+(fun {lsp/apply-changes text changes} {
+  if (nil? changes) {text}
+  {lsp/apply-changes (lsp/apply-one-change text (head changes))
+                     (tail changes)}
+})
+
+(sig 'lsp/apply-one-change {-> Str List Str})
+(fun {lsp/apply-one-change text change} {do
+  (= {range} (plist/get change :range))
+  (= {new-text} (plist/get change :text))
+  (if (nil? range) {new-text}
+    {do
+      (= {start} (plist/get range :start))
+      (= {end} (plist/get range :end))
+      (= {start-offset} (line-col->offset text (plist/get start :line) (plist/get start :character)))
+      (= {end-offset} (line-col->offset text (plist/get end :line) (plist/get end :character)))
+      (str (str/slice text 0 start-offset) new-text (str/slice text end-offset (len text)))})
+})
 
 (sig 'lsp/get-doc {-> DocParams DocCtx})
 (fun {lsp/get-doc params} {do
@@ -122,9 +219,10 @@
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
+  (= {pos} params:position)
   (if (nil? text) {nil}
     {(TextPosCtx :uri uri :text text :ast (lsp/get-ast uri text)
-                 :line params:position:line :col params:position:character)})
+                 :line pos:line :col pos:character)})
 })
 
 (sig 'lsp/get-word-ctx {-> TextDocPosParams WordCtx})
@@ -146,7 +244,7 @@
     {:positionEncoding "utf-8"
      :textDocumentSync
        {:openClose :true
-        :change 1
+        :change 2
         :save {:includeText :true}}
      :completionProvider
        {:triggerCharacters {"(" "/" ":"}
@@ -429,20 +527,103 @@
   (stderr/write (str "[valk-lsp] found " (len files) " .valk files\n"))
   files})
 
-(sig 'lsp/scan-all-inner {-> Ref List Num Num})
-(fun {lsp/scan-all-inner db files indexed} {
-  if (nil? files) {indexed}
-    {do
-      (= {did} (lsp/index-file db (head files)))
-      (lsp/scan-all-inner db (tail files) (+ indexed did))}
+; Prepare file for indexing (runs on worker thread).
+; Returns nil if unchanged or unreadable, otherwise a plist of extracted data.
+(sig 'lsp/prepare-file {-> Str List})
+(fun {lsp/prepare-file path} {do
+  (= {fp} (file/fingerprint path))
+  (if (error? fp) {nil}
+    {lsp/prepare-file-read path fp})
 })
 
-(sig 'lsp/scan-all {-> Ref List Num})
-(fun {lsp/scan-all db files} {do
-  (sqlite/exec db "BEGIN")
-  (= {indexed} (lsp/scan-all-inner db files 0))
-  (sqlite/exec db "COMMIT")
-  indexed})
+(sig 'lsp/prepare-file-read {-> Str Str List})
+(fun {lsp/prepare-file-read path fp} {do
+  (= {text} (read-file path))
+  (= {ast} (if (error? text) {nil} {parse text}))
+  (if (or (error? text) (or (nil? ast) (error? ast))) {nil}
+    {do
+      (= {syms} (symdb/extract-symbols-from-ast ast text))
+      (= {refs} (symdb/extract-refs-from-ast ast text))
+      (= {nodes} (symdb/collect-nodes ast nil))
+      (= {local-params} (hint/collect-local-params ast))
+      (= {raw-hints} (hint/walk-exprs ast (list :local local-params :db nil) nil))
+      (= {type-hints} (hint/collect-type-hints ast nil))
+      (list :path path :text text :fp fp :ast ast
+            :syms syms :refs refs :nodes nodes
+            :hints (join raw-hints type-hints))})
+})
+
+; Commit pre-extracted data to SQLite (runs on main loop callback).
+(sig 'lsp/commit-prepared {-> Ref List Num})
+(fun {lsp/commit-prepared db prep} {
+  if (nil? prep) {0}
+  {do
+    (= {path} (plist/get prep :path))
+    (= {fp} (plist/get prep :fp))
+    (= {fpath} (uri->path (str "file://" path)))
+    (= {existing} (sqlite/query-maybe db
+      "SELECT hash FROM files WHERE path=?1" fpath))
+    (if (and (not (nil? existing)) (and (not (error? existing)) (== existing:hash fp)))
+      {0}
+      {do
+        (= {text} (plist/get prep :text))
+        (= {ast} (plist/get prep :ast))
+        (sqlite/exec db
+          "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
+          fpath fp)
+    (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" fpath))
+    (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
+    (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
+    (symdb/insert-symbols db file-id (plist/get prep :syms))
+    (symdb/insert-refs db file-id (plist/get prep :refs))
+    (sqlite/exec db "DELETE FROM nodes WHERE file_id=?1" file-id)
+    (symdb/insert-nodes db file-id (plist/get prep :nodes))
+    (sqlite/exec db "DELETE FROM semantic_tokens WHERE file_id=?1" file-id)
+    (sqlite/exec db "DELETE FROM inlay_hints WHERE file_id=?1" file-id)
+    (sqlite/exec db "DELETE FROM scoped_refs WHERE file_id=?1" file-id)
+    (if (not (nil? file-id)) {lsp/index-ast db file-id ast text} {})
+    (if (not (nil? file-id)) {symdb/insert-hint-batch db file-id (plist/get prep :hints)} {})
+    1})}
+})
+
+; Parallel map-reduce workspace scan.
+; Map: dispatch read+parse to worker pool (parallel across all threads)
+; Reduce: commit to SQLite as callbacks arrive on main loop (serial, no shared state)
+(sig 'lsp/scan-all {-> Ref List Num Nil})
+(fun {lsp/scan-all db files tok} {do
+  (= {total} (len files))
+  (= {state} (dict/new))
+  (dict/set! state :remaining total)
+  (dict/set! state :indexed 0)
+  (dict/set! state :begun 0)
+  (map (\ {path} {
+    aio/dispatch lsp/sys
+      (\ {_} {lsp/prepare-file path})
+      nil
+      (\ {result} {do
+        (if (and (not (nil? result)) (== (dict/get state :begun) 0))
+          {do (sqlite/exec db "BEGIN") (dict/set! state :begun 1)} {})
+        (= {did-raw} (lsp/commit-prepared db result))
+        (= {did} (if (num? did-raw) {did-raw} {0}))
+        (= {new-indexed} (+ (dict/get state :indexed) did))
+        (= {new-remaining} (- (dict/get state :remaining) 1))
+        (dict/set! state :indexed new-indexed)
+        (dict/set! state :remaining new-remaining)
+        (= {processed} (- total new-remaining))
+        (= {pct} (/ (* processed 100) total))
+        (if (or (== (mod processed 10) 0) (== new-remaining 0))
+          {lsp/progress-report tok (str processed " / " total " files") pct}
+          {})
+        (if (== new-remaining 0)
+          {do
+            (if (== (dict/get state :begun) 1) {sqlite/exec db "COMMIT"} {})
+            (lsp/invalidate-known-set)
+            (lsp/progress-end tok (if (== new-indexed 0) {"up to date"} {str "indexed " new-indexed " files"}))
+            (stderr/write (str "[valk-lsp] scan complete: " new-indexed " indexed\n"))
+            (lsp/cleanup-stale-files)}
+          {})})
+  }) files)
+})
 
 (sig 'handle-initialize {-> Num InitParams Nil})
 (fun {handle-initialize id params} {do
@@ -453,8 +634,7 @@
       (def {lsp/root-path} (uri->path root-uri))
       (= {db-dir} (str lsp/root-path "/.valk"))
       (= {db-path} (str db-dir "/symdb.sqlite"))
-      (def {lsp/db} (symdb/init db-path))
-      (lsp/seed-builtins lsp/db lsp/root-path)}
+      (def {lsp/db} (symdb/init db-path))}
     {})
   (lsp/send-response id lsp/capabilities)})
 
@@ -466,10 +646,13 @@
   (= {uri} td:uri)
   (= {text} td:text)
   (lsp/doc-store uri text)
+  (dict/remove! lsp/line-index-cache uri)
+  (def {lsp/doc-version} (+ lsp/doc-version 1))
+  (= {snap} (DocSnapshot uri text lsp/doc-version))
   (aio/dispatch lsp/sys
-    (\ {_} {do (lsp/cache-ast uri text)
-               (lsp/sync-doc uri text)
-               (lsp/publish-diagnostics uri text)
+    (\ {_} {do (lsp/cache-ast snap:uri snap:text)
+               (lsp/sync-doc snap:uri snap:text)
+               (lsp/publish-diagnostics snap:uri snap:text)
                nil})
     nil lsp/noop-cb)})
 
@@ -480,14 +663,22 @@
   (= {changes} params:contentChanges)
   (if (nil? changes) {}
     {do
-      (= {text} (plist/get (head changes) :text))
+      (= {old-text} (lsp/doc-get uri))
+      (= {text} (if (nil? old-text)
+        {plist/get (head changes) :text}
+        {lsp/apply-changes old-text changes}))
       (lsp/doc-store uri text)
       (dict/remove! lsp/ast-cache uri)
+      (dict/remove! lsp/line-index-cache uri)
+      (def {lsp/doc-version} (+ lsp/doc-version 1))
+      (= {snap} (DocSnapshot uri text lsp/doc-version))
+      (= {v} lsp/doc-version)
       (aio/dispatch lsp/sys
-        (\ {_} {do (lsp/cache-ast uri text)
-                   (lsp/sync-doc uri text)
-                   (lsp/publish-diagnostics-fast uri text)
-                   nil})
+        (\ {_} {if (not (== lsp/doc-version v)) {nil}
+          {do (lsp/cache-ast snap:uri snap:text)
+              (lsp/sync-doc snap:uri snap:text)
+              (lsp/publish-diagnostics-fast snap:uri snap:text)
+              nil}})
         nil lsp/noop-cb)})})
 
 (sig 'handle-did-close {-> DocParams Nil})
@@ -496,6 +687,8 @@
   (= {uri} td:uri)
   (dict/remove! lsp/documents uri)
   (dict/remove! lsp/ast-cache uri)
+  (dict/remove! lsp/line-index-cache uri)
+  (def {lsp/doc-version} (+ lsp/doc-version 1))
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics nil))})
 
@@ -506,12 +699,17 @@
   (= {text} params:text)
   (= {save-text} (if (nil? text) {lsp/doc-get uri} {text}))
   (if (nil? save-text) {}
-    {aio/dispatch lsp/sys
-      (\ {_} {do (lsp/cache-ast uri save-text)
-                 (lsp/sync-doc uri save-text)
-                 (lsp/publish-diagnostics uri save-text)
-                 nil})
-      nil lsp/noop-cb})})
+    {do
+      (lsp/doc-store uri save-text)
+      (dict/remove! lsp/line-index-cache uri)
+      (def {lsp/doc-version} (+ lsp/doc-version 1))
+      (= {snap} (DocSnapshot uri save-text lsp/doc-version))
+      (aio/dispatch lsp/sys
+        (\ {_} {do (lsp/cache-ast snap:uri snap:text)
+                   (lsp/sync-doc snap:uri snap:text)
+                   (lsp/publish-diagnostics snap:uri snap:text)
+                   nil})
+        nil lsp/noop-cb)})})
 
 ; ---------------------------------------------------------------------------
 ; Method handlers — requests
@@ -525,6 +723,12 @@
   (= {doc} info:doc)
   (= {path} info:path)
   (= {sym-line} info:line)
+  (= {sym-kind} info:kind)
+  (= {kind-label} (if (== sym-kind SYMKIND_FUNCTION) {"function"}
+    {if (== sym-kind SYMKIND_VARIABLE) {"variable"}
+    {if (== sym-kind SYMKIND_TYPE) {"type"}
+    {if (== sym-kind SYMKIND_CONSTRUCTOR) {"constructor"}
+      {"symbol"}}}}))
   (= {sections} nil)
   (= {sections} (if (not (nil? type-sig))
     {qcons (str "```valk\n" name " : " type-sig "\n```") sections}
@@ -532,7 +736,7 @@
   (= {sections} (if (not (nil? formals))
     {qcons (str "```valk\n" formals "\n```") sections}
     {if (nil? type-sig)
-      {qcons (str "```valk\n" word "\n```") sections}
+      {qcons (str "```valk\n(" kind-label ") " word "\n```") sections}
       {sections}}))
   (= {sections} (if (not (nil? doc))
     {qcons doc sections}
@@ -589,7 +793,7 @@
     {do
       (lsp/index-ast db file-id ast text)
       (= {local-params} (hint/collect-local-params ast))
-      (= {hctx} (list :local local-params :db db))
+      (= {hctx} (HintCtx local-params db))
       (= {raw-hints} (hint/walk-exprs ast hctx nil))
       (= {type-hints} (hint/collect-type-hints ast db))
       (= {field-hints} (hint/collect-field-hints ast db))
@@ -604,7 +808,8 @@
       (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
       (= {path} (uri->path ctx:uri))
       (= {info} (if (nil? lsp/db) {nil}
-        {symdb/node-at-offset lsp/db path offset}))
+        {do (= {r} (symdb/node-at-offset lsp/db path offset))
+            (if (error? r) {nil} {r})}))
       (= {wr} (word-range-at-position ctx:text ctx:line ctx:col))
       (= {word} (if (nil? info)
         {if (nil? wr) {nil} {wr:word}}
@@ -829,9 +1034,9 @@
 (fun {make-sym-completion-item s} { do
   (= {name} s:name)
   (= {kind} s:kind)
-  (= {sig} s:sig)
+  (= {type-sig} s:sig)
   (= {doc} s:doc)
-  (= {detail-str} (if (nil? sig) {""} {sig}))
+  (= {detail-str} (if (nil? type-sig) {""} {type-sig}))
   (= {item} (list :label name
                    :kind (symkind->completion-kind kind)
                    :detail detail-str
@@ -945,7 +1150,7 @@
 ; Rename support
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-prepare-rename {-> Num List Nil})
+(sig 'handle-prepare-rename {-> Num TextDocPosParams Nil})
 (fun {handle-prepare-rename id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
@@ -1324,7 +1529,7 @@
                      :kind "region") acc})})
 })
 
-(sig 'handle-folding-range {-> Num List Nil})
+(sig 'handle-folding-range {-> Num DocParams Nil})
 (fun {handle-folding-range id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -1511,16 +1716,16 @@
 
 (sig 'handle-semantic-tokens-range {-> Num RangeParams Nil})
 (fun {handle-semantic-tokens-range id params} {do
-  (= {range} (plist/get params :range))
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id (list :data nil)}
     {do
-      (= {start-pos} (plist/get range :start))
-      (= {end-pos} (plist/get range :end))
-      (= {start-line} (plist/get start-pos :line))
-      (= {end-line} (plist/get end-pos :line))
+      (= {start-line} params:range:start:line)
+      (= {end-line} params:range:end:line)
       (= {path} (uri->path ctx:uri))
-      (= {rows} (if (nil? lsp/db) {nil} {symdb/get-semantic-tokens lsp/db path}))
+      (= {start-offset} (line-col->offset ctx:text start-line 0))
+      (= {end-offset} (line-col->offset ctx:text (+ end-line 1) 0))
+      (= {rows} (if (nil? lsp/db) {nil}
+        {symdb/get-semantic-tokens-range lsp/db path start-offset end-offset}))
       (= {data} (if (nil? rows)
         {sem/tokenize-ast ctx:ast ctx:text}
         {sem/encode-deltas ctx:text (symdb/rows-to-token-groups rows)}))
@@ -1554,7 +1759,36 @@
 (sig 'lsp/in-string? {-> Str Num Num Num})
 (fun {lsp/in-string? text line col} {do
   (= {offset} (line-col->offset text line col))
-  (lsp/count-quotes text offset 0 0)
+  (lsp/count-quotes-from text offset)
+})
+
+; Scan backwards to find last unescaped quote state boundary, then count forward.
+; Optimization: scan from line start instead of file start for common cases.
+(sig 'lsp/count-quotes-from {-> Str Num Num})
+(fun {lsp/count-quotes-from text limit} {do
+  (= {scan-start} (lsp/find-line-start text limit))
+  (= {pre-count} (if (== scan-start 0) {0}
+    {lsp/count-quotes-total text scan-start 0 0}))
+  (lsp/count-quotes text limit scan-start (+ pre-count 0))
+})
+
+(sig 'lsp/find-line-start {-> Str Num Num})
+(fun {lsp/find-line-start text pos} {
+  if (<= pos 0) {0}
+  {if (== (str/slice text (- pos 1) pos) "\n") {pos}
+    {lsp/find-line-start text (- pos 1)}}
+})
+
+(sig 'lsp/count-quotes-total {-> Str Num Num Num Num})
+(fun {lsp/count-quotes-total text limit pos count} {
+  if (>= pos limit) {count}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (== ch "\"")
+      {lsp/count-quotes-total text limit (+ pos 1) (+ count 1)}
+    {if (== ch "\\")
+      {lsp/count-quotes-total text limit (+ pos 2) count}
+      {lsp/count-quotes-total text limit (+ pos 1) count}})}
 })
 
 (sig 'lsp/count-quotes {-> Str Num Num Num Num})
@@ -1617,8 +1851,16 @@
   lsp/progress-token
 })
 
+(sig 'lsp/send-request {-> Num Str List Nil})
+(fun {lsp/send-request id method params}
+  {lsp/write-message
+    (list :jsonrpc "2.0" :id id :method method :params params)})
+
 (sig 'lsp/progress-begin {-> Num Str Num Nil})
 (fun {lsp/progress-begin token title total} {do
+  ; Request the progress token from the client first
+  (lsp/send-request (+ 100000 token) "window/workDoneProgress/create"
+    (list :token token))
   (lsp/send-notification "$/progress"
     (list :token token
           :value (list :kind "begin"
@@ -1697,65 +1939,58 @@
     {_ (lsp/dispatch-to-worker method id params)}
 })
 
-(sig 'lsp/make-text-doc {-> List LspTextDoc})
-(fun {lsp/make-text-doc raw} {
-  LspTextDoc (plist/get raw :uri)
-})
-
-(sig 'lsp/make-text-doc-text {-> List LspTextDocText})
-(fun {lsp/make-text-doc-text raw} {
-  LspTextDocText (plist/get raw :uri) (plist/get raw :text)
-})
-
-(sig 'lsp/make-position {-> List LspPosition})
-(fun {lsp/make-position raw} {
-  LspPosition (plist/get raw :line) (plist/get raw :character)
-})
-
-(sig 'lsp/make-range {-> List LspRange})
-(fun {lsp/make-range raw} {
-  LspRange (lsp/make-position (plist/get raw :start)) (lsp/make-position (plist/get raw :end))
-})
-
 (sig 'lsp/to-doc-params {-> List DocParams})
-(fun {lsp/to-doc-params raw} {
-  DocParams (lsp/make-text-doc (plist/get raw :textDocument))
+(fun {lsp/to-doc-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (DocParams (LspTextDoc (plist/get td :uri)))
 })
 
 (sig 'lsp/to-tdp-params {-> List TextDocPosParams})
-(fun {lsp/to-tdp-params raw} {
-  TextDocPosParams (lsp/make-text-doc (plist/get raw :textDocument))
-                   (lsp/make-position (plist/get raw :position))
+(fun {lsp/to-tdp-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (= {pos} (plist/get raw :position))
+  (TextDocPosParams (LspTextDoc (plist/get td :uri))
+                    (LspPosition (plist/get pos :line) (plist/get pos :character)))
 })
 
 (sig 'lsp/to-open-params {-> List OpenParams})
-(fun {lsp/to-open-params raw} {
-  OpenParams (lsp/make-text-doc-text (plist/get raw :textDocument))
+(fun {lsp/to-open-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (OpenParams (LspTextDocText (plist/get td :uri) (plist/get td :text)))
 })
 
 (sig 'lsp/to-change-params {-> List ChangeParams})
-(fun {lsp/to-change-params raw} {
-  ChangeParams (lsp/make-text-doc (plist/get raw :textDocument))
-               (plist/get raw :contentChanges)
+(fun {lsp/to-change-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (ChangeParams (LspTextDoc (plist/get td :uri))
+                (plist/get raw :contentChanges))
 })
 
 (sig 'lsp/to-save-params {-> List SaveParams})
-(fun {lsp/to-save-params raw} {
-  SaveParams (lsp/make-text-doc (plist/get raw :textDocument))
-             (plist/get raw :text)
+(fun {lsp/to-save-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (SaveParams (LspTextDoc (plist/get td :uri))
+              (plist/get raw :text))
 })
 
 (sig 'lsp/to-range-params {-> List RangeParams})
-(fun {lsp/to-range-params raw} {
-  RangeParams (lsp/make-text-doc (plist/get raw :textDocument))
-              (lsp/make-range (plist/get raw :range))
+(fun {lsp/to-range-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (= {r} (plist/get raw :range))
+  (= {s} (plist/get r :start))
+  (= {e} (plist/get r :end))
+  (RangeParams (LspTextDoc (plist/get td :uri))
+               (LspRange (LspPosition (plist/get s :line) (plist/get s :character))
+                         (LspPosition (plist/get e :line) (plist/get e :character))))
 })
 
 (sig 'lsp/to-rename-params {-> List RenameParams})
-(fun {lsp/to-rename-params raw} {
-  RenameParams (lsp/make-text-doc (plist/get raw :textDocument))
-               (lsp/make-position (plist/get raw :position))
-               (plist/get raw :newName)
+(fun {lsp/to-rename-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (= {pos} (plist/get raw :position))
+  (RenameParams (LspTextDoc (plist/get td :uri))
+                (LspPosition (plist/get pos :line) (plist/get pos :character))
+                (plist/get raw :newName))
 })
 
 (sig 'lsp/handle-readonly {-> Str Any List Nil})
@@ -1806,14 +2041,7 @@
                   (= {files} (lsp/collect-workspace-files lsp/root-path))
                   (= {tok} (lsp/next-progress-token))
                   (lsp/progress-begin tok "Indexing workspace" (len files))
-                  (aio/dispatch lsp/sys
-                    (\ {_} {lsp/scan-all lsp/db files})
-                    nil
-                    (\ {indexed} {do
-                      (lsp/invalidate-known-set)
-                      (lsp/progress-end tok (str "indexed " indexed " files"))
-                      (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
-                      (lsp/cleanup-stale-files)}))}
+                  (lsp/scan-all lsp/db files tok)}
                 {}))}
             {"shutdown" (lsp/send-response id (None))}
             {"exit" (aio/stop lsp/sys)}
