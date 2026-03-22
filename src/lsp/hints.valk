@@ -346,18 +346,17 @@
     (= {pos} (plist/get r :pos))
     (= {label} (plist/get r :label))
     (= {kind} (plist/get r :kind))
+    (= {pad} (plist/get r :padding))
+    (= {pad} (if (nil? pad) {0} {pad}))
     (= {lc} (offset->line-col text pos))
     (= {line} (head lc))
     (= {col} (head (tail lc)))
-    (= {is-ret} (str/starts-with? label "->"))
-    (= {formatted} (if (== kind 1)
-      {list :position (list :line line :character col)
-            :label label :kind 1
-            :paddingLeft (if is-ret {:false} {:true})
-            :paddingRight :true}
-      {list :position (list :line line :character col)
-            :label label :kind 2
-            :paddingRight :true}))
+    (= {formatted} (list :position (list :line line :character col)
+                         :label label :kind kind))
+    (= {formatted} (if (> (mod pad 2) 0)
+      {plist/set formatted :paddingLeft :true} {formatted}))
+    (= {formatted} (if (> (mod (/ pad 2) 2) 0)
+      {plist/set formatted :paddingRight :true} {formatted}))
     (hint/format-db-loop (tail rows) text range
       (if (hint/in-range? line range)
         {qcons formatted acc}

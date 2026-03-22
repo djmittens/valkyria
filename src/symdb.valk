@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS inlay_hints (
   file_id INTEGER NOT NULL REFERENCES files(id),
   pos INTEGER NOT NULL,
   label TEXT NOT NULL,
-  kind INTEGER NOT NULL
+  kind INTEGER NOT NULL,
+  padding INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_hints_file ON inlay_hints(file_id, pos);
 
@@ -124,7 +125,7 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 
 ; === Lifecycle ===
 
-(def {SYMDB_VERSION} 3)
+(def {SYMDB_VERSION} 4)
 
 (sig 'symdb/init {-> Str Ref})
 (fun {symdb/init path} {do
@@ -603,14 +604,22 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 
 
 
+(sig 'symdb/hint-padding-bits {-> List Num})
+(fun {symdb/hint-padding-bits h} {do
+  (= {l} (plist/get h :paddingLeft))
+  (= {r} (plist/get h :paddingRight))
+  (+ (if (not (nil? l)) {1} {0})
+     (if (not (nil? r)) {2} {0}))
+})
+
 (sig 'symdb/insert-hint-batch {-> Ref Num List Nil})
 (fun {symdb/insert-hint-batch db file-id hints} {
   if (nil? hints) {nil}
   {do
     (= {h} (head hints))
     (sqlite/exec db
-      "INSERT INTO inlay_hints (file_id, pos, label, kind) VALUES (?1, ?2, ?3, ?4)"
-      file-id h:offset h:label h:kind)
+      "INSERT INTO inlay_hints (file_id, pos, label, kind, padding) VALUES (?1, ?2, ?3, ?4, ?5)"
+      file-id h:offset h:label h:kind (symdb/hint-padding-bits h))
     (symdb/insert-hint-batch db file-id (tail hints))}
 })
 
@@ -653,7 +662,7 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 (fun {symdb/get-inlay-hints db path start-line end-line} {
   if (nil? db) {nil}
   {sqlite/query db
-    "SELECT h.pos, h.label, h.kind FROM inlay_hints h JOIN files f ON h.file_id=f.id WHERE f.path=?1 ORDER BY h.pos"
+    "SELECT h.pos, h.label, h.kind, h.padding FROM inlay_hints h JOIN files f ON h.file_id=f.id WHERE f.path=?1 ORDER BY h.pos"
     path}
 })
 
