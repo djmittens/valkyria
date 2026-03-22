@@ -1,0 +1,160 @@
+; valk-check — workspace diagnostics
+;
+; Usage: build/valk scripts/valk-check.valk -- [dir]
+;        make check [DIR=path]
+;
+; Runs the full LSP validator on all tracked .valk files:
+;   - Parse errors
+;   - Undefined symbols/functions
+;   - Arity mismatches (special forms + user functions)
+;   - Argument type mismatches vs sig
+;   - Constructor field validation
+;   - Type accessor validation
+;   - Unknown types in sig declarations
+;   - Match pattern field count
+;   - Division by literal zero
+;   - Unresolvable types
+
+(load "stdlib/prelude.valk")
+(load "stdlib/diag/symdb.valk")
+(load "stdlib/diag/validate.valk")
+
+(fun {eprintln s} {stderr/write (str s "\n")})
+
+; === Find .valk files via git ===
+
+(fun {check/find-files dir} {do
+  (= {r} (exec "git" "ls-files" "--full-name" "*.valk" "**/*.valk"))
+  (if (!= r:exit-code 0)
+    {do (eprintln (str "valk-check: git ls-files failed: " r:stderr))
+        nil}
+    {do
+      (= {all} (filter (\ {f} {> (len f) 0}) (str/split r:stdout "\n")))
+      (if (== dir ".")
+        {all}
+        {filter (\ {f} {str/starts-with? f dir}) all})})
+})
+
+; === Diagnostic formatting ===
+
+(fun {check/severity-str sev} {
+  if (== sev 1) {"error"}
+  {if (== sev 2) {"warning"}
+    {"info"}}
+})
+
+(fun {check/print-diag path d} {
+  eprintln (str path ":" d:line ":" d:col ": "
+    (check/severity-str d:severity) ": " d:message)
+})
+
+(fun {check/print-diags path diags} {
+  if (nil? diags) {nil}
+  {do (check/print-diag path (head diags))
+      (check/print-diags path (tail diags))}
+})
+
+(fun {check/count-severity diags sev} {
+  if (nil? diags) {0}
+  {if (error? diags) {0}
+    {do
+      (= {d} (head diags))
+      (= {s} (if (error? d) {-1} {d:severity}))
+      (= {s} (if (error? s) {-1} {s}))
+      (+ (if (== s sev) {1} {0})
+         (check/count-severity (tail diags) sev))}}
+})
+
+; === Phase 1: Sync all files into symdb ===
+
+(fun {check/sync-all db files} {
+  if (nil? files) {nil}
+  {do
+    (= {path} (head files))
+    (= {text} (read-file path))
+    (if (not (error? text))
+      {symdb/sync-document db (str "file://" path) text}
+      {nil})
+    (check/sync-all db (tail files))}
+})
+
+; === Phase 2: Validate all files ===
+
+(fun {check/validate-all db files} {
+  check/validate-walk db files 0 0 0
+})
+
+(fun {check/validate-walk db files total-lines total-errors total-warnings} {
+  if (nil? files) {list :lines total-lines :errors total-errors
+                        :warnings total-warnings}
+  {do
+    (= {path} (head files))
+    (= {text} (read-file path))
+    (if (error? text)
+      {check/validate-walk db (tail files) total-lines total-errors total-warnings}
+      {do
+        (= {lines} (+ 1 (len (str/split text "\n"))))
+        (= {ast} (parse text))
+        (if (error? ast)
+          {do (eprintln (str path ":1:1: error: " ast))
+              (check/validate-walk db (tail files) (+ total-lines lines)
+                (+ total-errors 1) total-warnings)}
+          {do
+            (= {diags} (vd/validate db ast text))
+            (if (error? diags)
+              {check/validate-walk db (tail files) (+ total-lines lines)
+                total-errors total-warnings}
+              {do
+                (= {errs} (check/count-severity diags 1))
+                (= {warns} (check/count-severity diags 2))
+                (if (> (len diags) 0) {check/print-diags path diags} {nil})
+                (check/validate-walk db (tail files) (+ total-lines lines)
+                  (+ total-errors errs) (+ total-warnings warns))})})})}
+})
+
+; === Arg parsing ===
+
+(fun {check/find-dir args} {
+  if (nil? args) {"."}
+  {if (== (head args) "--")
+    {if (nil? (tail args)) {"."} {head (tail args)}}
+    {check/find-dir (tail args)}}
+})
+
+; === Main ===
+
+(fun {check/main} {do
+  (= {dir} (check/find-dir sys/argv))
+  (= {files} (check/find-files dir))
+
+  (if (nil? files)
+    {do (eprintln "valk-check: no .valk files found") (exit 0)} {nil})
+
+  (= {n} (len files))
+
+  ; Phase 1: index workspace into symdb (for cross-file resolution)
+  (= {db-path} ".valk/check.sqlite")
+  (= {db} (symdb/init db-path))
+  (eprintln (str "valk-check: indexing " n " files"))
+  (check/sync-all db files)
+
+  ; Phase 2: validate each file using full LSP checks
+  (eprintln (str "valk-check: validating " n " files"))
+  (= {report} (check/validate-all db files))
+
+  (symdb/close db)
+
+  (eprintln "")
+  (if (== report:errors 0)
+    {if (== report:warnings 0)
+      {eprintln (str "valk-check: " n " files, " report:lines " lines -- all clear")}
+      {eprintln (str "valk-check: " n " files, " report:lines " lines, "
+        report:warnings " warnings")}}
+    {do
+      (eprintln (str "valk-check: " n " files, " report:lines " lines, "
+        report:errors " errors"
+        (if (> report:warnings 0) {str ", " report:warnings " warnings"} {""})))
+      (exit 1)})
+})
+
+(check/main)

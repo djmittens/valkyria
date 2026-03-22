@@ -1,0 +1,220 @@
+; check-coverage.valk — Coverage gate checker for Valkyria
+;
+; Enforces 90% line, 85% branch coverage for ALL runtime code in src/
+; Exit code 0 = pass, 1 = fail (blocks CI)
+
+(load "stdlib/prelude.valk")
+(load "scripts/coverage_common.valk")
+
+
+; Requirements in tenths of percent
+(def {REQ_LINE} 900)
+(def {REQ_BRANCH} 850)
+(def {REQ_EXPR} 900)
+
+(def {KNOWN_BLOCKED} (list
+  (list "stdlib/http/api.valk" "stdlib utility library - many functions not exercised by tests")
+  (list "stdlib/test/test.valk" "test framework - error/timeout/skip paths not exercised in normal runs")
+  (list "src/lsp_index.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
+  (list "src/gc_region.c" "GC region - branch coverage limited by OOM/edge-case paths")
+  (list "src/type_env.c" "type environment - branch coverage limited by complex pattern matching")
+  (list "scripts/lsp/main.valk" "LSP entry point - only 2 lines, coverage skew from small file")))
+
+(fun {is-blocked rel-path} {
+  (*is-blocked-loop* KNOWN_BLOCKED rel-path)
+})
+
+(fun {*is-blocked-loop* blocked rel-path} {
+  (if (== blocked nil) {nil}
+    {do
+      (= {entry} (head blocked))
+      (if (== (nth 1 entry) rel-path)
+        {(nth 2 entry)}
+        {(*is-blocked-loop* (tail blocked) rel-path)})})
+})
+
+; --- CLI ---
+
+(= {argv} sys/argv)
+(= {opts} (dict/new))
+(dict/set! opts "build-dir" "build-coverage")
+(dict/set! opts "show-passing" 0)
+(= {argc} (len argv))
+
+(fun {*parse-args* i} {
+  (if (> i argc) {}
+    {do
+      (= {arg} (nth i argv))
+      (select
+        {(== arg "--build-dir")
+         (do (dict/set! opts "build-dir" (nth (+ i 1) argv)) (*parse-args* (+ i 2)))}
+        {(== arg "--show-passing")
+         (do (dict/set! opts "show-passing" 1) (*parse-args* (+ i 1)))}
+        {true (*parse-args* (+ i 1))})})
+})
+(*parse-args* 1)
+
+(= {build-dir} (dict/get opts "build-dir"))
+(= {show-passing} (dict/get opts "show-passing"))
+
+; --- Resolve paths ---
+(= {build-dir} (realpath build-dir))
+(= {source-root} (realpath (str/join (init (str/split build-dir "/")) "/")))
+
+(if (not (file/exists? build-dir))
+  {do
+    (printf "Error: Build directory %s does not exist\n" build-dir)
+    (print "Run: make build-coverage && make test")
+    (exit 1)}
+  {})
+
+(printf "Build directory: %s\n\n" build-dir)
+
+; --- Collect ---
+(= {files} (collect-coverage build-dir source-root))
+(= {runtime-files} (filter-runtime-files files source-root))
+(= {stdlib-files} (filter-stdlib-files files source-root))
+
+(printf "Found %d runtime C files, %d stdlib Valk files\n\n"
+  (dict/count runtime-files) (dict/count stdlib-files))
+
+(if (and (== (dict/count runtime-files) 0) (== (dict/count stdlib-files) 0))
+  {do
+    (print "Error: No coverage data found")
+    (print "Run: make test")
+    (exit 1)}
+  {})
+
+; --- Check ---
+
+(print "================================================================================")
+(print "VALKYRIA RUNTIME COVERAGE GATE CHECK")
+(print "================================================================================")
+(print "")
+(printf "Runtime (src/*.c):    %s line, %s branch\n" (fmt-pct REQ_LINE) (fmt-pct REQ_BRANCH))
+(printf "Stdlib (src/*.valk):  %s expr, %s branch\n" (fmt-pct REQ_EXPR) (fmt-pct REQ_BRANCH))
+(print "")
+
+(= {results} (dict/new))
+(dict/set! results "failures" {})
+(dict/set! results "passes" {})
+(dict/set! results "blocked" {})
+
+(fun {add-result! bucket line} {
+  (dict/set! results bucket (join (dict/get results bucket) (list line)))
+})
+
+; Check runtime files
+(= {rt-keys} (dict/keys runtime-files))
+
+(fun {*check-runtime* keys} {
+  (if (== keys nil) {}
+    {do
+      (= {rel} (head keys))
+      (= {fc} (dict/get runtime-files rel))
+      (= {filename} (if (str/starts-with? rel "src/") {(str/slice rel 4 (len rel))} {rel}))
+      (= {line-pct} (fc/line-pct fc))
+      (= {branch-pct} (fc/branch-pct fc))
+      (= {line-pass} (>= line-pct REQ_LINE))
+      (= {branch-pass} (>= branch-pct REQ_BRANCH))
+      (= {status} (if (and line-pass branch-pass) {"V"} {"X"}))
+      (= {line} (str "  " filename " " status "  " (fmt-pct line-pct) " line, " (fmt-pct branch-pct) " branch"))
+      (if (or (not line-pass) (not branch-pass))
+        {do
+          (= {gaps} "")
+          (if (not line-pass)
+            {(= {gaps} (str gaps (fmt-pct (- REQ_LINE line-pct)) " line"))}
+            {})
+          (if (not branch-pass)
+            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
+            {})
+          (= {line} (str line "  (-" gaps ")"))
+          (add-result! "failures" line)}
+        {(add-result! "passes" line)})
+      (*check-runtime* (tail keys))})
+})
+(*check-runtime* rt-keys)
+
+; Check stdlib files
+(= {valk-keys} (dict/keys stdlib-files))
+
+(fun {*check-stdlib* keys} {
+  (if (== keys nil) {}
+    {do
+      (= {rel} (head keys))
+      (= {fc} (dict/get stdlib-files rel))
+      (= {filename} (if (str/starts-with? rel "src/") {(str/slice rel 4 (len rel))} {rel}))
+      (= {expr-pct} (fc/expr-pct fc))
+      (= {branch-pct} (fc/branch-pct fc))
+      (= {expr-pass} (>= expr-pct REQ_EXPR))
+      (= {branch-pass} (>= branch-pct REQ_BRANCH))
+      (= {status} (if (and expr-pass branch-pass) {"V"} {"X"}))
+      (= {line} (str "  " filename " " status "  " (fmt-pct expr-pct) " expr, " (fmt-pct branch-pct) " branch"))
+      (if (or (not expr-pass) (not branch-pass))
+        {do
+          (= {gaps} "")
+          (if (not expr-pass)
+            {(= {gaps} (str gaps (fmt-pct (- REQ_EXPR expr-pct)) " expr"))}
+            {})
+          (if (not branch-pass)
+            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
+            {})
+          (= {line} (str line "  (-" gaps ")"))
+          (= {reason} (is-blocked rel))
+          (if (!= reason nil)
+            {do
+              (= {line} (str line "  [BLOCKED: " reason "]"))
+              (add-result! "blocked" line)}
+            {(add-result! "failures" line)})}
+        {(add-result! "passes" line)})
+      (*check-stdlib* (tail keys))})
+})
+(*check-stdlib* valk-keys)
+
+(= {failures} (dict/get results "failures"))
+(= {passes} (dict/get results "passes"))
+(= {blocked} (dict/get results "blocked"))
+
+; --- Print results ---
+
+(if (> (len failures) 0)
+  {do
+    (print "FAILING FILES:")
+    (map (\ {l} {println l}) failures)
+    (print "")}
+  {})
+
+(if (> (len blocked) 0)
+  {do
+    (print "BLOCKED FILES (documented exceptions):")
+    (map (\ {l} {println l}) blocked)
+    (print "")}
+  {})
+
+(if (and (== show-passing 1) (> (len passes) 0))
+  {do
+    (print "PASSING FILES:")
+    (map (\ {l} {println l}) passes)
+    (print "")}
+  {})
+
+(print "================================================================================")
+(= {blocked-msg} (if (> (len blocked) 0) {(str ", " (len blocked) " blocked")} {""}))
+(printf "Results: %d passing, %d failing%s\n\n" (len passes) (len failures) blocked-msg)
+
+(if (== (len failures) 0)
+  {do
+    (print "V ALL COVERAGE REQUIREMENTS MET")
+    (if (> (len blocked) 0)
+      {(printf "  (%d files have documented blocking issues)\n" (len blocked))}
+      {})}
+  {do
+    (print "X COVERAGE REQUIREMENTS NOT MET")
+    (print "")
+    (printf "All runtime code in src/ requires %s line, %s branch.\n" (fmt-pct REQ_LINE) (fmt-pct REQ_BRANCH))
+    (print "See docs/COVERAGE_REQUIREMENTS.md for rationale.")})
+
+(print "================================================================================")
+(print "")
+
+(exit (if (== (len failures) 0) {0} {1}))

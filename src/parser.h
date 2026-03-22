@@ -201,6 +201,7 @@ valk_lval_t *valk_lval_dict(valk_dict_t *data);
 valk_lval_t *valk_lval_copy(valk_lval_t *lval);
 
 int valk_lval_eq(valk_lval_t *x, valk_lval_t *y);
+bool valk_lval_is_truthy(valk_lval_t *val);
 
 // Helper functions for cons-based lists
 int valk_lval_list_is_empty(valk_lval_t* list);

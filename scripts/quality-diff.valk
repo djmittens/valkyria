@@ -1,4 +1,4 @@
-(load "src/prelude.valk")
+(load "stdlib/prelude.valk")
 
 ; --- Index builders ---
 

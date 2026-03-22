@@ -884,3 +884,12 @@ static const char* valk_lval_str_escape(char x) {
   }
   return "";
 }
+
+bool valk_lval_is_truthy(valk_lval_t *val) {
+  if (val == nullptr) return false;
+  valk_ltype_e type = LVAL_TYPE(val);
+  if (type == LVAL_NIL) return false;
+  if (type == LVAL_NUM) return val->num != 0;
+  if (type == LVAL_ERR) return false;
+  return true;
+}

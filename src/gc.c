@@ -725,3 +725,23 @@ void valk_gc_reset_after_fork(void) {
   valk_thread_ctx.root_stack_capacity = 0;
 }
 // LCOV_EXCL_STOP
+
+void valk_gc_root_push_fn(valk_lval_t *val) {
+  valk_gc_root_push(val);
+}
+
+void valk_gc_root_pop_fn(void) {
+  valk_gc_root_pop();
+}
+
+sz valk_gc_root_save(void) {
+  return valk_thread_ctx.root_stack_count;
+}
+
+void valk_gc_root_restore(sz count) {
+  valk_thread_ctx.root_stack_count = count;
+}
+
+void valk_gc_safepoint_fn(void) {
+  VALK_GC_SAFE_POINT();
+}

@@ -1,2 +1,0 @@
-(load "src/lsp/lsp.valk")
-(lsp/start)

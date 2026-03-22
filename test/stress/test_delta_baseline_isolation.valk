@@ -1,9 +1,9 @@
 ; Delta Baseline Isolation Test
 ; Tests whether metrics/collect-delta uses per-connection or shared state
 
-(load "src/prelude.valk")
-(load "src/modules/test.valk")
-(load "src/modules/aio/debug.valk")
+(load "stdlib/prelude.valk")
+(load "stdlib/test/test.valk")
+(load "stdlib/aio/debug.valk")
 
 (def {aio} (aio/await (aio/start)))
 

@@ -446,3 +446,9 @@ static inline void valk_gc_root_cleanup(valk_gc_root_t *r) {
 // ============================================================================
 
 void valk_diag_dump_on_timeout(void);
+
+void valk_gc_root_push_fn(valk_lval_t *val);
+void valk_gc_root_pop_fn(void);
+sz valk_gc_root_save(void);
+void valk_gc_root_restore(sz count);
+void valk_gc_safepoint_fn(void);

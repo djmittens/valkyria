@@ -2,7 +2,7 @@
 ; Stress test for 50MB response through the Lisp machinery.
 ; Exercises: Lisp handler -> response building -> HTTP/2 framing -> SSL
 
-(load "src/prelude.valk")
+(load "stdlib/prelude.valk")
 
 (println "=== Large Response Stress Test ===")
 (println "")

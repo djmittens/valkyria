@@ -1,0 +1,7 @@
+(load "stdlib/prelude.valk")
+(load "stdlib/test/test.valk")
+(test/run (list
+  (test "exit-is-defined" {(not (error? exit))})
+  (test "shutdown-is-defined" {(not (error? shutdown))})
+  (test "exit-returns-code" {(do (= {r} (exit 0)) (== r 0))})
+) {:suite-name "Exit Alias"})

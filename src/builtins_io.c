@@ -5,6 +5,7 @@ extern valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a);
 #include <errno.h>
 #include <limits.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,29 @@ extern valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a);
 #include "diag.h"
 #include "gc.h"
 #include "type_env.h"
+
+#define MODULE_CACHE_MAX 512
+#define MODULE_STATE_LOADING 1
+#define MODULE_STATE_READY   2
+
+typedef struct {
+  char *resolved_path;
+  char *prefix;
+  int state;
+} module_entry_t;
+
+static pthread_mutex_t module_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+static module_entry_t module_cache[MODULE_CACHE_MAX];
+static int module_cache_count = 0;
+
+static module_entry_t *module_cache_find(const char *path) {
+  for (int i = 0; i < module_cache_count; i++)
+    if (strcmp(module_cache[i].resolved_path, path) == 0)
+      return &module_cache[i];
+  return NULL;
+}
+
+
 
 static bool env_has_name(const char *name, void *ctx) {
   valk_lenv_t *env = ctx;
@@ -49,66 +73,104 @@ static char *read_file_text(const char *filename) {
   return text;
 }
 
-static valk_lval_t* valk_builtin_load(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_BR_START - arg validation
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
-  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
-  // LCOV_EXCL_BR_STOP
-
-  const char *filename = valk_lval_list_nth(a, 0)->str;
-  valk_coverage_record_file(filename);
-
-  char *text = read_file_text(filename);
-  if (!text)
-    return valk_lval_err("Could not open file (%s)", filename);
-
-  // Stage 1: Parse
+static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
+                                   const char *filename, char *text) {
   valk_lval_t *ast = valk_parse_text(text);
-  if (LVAL_TYPE(ast) == LVAL_ERR) { // LCOV_EXCL_BR_LINE - parse errors tested via parser tests
+  if (LVAL_TYPE(ast) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
     valk_lval_println(ast); // LCOV_EXCL_LINE
-    free(text); // LCOV_EXCL_LINE
     return ast; // LCOV_EXCL_LINE
   }
 
-  // Stage 2: Validate
-  valk_name_resolver_t resolver = {.is_known = env_has_name, .ctx = e};
+  valk_name_resolver_t resolver = {.is_known = env_has_name, .ctx = target_env};
   valk_diag_list_t diags = valk_validate_ast(ast, text, resolver);
   if (valk_diag_error_count(&diags) > 0) {
     valk_diag_fprint(&diags, filename, text, stderr);
     valk_diag_free(&diags);
-    free(text);
     return valk_lval_err("Diagnostics found errors in %s", filename);
   }
   valk_diag_free(&diags);
-  free(text);
 
-  // Stage 3: Evaluate
-  valk_lval_t* last = nullptr;
+  valk_lval_t *last = nullptr;
   while (valk_lval_list_count(ast)) {
-    valk_lval_t* x = valk_type_transform_expr(valk_lval_pop(ast, 0));
+    valk_lval_t *x = valk_type_transform_expr(valk_lval_pop(ast, 0));
     if (LVAL_TYPE(x) == LVAL_NIL) continue;
-    if (LVAL_TYPE(x) == LVAL_ERR) { // LCOV_EXCL_BR_LINE - type transform errors
+    if (LVAL_TYPE(x) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
       valk_lval_println(x); // LCOV_EXCL_LINE
       return x; // LCOV_EXCL_LINE
     }
-    x = valk_lval_eval(e, x);
+    x = valk_lval_eval(target_env, x);
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
     } else {
       last = x;
     }
-    // LCOV_EXCL_START - GC collection during load: non-deterministic timing
-    valk_gc_heap_t* gc_heap =
-        (valk_gc_heap_t*)valk_thread_ctx.allocator;
+    // LCOV_EXCL_START
+    valk_gc_heap_t *gc_heap = (valk_gc_heap_t *)valk_thread_ctx.allocator;
     if (gc_heap->type == VALK_ALLOC_GC_HEAP &&
-        valk_gc_should_collect(gc_heap)) {
+        valk_gc_should_collect(gc_heap))
       valk_gc_heap_collect(gc_heap);
-    }
     // LCOV_EXCL_STOP
   }
-  if (last) {
-    valk_lenv_put(e, valk_lval_sym("VALK_LAST_VALUE"), last);
+  return last ? last : valk_lval_nil();
+}
+
+static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
+  u64 argc = valk_lval_list_count(a);
+  // LCOV_EXCL_BR_START
+  if (argc < 1 || argc > 2)
+    LVAL_RAISE(a, "load: expected 1-2 arguments, got %llu", argc);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  if (argc == 2)
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_SYM);
+  // LCOV_EXCL_BR_STOP
+
+  const char *filename = valk_lval_list_nth(a, 0)->str;
+  valk_coverage_record_file(filename);
+
+  char resolved[PATH_MAX];
+  if (!realpath(filename, resolved))
+    return valk_lval_err("Could not resolve file (%s)", filename);
+
+  pthread_mutex_lock(&module_cache_lock);
+
+  module_entry_t *cached = module_cache_find(resolved);
+  if (cached && cached->state == MODULE_STATE_READY) {
+    pthread_mutex_unlock(&module_cache_lock);
+    return valk_lval_nil();
   }
+
+  if (cached && cached->state == MODULE_STATE_LOADING) {
+    pthread_mutex_unlock(&module_cache_lock);
+    return valk_lval_err("Circular load detected: %s", filename);
+  }
+
+  if (module_cache_count >= MODULE_CACHE_MAX) { // LCOV_EXCL_BR_LINE
+    pthread_mutex_unlock(&module_cache_lock); // LCOV_EXCL_LINE
+    return valk_lval_err("Module cache full"); // LCOV_EXCL_LINE
+  }
+  module_entry_t *entry = &module_cache[module_cache_count++];
+  entry->resolved_path = strdup(resolved);
+  entry->prefix = strdup("");
+  entry->state = MODULE_STATE_LOADING;
+  pthread_mutex_unlock(&module_cache_lock);
+
+  char *text = read_file_text(filename);
+  if (!text) {
+    entry->state = 0;
+    return valk_lval_err("Could not open file (%s)", filename);
+  }
+
+  valk_lval_t *result = load_eval_file(e, filename, text);
+  free(text);
+
+  if (LVAL_TYPE(result) == LVAL_ERR) {
+    entry->state = 0;
+    return result;
+  }
+
+  pthread_mutex_lock(&module_cache_lock);
+  entry->state = MODULE_STATE_READY;
+  pthread_mutex_unlock(&module_cache_lock);
 
   return valk_lval_nil();
 }

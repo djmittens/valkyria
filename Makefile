@@ -91,6 +91,14 @@ cmake-coverage build-coverage/.cmake: CMakeLists.txt homebrew.cmake Makefile
 build-coverage: build-coverage/.cmake
 	$(call do_build,build-coverage)
 
+.PHONY: check
+check: build
+	build/valk scripts/valk-check.valk -- $(or $(DIR),.)
+
+.PHONY: check-strict
+check-strict: build
+	build/valk scripts/valk-check.valk -- $(or $(DIR),.)
+
 .PHONY: lint
 lint : build/.cmake
 	run-clang-tidy -p build -j $(JOBS) \
@@ -122,15 +130,15 @@ infer:
 
 .PHONY: repl
 repl: build
-	build/valk --repl src/prelude.valk
+	build/valk --repl stdlib/prelude.valk
 
 
 .PHONY: debug
 debug: build
 ifeq ($(UNAME), Darwin)
-	lldb build/valk src/prelude.valk
+	lldb build/valk stdlib/prelude.valk
 else
-	gdb --args build/valk src/prelude.valk
+	gdb --args build/valk stdlib/prelude.valk
 endif
 
 .ONESHELL:
@@ -138,10 +146,10 @@ endif
 asan: build-asan
 	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
 	export LSAN_OPTIONS=verbosity=1:log_threads=1
-	build-asan/valk src/prelude.valk test/test_prelude.valk && echo "exit code = $$?"
+	build-asan/valk stdlib/prelude.valk test/test_prelude.valk && echo "exit code = $$?"
 
 # ============================================================================
-# Unified Test Runner (bin/run-tests.valk)
+# Unified Test Runner (scripts/run-tests.valk)
 # ============================================================================
 # All test targets use the unified runner which auto-discovers tests, runs them
 # in parallel, and produces JUnit XML. No hardcoded test lists needed.
@@ -157,7 +165,7 @@ ONLY ?=
 J ?= 0
 TIMEOUT ?= 120
 
-TEST_RUN = build/valk bin/run-tests.valk --
+TEST_RUN = build/valk scripts/run-tests.valk --
 TEST_RUN_FILTER =
 ifdef F
   TEST_RUN_FILTER = --filter "$(F)"
@@ -174,6 +182,7 @@ TEST_RUN_ARGS = $(TEST_RUN_BASE)
 # Default test target (all C + Valk + stress)
 .PHONY: test
 test: build
+	-@$(MAKE) check 2>&1 | tail -3
 	$(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
 
 # C tests only
@@ -301,7 +310,7 @@ coverage-tests: build-coverage coverage-reset
 .PHONY: coverage-report
 coverage-report: build
 	@echo "=== Generating unified coverage reports ==="
-	VALK_HEAP_HARD_LIMIT=8589934592 build/valk bin/coverage-report.valk -- \
+	VALK_HEAP_HARD_LIMIT=8589934592 build/valk scripts/coverage-report.valk -- \
 		--build-dir build-coverage \
 		--source-root . \
 		--output coverage-report \
@@ -316,7 +325,7 @@ coverage: build-coverage coverage-tests coverage-report
 .PHONY: coverage-check
 coverage-check: build
 	@echo "=== Checking runtime coverage requirements ==="
-	@build/valk bin/check-coverage.valk -- --build-dir build-coverage
+	@build/valk scripts/check-coverage.valk -- --build-dir build-coverage
 
 # Stress tests
 .PHONY: test-stress

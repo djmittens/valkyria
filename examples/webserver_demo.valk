@@ -31,9 +31,9 @@
 ; Currently, the request map structure is being finalized, but will include:
 ;   {:method "GET" :path "/api/users" :headers {...} :body "..."}
 
-(load "src/prelude.valk")
-(load "src/async_handles.valk")
-(load "src/modules/aio/debug.valk")
+(load "stdlib/prelude.valk")
+(load "stdlib/aio/handles.valk")
+(load "stdlib/aio/debug.valk")
 
 ; ╔════════════════════════════════════════════════════════════════════════════╗
 ; ║                    VALKYRIA HTTP/2 WEB SERVER DEMO                         ║

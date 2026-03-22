@@ -1,0 +1,964 @@
+; LSP Validate — checks: symbol lookup, arity checking, type validation helpers
+;
+; Pure analysis functions — no AST walking or scope mutation.
+; Used by lsp-validate-walk.valk which does the actual tree traversal.
+
+(load "stdlib/prelude.valk")
+(load "stdlib/diag/symdb.valk")
+
+; ---------------------------------------------------------------------------
+; Constants
+; ---------------------------------------------------------------------------
+
+(def {DIAG_ERROR}   1)
+(def {DIAG_WARNING} 2)
+
+(def {VALIDATE_SPECIAL_FORMS}
+  (dict/from-keys {"=" "\\" "def" "fun" "if" "do" "select" "case" "quote"
+   "load" "eval" "read" "let" "aio/let" "aio/do" "<-"
+   "type" "match" "sig" "ctx/with" "ctx/with-deadline" "with"}))
+
+(def {VALIDATE_CONSTANTS}
+  (dict/from-keys {"true" "false" "nil" "otherwise" "_"}))
+
+(def {VALIDATE_BUILTIN_TYPES}
+  (dict/from-keys {"Num" "Str" "Nil" "Bool" "Err" "QExpr" "Fun" "Sym"
+                   "Ref" "Handle" "List" "Dict" "Never" "Any"}))
+
+; ---------------------------------------------------------------------------
+; Pre-scan: collect global defs from AST (fun names, def names, type ctors)
+; ---------------------------------------------------------------------------
+
+(sig 'vd/collect-globals {-> List List})
+(fun {vd/collect-globals ast} {
+  vd/collect-globals-walk ast nil
+})
+
+(sig 'vd/collect-globals-walk {-> List List List})
+(fun {vd/collect-globals-walk exprs acc} {
+  if (nil? exprs) {acc}
+  {vd/collect-globals-walk (tail exprs)
+    (vd/collect-globals-one (head exprs) acc)}
+})
+
+(sig 'vd/collect-globals-one {-> Any List List})
+(fun {vd/collect-globals-one expr acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {vd/collect-globals-dispatch (head expr) (tail expr) acc}}
+})
+
+(sig 'vd/collect-globals-dispatch {-> Any List List List})
+(fun {vd/collect-globals-dispatch hd tl acc} {
+  if (not (sym? hd)) {acc}
+  {vd/collect-globals-by-form (str hd) tl acc}
+})
+
+(sig 'vd/collect-globals-by-form {-> Str List List List})
+(fun {vd/collect-globals-by-form name tl acc} {
+  if (== name "fun") {vd/collect-fun-name tl acc}
+  {if (== name "def") {vd/collect-def-names tl acc}
+  {if (== name "type") {vd/collect-type-names tl acc}
+  {if (== name "sig") {vd/collect-sig-name tl acc}
+  {acc}}}}
+})
+
+(sig 'vd/collect-fun-name {-> List List List})
+(fun {vd/collect-fun-name tl acc} {
+  if (nil? tl) {acc}
+  {vd/collect-fun-formals (head tl) acc}
+})
+
+(sig 'vd/collect-fun-formals {-> Any List List})
+(fun {vd/collect-fun-formals formals acc} {
+  if (not (list? formals)) {acc}
+  {if (nil? formals) {acc}
+  {vd/collect-fun-head (head formals) acc}}
+})
+
+(sig 'vd/collect-fun-head {-> Any List List})
+(fun {vd/collect-fun-head fname acc} {
+  if (sym? fname) {qcons (str fname) acc}
+  {acc}
+})
+
+(sig 'vd/collect-def-names {-> List List List})
+(fun {vd/collect-def-names tl acc} {
+  if (nil? tl) {acc}
+  {vd/collect-binding-names (head tl) acc}
+})
+
+(sig 'vd/collect-binding-names {-> Any List List})
+(fun {vd/collect-binding-names binding acc} {
+  if (list? binding) {vd/collect-binding-walk binding acc}
+  {if (sym? binding) {qcons (str binding) acc}
+  {acc}}
+})
+
+(sig 'vd/collect-binding-walk {-> List List List})
+(fun {vd/collect-binding-walk vars acc} {
+  if (nil? vars) {acc}
+  {vd/collect-binding-walk (tail vars)
+    (if (sym? (head vars)) {qcons (str (head vars)) acc} {acc})}
+})
+
+(sig 'vd/collect-type-names {-> List List List})
+(fun {vd/collect-type-names tl acc} {
+  if (nil? tl) {acc}
+  {vd/collect-type-name-and-ctors (head tl) (tail tl) acc}
+})
+
+(sig 'vd/collect-type-name-and-ctors {-> Any List List List})
+(fun {vd/collect-type-name-and-ctors type-name-q variants acc} {
+  if (not (list? type-name-q)) {vd/collect-type-ctors variants acc}
+  {if (nil? type-name-q) {vd/collect-type-ctors variants acc}
+  {vd/collect-type-with-head (head type-name-q) variants acc}}
+})
+
+(sig 'vd/collect-type-with-head {-> Any List List List})
+(fun {vd/collect-type-with-head tname variants acc} {
+  if (not (sym? tname)) {vd/collect-type-ctors variants acc}
+  {vd/collect-type-with-name (str tname) variants acc}
+})
+
+(sig 'vd/collect-type-with-name {-> Str List List List})
+(fun {vd/collect-type-with-name tname-str variants acc} {
+  vd/collect-type-ctors variants (qcons tname-str acc)
+})
+
+(sig 'vd/collect-type-ctors {-> List List List})
+(fun {vd/collect-type-ctors variants acc} {
+  if (nil? variants) {acc}
+  {vd/collect-type-ctors (tail variants)
+    (vd/collect-type-one-ctor (head variants) acc)}
+})
+
+(sig 'vd/collect-type-one-ctor {-> Any List List})
+(fun {vd/collect-type-one-ctor variant acc} {
+  if (not (list? variant)) {acc}
+  {if (nil? variant) {acc}
+  {vd/collect-type-ctor-head (head variant) acc}}
+})
+
+(sig 'vd/collect-type-ctor-head {-> Any List List})
+(fun {vd/collect-type-ctor-head ctor acc} {
+  if (sym? ctor) {qcons (str ctor) acc} {acc}
+})
+
+(sig 'vd/collect-sig-name {-> List List List})
+(fun {vd/collect-sig-name tl acc} {
+  if (nil? tl) {acc}
+  {vd/collect-sig-quoted (head tl) acc}
+})
+
+(sig 'vd/collect-sig-quoted {-> Any List List})
+(fun {vd/collect-sig-quoted name-q acc} {
+  if (list? name-q) {vd/collect-sig-inner (head name-q) acc}
+  {if (sym? name-q) {qcons (str name-q) acc}
+  {acc}}
+})
+
+(sig 'vd/collect-sig-inner {-> Any List List})
+(fun {vd/collect-sig-inner s acc} {
+  if (sym? s) {qcons (str s) acc}
+  {acc}
+})
+
+; ---------------------------------------------------------------------------
+; Pre-scan: collect type declaration names for sig validation
+; ---------------------------------------------------------------------------
+
+(sig 'vd/collect-ast-types {-> List List})
+(fun {vd/collect-ast-types ast} {
+  vd/collect-ast-types-walk ast nil
+})
+
+(sig 'vd/collect-ast-types-walk {-> List List List})
+(fun {vd/collect-ast-types-walk exprs acc} {
+  if (nil? exprs) {acc}
+  {vd/collect-ast-types-walk (tail exprs)
+    (vd/collect-ast-type-one (head exprs) acc)}
+})
+
+(sig 'vd/collect-ast-type-one {-> Any List List})
+(fun {vd/collect-ast-type-one expr acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {if (not (sym? (head expr))) {acc}
+  {if (== (str (head expr)) "type")
+    {vd/collect-type-decl-name (tail expr) acc}
+    {acc}}}}
+})
+
+(sig 'vd/collect-type-decl-name {-> List List List})
+(fun {vd/collect-type-decl-name tl acc} {
+  if (nil? tl) {acc}
+  {vd/collect-type-decl-name-q (head tl) acc}
+})
+
+(sig 'vd/collect-type-decl-name-q {-> Any List List})
+(fun {vd/collect-type-decl-name-q type-q acc} {
+  if (list? type-q)
+    {if (nil? type-q) {acc}
+     {if (sym? (head type-q)) {qcons (str (head type-q)) acc} {acc}}}
+  {acc}
+})
+
+; ---------------------------------------------------------------------------
+; Load all known symbol names from symdb (queried once, O(1) C-level lookup)
+; ---------------------------------------------------------------------------
+
+(sig 'vd/load-known-set {-> Ref Dict})
+(fun {vd/load-known-set db} {
+  if (nil? db) {(dict/new)}
+  {do
+    (= {rows} (sqlite/query db
+      "SELECT DISTINCT name FROM symbols"))
+    (= {d} (dict/new (len rows)))
+    (vd/build-known-set rows d)}
+})
+
+(sig 'vd/build-known-set {-> List Dict Dict})
+(fun {vd/build-known-set rows d} {
+  if (nil? rows) {d}
+  {do
+    (= {row} (head rows))
+    (dict/put! d row:name)
+    (vd/build-known-set (tail rows) d)}
+})
+
+; ---------------------------------------------------------------------------
+; Build known-types set for sig validation
+; ---------------------------------------------------------------------------
+
+(sig 'vd/load-symdb-types {-> Ref Dict Dict})
+(fun {vd/load-symdb-types db d} {
+  if (nil? db) {d}
+  {do
+    (= {rows} (sqlite/query db "SELECT DISTINCT name FROM symbols WHERE kind=3"))
+    (vd/add-type-rows rows d)}
+})
+
+(sig 'vd/add-type-rows {-> List Dict Dict})
+(fun {vd/add-type-rows rows d} {
+  if (nil? rows) {d}
+  {do
+    (= {row} (head rows))
+    (dict/put! d row:name)
+    (vd/add-type-rows (tail rows) d)}
+})
+
+(sig 'vd/build-types-set {-> Ref List Dict})
+(fun {vd/build-types-set db ast} {do
+  (= {d} (dict/from-keys (vd/collect-ast-types ast)))
+  (vd/load-symdb-types db d)
+})
+
+; ---------------------------------------------------------------------------
+; Arity info from symdb
+; ---------------------------------------------------------------------------
+
+(sig 'vd/lookup-arity {-> Ref Str Any})
+(fun {vd/lookup-arity db name} {
+  if (nil? db) {nil}
+  {sqlite/query-maybe db
+    "SELECT arity, sig FROM symbols WHERE name=?1 AND (arity >= 0 OR sig IS NOT NULL) LIMIT 1"
+    name}
+})
+
+(sig 'vd/lookup-arity-cached {-> List Str Any})
+(fun {vd/lookup-arity-cached ctx name} {do
+  (= {cache} (plist/get ctx :arity-cache))
+  (if (nil? cache) {vd/lookup-arity (plist/get ctx :db) name}
+    {do
+      (= {cached} (dict/get cache name))
+      (if (nil? cached) {vd/lookup-arity (plist/get ctx :db) name}
+        {cached})})
+})
+
+; ---------------------------------------------------------------------------
+; Diagnostic builder
+; ---------------------------------------------------------------------------
+
+(sig 'vd/make-diag {-> Str Num Num Num Str List})
+(fun {vd/make-diag text offset length severity message} {do
+  (= {lc} (offset->line-col text offset))
+  (= {line} (head lc))
+  (= {col} (head (tail lc)))
+  (list :line line :col col :end-col (+ col length)
+        :severity severity :message message)
+})
+
+; ---------------------------------------------------------------------------
+; Symbol checks
+; ---------------------------------------------------------------------------
+
+(sig 'vd/is-accessor {-> Str Num})
+(fun {vd/is-accessor name} {
+  if (< (len name) 2) {0}
+  {vd/is-accessor-check (str/slice name 0 1) name}
+})
+
+(sig 'vd/is-accessor-check {-> Str Str Num})
+(fun {vd/is-accessor-check first name} {
+  if (< (ord first "A") 0) {0}
+  {if (> (ord first "Z") 0) {0}
+  {vd/has-field-colon name}}
+})
+
+(sig 'vd/has-field-colon {-> Str Num})
+(fun {vd/has-field-colon name} {do
+  (= {idx} (str/index-of name ":"))
+  (if (< idx 1) {0}
+  {if (>= idx (- (len name) 1)) {0}
+  {do
+    (= {after} (str/slice name (+ idx 1) (+ idx 2)))
+    (if (== after ":") {0} {1})}})
+})
+
+(sig 'vd/in-scope? {-> Str List Num})
+(fun {vd/in-scope? name scope-chain} {
+  if (nil? scope-chain) {0}
+  {if (dict/has? (head scope-chain) name) {1}
+  {vd/in-scope? name (tail scope-chain)}}
+})
+
+(sig 'vd/is-known {-> Str List Dict Dict Num})
+(fun {vd/is-known name scope globals-set known-set} {
+  if (dict/has? VALIDATE_CONSTANTS name) {1}
+  {if (dict/has? VALIDATE_SPECIAL_FORMS name) {1}
+  {if (vd/in-scope? name scope) {1}
+  {if (dict/has? globals-set name) {1}
+  {if (dict/has? known-set name) {1}
+  {if (vd/is-accessor name) {1}
+  {0}}}}}}
+})
+
+(sig 'vd/add-diag {-> List Any Str Str List})
+(fun {vd/add-diag ctx expr name message} {
+  plist/set ctx :diags
+    (qcons (vd/make-diag ctx:text
+                         (src-pos expr) (len name)
+                         DIAG_ERROR message)
+           ctx:diags)
+})
+
+(sig 'vd/add-warning {-> List Any Str Str List})
+(fun {vd/add-warning ctx expr name message} {
+  plist/set ctx :diags
+    (qcons (vd/make-diag ctx:text
+                         (src-pos expr) (len name)
+                         DIAG_WARNING message)
+           ctx:diags)
+})
+
+(def {vd/lowercase} "abcdefghijklmnopqrstuvwxyz")
+
+(sig 'vd/is-lowercase-char {-> Str Num})
+(fun {vd/is-lowercase-char c} {
+  >= (str/index-of vd/lowercase c) 0
+})
+
+(sig 'vd/is-field-access {-> Str Num})
+(fun {vd/is-field-access name} {do
+  (if (< (len name) 3) {0}
+  {do
+    (= {c0} (str/slice name 0 1))
+    (if (not (vd/is-lowercase-char c0)) {0}
+    {do
+      (= {idx} (str/index-of name ":"))
+      (if (<= idx 0) {0}
+      {if (>= idx (- (len name) 1)) {0}
+      {do
+        (= {c1} (str/slice name (+ idx 1) (+ idx 2)))
+        (if (== c1 ":") {0}
+        {if (not (vd/is-lowercase-char c1)) {0}
+          {1}})}})})})
+})
+
+(sig 'vd/check-sym-name {-> Any Str List List})
+(fun {vd/check-sym-name expr name ctx} {
+  if (<= (len name) 0) {ctx}
+  {if (== (str/slice name 0 1) ":") {ctx}
+  {if (vd/is-field-access name) {ctx}
+  {if (vd/is-known name ctx:scope
+                    ctx:globals
+                    ctx:known)
+    {if (vd/is-accessor name)
+      {vd/check-accessor expr expr name ctx}
+      {ctx}}
+  {vd/add-diag ctx expr name
+    (str "Symbol '" name "' is not defined")}}}}
+})
+
+; ---------------------------------------------------------------------------
+; Arity checking — compare call-site arg count against sig/symdb
+; ---------------------------------------------------------------------------
+
+(sig 'vd/sig-has-varargs {-> Str Num})
+(fun {vd/sig-has-varargs sig-str} {
+  if (nil? sig-str) {0}
+  {>= (str/index-of sig-str "& ") 0}
+})
+
+(sig 'vd/sig-min-arity {-> Str Num})
+(fun {vd/sig-min-arity sig-str} {
+  if (nil? sig-str) {-1}
+  {do
+    (= {parts} (str/split sig-str " "))
+    (vd/count-sig-params parts 0 0)}
+})
+
+(sig 'vd/count-sig-params {-> List Num Num Num})
+(fun {vd/count-sig-params parts depth count} {
+  if (nil? parts) {(if (> count 0) {- count 1} {0})}
+  {do
+    (= {p} (head parts))
+    (if (== p "->") {vd/count-sig-params (tail parts) depth count}
+    {if (== p "&") {(if (> count 0) {- count 1} {0})}
+    {if (== p "{->") {vd/count-sig-params (tail parts) depth count}
+    {if (== p "}") {vd/count-sig-params (tail parts) depth count}
+    {do
+      (= {opens} (vd/count-char p "("))
+      (= {closes} (vd/count-char p ")"))
+      (= {new-depth} (+ (- depth closes) opens))
+      (if (== new-depth 0)
+        {vd/count-sig-params (tail parts) 0 (+ count 1)}
+        {vd/count-sig-params (tail parts) new-depth count})}}}})}
+})
+
+(sig 'vd/count-char {-> Str Str Num})
+(fun {vd/count-char s c} {
+  vd/count-char-loop s c 0 0
+})
+
+(sig 'vd/count-char-loop {-> Str Str Num Num Num})
+(fun {vd/count-char-loop s c i count} {
+  if (>= i (len s)) {count}
+  {vd/count-char-loop s c (+ i 1)
+    (if (== (str/slice s i (+ i 1)) c) {+ count 1} {count})}
+})
+
+; ---------------------------------------------------------------------------
+; Argument type checking — infer literal types, compare against sig
+; ---------------------------------------------------------------------------
+
+(sig 'vd/infer-arg-type {-> Any Str})
+(fun {vd/infer-arg-type expr} {
+  if (num? expr) {"Num"}
+  {if (str? expr) {"Str"}
+  {if (not (list? expr)) {nil}
+  {if (nil? expr) {nil}
+  {vd/infer-arg-call-type expr}}}}
+})
+
+(sig 'vd/infer-arg-call-type {-> List Str})
+(fun {vd/infer-arg-call-type expr} {
+  if (not (sym? (head expr))) {nil}
+  {do
+    (= {n} (str (head expr)))
+    (if (== n "list") {"List"}
+    {if (== n "dict/new") {"Dict"}
+    {if (== n "dict/from-keys") {"Dict"}
+    {if (== n "\\") {"Fun"}
+    {nil}}}})}
+})
+
+(sig 'vd/is-type-var {-> Str Num})
+(fun {vd/is-type-var t} {
+  if (== (len t) 1)
+    {>= (str/index-of "ABCDEFGHIJKLMNOPQRSTUVWXYZ" t) 0}
+    {0}
+})
+
+(sig 'vd/is-compound-type {-> Str Num})
+(fun {vd/is-compound-type t} {
+  if (<= (len t) 0) {0}
+  {== (str/slice t 0 1) "("}
+})
+
+(sig 'vd/extract-compound-base {-> Str Str})
+(fun {vd/extract-compound-base t} {
+  if (not (vd/is-compound-type t)) {t}
+  {do
+    (= {inner} (str/slice t 1 (len t)))
+    (= {sp} (str/index-of inner " "))
+    (if (< sp 0) {inner} {str/slice inner 0 sp})}
+})
+
+(sig 'vd/types-compatible {-> Str Str Num})
+(fun {vd/types-compatible expected actual} {
+  if (nil? expected) {1}
+  {if (nil? actual) {1}
+  {if (== expected "Any") {1}
+  {if (== actual "Any") {1}
+  {if (vd/is-type-var expected) {1}
+  {if (vd/is-type-var actual) {1}
+  {if (vd/is-compound-type expected)
+    {do
+      (= {base} (vd/extract-compound-base expected))
+      (if (== base actual) {1}
+        {if (vd/is-type-var base) {1}
+        {== expected actual}})}
+  {== expected actual}}}}}}}
+})
+
+(sig 'vd/parse-sig-param-types {-> Str List})
+(fun {vd/parse-sig-param-types sig-str} {
+  if (nil? sig-str) {nil}
+  {do
+    (= {stripped} (vd/strip-sig-wrapper sig-str))
+    (if (nil? stripped) {nil}
+      {do
+        (= {parts} (str/split stripped " "))
+        (= {tokens} (vd/tokenize-sig parts 0 "" nil))
+        (if (nil? tokens) {nil}
+          {init (reverse tokens)})})}
+})
+
+(sig 'vd/strip-sig-wrapper {-> Str Str})
+(fun {vd/strip-sig-wrapper s} {
+  if (< (len s) 4) {nil}
+  {do
+    (= {start} (if (str/starts-with? s "{-> ") {4}
+      {if (str/starts-with? s "-> ") {3} {0}}))
+    (if (== start 0) {nil}
+      {do
+        (= {end} (if (str/ends-with? s "}") {- (len s) 1} {(len s)}))
+        (str/slice s start end)})}
+})
+
+(sig 'vd/tokenize-sig {-> List Num Str List List})
+(fun {vd/tokenize-sig parts depth current acc} {
+  if (nil? parts) {
+    if (> (len current) 0) {qcons current acc} {acc}}
+  {do
+    (= {p} (head parts))
+    (if (== p "&") {vd/tokenize-sig (tail parts) depth current acc}
+    {do
+      (= {opens} (vd/count-char p "("))
+      (= {closes} (vd/count-char p ")"))
+      (= {new-depth} (+ (- depth closes) opens))
+      (= {token} (if (> (len current) 0) {str current " " p} {p}))
+      (if (> new-depth 0)
+        {vd/tokenize-sig (tail parts) new-depth token acc}
+        {vd/tokenize-sig (tail parts) 0 "" (qcons token acc)})})}
+})
+
+(sig 'vd/check-arg-types {-> List Str List List List})
+(fun {vd/check-arg-types args name param-types ctx} {
+  if (nil? args) {ctx}
+  {if (nil? param-types) {ctx}
+  {do
+    (= {arg} (head args))
+    (= {expected-type} (head param-types))
+    (= {actual-type} (vd/infer-arg-type arg))
+    (= {ctx2} (if (nil? actual-type) {ctx}
+      {if (vd/types-compatible expected-type actual-type) {ctx}
+        {vd/add-diag ctx arg (str arg)
+          (str "'" name "' expects " expected-type " but got " actual-type)}}))
+    (= {rest-types} (if (nil? (tail param-types)) {param-types} {(tail param-types)}))
+    (vd/check-arg-types (tail args) name rest-types ctx2)}}
+})
+
+(sig 'vd/check-arity {-> List Any Str Num List List List})
+(fun {vd/check-arity expr hd name argc tl ctx} {
+  if (nil? ctx:db) {ctx}
+  {do
+    (= {info} (vd/lookup-arity-cached ctx name))
+    (if (nil? info) {ctx}
+      {do
+        (= {expected} (plist/get info :arity))
+        (= {sig-str} (plist/get info :sig))
+        (= {is-varargs} (or (vd/sig-has-varargs sig-str) (< expected 0)))
+        (if is-varargs
+          {do
+            (= {min-arity} (vd/sig-min-arity sig-str))
+            (if (and (>= min-arity 0) (< argc min-arity))
+              {vd/add-diag ctx hd name
+                (str "'" name "' expects at least " min-arity " arguments, got " argc)}
+              {if (nil? sig-str) {ctx}
+                {vd/check-arg-types tl name
+                  (vd/parse-sig-param-types sig-str) ctx}})}
+          {if (not (== argc expected))
+            {vd/add-diag ctx hd name
+              (str "'" name "' expects " expected " arguments, got " argc)}
+            {if (nil? sig-str) {ctx}
+              {vd/check-arg-types tl name
+                (vd/parse-sig-param-types sig-str) ctx}}})})}
+})
+
+; ---------------------------------------------------------------------------
+; Special form arity — hardcoded rules
+; ---------------------------------------------------------------------------
+
+(sig 'vd/check-special-arity {-> Str List List Any List List})
+(fun {vd/check-special-arity name tl ctx hd} {
+  if (== name "if")
+    {if (< (len tl) 2) {vd/add-diag ctx hd name (str "'if' requires 2-3 arguments, got " (len tl))}
+    {if (> (len tl) 3) {vd/add-diag ctx hd name (str "'if' requires 2-3 arguments, got " (len tl))}
+    {ctx}}}
+  {if (== name "fun")
+    {if (< (len tl) 2) {vd/add-diag ctx hd name "'fun' requires formals and body"} {ctx}}
+  {if (== name "\\")
+    {if (< (len tl) 2) {vd/add-diag ctx hd name "lambda requires formals and body"} {ctx}}
+  {if (== name "def")
+    {if (< (len tl) 2) {vd/add-diag ctx hd name "'def' requires a binding and a value"} {ctx}}
+  {if (== name "=")
+    {if (< (len tl) 2) {vd/add-diag ctx hd name "'=' requires a binding and a value"} {ctx}}
+  {if (== name "type")
+    {if (< (len tl) 2) {vd/add-diag ctx hd name "'type' requires a name and at least one variant"} {ctx}}
+  {if (== name "match")
+    {if (< (len tl) 2) {vd/add-diag ctx hd name "'match' requires a value and at least one clause"} {ctx}}
+  {if (== name "sig")
+    {if (< (len tl) 2) {vd/add-diag ctx hd name "'sig' requires a name and a type"} {ctx}}
+  {if (== name "load")
+    {if (not (== (len tl) 1)) {vd/add-diag ctx hd name "'load' requires exactly 1 argument"} {ctx}}
+  {ctx}}}}}}}}}
+})
+
+; ---------------------------------------------------------------------------
+; Constructor arity — check field count at call site
+; ---------------------------------------------------------------------------
+
+(sig 'vd/is-keyword-sym {-> Any Num})
+(fun {vd/is-keyword-sym x} {
+  if (not (sym? x)) {0}
+  {do
+    (= {s} (str x))
+    (if (<= (len s) 1) {0}
+      {== (str/slice s 0 1) ":"})}
+})
+
+(sig 'vd/check-ctor-arity {-> List Any Str Num List List List})
+(fun {vd/check-ctor-arity expr hd name argc tl ctx} {
+  if (nil? ctx:db) {ctx}
+  {do
+    (= {info} (vd/lookup-arity-cached ctx name))
+    (if (nil? info) {ctx}
+      {do
+        (= {expected} (plist/get info :arity))
+        (= {sig-str} (plist/get info :sig))
+        (= {is-kw} (if (nil? tl) {0}
+          {vd/is-keyword-sym (head tl)}))
+        (if is-kw
+          {vd/check-ctor-keyword-mode hd name argc expected sig-str tl ctx}
+          {if (not (== argc expected))
+            {vd/add-diag ctx hd name
+              (str "Constructor '" name "' expects " expected " fields, got " argc)}
+            {ctx}})})}
+})
+
+(sig 'vd/check-ctor-keyword-mode {-> Any Str Num Num Str List List List})
+(fun {vd/check-ctor-keyword-mode hd name argc expected sig-str tl ctx} {
+  if (not (== argc (* expected 2)))
+    {vd/add-diag ctx hd name
+      (str "Constructor '" name "' expects " expected " keyword-value pairs, got " argc " args")}
+    {if (nil? sig-str) {ctx}
+      {vd/check-ctor-field-names hd name sig-str tl ctx}}
+})
+
+(sig 'vd/check-ctor-field-names {-> Any Str Str List List List})
+(fun {vd/check-ctor-field-names hd name sig-str tl ctx} {
+  if (nil? tl) {ctx}
+  {if (< (len tl) 2) {ctx}
+  {do
+    (= {key} (head tl))
+    (= {ctx2} (if (not (sym? key)) {ctx}
+      {do
+        (= {ks} (str key))
+        (if (< (str/index-of sig-str ks) 0)
+          {vd/add-diag ctx key ks
+            (str "Constructor '" name "' has no field '" ks "'")}
+          {ctx})}))
+    (vd/check-ctor-field-names hd name sig-str (tail (tail tl)) ctx2)}}
+})
+
+; ---------------------------------------------------------------------------
+; Accessor validation — check TypeName:field exists
+; ---------------------------------------------------------------------------
+
+(sig 'vd/check-accessor {-> List Any Str List List})
+(fun {vd/check-accessor expr hd name ctx} {
+  if (nil? ctx:db) {ctx}
+  {do
+    (= {colon} (str/index-of name ":"))
+    (if (< colon 1) {ctx}
+      {do
+        (= {type-name} (str/slice name 0 colon))
+        (= {field-name} (str ":" (str/slice name (+ colon 1) (len name))))
+        (= {ctor-row} (vd/lookup-arity-cached ctx type-name))
+        (if (nil? ctor-row) {ctx}
+          {do
+            (= {sig-str} (plist/get ctor-row :sig))
+            (if (nil? sig-str) {ctx}
+              {if (< (str/index-of sig-str field-name) 0)
+                {vd/add-diag ctx hd name
+                  (str "Type '" type-name "' has no field '" field-name "'")}
+                {ctx}})})})}
+})
+
+; ---------------------------------------------------------------------------
+; Match pattern validation — check constructor names and field counts
+; ---------------------------------------------------------------------------
+
+(sig 'vd/check-match-clause {-> Any List List})
+(fun {vd/check-match-clause clause ctx} {
+  if (not (list? clause)) {ctx}
+  {if (nil? clause) {ctx}
+  {do
+    (= {hd} (head clause))
+    (if (not (list? hd)) {ctx}
+    {if (nil? hd) {ctx}
+    {do
+      (= {pat-head} (head hd))
+      (if (not (sym? pat-head)) {ctx}
+        {vd/check-match-ctor-name pat-head (str pat-head) (- (len hd) 1) ctx})}})}}
+})
+
+(sig 'vd/check-match-ctor-name {-> Any Str Num List List})
+(fun {vd/check-match-ctor-name sym name bind-count ctx} {
+  if (== name "_") {ctx}
+  {if (nil? ctx:db) {ctx}
+  {do
+    (= {info} (sqlite/query-maybe ctx:db
+      "SELECT arity FROM symbols WHERE name=?1 AND kind=4 LIMIT 1"
+      name))
+    (if (nil? info) {ctx}
+      {do
+        (= {expected} (plist/get info :arity))
+        (if (not (== bind-count expected))
+          {vd/add-warning ctx sym name
+            (str "Match pattern '" name "' binds " bind-count " fields, constructor has " expected)}
+          {ctx})})}}
+})
+
+; ---------------------------------------------------------------------------
+; Division by zero warning
+; ---------------------------------------------------------------------------
+
+(sig 'vd/check-div-zero {-> List Any Str List List List})
+(fun {vd/check-div-zero expr hd name tl ctx} {
+  if (not (or (== name "/") (== name "mod"))) {ctx}
+  {if (< (len tl) 2) {ctx}
+  {do
+    (= {last-arg} (nth (len tl) tl))
+    (if (num? last-arg)
+      {if (== last-arg 0)
+        {vd/add-warning ctx hd name
+          (str "Division by zero: " name " called with literal 0")}
+        {ctx}}
+      {ctx})}}
+})
+
+; ---------------------------------------------------------------------------
+; Sig type name check (used by sig walker in lsp-validate-walk.valk)
+; ---------------------------------------------------------------------------
+
+(sig 'vd/should-validate-type {-> Str Num})
+(fun {vd/should-validate-type name} {
+  if (<= (len name) 1) {0}
+  {if (< (ord (str/slice name 0 1) "A") 0) {0}
+  {if (> (ord (str/slice name 0 1) "Z") 0) {0}
+  {1}}}
+})
+
+(sig 'vd/is-known-type {-> Str Dict Num})
+(fun {vd/is-known-type name types-set} {
+  if (dict/has? VALIDATE_BUILTIN_TYPES name) {1}
+  {dict/has? types-set name}
+})
+
+(sig 'vd/check-sig-type-name {-> Any Str List List})
+(fun {vd/check-sig-type-name elem name ctx} {
+  if (<= (len name) 0) {ctx}
+  {if (== name "->") {ctx}
+  {if (== name "|") {ctx}
+  {if (== name "&") {ctx}
+  {if (== name "_") {ctx}
+  {if (== (str/slice name 0 1) ":") {ctx}
+  {if (not (vd/should-validate-type name)) {ctx}
+  {if (vd/is-known-type name ctx:types) {ctx}
+  {vd/add-diag ctx elem name
+    (str "Type '" name "' is not defined")}}}}}}}}
+})
+
+; ---------------------------------------------------------------------------
+; Type resolution — typed scope building, param type checking
+; ---------------------------------------------------------------------------
+
+(sig 'vd/query-fun-sig {-> Ref Str Any})
+(fun {vd/query-fun-sig db name} {
+  if (nil? db) {nil}
+  {sqlite/query-maybe db
+    "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
+    name}
+})
+
+(sig 'vd/drop-last {-> List List})
+(fun {vd/drop-last l} {
+  if (<= (len l) 1) {nil}
+  {qcons (head l) (vd/drop-last (tail l))}
+})
+
+(sig 'vd/extract-sig-params {-> List List})
+(fun {vd/extract-sig-params sig-expr} {
+  if (< (len sig-expr) 2) {nil}
+  {vd/drop-last (tail sig-expr)}
+})
+
+(sig 'vd/parse-sig-types {-> Str List})
+(fun {vd/parse-sig-types sig-str} {
+  if (nil? sig-str) {nil}
+  {vd/parse-sig-types-inner (parse sig-str)}
+})
+
+(sig 'vd/parse-sig-types-inner {-> List List})
+(fun {vd/parse-sig-types-inner parsed} {
+  if (nil? parsed) {nil}
+  {vd/extract-sig-params (head parsed)}
+})
+
+(sig 'vd/zip-one-param {-> Dict Str Any List List Dict})
+(fun {vd/zip-one-param d name type rest-params rest-types} {do
+  (dict/set! d name type)
+  (vd/zip-params-types d rest-params rest-types)
+})
+
+(sig 'vd/zip-params-rest {-> Dict List Dict})
+(fun {vd/zip-params-rest d params} {
+  if (nil? params) {d}
+  {do
+    (dict/set! d (head params) 1)
+    (vd/zip-params-rest d (tail params))}
+})
+
+(sig 'vd/zip-params-types {-> Dict List List Dict})
+(fun {vd/zip-params-types d params types} {
+  if (nil? params) {d}
+  {if (nil? types)
+    {vd/zip-params-rest d params}
+    {vd/zip-one-param d (head params) (head types) (tail params) (tail types)}}
+})
+
+(sig 'vd/build-typed-scope-sig {-> List Str Dict})
+(fun {vd/build-typed-scope-sig param-names sig-str} {do
+  (= {types} (vd/parse-sig-types sig-str))
+  (if (nil? types) {dict/from-keys param-names}
+    {vd/zip-params-types (dict/new) param-names types})
+})
+
+(sig 'vd/build-typed-scope-row {-> List Any Dict})
+(fun {vd/build-typed-scope-row param-names sig-val} {
+  if (nil? sig-val) {dict/from-keys param-names}
+  {vd/build-typed-scope-sig param-names (str sig-val)}
+})
+
+(sig 'vd/build-typed-scope-q {-> Str List Ref Dict})
+(fun {vd/build-typed-scope-q fname param-names db} {do
+  (= {row} (vd/query-fun-sig db fname))
+  (if (nil? row) {dict/from-keys param-names}
+    {vd/build-typed-scope-row param-names row:sig})
+})
+
+(sig 'vd/build-typed-scope {-> Str List Ref Dict})
+(fun {vd/build-typed-scope fname param-names db} {
+  if (nil? db) {dict/from-keys param-names}
+  {vd/build-typed-scope-q fname param-names db}
+})
+
+(sig 'vd/check-type-callable {-> Any Num})
+(fun {vd/check-type-callable type} {
+  if (not (list? type)) {0}
+  {if (nil? type) {0}
+  {if (sym? (head type))
+    {== (str (head type)) "->"}
+    {0}}}
+})
+
+(sig 'vd/scope-has-callable {-> Str List Num})
+(fun {vd/scope-has-callable name scope-chain} {
+  if (nil? scope-chain) {0}
+  {if (dict/has? (head scope-chain) name)
+    {vd/check-type-callable (dict/get (head scope-chain) name)}
+    {vd/scope-has-callable name (tail scope-chain)}}
+})
+
+(sig 'vd/infer-expr-type {-> Any List Any})
+(fun {vd/infer-expr-type expr ctx} {
+  if (num? expr) {1}
+  {if (str? expr) {1}
+  {if (sym? expr) {1}
+  {if (not (list? expr)) {nil}
+  {if (nil? expr) {1}
+  {vd/infer-from-call expr ctx}}}}}
+})
+
+(sig 'vd/infer-from-call {-> List List Any})
+(fun {vd/infer-from-call expr ctx} {
+  if (not (sym? (head expr))) {nil}
+  {vd/infer-by-callee (str (head expr)) ctx}
+})
+
+(sig 'vd/infer-by-callee {-> Str List Any})
+(fun {vd/infer-by-callee name ctx} {
+  if (dict/has? VALIDATE_SPECIAL_FORMS name) {1}
+  {if (if (> (len name) 0) {== (str/slice name 0 1) ":"} {0}) {1}
+  {if (== name "list") {1}
+  {if (== name "dict/new") {1}
+  {if (== name "dict/from-keys") {1}
+  {if (== name "None") {1}
+  {if (== name "Some") {1}
+  {if (== name "\\") {1}
+  {vd/infer-by-callee-db name ctx}}}}}}}}
+})
+
+(sig 'vd/infer-by-callee-db {-> Str List Any})
+(fun {vd/infer-by-callee-db name ctx} {do
+  (= {found} (vd/query-fun-sig ctx:db name))
+  (if (not (nil? found)) {1}
+    {if (vd/scope-has-callable name ctx:scope) {1}
+    {if (vd/is-ctor-call name) {1}
+      {nil}}})
+})
+
+(sig 'vd/param-has-annotation {-> List Num})
+(fun {vd/param-has-annotation rest} {
+  if (nil? rest) {0}
+  {if (not (sym? (head rest))) {0}
+  {== (str (head rest)) "::"}}
+})
+
+(sig 'vd/flag-untyped-params {-> List List List})
+(fun {vd/flag-untyped-params params ctx} {
+  if (nil? params) {ctx}
+  {vd/flag-untyped-one (head params) (tail params) ctx}
+})
+
+(sig 'vd/flag-untyped-one {-> Any List List List})
+(fun {vd/flag-untyped-one p rest ctx} {
+  if (not (sym? p)) {vd/flag-untyped-params rest ctx}
+  {vd/flag-untyped-str p (str p) rest ctx}
+})
+
+(sig 'vd/flag-untyped-str {-> Any Str List List List})
+(fun {vd/flag-untyped-str p name rest ctx} {
+  if (== name "&") {ctx}
+  {if (== name "::") {if (nil? rest) {ctx} {vd/flag-untyped-params (tail rest) ctx}}
+  {if (== name "->") {ctx}
+  {if (vd/param-has-annotation rest)
+    {if (< (len rest) 2) {ctx} {vd/flag-untyped-params (tail (tail rest)) ctx}}
+  {vd/flag-untyped-params rest
+    (vd/add-diag ctx p name
+      (str "Type of '" name "' could not be resolved"))}}}}
+})
+
+(sig 'vd/is-ctor-call {-> Str Num})
+(fun {vd/is-ctor-call name} {
+  if (<= (len name) 0) {0}
+  {do
+    (= {c} (str/slice name 0 1))
+    (if (>= (str/index-of "ABCDEFGHIJKLMNOPQRSTUVWXYZ" c) 0)
+      {< (str/index-of name ":") 0}
+      {0})}
+})

@@ -83,6 +83,20 @@ find_library(BACKTRACE_LIBRARIES NAMES backtrace)
 
 find_package(OpenSSL REQUIRED)
 
+# LLVM backend (optional)
+option(VALK_LLVM "Enable LLVM backend for JIT and AOT compilation" ON)
+if(VALK_LLVM)
+  find_package(LLVM CONFIG)
+  if(LLVM_FOUND)
+    message(STATUS "LLVM ${LLVM_PACKAGE_VERSION} found")
+    message(STATUS "LLVM include dirs: ${LLVM_INCLUDE_DIRS}")
+    add_compile_definitions(VALK_LLVM=1)
+  else()
+    message(STATUS "LLVM not found, disabling LLVM backend")
+    set(VALK_LLVM OFF)
+  endif()
+endif()
+
 ## LIB
 set(VALKYRIA_SOURCES
   src/parser.c
@@ -234,6 +248,7 @@ target_include_directories(valkyria SYSTEM PRIVATE
   ${LIBUV_INCLUDE_DIRS}
   ${PROJECT_SOURCE_DIR}/vendor
   ${PROJECT_SOURCE_DIR}/vendor/sqlite3
+  $<$<BOOL:${VALK_LLVM}>:${LLVM_INCLUDE_DIRS}>
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -249,6 +264,37 @@ target_link_libraries(valkyria PRIVATE
   m
   dl
   pthread)
+
+if(VALK_LLVM)
+  execute_process(
+    COMMAND llvm-config --link-shared --libs core orcjit native support
+    OUTPUT_VARIABLE LLVM_LIBS_RAW
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  string(REPLACE " " ";" LLVM_LIBS_LIST "${LLVM_LIBS_RAW}")
+
+  add_library(valk_llvm STATIC
+    src/llvm/llvm_codegen.c
+    src/llvm/llvm_jit.c
+    src/llvm/llvm_aot.c
+    src/llvm/vir_to_llvm.c
+    src/vir/vir.c
+    src/vir/vir_print.c
+    src/vir/ast_to_vir.c
+    src/vir/vir_gc.c
+  )
+  target_include_directories(valk_llvm PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/aio
+    ${PROJECT_SOURCE_DIR}/src/vir
+  )
+  target_include_directories(valk_llvm SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS}
+    ${PROJECT_SOURCE_DIR}/vendor
+  )
+  target_link_libraries(valk_llvm PRIVATE valkyria ${LLVM_LIBS_LIST})
+  target_compile_options(valk_llvm PRIVATE -Wno-pedantic)
+endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BACKTRACE_LIBRARIES)
   target_link_libraries(valkyria PRIVATE ${BACKTRACE_LIBRARIES})
@@ -273,8 +319,8 @@ target_link_libraries(valk_test_fakes PRIVATE valkyria)
 add_executable(valk
   "src/repl.c"
 )
-
 target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
+
 target_include_directories(valk SYSTEM PRIVATE
   # vendor/editline/include/
   ${EDITLINE_INCLUDE_DIRS}
@@ -295,25 +341,23 @@ include_directories(
   ${PROJECT_BINARY_DIR}/vendor/nghttp2/lib/includes
 )
 
-add_executable(test_std test/test_std.c test/testing.c)
+# All test targets need test/ for testing.h and src/ for runtime headers
+include_directories(${PROJECT_SOURCE_DIR}/test ${PROJECT_SOURCE_DIR}/src)
+
+add_executable(test_std test/lang/test_std.c test/testing.c)
 target_link_libraries(test_std PRIVATE "-lc" valkyria)
-include_directories(test_std src/)
 
-add_executable(test_regression test/test_regression.c test/testing.c)
+add_executable(test_regression test/lang/test_regression.c test/testing.c)
 target_link_libraries(test_regression PRIVATE "-lc" valkyria)
-include_directories(test_regression src/)
 
-add_executable(test_networking test/test_networking.c test/testing.c)
+add_executable(test_networking test/http/test_networking.c test/testing.c)
 target_link_libraries(test_networking PRIVATE "-lc" valkyria)
-include_directories(test_networking src/)
 
-add_executable(test_demo_server test/test_demo_server.c test/testing.c)
+add_executable(test_demo_server test/http/test_demo_server.c test/testing.c)
 target_link_libraries(test_demo_server PRIVATE "-lc" valkyria)
-include_directories(test_demo_server src/)
 
-add_executable(test_large_response test/test_large_response.c test/testing.c)
+add_executable(test_large_response test/http/test_large_response.c test/testing.c)
 target_link_libraries(test_large_response PRIVATE "-lc" valkyria)
-include_directories(test_large_response src/)
 
 # test_networking_lisp removed - redundant tests
 
@@ -322,139 +366,108 @@ include_directories(test_large_response src/)
 # target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
 # include_directories(test_concurrency src/)
 
-add_executable(test_memory test/test_memory.c test/testing.c)
+add_executable(test_memory test/gc/test_memory.c test/testing.c)
 target_link_libraries(test_memory PRIVATE "-lc" "-lm" valkyria)
-include_directories(test_memory src/)
 
-add_executable(test_per_stream_arena test/test_per_stream_arena.c test/testing.c)
+add_executable(test_per_stream_arena test/http/test_per_stream_arena.c test/testing.c)
 target_link_libraries(test_per_stream_arena PRIVATE "-lc" valkyria)
-include_directories(test_per_stream_arena src/)
 
-add_executable(test_gc_metrics test/test_gc_metrics.c test/testing.c)
+add_executable(test_gc_metrics test/gc/test_gc_metrics.c test/testing.c)
 target_link_libraries(test_gc_metrics PRIVATE "-lc" "-lm" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_gc_metrics src/)
 
-add_executable(test_gc_aio_hang test/test_gc_aio_hang.c test/testing.c)
+add_executable(test_gc_aio_hang test/gc/test_gc_aio_hang.c test/testing.c)
 target_link_libraries(test_gc_aio_hang PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_gc_aio_hang src/)
 
-add_executable(test_gc_aio test/test_gc_aio.c test/testing.c)
+add_executable(test_gc_aio test/gc/test_gc_aio.c test/testing.c)
 target_link_libraries(test_gc_aio PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_gc_aio src/)
 
-add_executable(test_system test/test_system.c test/testing.c)
+add_executable(test_system test/lang/test_system.c test/testing.c)
 target_link_libraries(test_system PRIVATE "-lc" valkyria)
-include_directories(test_system src/)
 
-add_executable(test_aio_config test/test_aio_config.c test/testing.c)
+add_executable(test_aio_config test/aio/test_aio_config.c test/testing.c)
 target_link_libraries(test_aio_config PRIVATE "-lc" valkyria)
-include_directories(test_aio_config src/)
 
-add_executable(test_aio_integration test/test_aio_integration.c test/testing.c)
+add_executable(test_aio_integration test/aio/test_aio_integration.c test/testing.c)
 target_link_libraries(test_aio_integration PRIVATE "-lc" valkyria)
-include_directories(test_aio_integration src/)
 
-add_executable(test_aio_load_shedding test/test_aio_load_shedding.c test/testing.c)
+add_executable(test_aio_load_shedding test/aio/test_aio_load_shedding.c test/testing.c)
 target_link_libraries(test_aio_load_shedding PRIVATE "-lc" valkyria)
-include_directories(test_aio_load_shedding src/)
 
 
 
-add_executable(test_loop_metrics test/test_loop_metrics.c test/testing.c)
+add_executable(test_loop_metrics test/metrics/test_loop_metrics.c test/testing.c)
 target_link_libraries(test_loop_metrics PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_loop_metrics src/)
 
-add_executable(test_eval_metrics test/test_eval_metrics.c test/testing.c)
+add_executable(test_eval_metrics test/metrics/test_eval_metrics.c test/testing.c)
 target_link_libraries(test_eval_metrics PRIVATE "-lc" valkyria)
-include_directories(test_eval_metrics src/)
 
-add_executable(test_metrics_v2 test/test_metrics_v2.c test/testing.c)
+add_executable(test_metrics_v2 test/metrics/test_metrics_v2.c test/testing.c)
 target_link_libraries(test_metrics_v2 PRIVATE "-lc" valkyria)
-include_directories(test_metrics_v2 src/)
 
 if(VALK_COVERAGE)
-  add_executable(test_source_loc test/test_source_loc.c test/testing.c)
+  add_executable(test_source_loc test/parser/test_source_loc.c test/testing.c)
   target_link_libraries(test_source_loc PRIVATE "-lc" valkyria)
   include_directories(test_source_loc src/)
 endif()
 
 add_executable(test_debug test/unit/test_debug.c test/testing.c)
 target_link_libraries(test_debug PRIVATE "-lc" valkyria)
-include_directories(test_debug src/)
 
 add_executable(test_pool_metrics test/unit/test_pool_metrics.c test/testing.c)
 target_link_libraries(test_pool_metrics PRIVATE "-lc" valkyria)
-include_directories(test_pool_metrics src/)
 
 add_executable(test_metrics_delta test/unit/test_metrics_delta.c test/testing.c)
 target_link_libraries(test_metrics_delta PRIVATE "-lc" valkyria)
-include_directories(test_metrics_delta src/)
 
 add_executable(test_event_loop_metrics_unit test/unit/test_event_loop_metrics.c test/testing.c)
 target_link_libraries(test_event_loop_metrics_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_event_loop_metrics_unit src/)
 
 add_executable(test_metrics_builtins test/unit/test_metrics_builtins.c test/testing.c)
 target_link_libraries(test_metrics_builtins PRIVATE "-lc" valkyria)
-include_directories(test_metrics_builtins src/)
 
 add_executable(test_log test/unit/test_log.c test/testing.c)
 target_link_libraries(test_log PRIVATE "-lc" valkyria)
-include_directories(test_log src/)
 
 
 
 add_executable(test_aio_alloc_unit test/unit/test_aio_alloc.c test/testing.c)
 target_link_libraries(test_aio_alloc_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_aio_alloc_unit src/)
 
 add_executable(test_aio_uv_unit test/unit/test_aio_uv.c test/testing.c)
 target_link_libraries(test_aio_uv_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_aio_uv_unit src/)
 
-add_executable(test_aio_uv_coverage test/test_aio_uv_coverage.c test/testing.c)
+add_executable(test_aio_uv_coverage test/aio/test_aio_uv_coverage.c test/testing.c)
 target_link_libraries(test_aio_uv_coverage PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_aio_uv_coverage src/)
 
-add_executable(test_aio_combinators test/test_aio_combinators.c test/testing.c)
+add_executable(test_aio_combinators test/aio/test_aio_combinators.c test/testing.c)
 target_link_libraries(test_aio_combinators PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_aio_combinators src/)
 
-add_executable(test_pipe_builtins test/test_pipe_builtins.c test/testing.c)
+add_executable(test_pipe_builtins test/http/test_pipe_builtins.c test/testing.c)
 target_link_libraries(test_pipe_builtins PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_pipe_builtins src/)
 
-add_executable(test_lsp_integration test/test_lsp_integration.c test/testing.c)
+add_executable(test_lsp_integration test/lsp/test_lsp_integration.c test/testing.c)
 target_link_libraries(test_lsp_integration PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_lsp_integration src/)
 
 add_executable(test_aio_backpressure test/unit/test_aio_backpressure.c test/testing.c)
 target_link_libraries(test_aio_backpressure PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_aio_backpressure src/)
 
 add_executable(test_coverage_unit test/unit/test_coverage.c test/testing.c)
 target_link_libraries(test_coverage_unit PRIVATE "-lc" valkyria)
-include_directories(test_coverage_unit src/)
 
 add_executable(test_gc_unit test/unit/test_gc.c test/testing.c)
 target_link_libraries(test_gc_unit PRIVATE "-lc" valkyria)
-include_directories(test_gc_unit src/)
 
 add_executable(test_gc_parallel_unit test/unit/test_gc_parallel.c test/testing.c)
 target_link_libraries(test_gc_parallel_unit PRIVATE "-lc" valkyria)
-include_directories(test_gc_parallel_unit src/)
 
-add_executable(test_large_str test/test_large_str.c test/testing.c)
+add_executable(test_large_str test/http/test_large_str.c test/testing.c)
 target_link_libraries(test_large_str PRIVATE "-lc" valkyria)
-include_directories(test_large_str src/)
 
 add_executable(test_parser_unit test/unit/test_parser.c test/testing.c)
 target_link_libraries(test_parser_unit PRIVATE "-lc" valkyria)
-include_directories(test_parser_unit src/)
 
 add_executable(test_memory_unit test/unit/test_memory.c test/testing.c)
 target_link_libraries(test_memory_unit PRIVATE "-lc" valkyria)
-include_directories(test_memory_unit src/)
 
 if(VALK_COVERAGE)
   add_executable(test_source_loc_unit test/unit/test_source_loc.c test/testing.c)
@@ -465,131 +478,118 @@ endif()
 
 add_executable(test_aio_ssl_unit test/unit/test_aio_ssl.c test/testing.c)
 target_link_libraries(test_aio_ssl_unit PRIVATE "-lc" valkyria OpenSSL::SSL OpenSSL::Crypto)
-include_directories(test_aio_ssl_unit src/)
 
 add_executable(test_pressure test/unit/test_pressure.c test/testing.c)
 target_link_libraries(test_pressure PRIVATE "-lc" valkyria)
-include_directories(test_pressure src/)
 
 add_executable(test_conn_io test/unit/test_conn_io.c test/testing.c)
 target_link_libraries(test_conn_io PRIVATE "-lc" valkyria)
-include_directories(test_conn_io src/)
 
 add_executable(test_aio_timer_unit test/unit/test_aio_timer.c test/testing.c)
 target_link_libraries(test_aio_timer_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_aio_timer_unit src/)
 
 add_executable(test_io_timer_ops_unit test/unit/test_io_timer_ops.c test/testing.c)
 target_link_libraries(test_io_timer_ops_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_io_timer_ops_unit src/)
 
 add_executable(test_thread_posix_unit test/unit/test_thread_posix.c test/testing.c)
 target_link_libraries(test_thread_posix_unit PRIVATE "-lc" valkyria)
-include_directories(test_thread_posix_unit src/)
 
 add_executable(test_aio_async_unit test/unit/test_aio_async.c test/testing.c)
 target_link_libraries(test_aio_async_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_aio_async_unit src/)
 
-add_executable(test_aio_handle_diag test/test_aio_handle_diag.c test/testing.c)
+add_executable(test_aio_handle_diag test/aio/test_aio_handle_diag.c test/testing.c)
 target_link_libraries(test_aio_handle_diag PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_aio_handle_diag src/)
 
 # HTTP2/Streaming tests
-add_executable(test_http2_streaming test/test_http2_streaming.c test/testing.c)
+add_executable(test_http2_streaming test/http/test_http2_streaming.c test/testing.c)
 target_link_libraries(test_http2_streaming PRIVATE "-lc" valkyria)
-include_directories(test_http2_streaming src/)
 
 # Stream body integration tests (data flow through nghttp2)
-add_executable(test_stream_body_integration test/test_stream_body_integration.c test/testing.c)
+add_executable(test_stream_body_integration test/http/test_stream_body_integration.c test/testing.c)
 target_link_libraries(test_stream_body_integration PRIVATE "-lc" valkyria)
-include_directories(test_stream_body_integration src/)
 
 # Parser error path tests
-add_executable(test_parser_errors test/test_parser_errors.c test/testing.c)
+add_executable(test_parser_errors test/parser/test_parser_errors.c test/testing.c)
 target_link_libraries(test_parser_errors PRIVATE "-lc" valkyria)
-include_directories(test_parser_errors src/)
 
 # Concurrent metrics tests
-add_executable(test_metrics_concurrent test/test_metrics_concurrent.c test/testing.c)
+add_executable(test_metrics_concurrent test/metrics/test_metrics_concurrent.c test/testing.c)
 target_link_libraries(test_metrics_concurrent PRIVATE "-lc" valkyria)
-include_directories(test_metrics_concurrent src/)
 
 # Request context tests
 add_executable(test_request_ctx_unit test/unit/test_request_ctx.c test/testing.c)
 target_link_libraries(test_request_ctx_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_request_ctx_unit src/)
 
 # Context builtins tests (ctx/deadline, trace/id, etc.)
 add_executable(test_ctx_builtins_unit test/unit/test_ctx_builtins.c test/testing.c)
 target_link_libraries(test_ctx_builtins_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_ctx_builtins_unit src/)
 
 # HTTP request builtins tests (req/method, req/path, req/headers, etc.)
 add_executable(test_http_builtins_unit test/unit/test_http_builtins.c test/testing.c)
 target_link_libraries(test_http_builtins_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_http_builtins_unit src/)
 
 # Chase-Lev deque tests (lock-free work-stealing data structure)
 add_executable(test_chase_lev_unit test/unit/test_chase_lev.c test/testing.c)
 target_link_libraries(test_chase_lev_unit PRIVATE "-lc" valkyria)
-include_directories(test_chase_lev_unit src/)
 
 # MPMC bounded queue tests (Vyukov multi-producer multi-consumer)
 add_executable(test_mpmc_unit test/unit/test_mpmc.c test/testing.c)
 target_link_libraries(test_mpmc_unit PRIVATE "-lc" valkyria)
-include_directories(test_mpmc_unit src/)
 
 # Task queue tests (async task execution via libuv event loop)
 add_executable(test_task_queue_unit test/unit/test_task_queue.c test/testing.c)
 target_link_libraries(test_task_queue_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_task_queue_unit src/)
 
 # Stream body connection management tests
 add_executable(test_stream_body_conn_unit test/unit/test_stream_body_conn.c test/testing.c)
 target_link_libraries(test_stream_body_conn_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_stream_body_conn_unit src/)
 
 # Backpressure list tests (linked list operations for overload protection)
 add_executable(test_backpressure_list_unit test/unit/test_backpressure_list.c test/testing.c)
 target_link_libraries(test_backpressure_list_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES})
-include_directories(test_backpressure_list_unit src/)
 
 # Connection FSM state machine tests
 add_executable(test_conn_fsm_unit test/unit/test_conn_fsm.c test/testing.c)
 target_link_libraries(test_conn_fsm_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_conn_fsm_unit src/)
 
 # Stream builtins tests (Lisp API for stream operations)
 add_executable(test_stream_builtins_unit test/unit/test_stream_builtins.c test/testing.c)
 target_link_libraries(test_stream_builtins_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_stream_builtins_unit src/)
 
 # HTTP/2 connection tests (write buffer, backpressure, alloc callbacks)
 add_executable(test_http2_conn_unit test/unit/test_http2_conn.c test/testing.c)
 target_link_libraries(test_http2_conn_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES} nghttp2::nghttp2)
-include_directories(test_http2_conn_unit src/)
 
 # HTTP/2 server tests (lifecycle, metrics, getters)
 add_executable(test_http2_server_unit test/unit/test_http2_server.c test/testing.c)
 target_link_libraries(test_http2_server_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES})
-include_directories(test_http2_server_unit src/)
 
 # HTTP/2 session tests (callbacks, stream arenas, headers)
 add_executable(test_http2_session_unit test/unit/test_http2_session.c test/testing.c)
 target_link_libraries(test_http2_session_unit PRIVATE "-lc" valkyria valk_test_fakes ${LIBUV_LIBRARIES} nghttp2::nghttp2 OpenSSL::SSL OpenSSL::Crypto)
-include_directories(test_http2_session_unit src/)
 
 # Connection admission tests (overload admission control)
 add_executable(test_conn_admission_unit test/unit/test_conn_admission.c test/testing.c)
 target_link_libraries(test_conn_admission_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
-include_directories(test_conn_admission_unit src/)
 
-add_executable(test_validate test/test_validate.c test/testing.c)
+add_executable(test_validate test/parser/test_validate.c test/testing.c)
 target_link_libraries(test_validate PRIVATE "-lc" valkyria)
-include_directories(test_validate src/)
 
-add_executable(test_type_env test/test_type_env.c test/testing.c)
+add_executable(test_type_env test/parser/test_type_env.c test/testing.c)
 target_link_libraries(test_type_env PRIVATE "-lc" valkyria)
-include_directories(test_type_env src/)
+
+# LLVM backend tests
+if(VALK_LLVM)
+  add_executable(test_llvm_codegen test/lang/test_llvm_codegen.c test/testing.c)
+  target_link_libraries(test_llvm_codegen PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
+  target_include_directories(test_llvm_codegen SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_compile_options(test_llvm_codegen PRIVATE -Wno-pedantic)
+  include_directories(test_llvm_codegen src/)
+
+  add_executable(test_vir test/lang/test_vir.c test/testing.c)
+  target_link_libraries(test_vir PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
+  target_include_directories(test_vir SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_compile_options(test_vir PRIVATE -Wno-pedantic)
+  include_directories(test_vir src/)
+endif()
 

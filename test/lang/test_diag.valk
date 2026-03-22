@@ -1,0 +1,27 @@
+(load "stdlib/prelude.valk")
+(load "stdlib/test/test.valk")
+
+(test/run (list
+
+  (test "load-undefined-symbol-returns-error"
+    {do
+      (= {r} (error? (load "test/fixtures/diag_undefined_sym.valk")))
+      (test/assert r "loading file with undefined symbol should return error")
+      true
+    })
+
+  (test "load-multiple-errors-returns-error"
+    {do
+      (= {r} (error? (load "test/fixtures/diag_multiple_errors.valk")))
+      (test/assert r "loading file with multiple undefined symbols should return error")
+      true
+    })
+
+  (test "load-valid-code-no-error"
+    {do
+      (= {r} (load "test/fixtures/load_with_error.valk"))
+      (test/assert (not (error? r)) "load completes even with runtime error in file")
+      true
+    })
+
+) {:suite-name "Diag Coverage"})

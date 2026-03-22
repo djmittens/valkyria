@@ -1,0 +1,17 @@
+{
+  "grammars": [
+    {
+      "name": "valk",
+      "camelcase": "Valk",
+      "scope": "source.valk",
+      "path": ".",
+      "file-types": ["valk"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "links": {
+      "repository": "https://github.com/example/tree-sitter-valk"
+    }
+  }
+}

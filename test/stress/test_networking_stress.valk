@@ -2,8 +2,8 @@
 ; Heavy load tests for HTTP/2 request/response object creation and manipulation
 ; Note: These tests stress the networking API without requiring actual network I/O
 
-(load "src/prelude.valk")
-(load "src/modules/test.valk")
+(load "stdlib/prelude.valk")
+(load "stdlib/test/test.valk")
 
 ; ============================================================================
 ; Request Object Creation Stress

@@ -59,7 +59,7 @@ jobs:
         env:
           VALK_HEAP_HARD_LIMIT: "2147483648"
         run: |
-          build/valk bin/run-tests.valk -- --build-dir build-coverage --junit-dir build/junit --examples
+          build/valk scripts/run-tests.valk -- --build-dir build-coverage --junit-dir build/junit --examples
       
       - name: Generate Coverage Report
         env:
@@ -69,7 +69,11 @@ jobs:
       
       - name: Check Global Mutation Lint
         run: |
-          build/valk bin/check-no-globals.valk
+          build/valk scripts/check-no-globals.valk
+      
+      - name: Workspace Parse Check
+        run: |
+          make check
       
       - name: Remove expected-failure JUnit
         if: always()
