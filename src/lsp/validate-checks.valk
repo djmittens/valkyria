@@ -1,11 +1,10 @@
-; LSP Validate — Valk-native AST diagnostic validation
+; LSP Validate — checks: symbol lookup, arity checking, type validation helpers
 ;
-; Replaces the C `validate` builtin. Walks the AST with scope tracking,
-; reports undefined symbols/functions and arity mismatches.
-;
-; Returns: list of plists {:line N :col N :end-col N :severity N :message S}
-;
-; Requires: prelude.valk, symdb.valk loaded. Needs a symdb db handle.
+; Pure analysis functions — no AST walking or scope mutation.
+; Used by lsp-validate-walk.valk which does the actual tree traversal.
+
+(load "src/prelude.valk")
+(load "src/symdb.valk")
 
 ; ---------------------------------------------------------------------------
 ; Constants
@@ -335,30 +334,22 @@
   {0}}}}}}
 })
 
-; ---------------------------------------------------------------------------
-; Main walk dispatcher
-; ---------------------------------------------------------------------------
-
-(sig 'vd/walk-body {-> List List List})
-(fun {vd/walk-body exprs ctx} {
-  if (nil? exprs) {ctx}
-  {vd/walk-body (tail exprs)
-    (vd/walk-expr (head exprs) ctx)}
+(sig 'vd/add-diag {-> List Any Str Str List})
+(fun {vd/add-diag ctx expr name message} {
+  plist/set ctx :diags
+    (qcons (vd/make-diag ctx:text
+                         (src-pos expr) (len name)
+                         DIAG_ERROR message)
+           ctx:diags)
 })
 
-(sig 'vd/walk-expr {-> Any List List})
-(fun {vd/walk-expr expr ctx} {
-  if (nil? expr) {ctx}
-  {if (num? expr) {ctx}
-  {if (str? expr) {ctx}
-  {if (sym? expr) {vd/check-sym expr ctx}
-  {if (list? expr) {vd/walk-list expr ctx}
-  {ctx}}}}}
-})
-
-(sig 'vd/check-sym {-> Any List List})
-(fun {vd/check-sym expr ctx} {
-  vd/check-sym-name expr (str expr) ctx
+(sig 'vd/add-warning {-> List Any Str Str List})
+(fun {vd/add-warning ctx expr name message} {
+  plist/set ctx :diags
+    (qcons (vd/make-diag ctx:text
+                         (src-pos expr) (len name)
+                         DIAG_WARNING message)
+           ctx:diags)
 })
 
 (def {vd/lowercase} "abcdefghijklmnopqrstuvwxyz")
@@ -398,24 +389,6 @@
       {ctx}}
   {vd/add-diag ctx expr name
     (str "Symbol '" name "' is not defined")}}}}
-})
-
-(sig 'vd/add-diag {-> List Any Str Str List})
-(fun {vd/add-diag ctx expr name message} {
-  plist/set ctx :diags
-    (qcons (vd/make-diag ctx:text
-                         (src-pos expr) (len name)
-                         DIAG_ERROR message)
-           ctx:diags)
-})
-
-(sig 'vd/add-warning {-> List Any Str Str List})
-(fun {vd/add-warning ctx expr name message} {
-  plist/set ctx :diags
-    (qcons (vd/make-diag ctx:text
-                         (src-pos expr) (len name)
-                         DIAG_WARNING message)
-           ctx:diags)
 })
 
 ; ---------------------------------------------------------------------------
@@ -465,7 +438,6 @@
   {vd/count-char-loop s c (+ i 1)
     (if (== (str/slice s i (+ i 1)) c) {+ count 1} {count})}
 })
-
 
 ; ---------------------------------------------------------------------------
 ; Argument type checking — infer literal types, compare against sig
@@ -780,93 +752,8 @@
 })
 
 ; ---------------------------------------------------------------------------
-; List dispatch
+; Sig type name check (used by sig walker in lsp-validate-walk.valk)
 ; ---------------------------------------------------------------------------
-
-(sig 'vd/walk-list {-> List List List})
-(fun {vd/walk-list expr ctx} {
-  if (nil? expr) {ctx}
-  {vd/walk-list-head expr (head expr) (tail expr) ctx}
-})
-
-(sig 'vd/walk-list-head {-> List Any List List List})
-(fun {vd/walk-list-head expr hd tl ctx} {
-  if (quoted? expr)
-    {vd/walk-quoted expr hd tl ctx}
-  {if (sym? hd)
-    {vd/dispatch-call expr hd (str hd) tl ctx}
-  {vd/walk-expr hd (vd/walk-body tl ctx)}}
-})
-
-(sig 'vd/walk-quoted {-> List Any List List List})
-(fun {vd/walk-quoted expr hd tl ctx} {
-  if (sym? hd)
-    {vd/walk-quoted-sym hd (str hd) tl ctx}
-  {vd/walk-implicit-do expr ctx}
-})
-
-(sig 'vd/walk-quoted-sym {-> Any Str List List List})
-(fun {vd/walk-quoted-sym hd name tl ctx} {
-  if (vd/is-known name ctx:scope
-                  ctx:globals
-                  ctx:known)
-    {vd/dispatch-call nil hd name tl ctx}
-  {ctx}
-})
-
-(sig 'vd/walk-implicit-do {-> List List List})
-(fun {vd/walk-implicit-do exprs ctx} {
-  if (nil? exprs) {ctx}
-  {vd/walk-implicit-do-next (head exprs) (tail exprs) ctx}
-})
-
-(sig 'vd/walk-implicit-do-next {-> Any List List List})
-(fun {vd/walk-implicit-do-next expr rest ctx} {
-  vd/walk-implicit-do rest
-    (vd/maybe-thread-binding expr (vd/walk-expr expr ctx))
-})
-
-(sig 'vd/maybe-thread-binding {-> Any List List})
-(fun {vd/maybe-thread-binding expr ctx} {
-  if (not (list? expr)) {ctx}
-  {if (nil? expr) {ctx}
-  {vd/check-thread-head (head expr) (tail expr) ctx}}
-})
-
-(sig 'vd/check-thread-head {-> Any List List List})
-(fun {vd/check-thread-head hd tl ctx} {
-  if (not (sym? hd)) {ctx}
-  {if (== (str hd) "=")
-    {vd/thread-binding-names tl ctx}
-    {ctx}}
-})
-
-(sig 'vd/thread-binding-names {-> List List List})
-(fun {vd/thread-binding-names tl ctx} {
-  if (nil? tl) {ctx}
-  {vd/thread-binding-vars (head tl) ctx}
-})
-
-(sig 'vd/thread-binding-vars {-> Any List List})
-(fun {vd/thread-binding-vars binding ctx} {
-  if (not (list? binding)) {ctx}
-  {do
-    (vd/dict-add-names (head ctx:scope)
-      (vd/collect-binding-names-list binding nil))
-    ctx}
-})
-
-; ---------------------------------------------------------------------------
-; sig type validation — check that type names in sig Q-exprs are defined
-; ---------------------------------------------------------------------------
-
-(sig 'vd/is-type-var {-> Str Num})
-(fun {vd/is-type-var name} {
-  if (not (== (len name) 1)) {0}
-  {if (< (ord name "A") 0) {0}
-  {if (> (ord name "Z") 0) {0}
-  {1}}}
-})
 
 (sig 'vd/should-validate-type {-> Str Num})
 (fun {vd/should-validate-type name} {
@@ -896,34 +783,8 @@
     (str "Type '" name "' is not defined")}}}}}}}}
 })
 
-(sig 'vd/walk-sig-elems {-> List List List})
-(fun {vd/walk-sig-elems elems ctx} {
-  if (nil? elems) {ctx}
-  {vd/walk-sig-elems (tail elems)
-    (vd/walk-sig-elem (head elems) ctx)}
-})
-
-(sig 'vd/walk-sig-elem {-> Any List List})
-(fun {vd/walk-sig-elem elem ctx} {
-  if (sym? elem) {vd/check-sig-type-name elem (str elem) ctx}
-  {if (list? elem) {vd/walk-sig-elems elem ctx}
-  {ctx}}
-})
-
-(sig 'vd/walk-sig-type-q {-> Any List List})
-(fun {vd/walk-sig-type-q type-q ctx} {
-  if (not (list? type-q)) {ctx}
-  {vd/walk-sig-elems type-q ctx}
-})
-
-(sig 'vd/walk-sig {-> List List List})
-(fun {vd/walk-sig tl ctx} {
-  if (< (len tl) 2) {ctx}
-  {vd/walk-sig-type-q (head (tail tl)) ctx}
-})
-
 ; ---------------------------------------------------------------------------
-; Type resolution — check function params and bindings have resolvable types
+; Type resolution — typed scope building, param type checking
 ; ---------------------------------------------------------------------------
 
 (sig 'vd/query-fun-sig {-> Ref Str Any})
@@ -933,10 +794,6 @@
     "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
     name}
 })
-
-; ---------------------------------------------------------------------------
-; Generic type inference — parse sigs, track param types through scope
-; ---------------------------------------------------------------------------
 
 (sig 'vd/drop-last {-> List List})
 (fun {vd/drop-last l} {
@@ -1027,10 +884,6 @@
     {vd/scope-has-callable name (tail scope-chain)}}
 })
 
-; ---------------------------------------------------------------------------
-; Expression type inference — checks if an expression has a resolvable type
-; ---------------------------------------------------------------------------
-
 (sig 'vd/infer-expr-type {-> Any List Any})
 (fun {vd/infer-expr-type expr ctx} {
   if (num? expr) {1}
@@ -1100,70 +953,6 @@
       (str "Type of '" name "' could not be resolved"))}}}}
 })
 
-(sig 'vd/check-fun-param-types {-> Any List List List})
-(fun {vd/check-fun-param-types fname params ctx} {
-  if (not (sym? fname)) {ctx}
-  {vd/check-fun-types-named (str fname) params ctx}
-})
-
-(sig 'vd/check-fun-types-named {-> Str List List List})
-(fun {vd/check-fun-types-named name params ctx} {do
-  (= {db} ctx:db)
-  (if (nil? db) {ctx}
-    {do
-      (= {sig-row} (vd/query-fun-sig db name))
-      (if (nil? sig-row)
-        {vd/flag-untyped-params params ctx}
-        {ctx})})
-})
-
-(sig 'vd/check-binding-types {-> Any List List List})
-(fun {vd/check-binding-types binding vals ctx} {
-  if (nil? ctx:db) {ctx}
-  {if (not (list? binding)) {ctx}
-  {if (not (== (len binding) 1)) {ctx}
-  {if (nil? vals) {ctx}
-  {vd/check-one-binding (head binding) (head vals) ctx}}}}
-})
-
-(sig 'vd/check-one-binding {-> Any Any List List})
-(fun {vd/check-one-binding name-sym rhs ctx} {
-  if (not (sym? name-sym)) {ctx}
-  {vd/check-one-binding-str name-sym (str name-sym) rhs ctx}
-})
-
-(sig 'vd/check-one-binding-str {-> Any Str Any List List})
-(fun {vd/check-one-binding-str name-sym name rhs ctx} {
-  if (== name "_") {ctx}
-  {do
-    (= {type} (vd/infer-expr-type rhs ctx))
-    (if (not (nil? type)) {ctx}
-      {vd/add-diag ctx name-sym name
-        (str "Type of '" name "' could not be resolved")})}
-})
-
-(sig 'vd/dispatch-call {-> Any Any Str List List List})
-(fun {vd/dispatch-call expr hd name tl ctx} {
-  if (if (> (len name) 0) {== (str/slice name 0 1) ":"} {0}) {vd/walk-body tl ctx}
-  {if (== name "fun")     {vd/walk-fun tl (vd/check-special-arity name tl ctx hd)}
-  {if (== name "\\")     {vd/walk-lambda tl (vd/check-special-arity name tl ctx hd)}
-  {if (== name "def")    {vd/walk-binding "def" tl (vd/check-special-arity name tl ctx hd)}
-  {if (== name "=")      {vd/walk-binding "=" tl (vd/check-special-arity name tl ctx hd)}
-  {if (== name "type")   {vd/walk-type tl (vd/check-special-arity name tl ctx hd)}
-  {if (== name "sig")    {vd/walk-sig tl (vd/check-special-arity name tl ctx hd)}
-  {if (== name "quote")  {ctx}
-  {if (== name "match")  {vd/walk-match tl (vd/check-special-arity name tl ctx hd)}
-  {if (== name "aio/do") {vd/walk-aio-do tl ctx}
-  {if (== name "aio/let") {vd/walk-aio-let tl ctx}
-  {if (dict/has? VALIDATE_SPECIAL_FORMS name)
-    {vd/walk-body tl (vd/check-special-arity name tl ctx hd)}
-  {vd/walk-call expr hd name tl ctx}}}}}}}}}}}}
-})
-
-; ---------------------------------------------------------------------------
-; Function call — check defined + arity
-; ---------------------------------------------------------------------------
-
 (sig 'vd/is-ctor-call {-> Str Num})
 (fun {vd/is-ctor-call name} {
   if (<= (len name) 0) {0}
@@ -1172,396 +961,4 @@
     (if (>= (str/index-of "ABCDEFGHIJKLMNOPQRSTUVWXYZ" c) 0)
       {< (str/index-of name ":") 0}
       {0})}
-})
-
-(sig 'vd/walk-call {-> Any Any Str List List List})
-(fun {vd/walk-call expr hd name tl ctx} {do
-  (= {ctx2} (vd/walk-body tl ctx))
-  (= {argc} (len tl))
-  (= {ctx3} (vd/check-div-zero expr hd name tl ctx2))
-  (= {scope} ctx3:scope)
-  (= {globals} ctx3:globals)
-  (= {known} ctx3:known)
-  (if (vd/is-ctor-call name)
-    {vd/check-ctor-arity expr hd name argc tl ctx3}
-    {if (vd/is-known name scope globals known)
-      {vd/check-arity expr hd name argc tl ctx3}
-      {vd/add-diag ctx3 hd name
-        (str "Function '" name "' is not defined")}})
-})
-
-; ---------------------------------------------------------------------------
-; (fun {name params...} {body...})
-; ---------------------------------------------------------------------------
-
-(sig 'vd/walk-fun {-> List List List})
-(fun {vd/walk-fun tl ctx} {
-  if (< (len tl) 2) {vd/walk-body tl ctx}
-  {vd/walk-fun-inner (head tl) (tail tl) ctx}
-})
-
-(sig 'vd/walk-fun-inner {-> Any List List List})
-(fun {vd/walk-fun-inner formals body-rest ctx} {
-  if (not (list? formals)) {vd/walk-body body-rest ctx}
-  {if (nil? formals) {vd/walk-body body-rest ctx}
-  {vd/walk-fun-parts (head formals) (tail formals) body-rest ctx}}
-})
-
-(sig 'vd/walk-fun-parts {-> Any List List List List})
-(fun {vd/walk-fun-parts fname params body-rest ctx} {do
-  (= {fname-str} (if (sym? fname) {str fname} {""}))
-  (= {ctx2} (if (sym? fname)
-    {vd/add-global ctx fname-str}
-    {ctx}))
-  (= {ctx2b} (vd/check-fun-param-types fname params ctx2))
-  (= {param-names} (vd/collect-param-names params nil))
-  (= {saved-scope} ctx2b:scope)
-  (= {local-dict} (vd/build-typed-scope fname-str (reverse param-names) ctx2b:db))
-  (= {ctx3} (plist/set ctx2b :scope (qcons local-dict saved-scope)))
-  (= {ctx4} (vd/walk-annotated-body params body-rest ctx3))
-  (plist/set ctx4 :scope saved-scope)
-})
-
-(sig 'vd/add-global {-> List Str List})
-(fun {vd/add-global ctx name} {do
-  (dict/put! ctx:globals name)
-  ctx
-})
-
-(sig 'vd/dict-add-names {-> Dict List Dict})
-(fun {vd/dict-add-names d names} {
-  if (nil? names) {d}
-  {do
-    (dict/put! d (head names))
-    (vd/dict-add-names d (tail names))}
-})
-
-; ---------------------------------------------------------------------------
-; (\ {params...} {body...})
-; ---------------------------------------------------------------------------
-
-(sig 'vd/walk-lambda {-> List List List})
-(fun {vd/walk-lambda tl ctx} {
-  if (< (len tl) 2) {vd/walk-body tl ctx}
-  {vd/walk-lambda-inner (head tl) (tail tl) ctx}
-})
-
-(sig 'vd/walk-lambda-inner {-> Any List List List})
-(fun {vd/walk-lambda-inner formals body-rest ctx} {do
-  (= {param-names} (if (list? formals)
-    {vd/collect-param-names formals nil}
-    {nil}))
-  (= {saved-scope} ctx:scope)
-  (= {local-dict} (dict/from-keys param-names))
-  (= {ctx2} (plist/set ctx :scope (qcons local-dict saved-scope)))
-  (= {ctx3} (vd/walk-annotated-body formals body-rest ctx2))
-  (plist/set ctx3 :scope saved-scope)
-})
-
-; Walk body, skipping :: and -> type annotations in formals
-(sig 'vd/walk-annotated-body {-> List List List List})
-(fun {vd/walk-annotated-body formals body-rest ctx} {
-  vd/walk-body body-rest ctx
-})
-
-; ---------------------------------------------------------------------------
-; (def {vars} vals) / (= {vars} vals)
-; ---------------------------------------------------------------------------
-
-(sig 'vd/walk-binding {-> Str List List List})
-(fun {vd/walk-binding form tl ctx} {
-  if (nil? tl) {ctx}
-  {vd/walk-binding-inner form (head tl) (tail tl) ctx}
-})
-
-(sig 'vd/walk-binding-inner {-> Str Any List List List})
-(fun {vd/walk-binding-inner form binding vals ctx} {do
-  (= {names} (vd/collect-binding-names-list binding nil))
-  (= {ctx2} (if (== form "def")
-    {do (vd/dict-add-names ctx:globals names) ctx}
-    {do (vd/dict-add-names (head ctx:scope) names) ctx}))
-  (= {ctx3} (vd/check-binding-types binding vals ctx2))
-  (vd/walk-body vals ctx3)
-})
-
-(sig 'vd/collect-binding-names-list {-> Any List List})
-(fun {vd/collect-binding-names-list binding acc} {
-  if (not (list? binding)) {
-    if (sym? binding) {qcons (str binding) acc} {acc}}
-  {if (nil? binding) {acc}
-  {vd/collect-binding-names-list (tail binding)
-    (if (sym? (head binding)) {qcons (str (head binding)) acc} {acc})}}
-})
-
-; ---------------------------------------------------------------------------
-; (type {Name params} {Ctor ...} ...)
-; ---------------------------------------------------------------------------
-
-(sig 'vd/walk-type {-> List List List})
-(fun {vd/walk-type tl ctx} {
-  if (nil? tl) {ctx}
-  {vd/walk-type-add-globals tl ctx}
-})
-
-(sig 'vd/walk-type-add-globals {-> List List List})
-(fun {vd/walk-type-add-globals tl ctx} {do
-  (= {names} (vd/collect-type-names tl nil))
-  (vd/dict-add-names ctx:globals names)
-  ctx
-})
-
-; ---------------------------------------------------------------------------
-; (match scrutinee {pattern body...} ...)
-; ---------------------------------------------------------------------------
-
-(sig 'vd/walk-match {-> List List List})
-(fun {vd/walk-match tl ctx} {
-  if (nil? tl) {ctx}
-  {vd/walk-match-inner (head tl) (tail tl) ctx}
-})
-
-(sig 'vd/walk-match-inner {-> Any List List List})
-(fun {vd/walk-match-inner scrutinee clauses ctx} {
-  vd/walk-match-clauses clauses (vd/walk-expr scrutinee ctx)
-})
-
-(sig 'vd/walk-match-clauses {-> List List List})
-(fun {vd/walk-match-clauses clauses ctx} {
-  if (nil? clauses) {ctx}
-  {vd/walk-match-clauses (tail clauses)
-    (vd/walk-match-clause (head clauses) ctx)}
-})
-
-(sig 'vd/walk-match-clause {-> Any List List})
-(fun {vd/walk-match-clause clause ctx} {
-  if (not (list? clause)) {ctx}
-  {if (< (len clause) 2) {ctx}
-  {vd/walk-match-clause-inner (head clause) (tail clause) ctx}}
-})
-
-(sig 'vd/walk-match-clause-inner {-> Any List List List})
-(fun {vd/walk-match-clause-inner pattern body ctx} {do
-  (= {ctx1} (vd/check-match-clause pattern ctx))
-  (= {saved-scope} ctx1:scope)
-  (= {pat-names} (vd/collect-pattern-names pattern nil))
-  (= {local-dict} (dict/from-keys pat-names))
-  (= {ctx2} (plist/set ctx1 :scope (qcons local-dict saved-scope)))
-  (= {ctx3} (vd/walk-body body ctx2))
-  (plist/set ctx3 :scope saved-scope)
-})
-
-(sig 'vd/collect-pattern-names {-> Any List List})
-(fun {vd/collect-pattern-names pattern acc} {
-  if (sym? pattern)
-    {vd/collect-pattern-sym (str pattern) acc}
-  {if (list? pattern)
-    {vd/collect-pattern-list pattern acc}
-  {acc}}
-})
-
-(sig 'vd/collect-pattern-sym {-> Str List List})
-(fun {vd/collect-pattern-sym name acc} {
-  if (== name "_") {acc}
-  {if (== (str/slice name 0 1) ":") {acc}
-  {qcons name acc}}
-})
-
-(sig 'vd/collect-pattern-list {-> List List List})
-(fun {vd/collect-pattern-list pattern acc} {
-  if (nil? pattern) {acc}
-  {vd/collect-pattern-list-inner (head pattern) (tail pattern) acc}
-})
-
-(sig 'vd/collect-pattern-list-inner {-> Any List List List})
-(fun {vd/collect-pattern-list-inner hd tl acc} {
-  vd/collect-pattern-args tl acc
-})
-
-(sig 'vd/collect-pattern-args {-> List List List})
-(fun {vd/collect-pattern-args args acc} {
-  if (nil? args) {acc}
-  {vd/collect-pattern-args (tail args)
-    (vd/collect-pattern-names (head args) acc)}
-})
-
-; ---------------------------------------------------------------------------
-; (aio/do {stmt...})
-; ---------------------------------------------------------------------------
-
-(sig 'vd/walk-aio-do {-> List List List})
-(fun {vd/walk-aio-do tl ctx} {
-  if (nil? tl) {ctx}
-  {vd/walk-aio-do-body (head tl) ctx}
-})
-
-(sig 'vd/walk-aio-do-body {-> Any List List})
-(fun {vd/walk-aio-do-body body ctx} {
-  if (not (list? body)) {vd/walk-expr body ctx}
-  {do
-    (= {saved-scope} ctx:scope)
-    (= {ctx2} (plist/set ctx :scope (qcons (dict/new) saved-scope)))
-    (= {ctx3} (vd/walk-aio-do-stmts body ctx2))
-    (plist/set ctx3 :scope saved-scope)}
-})
-
-(sig 'vd/walk-aio-do-stmts {-> List List List})
-(fun {vd/walk-aio-do-stmts stmts ctx} {
-  if (nil? stmts) {ctx}
-  {vd/walk-aio-do-stmts (tail stmts)
-    (vd/walk-aio-do-stmt (head stmts) ctx)}
-})
-
-(sig 'vd/walk-aio-do-stmt {-> Any List List})
-(fun {vd/walk-aio-do-stmt stmt ctx} {
-  if (not (list? stmt)) {vd/walk-expr stmt ctx}
-  {vd/walk-aio-do-check-bind stmt ctx}
-})
-
-(sig 'vd/walk-aio-do-check-bind {-> List List List})
-(fun {vd/walk-aio-do-check-bind stmt ctx} {
-  if (< (len stmt) 3) {vd/walk-expr stmt ctx}
-  {vd/walk-aio-do-bind-check (head stmt) (head (tail stmt)) (tail (tail stmt)) ctx}
-})
-
-(sig 'vd/walk-aio-do-bind-check {-> Any Any List List List})
-(fun {vd/walk-aio-do-bind-check var arrow rest ctx} {
-  if (not (sym? var)) {vd/walk-expr var (vd/walk-expr arrow (vd/walk-body rest ctx))}
-  {if (not (sym? arrow)) {vd/walk-expr var (vd/walk-expr arrow (vd/walk-body rest ctx))}
-  {if (== (str arrow) "<-")
-    {vd/walk-aio-do-bind (str var) rest ctx}
-    {vd/walk-expr var (vd/walk-expr arrow (vd/walk-body rest ctx))}}}
-})
-
-(sig 'vd/walk-aio-do-bind {-> Str List List List})
-(fun {vd/walk-aio-do-bind name rest ctx} {do
-  (= {ctx2} (vd/walk-body rest ctx))
-  (if (== name "_") {ctx2}
-    {do (dict/put! (head ctx2:scope) name) ctx2})
-})
-
-; ---------------------------------------------------------------------------
-; (aio/let {bindings...} body...)
-; ---------------------------------------------------------------------------
-
-(sig 'vd/walk-aio-let {-> List List List})
-(fun {vd/walk-aio-let tl ctx} {
-  if (nil? tl) {ctx}
-  {vd/walk-aio-let-inner (head tl) (tail tl) ctx}
-})
-
-(sig 'vd/walk-aio-let-inner {-> Any List List List})
-(fun {vd/walk-aio-let-inner bindings body-rest ctx} {
-  if (not (list? bindings)) {vd/walk-body body-rest ctx}
-  {do
-    (= {saved-scope} ctx:scope)
-    (= {ctx2} (plist/set ctx :scope (qcons (dict/new) saved-scope)))
-    (= {ctx3} (vd/walk-aio-let-bindings bindings ctx2))
-    (= {ctx4} (vd/walk-body body-rest ctx3))
-    (plist/set ctx4 :scope saved-scope)}
-})
-
-(sig 'vd/walk-aio-let-bindings {-> List List List})
-(fun {vd/walk-aio-let-bindings bindings ctx} {
-  if (nil? bindings) {ctx}
-  {vd/walk-aio-let-bindings (tail bindings)
-    (vd/walk-aio-let-one (head bindings) ctx)}
-})
-
-(sig 'vd/walk-aio-let-one {-> Any List List})
-(fun {vd/walk-aio-let-one item ctx} {
-  if (sym? item)
-    {if (== (str/slice (str item) 0 1) ":") {ctx} {ctx}}
-  {if (list? item)
-    {vd/walk-aio-let-pair item ctx}
-  {ctx}}
-})
-
-(sig 'vd/walk-aio-let-pair {-> List List List})
-(fun {vd/walk-aio-let-pair item ctx} {
-  if (nil? item) {ctx}
-  {vd/walk-aio-let-var (head item) (tail item) ctx}
-})
-
-(sig 'vd/walk-aio-let-var {-> Any List List List})
-(fun {vd/walk-aio-let-var var rest ctx} {
-  if (not (sym? var)) {vd/walk-body rest ctx}
-  {do
-    (= {ctx2} (vd/walk-body rest ctx))
-    (dict/put! (head ctx2:scope) (str var))
-    ctx2}
-})
-
-; ---------------------------------------------------------------------------
-; Parameter name collection (handles & and :: annotations)
-; ---------------------------------------------------------------------------
-
-(sig 'vd/collect-param-names {-> List List List})
-(fun {vd/collect-param-names params acc} {
-  if (nil? params) {acc}
-  {vd/collect-param-one (head params) (tail params) acc}
-})
-
-(sig 'vd/collect-param-one {-> Any List List List})
-(fun {vd/collect-param-one p rest acc} {
-  if (not (sym? p)) {vd/collect-param-names rest acc}
-  {vd/collect-param-str (str p) rest acc}
-})
-
-(sig 'vd/collect-param-str {-> Str List List List})
-(fun {vd/collect-param-str name rest acc} {
-  if (== name "&") {vd/collect-param-names rest acc}
-  {if (== name "::") {vd/skip-annotation rest acc}
-  {if (== name "->") {vd/skip-annotation rest acc}
-  {vd/collect-param-names rest (qcons name acc)}}}
-})
-
-(sig 'vd/skip-annotation {-> List List List})
-(fun {vd/skip-annotation rest acc} {
-  if (nil? rest) {acc}
-  {vd/collect-param-names (tail rest) acc}
-})
-
-; ---------------------------------------------------------------------------
-; Public entry point
-; ---------------------------------------------------------------------------
-
-(sig 'vd/validate {-> Ref List Str List})
-(fun {vd/validate db ast text} {
-  vd/validate-with-known db ast text (vd/load-known-set db)
-})
-
-(sig 'vd/preload-arity-cache {-> Ref Dict})
-(fun {vd/preload-arity-cache db} {
-  if (nil? db) {(dict/new)}
-  {do
-    (= {rows} (sqlite/query db
-      "SELECT name, arity, sig FROM symbols WHERE arity >= 0 OR sig IS NOT NULL"))
-    (vd/build-arity-dict rows (dict/new))}
-})
-
-(sig 'vd/build-arity-dict {-> List Dict Dict})
-(fun {vd/build-arity-dict rows d} {
-  if (nil? rows) {d}
-  {do
-    (= {r} (head rows))
-    (= {name} (plist/get r :name))
-    (dict/set! d name r)
-    (vd/build-arity-dict (tail rows) d)}
-})
-
-(sig 'vd/validate-with-known {-> Ref List Str Dict List})
-(fun {vd/validate-with-known db ast text known-set} {do
-  (= {globals-set} (dict/from-keys (vd/collect-globals ast)))
-  (= {types-set} (vd/build-types-set db ast))
-  (= {arity-cache} (vd/preload-arity-cache db))
-  (= {ctx} (list :scope (list (dict/new))
-                  :globals globals-set
-                  :known known-set
-                  :types types-set
-                  :db db
-                  :arity-cache arity-cache
-                  :text text
-                  :diags nil))
-  (= {result} (vd/walk-body ast ctx))
-  (reverse result:diags)
 })

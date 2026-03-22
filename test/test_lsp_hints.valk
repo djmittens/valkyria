@@ -1,9 +1,10 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 (load "src/symdb.valk")
-(load "src/lsp-analysis.valk")
-(load "src/lsp-validate.valk")
-(load "src/lsp-hints.valk")
+(load "src/lsp/analysis.valk")
+(load "src/lsp/validate.valk")
+(load "src/lsp/hints.valk")
+(load "src/lsp/hints-fields.valk")
 
 ; --- Helpers ---
 
@@ -642,9 +643,10 @@
       (= {text} "(fun {add a b} {+ a b})")
       (= {hints} (hint/collect text db nil))
       (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
-      (= {h} (head type-hints))
-      (test/assert (not (nil? h)) "type hint exists")
-      (test/assert (not (nil? h:paddingLeft)) "paddingLeft set")
+      (= {param-hints} (filter (\ {h} {str/starts-with? h:label "::"}) type-hints))
+      (= {h} (head param-hints))
+      (test/assert (not (nil? h)) "param type hint exists")
+      (test/assert (not (nil? h:paddingLeft)) "paddingLeft set on param type hint")
       true
     })
 

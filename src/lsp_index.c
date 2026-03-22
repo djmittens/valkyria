@@ -419,50 +419,6 @@ static void walk_binding(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl) {
   walk_each(ctx, vals);
 }
 
-static void walk_type(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl) {
-  int kw_pos = (int)LVAL_SRC_POS(kw);
-  if (kw_pos >= 0) emit_semtok(ctx, kw_pos, 4, TOK_KEYWORD, 0);
-
-  // Walk type variants and emit type/property tokens
-  while (tl && LVAL_TYPE(tl) == LVAL_CONS) {
-    valk_lval_t *variant = tl->cons.head;
-    if (variant && is_qexpr(variant)) {
-      valk_lval_t *cur = variant;
-      while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-        valk_lval_t *elem = cur->cons.head;
-        if (LVAL_TYPE(elem) == LVAL_SYM) {
-          const char *name = elem->str;
-          int ep = (int)LVAL_SRC_POS(elem);
-          int el = (int)strlen(name);
-          if (ep >= 0) {
-            int type = is_keyword_str(name) ? TOK_PROPERTY : TOK_TYPE;
-            emit_semtok(ctx, ep, el, type, name[0] != ':' ? 1 : 0);
-            emit_node(ctx, ep, ep + el, "sym", name);
-          }
-        } else if (LVAL_TYPE(elem) == LVAL_CONS) {
-          // Nested type expression — walk for tokens
-          valk_lval_t *inner = elem;
-          while (inner && LVAL_TYPE(inner) == LVAL_CONS) {
-            valk_lval_t *ie = inner->cons.head;
-            if (LVAL_TYPE(ie) == LVAL_SYM) {
-              int ip = (int)LVAL_SRC_POS(ie);
-              int il = (int)strlen(ie->str);
-              if (ip >= 0) {
-                int t = is_keyword_str(ie->str) ? TOK_PROPERTY : TOK_TYPE;
-                emit_semtok(ctx, ip, il, t, 0);
-                emit_node(ctx, ip, ip + il, "sym", ie->str);
-              }
-            }
-            inner = inner->cons.tail;
-          }
-        }
-        cur = cur->cons.tail;
-      }
-    }
-    tl = tl->cons.tail;
-  }
-}
-
 static void walk_do(index_ctx_t *ctx, valk_lval_t *tl) {
   // do blocks: walk children sequentially, adding = bindings to current scope
   while (tl && LVAL_TYPE(tl) == LVAL_CONS) {
@@ -557,15 +513,14 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
   if (strcmp(name, "\\") == 0)    { walk_fun(ctx, hd, tl, true); return; }
   if (strcmp(name, "def") == 0)   { walk_binding(ctx, hd, tl); return; }
   if (strcmp(name, "=") == 0)     { walk_binding(ctx, hd, tl); return; }
-  if (strcmp(name, "type") == 0)  { walk_type(ctx, hd, tl); return; }
+  // type falls through to generic keyword handler
   if (strcmp(name, "match") == 0) {
     int kp = (int)LVAL_SRC_POS(hd);
     if (kp >= 0) emit_semtok(ctx, kp, 5, TOK_KEYWORD, 0);
     walk_match(ctx, tl);
     return;
   }
-  if (strcmp(name, "sig") == 0)   { return; } // sig handled by type_env
-  if (strcmp(name, "quote") == 0) { return; }
+  // quote falls through — walk_expr handles Q-exprs via walk_qexpr_tokens
 
   if (strcmp(name, "do") == 0) {
     int kp = (int)LVAL_SRC_POS(hd);
@@ -602,6 +557,35 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
   }
 }
 
+static void walk_qexpr_tokens(index_ctx_t *ctx, valk_lval_t *qexpr) {
+  valk_lval_t *cur = qexpr;
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+    valk_lval_t *elem = cur->cons.head;
+    if (LVAL_TYPE(elem) == LVAL_SYM) {
+      int pos = (int)LVAL_SRC_POS(elem);
+      int len = (int)strlen(elem->str);
+      if (pos >= 0) {
+        emit_semtok(ctx, pos, len, TOK_VARIABLE, 0);
+        emit_node(ctx, pos, pos + len, "sym", elem->str);
+      }
+    } else if (LVAL_TYPE(elem) == LVAL_NUM) {
+      int pos = (int)LVAL_SRC_POS(elem);
+      if (pos >= 0) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%ld", (long)elem->num);
+        emit_semtok(ctx, pos, (int)strlen(buf), TOK_NUMBER, 0);
+      }
+    } else if (LVAL_TYPE(elem) == LVAL_STR) {
+      int pos = (int)LVAL_SRC_POS(elem);
+      if (pos >= 0)
+        emit_semtok(ctx, pos, (int)strlen(elem->str) + 2, TOK_STRING, 0);
+    } else if (LVAL_TYPE(elem) == LVAL_CONS) {
+      walk_qexpr_tokens(ctx, elem);
+    }
+    cur = cur->cons.tail;
+  }
+}
+
 static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr) {
   if (!expr || LVAL_TYPE(expr) == LVAL_NIL) return;
 
@@ -634,7 +618,7 @@ static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr) {
 
   if (LVAL_TYPE(expr) == LVAL_CONS) {
     if (expr->flags & LVAL_FLAG_QUOTED) {
-      // qexpr — don't walk as code
+      walk_qexpr_tokens(ctx, expr);
       return;
     }
     valk_lval_t *hd = expr->cons.head;

@@ -4,7 +4,7 @@
 (test/run (list
   (test "lsp-parses-without-errors"
     {do
-    (= {text} (read-file "src/lsp.valk"))
+    (= {text} (read-file "src/lsp/lsp.valk"))
     (test/assert (not (error? text)) "should read lsp.valk")
     (= {ast} (parse text))
     (test/assert (not (error? ast)) (str "lsp.valk should parse: " ast))
@@ -12,7 +12,7 @@
   })
   (test "lsp-analysis-parses"
     {do
-    (= {text} (read-file "src/lsp-analysis.valk"))
+    (= {text} (read-file "src/lsp/analysis.valk"))
     (test/assert (not (error? text)) "should read lsp-analysis.valk")
     (= {ast} (parse text))
     (test/assert (not (error? ast)) (str "lsp-analysis.valk should parse: " ast))
@@ -20,7 +20,7 @@
   })
   (test "lsp-validate-parses"
     {do
-    (= {text} (read-file "src/lsp-validate.valk"))
+    (= {text} (read-file "src/lsp/validate.valk"))
     (test/assert (not (error? text)) "should read lsp-validate.valk")
     (= {ast} (parse text))
     (test/assert (not (error? ast)) (str "lsp-validate.valk should parse: " ast))
@@ -28,7 +28,7 @@
   })
   (test "lsp-hints-parses"
     {do
-    (= {text} (read-file "src/lsp-hints.valk"))
+    (= {text} (read-file "src/lsp/hints.valk"))
     (test/assert (not (error? text)) "should read lsp-hints.valk")
     (= {ast} (parse text))
     (test/assert (not (error? ast)) (str "lsp-hints.valk should parse: " ast))
@@ -36,11 +36,7 @@
   })
   (test "lsp-loads-without-validation-errors"
     {do
-    (load "src/symdb.valk")
-    (load "src/lsp-analysis.valk")
-    (load "src/lsp-validate.valk")
-    (load "src/lsp-hints.valk")
-    (load "src/lsp.valk")
+    (load "src/lsp/lsp.valk")
     (test/assert (not (nil? lsp/start)) "lsp/start should be defined after load")
     true
   })

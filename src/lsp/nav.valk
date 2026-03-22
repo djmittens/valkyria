@@ -1,0 +1,572 @@
+; Valkyria LSP Server — hover, definition, references, completion, symbols, rename
+
+(load "src/lsp/workspace.valk")
+
+; ---------------------------------------------------------------------------
+; Hover — format and describe symbols
+; ---------------------------------------------------------------------------
+
+(sig 'hover/format-markdown {-> SymInfo Str Str})
+(fun {hover/format-markdown info word} {do
+  (= {name} info:name)
+  (= {type-sig} info:sig)
+  (= {formals} info:formals)
+  (= {doc} info:doc)
+  (= {path} info:path)
+  (= {sym-line} info:line)
+  (= {sym-kind} info:kind)
+  (= {kind-label} (if (== sym-kind SYMKIND_FUNCTION) {"function"}
+    {if (== sym-kind SYMKIND_VARIABLE) {"variable"}
+    {if (== sym-kind SYMKIND_TYPE) {"type"}
+    {if (== sym-kind SYMKIND_CONSTRUCTOR) {"constructor"}
+      {"symbol"}}}}))
+  (= {sections} nil)
+  (= {sections} (if (not (nil? type-sig))
+    {qcons (str "```valk\n" name " : " type-sig "\n```") sections}
+    {sections}))
+  (= {sections} (if (not (nil? formals))
+    {qcons (str "```valk\n" formals "\n```") sections}
+    {if (nil? type-sig)
+      {qcons (str "```valk\n(" kind-label ") " word "\n```") sections}
+      {sections}}))
+  (= {sections} (if (not (nil? doc))
+    {qcons doc sections}
+    {sections}))
+  (= {sections} (if (not (nil? path))
+    {if (> sym-line 0)
+      {qcons (str "*" path ":" (+ sym-line 1) "*") sections}
+      {qcons (str "*" path "*") sections}}
+    {sections}))
+  (str/join (reverse sections) "\n\n---\n\n")
+})
+
+; ---------------------------------------------------------------------------
+; Hover — AST-node-aware via symdb nodes table
+; ---------------------------------------------------------------------------
+
+(sig 'hover/describe {-> List Ref Str})
+(fun {hover/describe info db} {
+  if (nil? info) {nil}
+  {do
+    (= {ntype} (plist/get info :type))
+    (= {name} (plist/get info :name))
+    (if (== ntype "str") {str "```valk\n\"" name "\" :: Str\n```"}
+    {if (== ntype "num") {str "```valk\n" name " :: Num\n```"}
+    {if (== ntype "sym")
+      {if (> (len name) 0)
+        {if (== (str/slice name 0 1) ":")
+          {str "```valk\n" name " :: Keyword\n```"}
+          {hover/sym-describe name db}}
+        {nil}}
+    {nil}}})}
+})
+
+(sig 'hover/sym-describe {-> Str Ref Str})
+(fun {hover/sym-describe name db} {
+  if (nil? db) {str "```valk\n" name "\n```"}
+  {do
+    (= {info} (symdb/symbol-hover db name))
+    (if (nil? info) {str "```valk\n" name "\n```"}
+      {hover/format-markdown info name})}
+})
+
+(sig 'handle-hover {-> Num TextDocPosParams Nil})
+(fun {handle-hover id params} {do
+  (= {ctx} (lsp/get-text-pos params))
+  (if (nil? ctx) {lsp/send-response id (None)}
+    {do
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {path} (uri->path ctx:uri))
+      (= {info} (if (nil? lsp/db) {nil}
+        {do (= {r} (symdb/node-at-offset lsp/db path offset))
+            (if (error? r) {nil} {r})}))
+      (= {wr} (word-range-at-position ctx:text ctx:line ctx:col))
+      (= {word} (if (nil? info)
+        {if (nil? wr) {nil} {wr:word}}
+        {plist/get info :name}))
+      (if (nil? word) {lsp/send-response id (None)}
+        {do
+          (= {hover-str} (hover/describe info lsp/db))
+          (= {hover-str} (if (nil? hover-str)
+            {do
+              (= {fallback-info} (if (nil? lsp/db) {nil}
+                {symdb/symbol-hover lsp/db word}))
+              (if (nil? fallback-info)
+                {str "```valk\n" word "\n```"}
+                {hover/format-markdown fallback-info word})}
+            {hover-str}))
+          (= {start-line} ctx:line)
+          (= {start-col} (if (nil? wr) {ctx:col} {wr:start}))
+          (= {ntype} (if (nil? info) {nil} {plist/get info :type}))
+          (= {wlen} (if (nil? word) {0}
+            {if (== ntype "str") {+ (len word) 2} {len word}}))
+          (if (not (nil? info))
+            {do
+              (= {node-lc} (offset->line-col ctx:text (plist/get info :pos)))
+              (= {start-line} (head node-lc))
+              (= {start-col} (head (tail node-lc)))}
+            {})
+          (lsp/send-response id
+            (list :contents
+              (list :kind "markdown" :value hover-str)
+              :range
+              (list :start (list :line start-line :character start-col)
+                    :end (list :line start-line :character (+ start-col wlen)))))})})
+})
+
+; ---------------------------------------------------------------------------
+; Definition and references
+; ---------------------------------------------------------------------------
+
+(sig 'handle-definition {-> Num TextDocPosParams Nil})
+(fun {handle-definition id params} {do
+  (= {ctx} (lsp/get-word-ctx params))
+  (if (nil? ctx) {lsp/send-response id (None)}
+    {do
+      (= {path} (uri->path ctx:uri))
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {local-def} (lsp/find-local-def ctx:ast ctx:text ctx:line ctx:col ctx:word path offset))
+      (if (not (nil? local-def))
+        {lsp/respond-def-offset id ctx:uri ctx:text local-def}
+        {do
+          (= {defn} (if (nil? lsp/db) {nil} {symdb/find-definition lsp/db ctx:word}))
+          (if (nil? defn) {lsp/send-response id (None)}
+            {lsp/send-response id
+              (list :uri (str "file://" (plist/get defn :path))
+                    :range (list
+                      :start (list :line (plist/get defn :line) :character (plist/get defn :col))
+                      :end (list :line (plist/get defn :line) :character (+ (plist/get defn :col) (len ctx:word)))))})})}
+  )
+})
+
+(sig 'lsp/find-local-def {-> List Str Num Num Str Str Num List})
+(fun {lsp/find-local-def ast text line col word path offset} {do
+  (= {db-def} (if (nil? lsp/db) {nil}
+    {do
+      (= {target} (symdb/get-ref-at-offset lsp/db path offset))
+      (if (not (nil? target))
+        {do
+          (= {sid} (plist/get target :scope_id))
+          (if (nil? sid) {nil}
+            {if (< sid 0) {nil}
+              {symdb/find-def-in-scope-chain lsp/db path (plist/get target :name) sid}})}
+        {lsp/find-var-for-field lsp/db path offset word})}))
+  (if (not (nil? db-def)) {db-def}
+    {do
+      (= {ast-local} (ref/find-scoped-refs-from-ast ast text line col))
+      (if (nil? ast-local) {nil}
+        {do
+          (= {defs} (filter (\ {r} {== (plist/get r :is-def) 1}) ast-local))
+          (if (nil? defs) {nil} {head defs})})})
+})
+
+(sig 'lsp/find-var-for-field {-> Ref Str Num Str List})
+(fun {lsp/find-var-for-field db path offset word} {
+  if (nil? db) {nil}
+  {do
+    (= {node} (symdb/node-at-offset db path offset))
+    (if (nil? node) {nil}
+      {do
+        (= {ntype} (plist/get node :type))
+        (= {nname} (plist/get node :name))
+        (= {nctx} (plist/get node :context))
+        (if (not (== ntype "sym")) {nil}
+          {if (not (> (len nname) 0)) {nil}
+          {if (not (== (str/slice nname 0 1) ":")) {nil}
+            {symdb/find-field-definition db nname nctx}}})})}
+})
+
+(sig 'lsp/respond-def-offset {-> Num Str Str List Nil})
+(fun {lsp/respond-def-offset id uri text def-ref} {do
+  (= {pos} (if (plist/get def-ref :pos) {plist/get def-ref :pos} {plist/get def-ref :offset}))
+  (= {rlen} (plist/get def-ref :len))
+  (= {def-path} (plist/get def-ref :path))
+  (= {target-uri} (if (nil? def-path) {uri} {str "file://" def-path}))
+  (= {target-text} (if (nil? def-path) {text} {read-file def-path}))
+  (= {target-text} (if (error? target-text) {text} {target-text}))
+  (= {dlc} (offset->line-col target-text pos))
+  (lsp/send-response id
+    (list :uri target-uri
+          :range (list
+            :start (list :line (head dlc) :character (head (tail dlc)))
+            :end (list :line (head dlc) :character (+ (head (tail dlc)) (if (nil? rlen) {1} {rlen}))))))
+})
+
+
+(sig 'ref->lsp-location {-> Str Str List List})
+(fun {ref->lsp-location uri text r} {do
+  (= {lc} (offset->line-col text r:offset))
+  (= {rname} r:name)
+  (list :uri uri
+        :range (list
+          :start (list :line (head lc) :character (head (tail lc)))
+          :end (list :line (head lc) :character (+ (head (tail lc)) (len rname)))))
+})
+
+(sig 'handle-references {-> Num TextDocPosParams Nil})
+(fun {handle-references id params} {do
+  (= {ctx} (lsp/get-word-ctx params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {do
+      (= {path} (uri->path ctx:uri))
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {target} (if (nil? lsp/db) {nil}
+        {symdb/get-ref-at-offset lsp/db path offset}))
+      (= {local-refs} (if (nil? target) {nil}
+        {do
+          (= {sid} (plist/get target :scope_id))
+          (if (== sid -1) {nil}
+            {symdb/get-scoped-refs lsp/db path (plist/get target :name) sid})}))
+      (if (not (nil? local-refs))
+        {lsp/send-response id
+          (map (\ {r} {do
+            (= {rlc} (offset->line-col ctx:text (plist/get r :pos)))
+            (list :uri ctx:uri :range (list
+              :start (list :line (head rlc) :character (head (tail rlc)))
+              :end (list :line (head rlc) :character (+ (head (tail rlc)) (plist/get r :len)))))
+          }) local-refs)}
+        {do
+          (= {ast-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
+          (if (not (nil? ast-refs))
+            {lsp/send-response id (map (\ {r} {ref->lsp-location ctx:uri ctx:text r}) ast-refs)}
+            {if (nil? lsp/db) {lsp/send-response id nil}
+              {do
+                (= {refs} (symdb/find-refs lsp/db ctx:word))
+                (lsp/send-response id (map (\ {r} {
+                  list :uri (str "file://" (plist/get r :path))
+                       :range (list
+                         :start (list :line (plist/get r :line) :character (plist/get r :col))
+                         :end (list :line (plist/get r :line) :character (+ (plist/get r :col) (len ctx:word))))
+                }) refs))}})})})
+})
+
+; ---------------------------------------------------------------------------
+; Completion context filtering
+; ---------------------------------------------------------------------------
+
+(sig 'lsp/in-string? {-> Str Num Num Num})
+(fun {lsp/in-string? text line col} {do
+  (= {offset} (line-col->offset text line col))
+  (lsp/count-quotes-from text offset)
+})
+
+; Scan backwards to find last unescaped quote state boundary, then count forward.
+; Optimization: scan from line start instead of file start for common cases.
+(sig 'lsp/count-quotes-from {-> Str Num Num})
+(fun {lsp/count-quotes-from text limit} {do
+  (= {scan-start} (lsp/find-line-start text limit))
+  (= {pre-count} (if (== scan-start 0) {0}
+    {lsp/count-quotes-total text scan-start 0 0}))
+  (lsp/count-quotes text limit scan-start (+ pre-count 0))
+})
+
+(sig 'lsp/find-line-start {-> Str Num Num})
+(fun {lsp/find-line-start text pos} {
+  if (<= pos 0) {0}
+  {if (== (str/slice text (- pos 1) pos) "\n") {pos}
+    {lsp/find-line-start text (- pos 1)}}
+})
+
+(sig 'lsp/count-quotes-total {-> Str Num Num Num Num})
+(fun {lsp/count-quotes-total text limit pos count} {
+  if (>= pos limit) {count}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (== ch "\"")
+      {lsp/count-quotes-total text limit (+ pos 1) (+ count 1)}
+    {if (== ch "\\")
+      {lsp/count-quotes-total text limit (+ pos 2) count}
+      {lsp/count-quotes-total text limit (+ pos 1) count}})}
+})
+
+(sig 'lsp/count-quotes {-> Str Num Num Num Num})
+(fun {lsp/count-quotes text limit pos count} {
+  if (>= pos limit) {== (mod count 2) 1}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (== ch "\"")
+      {lsp/count-quotes text limit (+ pos 1) (+ count 1)}
+    {if (== ch "\\")
+      {lsp/count-quotes text limit (+ pos 2) count}
+      {lsp/count-quotes text limit (+ pos 1) count}})}
+})
+
+; ---------------------------------------------------------------------------
+; Completion — snippets and enriched symbol items
+; ---------------------------------------------------------------------------
+
+(def {lsp/form-snippets} (list
+  (FormSnippet :label "fun" :detail "(fun {name} {body})"
+        :snippet "fun {${1:name}} {$0}" :sort "00")
+  (FormSnippet :label "if" :detail "(if cond {then} {else})"
+        :snippet "if ${1:cond} {$2} {$0}" :sort "01")
+  (FormSnippet :label "def" :detail "(def {name} value)"
+        :snippet "def {${1:name}} $0" :sort "02")
+  (FormSnippet :label "=" :detail "(= {name} value)"
+        :snippet "= {${1:name}} $0" :sort "03")
+  (FormSnippet :label "\\" :detail "(\\ {args} {body})"
+        :snippet "\\ {${1:args}} {$0}" :sort "04")
+  (FormSnippet :label "do" :detail "(do expr...)"
+        :snippet "do $0" :sort "05")
+  (FormSnippet :label "match" :detail "(match val {pat body}...)"
+        :snippet "match ${1:val} {$0}" :sort "06")
+  (FormSnippet :label "select" :detail "(select {cond body}...)"
+        :snippet "select {${1:cond} $0}" :sort "07")
+  (FormSnippet :label "case" :detail "(case val {pat body}...)"
+        :snippet "case ${1:val} {$0}" :sort "08")
+  (FormSnippet :label "type" :detail "(type {Name} {Ctor fields})"
+        :snippet "type {${1:Name}} {$0}" :sort "09")
+  (FormSnippet :label "load" :detail "(load \"path\")"
+        :snippet "load \"$0\"" :sort "10")
+  (FormSnippet :label "sig" :detail "(sig 'name {type})"
+        :snippet "sig '${1:name} {$0}" :sort "11")
+  (FormSnippet :label "let" :detail "(let {bindings} body)"
+        :snippet "let {$1} $0" :sort "12")
+))
+
+(sig 'make-snippet-item {-> FormSnippet List})
+(fun {make-snippet-item s} {
+  list :label s:label
+       :kind 15
+       :detail s:detail
+       :insertText s:snippet
+       :insertTextFormat 2
+       :sortText s:sort
+})
+
+(sig 'filter-snippets {-> Str List List})
+(fun {filter-snippets prefix snippets} {
+  if (nil? snippets) {nil}
+  {do
+    (= {s} (head snippets))
+    (if (str/starts-with? (FormSnippet:label s) prefix)
+      {qcons (make-snippet-item s) (filter-snippets prefix (tail snippets))}
+      {filter-snippets prefix (tail snippets)})}
+})
+
+(sig 'symkind->completion-kind {-> Num Num})
+(fun {symkind->completion-kind kind} {
+  if (== kind SYMKIND_FUNCTION) {3}
+  {if (== kind SYMKIND_VARIABLE) {6}
+  {if (== kind SYMKIND_TYPE) {7}
+  {if (== kind SYMKIND_CONSTRUCTOR) {4}
+    {6}}}}
+})
+
+(type {CompletionRow} {:name Str :kind Num :sig Str :doc Str})
+
+(sig 'make-sym-completion-item {-> CompletionRow List})
+(fun {make-sym-completion-item s} { do
+  (= {name} s:name)
+  (= {kind} s:kind)
+  (= {type-sig} s:sig)
+  (= {doc} s:doc)
+  (= {detail-str} (if (nil? type-sig) {""} {type-sig}))
+  (= {item} (list :label name
+                   :kind (symkind->completion-kind kind)
+                   :detail detail-str
+                   :sortText (str "1-" name)))
+  (if (nil? doc) {item}
+    {plist/set item :documentation (list :kind "markdown" :value doc)})
+})
+
+(sig 'row->completion-row {-> List CompletionRow})
+(fun {row->completion-row r} {
+  CompletionRow (plist/get r :name) (plist/get r :kind) (plist/get r :sig) (plist/get r :doc)
+})
+
+(sig 'handle-completion {-> Num TextDocPosParams Nil})
+(fun {handle-completion id params} {do
+  (= {ctx} (lsp/get-text-pos params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {if (lsp/in-string? ctx:text ctx:line ctx:col)
+      {lsp/send-response id (list :isIncomplete :false :items nil)}
+      {do
+        (= {word} (word-at-position ctx:text ctx:line ctx:col))
+        (= {prefix} (if (nil? word) {""} {word}))
+        (= {snippet-items} (if (str/starts-with? prefix ":")
+          {nil}
+          {if (== prefix "")
+            {map make-snippet-item lsp/form-snippets}
+            {filter-snippets prefix lsp/form-snippets}}))
+        (= {sym-items} (if (nil? lsp/db) {nil}
+          {do
+            (= {syms} (if (== prefix "")
+              {symdb/completion-all lsp/db}
+              {symdb/completion-symbols lsp/db prefix}))
+            (map make-sym-completion-item (map row->completion-row syms))}))
+        (= {all-items} (join snippet-items (if (nil? sym-items) {nil} {sym-items})))
+        (lsp/send-response id (list :isIncomplete :false :items all-items))}})
+})
+
+; ---------------------------------------------------------------------------
+; Document and workspace symbols, semantic tokens
+; ---------------------------------------------------------------------------
+
+(sig 'handle-document-symbols {-> Num DocParams Nil})
+(fun {handle-document-symbols id params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (if (nil? lsp/db) {lsp/send-response id nil}
+    {do
+      (= {path} (uri->path uri))
+      (= {syms} (symdb/file-symbols lsp/db path))
+      (= {lsp-syms} (map (\ {s} {do
+        (= {sym-line} s:line)
+        (= {sym-col} s:col)
+        (= {sym-name} s:name)
+        (= {sym-kind} s:kind)
+        (list :name sym-name
+              :kind (symkind->lsp-kind sym-kind)
+              :range (list
+                :start (list :line sym-line :character sym-col)
+                :end (list :line sym-line :character (+ sym-col (len sym-name))))
+              :selectionRange (list
+                :start (list :line sym-line :character sym-col)
+                :end (list :line sym-line :character (+ sym-col (len sym-name)))))
+      }) syms))
+      (lsp/send-response id lsp-syms)})})
+
+(sig 'handle-workspace-symbols {-> Num QueryParams Nil})
+(fun {handle-workspace-symbols id params} {do
+  (= {query} params:query)
+  (if (nil? lsp/db) {lsp/send-response id nil}
+    {do
+      (= {syms} (if (nil? query) {symdb/all-symbol-names lsp/db}
+        {if (== query "") {symdb/all-symbol-names lsp/db}
+          {symdb/search-symbols lsp/db query}}))
+      (= {lsp-syms} (map (\ {s} {do
+        (= {sym-line} s:line)
+        (= {sym-col} s:col)
+        (= {sym-name} s:name)
+        (= {sl} (if (nil? sym-line) {0} {sym-line}))
+        (= {sc} (if (nil? sym-col) {0} {sym-col}))
+        (list :name sym-name
+             :kind (symkind->lsp-kind s:kind)
+             :location (list
+               :uri (str "file://" (if (nil? s:path)
+                 {""} {s:path}))
+               :range (list
+                 :start (list :line sl :character sc)
+                 :end (list :line sl :character (+ sc (len sym-name))))))
+      }) syms))
+      (lsp/send-response id lsp-syms)})})
+
+(sig 'handle-semantic-tokens {-> Num DocParams Nil})
+(fun {handle-semantic-tokens id params} {do
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id (list :data nil)}
+    {do
+      (= {path} (uri->path ctx:uri))
+      (= {rows} (if (nil? lsp/db) {nil} {symdb/get-semantic-tokens lsp/db path}))
+      (= {data} (if (nil? rows)
+        {sem/tokenize-ast ctx:ast ctx:text}
+        {sem/encode-deltas ctx:text (symdb/rows-to-token-groups rows)}))
+      (lsp/send-response id (list :data data))})
+})
+
+(sig 'symdb/rows-to-token-groups {-> List List})
+(fun {symdb/rows-to-token-groups rows} {
+  if (nil? rows) {nil}
+  {do
+    (= {r} (head rows))
+    (qcons (list (plist/get r :pos) (plist/get r :length)
+                 (plist/get r :token_type) (plist/get r :modifiers))
+      (symdb/rows-to-token-groups (tail rows)))}
+})
+
+; ---------------------------------------------------------------------------
+; Rename support
+; ---------------------------------------------------------------------------
+
+(sig 'handle-prepare-rename {-> Num TextDocPosParams Nil})
+(fun {handle-prepare-rename id params} {do
+  (= {ctx} (lsp/get-text-pos params))
+  (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
+    {do
+      (= {wr} (word-range-at-position ctx:text ctx:line ctx:col))
+      (if (nil? wr) {lsp/send-error id -32602 "No symbol at cursor"}
+        {lsp/send-response id
+          (list :range (list
+            :start (list :line ctx:line :character wr:start)
+            :end (list :line ctx:line :character wr:end))
+          :placeholder wr:word)})})
+})
+
+(sig 'ref->lsp-edit {-> Str List Str List})
+(fun {ref->lsp-edit text r new-name} {do
+  (= {lc} (offset->line-col text r:offset))
+  (= {rlen} r:len)
+  (list :range (list
+    :start (list :line (head lc) :character (head (tail lc)))
+    :end (list :line (head lc) :character (+ (head (tail lc)) rlen)))
+  :newText new-name)
+})
+
+(sig 'db-ref->lsp-edit {-> List Num Str List})
+(fun {db-ref->lsp-edit r word-len new-name} {
+  list :range (list
+    :start (list :line r:line :character r:col)
+    :end (list :line r:line :character (+ r:col word-len)))
+  :newText new-name
+})
+
+(sig 'rename/group-by-uri {-> List List List})
+(fun {rename/group-by-uri locs acc} {
+  if (nil? locs) {acc}
+  {do
+    (= {loc} (head locs))
+    (= {uri} loc:uri)
+    (= {edit} loc:edit)
+    (= {existing} (plist/get acc uri))
+    (= {new-edits} (if (nil? existing) {list edit} {qcons edit existing}))
+    (rename/group-by-uri (tail locs) (plist/set acc uri new-edits))}
+})
+
+(sig 'rename/make-doc-changes {-> List List})
+(fun {rename/make-doc-changes grouped} {
+  rename/make-doc-changes-walk grouped nil
+})
+
+(sig 'rename/make-doc-changes-walk {-> List List List})
+(fun {rename/make-doc-changes-walk pairs acc} {
+  if (nil? pairs) {acc}
+  {do
+    (= {uri} (head pairs))
+    (= {edits} (head (tail pairs)))
+    (= {doc-edit} (list :textDocument (list :uri uri :version (None))
+                        :edits edits))
+    (rename/make-doc-changes-walk (tail (tail pairs)) (qcons doc-edit acc))}
+})
+
+(sig 'handle-rename {-> Num RenameParams Nil})
+(fun {handle-rename id params} {do
+  (= {new-name} params:newName)
+  (= {ctx} (lsp/get-word-ctx params))
+  (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
+    {do
+      (= {local-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
+      (if (not (nil? local-refs))
+        {do
+          (= {edits} (map (\ {r} {ref->lsp-edit ctx:text r new-name}) local-refs))
+          (= {doc-edit} (list :textDocument (list :uri ctx:uri :version (None))
+                              :edits edits))
+          (lsp/send-response id (list :documentChanges (list doc-edit)))}
+        {if (nil? lsp/db) {lsp/send-error id -32602 "No workspace"}
+          {do
+            (= 'word-len (len ctx:word))
+            (= 'db-refs (symdb/find-refs lsp/db ctx:word))
+            (= 'db-defs (symdb/find-definitions lsp/db ctx:word))
+            (= 'all-locs (join
+              (map (\ {r} {
+                list :uri (str "file://" r:path)
+                     :edit (db-ref->lsp-edit r word-len new-name)
+              }) db-refs)
+              (map (\ {d} {
+                list :uri (str "file://" d:path)
+                     :edit (db-ref->lsp-edit d word-len new-name)
+              }) db-defs)))
+            (= 'grouped (rename/group-by-uri all-locs nil))
+            (= 'doc-changes (rename/make-doc-changes grouped))
+            (lsp/send-response id (list :documentChanges doc-changes))}})})
+})

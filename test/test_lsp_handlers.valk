@@ -1,9 +1,9 @@
 (load "src/prelude.valk")
 (load "src/symdb.valk")
-(load "src/lsp-analysis.valk")
-(load "src/lsp-validate.valk")
-(load "src/lsp-hints.valk")
-(load "src/lsp.valk")
+(load "src/lsp/analysis.valk")
+(load "src/lsp/validate.valk")
+(load "src/lsp/hints.valk")
+(load "src/lsp/lsp.valk")
 (load "src/modules/test.valk")
 
 ; --- Response capture stubs ---
@@ -604,21 +604,21 @@
 
   (test "sem-filter-range-all-in"
     {do
-      (= {tokens} (list 0 5 3 1 0  1 2 4 0 0))
+      (= {tokens} (sem/parse-flat (list 0 5 3 1 0  1 2 4 0 0)))
       (= {filtered} (sem/filter-range tokens 0 10 0 nil))
-      (test/assert-eq 10 (len filtered) "all tokens in range")
+      (test/assert-eq 2 (len filtered) "all 2 tokens in range")
     })
 
   (test "sem-filter-range-partial"
     {do
-      (= {tokens} (list 0 5 3 1 0  5 2 4 0 0  1 1 2 0 0))
+      (= {tokens} (sem/parse-flat (list 0 5 3 1 0  5 2 4 0 0  1 1 2 0 0)))
       (= {filtered} (sem/filter-range tokens 0 3 0 nil))
-      (test/assert-eq 5 (len filtered) "only first token in range 0-3")
+      (test/assert-eq 1 (len filtered) "only first token in range 0-3")
     })
 
   (test "sem-filter-range-empty"
     {do
-      (= {tokens} (list 10 5 3 1 0))
+      (= {tokens} (sem/parse-flat (list 10 5 3 1 0)))
       (= {filtered} (sem/filter-range tokens 0 3 0 nil))
       (test/assert (nil? filtered) "token beyond range -> empty")
     })

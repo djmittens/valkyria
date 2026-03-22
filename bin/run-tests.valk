@@ -275,6 +275,11 @@
   (= {total-passed} (foldl (\ {acc r} {(+ acc (plist/get r :test-passed))}) 0 results))
   (= {total-failed} (foldl (\ {acc r} {(+ acc (plist/get r :test-failed))}) 0 results))
   (= {total-skipped} (foldl (\ {acc r} {(+ acc (plist/get r :test-skipped))}) 0 results))
+  (= {crashed-no-output} (len (filter (\ {r} {
+    (and (not (plist/get r :passed)) (== (plist/get r :test-count) 0))
+  }) results)))
+  (= {total-tests} (+ total-tests crashed-no-output))
+  (= {total-failed} (+ total-failed crashed-no-output))
   (= {wall-s-whole} (/ wall-us 1000000))
   (= {wall-s-frac} (/ (mod wall-us 1000000) 100000))
 

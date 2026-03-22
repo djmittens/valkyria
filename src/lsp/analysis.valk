@@ -371,6 +371,36 @@
 })
 
 ; ---------------------------------------------------------------------------
+; Typed semantic token representation
+; ---------------------------------------------------------------------------
+; The C builtin sem/encode-deltas returns a flat integer list for the LSP wire
+; format. These helpers convert between that flat encoding and typed records.
+
+(type {SemToken}
+  {:dl Num :dc Num :len Num :ttype Num :mods Num})
+
+(sig 'sem/parse-flat {-> List List})
+(fun {sem/parse-flat tokens} {
+  if (nil? tokens) {nil}
+  {if (< (len tokens) 5) {nil}
+  {qcons (SemToken :dl    (nth 1 tokens)
+                   :dc    (nth 2 tokens)
+                   :len   (nth 3 tokens)
+                   :ttype (nth 4 tokens)
+                   :mods  (nth 5 tokens))
+         (sem/parse-flat (drop 5 tokens))}}
+})
+
+(sig 'sem/flatten {-> List List})
+(fun {sem/flatten tokens} {
+  if (nil? tokens) {nil}
+  {do
+    (= {t} (head tokens))
+    (qcons t:dl (qcons t:dc (qcons t:len (qcons t:ttype
+      (qcons t:mods (sem/flatten (tail tokens)))))))}
+})
+
+; ---------------------------------------------------------------------------
 ; Scope-aware reference collection
 ; ---------------------------------------------------------------------------
 ;

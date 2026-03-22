@@ -234,13 +234,14 @@ u64 valk_sym_intern_count(void);
 
 
 
+#define LVAL_FLAG_INTERNED  (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 2))
+
 #define LVAL_SET_SOURCE_LOC(lval, fid, ln, col) do { \
   (lval)->cov_file_id = (fid); \
   (lval)->cov_line = (ln); \
   (lval)->cov_column = (col); \
   u8 __type = LVAL_TYPE(lval); \
   bool __is_quoted = ((lval)->flags & LVAL_FLAG_QUOTED) != 0; \
-#define LVAL_FLAG_INTERNED  (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 2))
   if (__type == LVAL_CONS && !__is_quoted) { \
     VALK_COVERAGE_MARK_LINE((fid), (ln)); \
     VALK_COVERAGE_MARK_LVAL(lval); \

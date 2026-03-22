@@ -1,0 +1,651 @@
+; Valkyria LSP Server — diagnostics, document sync, workspace indexing, notification handlers
+
+(load "src/lsp/io.valk")
+
+; ---------------------------------------------------------------------------
+; File indexing and seeding (must be defined before diagnostic publishing)
+; ---------------------------------------------------------------------------
+
+(sig 'lsp/sync-file {-> Ref Str Num})
+(fun {lsp/sync-file db path} {do
+  (= {fp} (file/fingerprint path))
+  (if (error? fp) {0}
+    {do
+      (= {fpath} (uri->path (str "file://" path)))
+      (= {existing} (sqlite/query-maybe db
+        "SELECT hash FROM files WHERE path=?1" fpath))
+      (if (not (nil? existing))
+        {if (== existing:hash fp) {0}
+          {do
+            (= {text} (read-file path))
+            (if (error? text) {0}
+              {do
+                (= {uri} (str "file://" path))
+                (symdb/sync-file-symbols db uri text fp)
+                (= {ast} (parse text))
+                (if (not (error? ast))
+                  {do
+                    (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (uri->path uri)))
+                    (if (not (nil? fid)) {lsp/index-ast db fid ast text} {})}
+                  {})
+                1})}}
+        {do
+          (= {text} (read-file path))
+          (if (error? text) {0}
+            {do
+              (= {uri} (str "file://" path))
+              (symdb/sync-file-symbols db uri text fp)
+              (= {ast} (parse text))
+              (if (not (error? ast))
+                {do
+                  (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (uri->path uri)))
+                  (if (not (nil? fid)) {lsp/index-ast db fid ast text} {})}
+                {})
+              1})})})
+})
+
+(sig 'lsp/seed-file {-> Ref Str Num})
+(fun {lsp/seed-file db path} {do
+  (= {path} (if (str/starts-with? path "/") {path}
+               {str lsp/root-path "/" path}))
+  (lsp/sync-file db path)
+})
+
+(sig 'lsp/seed-builtins {-> Ref Str Nil})
+(fun {lsp/seed-builtins db root} {do
+  (= {builtins-path} (str root "/src/builtins.valk"))
+  (= {b} (lsp/seed-file db builtins-path))
+  (= {prelude-path} (str root "/src/prelude.valk"))
+  (= {p} (lsp/seed-file db prelude-path))
+  (if (== (+ b p) 0)
+    {stderr/write "[valk-lsp] builtins + prelude cached\n"}
+    {stderr/write "[valk-lsp] seeded builtins + prelude\n"})})
+
+(sig 'lsp/precompute-file-data {-> Ref Str List Str Nil})
+(fun {lsp/precompute-file-data db uri ast text} {do
+  (= {path} (uri->path uri))
+  (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
+  (if (nil? file-id) {}
+    {do
+      (lsp/index-ast db file-id ast text)
+      (= {local-params} (hint/collect-local-params ast))
+      (= {hctx} (HintCtx local-params db))
+      (= {raw-hints} (hint/walk-exprs ast hctx nil))
+      (= {type-hints} (hint/collect-type-hints ast db))
+      (= {field-hints} (hint/collect-field-hints ast db))
+      (symdb/insert-hint-batch db file-id (join raw-hints (join type-hints field-hints)))})
+})
+
+; ---------------------------------------------------------------------------
+; Diagnostic publishing
+; ---------------------------------------------------------------------------
+
+(sig 'make-lsp-diag {-> List List})
+(fun {make-lsp-diag d}
+  {list :range
+    (list :start (list :line d:line
+                       :character d:col)
+          :end   (list :line d:line
+                       :character d:end-col))
+    :severity d:severity
+    :source "valk"
+    :message d:message})
+
+(sig 'lsp/ensure-loads-indexed {-> List Nil})
+(fun {lsp/ensure-loads-indexed ast} {
+  if (nil? lsp/db) {}
+  {lsp/ensure-loads-walk ast}
+})
+
+(sig 'lsp/ensure-loads-walk {-> List Nil})
+(fun {lsp/ensure-loads-walk exprs} {
+  if (nil? exprs) {}
+  {do
+    (= {e} (head exprs))
+    (if (list? e)
+      {if (nil? e) {}
+        {do
+          (= {form} (str (head e)))
+          (if (== form "load")
+            {if (nil? (tail e)) {}
+              {do
+                (= {path} (str (head (tail e))))
+                (lsp/seed-file lsp/db path)}}
+            {})}}
+      {})
+    (lsp/ensure-loads-walk (tail exprs))}
+})
+
+(sig 'lsp/publish-diagnostics {-> Str Str Nil})
+(fun {lsp/publish-diagnostics uri text} {do
+  (= {ast} (lsp/get-ast uri text))
+  (if (error? ast)
+    {lsp/send-notification "textDocument/publishDiagnostics"
+      (list :uri uri :diagnostics
+        (list (list :range
+          (list :start (list :line 0 :character 0)
+                :end   (list :line 0 :character 1))
+          :severity 1
+          :source "valk"
+          :message (str ast))))}
+    {do
+      (lsp/ensure-loads-indexed ast)
+      (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
+      (= {lsp-diags} (map make-lsp-diag diags))
+      (lsp/send-notification "textDocument/publishDiagnostics"
+        (list :uri uri :diagnostics lsp-diags))})})
+
+(sig 'lsp/publish-diagnostics-fast {-> Str Str Nil})
+(fun {lsp/publish-diagnostics-fast uri text} {do
+  (= {ast} (lsp/get-ast uri text))
+  (if (error? ast)
+    {lsp/send-notification "textDocument/publishDiagnostics"
+      (list :uri uri :diagnostics
+        (list (list :range
+          (list :start (list :line 0 :character 0)
+                :end   (list :line 0 :character 1))
+          :severity 1
+          :source "valk"
+          :message (str ast))))}
+    {lsp/send-notification "textDocument/publishDiagnostics"
+      (list :uri uri :diagnostics nil)})})
+
+; ---------------------------------------------------------------------------
+; Sync document to symdb
+; ---------------------------------------------------------------------------
+
+(sig 'lsp/sync-doc {-> Str Str Nil})
+(fun {lsp/sync-doc uri text} {do
+  (lsp/doc-store uri text)
+  (if (nil? lsp/db) {}
+    {do (= {changed} (symdb/sync-document lsp/db uri text))
+        (if (> changed 0)
+          {do
+            (= {ast} (lsp/get-ast uri text))
+            (if (not (error? ast))
+              {do
+                (= {path} (uri->path uri))
+                (= {fid} (sqlite/query-value lsp/db "SELECT id FROM files WHERE path=?1" path))
+                (if (not (nil? fid)) {lsp/index-ast lsp/db fid ast text} {})}
+              {})
+            (lsp/invalidate-known-set)}
+          {})})})
+
+(sig 'lsp/sync-doc-text {-> Str Str Nil})
+(fun {lsp/sync-doc-text uri text} {do
+  (if (nil? lsp/db) {}
+    {do
+      (= {hash} (str "mem:" (len text)))
+      (= {path} (uri->path uri))
+      (= {existing} (sqlite/query-maybe lsp/db
+        "SELECT hash FROM files WHERE path=?1" path))
+      (if (not (nil? existing))
+        {if (== existing:hash hash) {}
+          {do (sqlite/exec lsp/db "BEGIN")
+              (symdb/sync-file-symbols lsp/db uri text hash)
+              (= {ast} (lsp/get-ast uri text))
+              (lsp/precompute-file-data lsp/db uri ast text)
+              (sqlite/exec lsp/db "COMMIT")
+              (lsp/invalidate-known-set)}}
+        {do (sqlite/exec lsp/db "BEGIN")
+            (symdb/sync-file-symbols lsp/db uri text hash)
+            (= {ast} (lsp/get-ast uri text))
+            (lsp/precompute-file-data lsp/db uri ast text)
+            (sqlite/exec lsp/db "COMMIT")
+            (lsp/invalidate-known-set)})})})
+
+; ---------------------------------------------------------------------------
+; Workspace scanning — incremental background indexing
+; ---------------------------------------------------------------------------
+
+(def {lsp/skip-dirs} (list "build" "vendor" "node_modules" "coverage-report"
+                           "test-report" ".valk" ".git"))
+
+(sig 'lsp/skip-dir? {-> Str Num})
+(fun {lsp/skip-dir? name} {
+  if (nil? lsp/skip-dirs) {0}
+    {lsp/skip-dir-check name lsp/skip-dirs}
+})
+
+(sig 'lsp/skip-dir-check {-> Str List Num})
+(fun {lsp/skip-dir-check name dirs} {
+  if (nil? dirs) {0}
+    {if (== name (head dirs)) {1}
+      {lsp/skip-dir-check name (tail dirs)}}
+})
+
+(sig 'lsp/scan-dir {-> Str List List})
+(fun {lsp/scan-dir root acc} {do
+  (= {entries} (list-dir root))
+  (if (error? entries) {acc}
+    {lsp/scan-entries root entries acc})
+})
+
+(sig 'lsp/scan-entries {-> Str List List List})
+(fun {lsp/scan-entries root entries acc} {
+  if (nil? entries) {acc}
+    {do
+      (= {entry} (head entries))
+      (= {name} entry:name)
+      (= {type} entry:type)
+      (= {full} (str root "/" name))
+      (= {acc} (if (== type "dir")
+        {if (lsp/skip-dir? name) {acc}
+          {lsp/scan-dir full acc}}
+        {if (str/ends-with? name ".valk")
+          {qcons full acc}
+          {acc}}))
+      (lsp/scan-entries root (tail entries) acc)}
+})
+
+(sig 'lsp/index-file {-> Ref Str Num})
+(fun {lsp/index-file db path} {
+  lsp/sync-file db path
+})
+
+(sig 'lsp/collect-workspace-files {-> Str List})
+(fun {lsp/collect-workspace-files root} {do
+  (stderr/write (str "[valk-lsp] collecting workspace files: " root "\n"))
+  (= {files} (lsp/scan-dir root nil))
+  (stderr/write (str "[valk-lsp] found " (len files) " .valk files\n"))
+  files})
+
+; Prepare file for indexing (runs on worker thread).
+; Returns nil if unchanged or unreadable, otherwise a plist of extracted data.
+(sig 'lsp/prepare-file {-> Str List})
+(fun {lsp/prepare-file path} {do
+  (= {fp} (file/fingerprint path))
+  (if (error? fp) {nil}
+    {lsp/prepare-file-read path fp})
+})
+
+(sig 'lsp/prepare-file-read {-> Str Str List})
+(fun {lsp/prepare-file-read path fp} {do
+  (= {text} (read-file path))
+  (= {ast} (if (error? text) {nil} {parse text}))
+  (if (or (error? text) (or (nil? ast) (error? ast))) {nil}
+    {do
+      (= {syms} (symdb/extract-symbols-from-ast ast text))
+      (= {refs} (symdb/extract-refs-from-ast ast text))
+      (= {nodes} (symdb/collect-nodes ast nil))
+      (list :path path :text text :fp fp :ast ast
+            :syms syms :refs refs :nodes nodes)})
+})
+
+; Commit pre-extracted data to SQLite (runs on main loop callback).
+(sig 'lsp/commit-prepared {-> Ref List Num})
+(fun {lsp/commit-prepared db prep} {
+  if (nil? prep) {0}
+  {do
+    (= {path} (plist/get prep :path))
+    (= {fp} (plist/get prep :fp))
+    (= {fpath} (uri->path (str "file://" path)))
+    (= {existing} (sqlite/query-maybe db
+      "SELECT hash FROM files WHERE path=?1" fpath))
+    (if (and (not (nil? existing)) (and (not (error? existing)) (== existing:hash fp)))
+      {0}
+      {do
+        (= {text} (plist/get prep :text))
+        (= {ast} (plist/get prep :ast))
+        (sqlite/exec db
+          "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
+          fpath fp)
+    (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" fpath))
+    (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
+    (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
+    (symdb/insert-symbols db file-id (plist/get prep :syms))
+    (symdb/insert-refs db file-id (plist/get prep :refs))
+    (sqlite/exec db "DELETE FROM nodes WHERE file_id=?1" file-id)
+    (symdb/insert-nodes db file-id (plist/get prep :nodes))
+    (sqlite/exec db "DELETE FROM semantic_tokens WHERE file_id=?1" file-id)
+    (sqlite/exec db "DELETE FROM inlay_hints WHERE file_id=?1" file-id)
+    (sqlite/exec db "DELETE FROM scoped_refs WHERE file_id=?1" file-id)
+    (if (not (nil? file-id)) {lsp/index-ast db file-id ast text} {})
+    (if (not (nil? file-id))
+      {do
+        (= {local-params} (hint/collect-local-params ast))
+        (= {hctx} (HintCtx local-params db))
+        (= {raw-hints} (hint/walk-exprs ast hctx nil))
+        (= {type-hints} (hint/collect-type-hints ast db))
+        (= {field-hints} (hint/collect-field-hints ast db))
+        (symdb/insert-hint-batch db file-id
+          (join raw-hints (join type-hints field-hints)))}
+      {})
+    1})}
+})
+
+; ---------------------------------------------------------------------------
+; Stale file cleanup
+; ---------------------------------------------------------------------------
+
+(sig 'lsp/cleanup-stale-files {-> Nil})
+(fun {lsp/cleanup-stale-files} {
+  if (nil? lsp/db) {}
+  {do
+    (= {indexed} (symdb/all-indexed-paths lsp/db))
+    (= {removed} (lsp/check-stale-files indexed 0))
+    (if (> removed 0)
+      {do (lsp/invalidate-known-set)
+          (stderr/write (str "[valk-lsp] removed " removed " stale files\n"))}
+      {})}
+})
+
+(sig 'lsp/check-stale-files {-> List Num Num})
+(fun {lsp/check-stale-files files count} {
+  if (nil? files) {count}
+  {do
+    (= {f} (head files))
+    (= {path} f:path)
+    (= {file-id} f:id)
+    (= {fp} (file/fingerprint path))
+    (if (error? fp)
+      {do (symdb/remove-file lsp/db file-id)
+          (lsp/check-stale-files (tail files) (+ count 1))}
+      {lsp/check-stale-files (tail files) count})}
+})
+
+; ---------------------------------------------------------------------------
+; Progress support
+; ---------------------------------------------------------------------------
+
+(def {lsp/progress-token} 0)
+
+(sig 'lsp/next-progress-token {-> Num})
+(fun {lsp/next-progress-token} {do
+  (def {lsp/progress-token} (+ lsp/progress-token 1))
+  lsp/progress-token
+})
+
+(sig 'lsp/send-request {-> Num Str List Nil})
+(fun {lsp/send-request id method params}
+  {lsp/write-message
+    (list :jsonrpc "2.0" :id id :method method :params params)})
+
+(sig 'lsp/progress-begin {-> Num Str Num Nil})
+(fun {lsp/progress-begin token title total} {do
+  (lsp/send-request (+ 100000 token) "window/workDoneProgress/create"
+    (list :token token))
+  (lsp/send-notification "$/progress"
+    (list :token token
+          :value (list :kind "begin"
+                       :title title
+                       :percentage 0)))
+})
+
+(sig 'lsp/progress-report {-> Num Str Num Nil})
+(fun {lsp/progress-report token message pct} {do
+  (lsp/send-notification "$/progress"
+    (list :token token
+          :value (list :kind "report"
+                       :message message
+                       :percentage pct)))
+})
+
+(sig 'lsp/progress-end {-> Num Str Nil})
+(fun {lsp/progress-end token message} {do
+  (lsp/send-notification "$/progress"
+    (list :token token
+          :value (list :kind "end"
+                       :message message)))
+})
+
+; Pre-filter: check fingerprints on main thread, only return files that changed
+(sig 'lsp/filter-changed {-> Ref List List})
+(fun {lsp/filter-changed db files} {
+  if (nil? files) {nil}
+  {do
+    (= {path} (head files))
+    (= {fp} (file/fingerprint path))
+    (= {rest} (lsp/filter-changed db (tail files)))
+    (if (error? fp) {rest}
+      {do
+        (= {fpath} (uri->path (str "file://" path)))
+        (= {existing} (sqlite/query-maybe db
+          "SELECT hash FROM files WHERE path=?1" fpath))
+        (if (and (not (nil? existing)) (== existing:hash fp))
+          {rest}
+          {qcons path rest})})}
+})
+
+; ---------------------------------------------------------------------------
+; Dependency-ordered workspace scan
+; Phase 1: dispatch all files to workers for read+parse+extract (parallel)
+; Phase 2: collect results, topo-sort by (load ...) deps, commit in order
+;          so hints can see dependency symbols in DB
+; ---------------------------------------------------------------------------
+
+; Extract (load "path") dependencies from file text (cheap string scan)
+(sig 'lsp/extract-loads {-> Str Str List})
+(fun {lsp/extract-loads text root} {
+  lsp/extract-loads-walk (str/split text "\n") root nil
+})
+
+(sig 'lsp/extract-loads-walk {-> List Str List List})
+(fun {lsp/extract-loads-walk lines root acc} {
+  if (nil? lines) {acc}
+  {lsp/extract-loads-walk (tail lines) root
+    (lsp/extract-load-line (head lines) root acc)}
+})
+
+(sig 'lsp/extract-load-line {-> Str Str List List})
+(fun {lsp/extract-load-line line root acc} {do
+  (= {idx} (str/index-of line "(load \""))
+  (if (< idx 0) {acc}
+    {do
+      (= {start} (+ idx 7))
+      (= {end} (str/index-of (str/slice line start (len line)) "\""))
+      (if (< end 0) {acc}
+        {do
+          (= {path} (str/slice line start (+ start end)))
+          (= {full} (if (str/starts-with? path "/") {path}
+            {str root "/" path}))
+          (qcons full acc)})})
+})
+
+; Topological sort: repeatedly extract files with no unresolved deps
+(sig 'lsp/topo-sort {-> List Dict List})
+(fun {lsp/topo-sort files dep-map} {
+  lsp/topo-pass files dep-map nil (dict/new) 0
+})
+
+(sig 'lsp/topo-pass {-> List Dict List Dict Num List})
+(fun {lsp/topo-pass remaining dep-map sorted emitted depth} {
+  if (nil? remaining) {sorted}
+  {if (> depth (len remaining)) {join sorted remaining}
+  {do
+    (= {ready} (filter (\ {f} {lsp/deps-satisfied f dep-map emitted}) remaining))
+    (if (nil? ready) {join sorted remaining}
+      {do
+        (map (\ {f} {dict/put! emitted f}) ready)
+        (lsp/topo-pass
+          (filter (\ {f} {not (dict/has? emitted f)}) remaining)
+          dep-map
+          (join sorted ready)
+          emitted
+          (+ depth 1))})}}
+})
+
+(sig 'lsp/deps-satisfied {-> Str Dict Dict Num})
+(fun {lsp/deps-satisfied path dep-map emitted} {do
+  (= {deps} (dict/get dep-map path))
+  (if (nil? deps) {1}
+    {lsp/all-emitted deps emitted})
+})
+
+(sig 'lsp/all-emitted {-> List Dict Num})
+(fun {lsp/all-emitted deps emitted} {
+  if (nil? deps) {1}
+  {if (dict/has? emitted (head deps)) {lsp/all-emitted (tail deps) emitted}
+    {0}}
+})
+
+; Build dep map: path -> list of dependency paths
+(sig 'lsp/build-dep-map {-> List Str Dict})
+(fun {lsp/build-dep-map files root} {do
+  (= {d} (dict/new))
+  (lsp/build-dep-map-walk files root d)
+  d
+})
+
+(sig 'lsp/build-dep-map-walk {-> List Str Dict Nil})
+(fun {lsp/build-dep-map-walk files root d} {
+  if (nil? files) {}
+  {do
+    (= {path} (head files))
+    (= {text} (read-file path))
+    (if (error? text) {}
+      {do
+        (= {deps} (lsp/extract-loads text root))
+        (if (not (nil? deps)) {dict/set! d path deps} {})})
+    (lsp/build-dep-map-walk (tail files) root d)}
+})
+
+; Main scan entry point
+(sig 'lsp/scan-all {-> Ref List Num Nil})
+(fun {lsp/scan-all db files tok} {do
+  (= {changed} (lsp/filter-changed db files))
+  (= {skipped} (- (len files) (len changed)))
+  (if (> skipped 0)
+    {stderr/write (str "[valk-lsp] " skipped " files unchanged, " (len changed) " to index\n")}
+    {})
+  (if (nil? changed)
+    {do
+      (lsp/progress-end tok "up to date")
+      (stderr/write "[valk-lsp] scan complete: 0 indexed\n")
+      (lsp/cleanup-stale-files)}
+    {do
+      (= {dep-map} (lsp/build-dep-map changed lsp/root-path))
+      (= {sorted} (lsp/topo-sort changed dep-map))
+      (= {total} (len sorted))
+      (= {state} (dict/new))
+      (dict/set! state :remaining sorted)
+      (dict/set! state :indexed 0)
+      (dict/set! state :begun 0)
+      (dict/set! state :total total)
+      (lsp/scan-next db state tok)})
+})
+
+; Dispatch one file at a time in dependency order.
+; Each callback commits, then dispatches the next file.
+(sig 'lsp/scan-next {-> Ref Dict Num Nil})
+(fun {lsp/scan-next db state tok} {do
+  (= {remaining} (dict/get state :remaining))
+  (if (nil? remaining)
+    {do
+      (if (== (dict/get state :begun) 1) {sqlite/exec db "COMMIT"} {})
+      (lsp/invalidate-known-set)
+      (= {indexed} (dict/get state :indexed))
+      (lsp/progress-end tok (if (== indexed 0) {"up to date"} {str "indexed " indexed " files"}))
+      (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
+      (lsp/cleanup-stale-files)}
+    {do
+      (= {path} (head remaining))
+      (dict/set! state :remaining (tail remaining))
+      (aio/dispatch lsp/sys
+        (\ {_} {lsp/prepare-file path})
+        nil
+        (\ {result} {do
+          (if (and (not (nil? result)) (== (dict/get state :begun) 0))
+            {do (sqlite/exec db "BEGIN") (dict/set! state :begun 1)} {})
+          (= {did-raw} (lsp/commit-prepared db result))
+          (= {did} (if (num? did-raw) {did-raw} {0}))
+          (dict/set! state :indexed (+ (dict/get state :indexed) did))
+          (= {total} (dict/get state :total))
+          (= {left} (len (dict/get state :remaining)))
+          (= {processed} (- total left))
+          (= {pct} (/ (* processed 100) total))
+          (if (or (== (mod processed 10) 0) (== left 0))
+            {lsp/progress-report tok (str processed " / " total " files") pct}
+            {})
+          (lsp/scan-next db state tok)}))})
+})
+
+; ---------------------------------------------------------------------------
+; Method handlers — notifications
+; ---------------------------------------------------------------------------
+
+(sig 'handle-initialize {-> Num InitParams Nil})
+(fun {handle-initialize id params} {do
+  (= {root-uri} params:rootUri)
+  (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
+  (if (not (nil? root-uri))
+    {do
+      (def {lsp/root-path} (uri->path root-uri))
+      (= {db-dir} (str lsp/root-path "/.valk"))
+      (= {db-path} (str db-dir "/symdb.sqlite"))
+      (def {lsp/db} (symdb/init db-path))}
+    {})
+  (lsp/send-response id lsp/capabilities)})
+
+(def {lsp/noop-cb} (\ {_} {}))
+
+(sig 'handle-did-open {-> OpenParams Nil})
+(fun {handle-did-open params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {text} td:text)
+  (lsp/doc-store uri text)
+  (dict/remove! lsp/line-index-cache uri)
+  (def {lsp/doc-version} (+ lsp/doc-version 1))
+  (= {snap} (DocSnapshot uri text lsp/doc-version))
+  (aio/dispatch lsp/sys
+    (\ {_} {do (lsp/cache-ast snap:uri snap:text)
+               (lsp/sync-doc snap:uri snap:text)
+               (lsp/publish-diagnostics snap:uri snap:text)
+               nil})
+    nil lsp/noop-cb)})
+
+(sig 'handle-did-change {-> ChangeParams Nil})
+(fun {handle-did-change params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {changes} params:contentChanges)
+  (if (nil? changes) {}
+    {do
+      (= {old-text} (lsp/doc-get uri))
+      (= {text} (if (nil? old-text)
+        {plist/get (head changes) :text}
+        {lsp/apply-changes old-text changes}))
+      (lsp/doc-store uri text)
+      (dict/remove! lsp/ast-cache uri)
+      (dict/remove! lsp/line-index-cache uri)
+      (def {lsp/doc-version} (+ lsp/doc-version 1))
+      (= {snap} (DocSnapshot uri text lsp/doc-version))
+      (= {v} lsp/doc-version)
+      (aio/dispatch lsp/sys
+        (\ {_} {if (not (== lsp/doc-version v)) {nil}
+          {do (lsp/cache-ast snap:uri snap:text)
+              (lsp/sync-doc snap:uri snap:text)
+              (lsp/publish-diagnostics-fast snap:uri snap:text)
+              nil}})
+        nil lsp/noop-cb)})})
+
+(sig 'handle-did-close {-> DocParams Nil})
+(fun {handle-did-close params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (dict/remove! lsp/documents uri)
+  (dict/remove! lsp/ast-cache uri)
+  (dict/remove! lsp/line-index-cache uri)
+  (def {lsp/doc-version} (+ lsp/doc-version 1))
+  (lsp/send-notification "textDocument/publishDiagnostics"
+    (list :uri uri :diagnostics nil))})
+
+(sig 'handle-did-save {-> SaveParams Nil})
+(fun {handle-did-save params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {text} params:text)
+  (= {save-text} (if (nil? text) {lsp/doc-get uri} {text}))
+  (if (nil? save-text) {}
+    {do
+      (lsp/doc-store uri save-text)
+      (dict/remove! lsp/line-index-cache uri)
+      (def {lsp/doc-version} (+ lsp/doc-version 1))
+      (= {snap} (DocSnapshot uri save-text lsp/doc-version))
+      (aio/dispatch lsp/sys
+        (\ {_} {do (lsp/cache-ast snap:uri snap:text)
+                   (lsp/sync-doc snap:uri snap:text)
+                   (lsp/publish-diagnostics snap:uri snap:text)
+                   nil})
+        nil lsp/noop-cb)})})

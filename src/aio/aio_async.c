@@ -349,17 +349,23 @@ bool valk_async_handle_cancel(valk_async_handle_t *handle) {
 
 void valk_async_handle_add_child(valk_async_handle_t *parent, valk_async_handle_t *child) {
   if (!parent || !child) return;
-  child->parent = parent;
   if (parent->request_ctx && !child->request_ctx) {
     child->request_ctx = parent->request_ctx;
   }
   valk_chunked_ptrs_push(&parent->children, child, parent->region);
+  
+  // Set parent with release so the worker thread's notify_parent sees it.
+  // This must happen before checking child status to avoid both paths firing.
+  atomic_store_explicit((_Atomic(valk_async_handle_t *)*)&child->parent, parent, memory_order_release);
+  atomic_thread_fence(memory_order_seq_cst);
   
   valk_async_status_t parent_status = valk_async_handle_get_status(parent);
   if (valk_async_handle_is_terminal(parent_status)) {
     valk_async_propagate_completion(parent);
   }
   
+  // If child already completed before we set parent, the worker's notify_parent
+  // may have missed us. Check and notify now.
   valk_async_status_t child_status = valk_async_handle_get_status(child);
   if (valk_async_handle_is_terminal(child_status)) {
     valk_async_notify_parent(child);

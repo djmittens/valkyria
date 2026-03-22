@@ -175,7 +175,9 @@ static lsp_t lsp_spawn(void) {
     int devnull = open("/dev/null", O_WRONLY);
     if (devnull >= 0) { dup2(devnull, 2); close(devnull); }
 
-    execlp("build/valk", "build/valk", "src/lsp-main.valk", NULL);
+    char valk_path[256];
+    snprintf(valk_path, sizeof(valk_path), "%s/valk", VALK_BUILD_DIR);
+    execlp(valk_path, valk_path, "src/lsp/main.valk", NULL);
     _exit(1);
   }
 

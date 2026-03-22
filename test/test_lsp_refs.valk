@@ -1,8 +1,8 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 (load "src/symdb.valk")
-(load "src/lsp-analysis.valk")
-(load "src/lsp-validate.valk")
+(load "src/lsp/analysis.valk")
+(load "src/lsp/validate.valk")
 
 (fun {make-test-db} {do
   (= {db} (sqlite/open ":memory:"))

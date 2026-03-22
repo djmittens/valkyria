@@ -1,5 +1,20 @@
 # AGENTS.md - Valkyria Lisp Interpreter (C23)
 
+## File Size Limit (ENFORCED)
+
+**No source file (.valk or .c) may exceed 1000 lines of code.**
+
+- Before creating or significantly expanding a file, check its current line count with `wc -l`
+- If a file reaches 1000 lines, STOP and split it before adding more code
+- When splitting: identify logical boundaries (related functions, a coherent feature), extract to a new file, `(load ...)` it from the original
+- The `lsp*.valk` files are the canonical example of the correct split pattern
+
+Enforcement check:
+```bash
+wc -l src/*.valk src/*.c | sort -rn | head -20
+```
+Any file over 1000 lines is a violation that must be fixed immediately.
+
 ## Build & Test Commands
 - `make build` - Build into `build/` (CMake+Ninja)
 - `make test` - Run all C and Valk tests (parallel, auto-discovers)

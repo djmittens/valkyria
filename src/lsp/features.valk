@@ -1,0 +1,470 @@
+; Valkyria LSP Server — inlay hints, signature help, highlight, links, folding, selection, code lens, code actions
+
+(load "src/lsp/nav.valk")
+
+; ---------------------------------------------------------------------------
+; Inlay hints — parameter name hints for function calls
+; ---------------------------------------------------------------------------
+
+(sig 'handle-inlay-hints {-> Num RangeParams Nil})
+(fun {handle-inlay-hints id params} {do
+  (= {range} (plist/get params :range))
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {do
+      (= {path} (uri->path ctx:uri))
+      (= {rows} (if (nil? lsp/db) {nil}
+        {symdb/get-inlay-hints lsp/db path 0 999999}))
+      (= {hints} (if (nil? rows)
+        {hint/collect-from-ast ctx:ast ctx:text lsp/db range}
+        {hint/format-db-rows rows ctx:text range}))
+      (lsp/send-response id hints)})
+})
+
+; ---------------------------------------------------------------------------
+; Signature help — show function signature as user types arguments
+; ---------------------------------------------------------------------------
+
+(sig 'sig/scan-back {-> Str Num Num Num Any})
+(fun {sig/scan-back text pos dp db} {
+  if (< pos 0) {nil}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (== ch ")")
+      {sig/scan-back text (- pos 1) (+ dp 1) db}
+    {if (== ch "(")
+      {if (== dp 0) {pos}
+        {sig/scan-back text (- pos 1) (- dp 1) db}}
+    {if (== ch "}")
+      {sig/scan-back text (- pos 1) dp (+ db 1)}
+    {if (== ch "{")
+      {if (> db 0)
+        {sig/scan-back text (- pos 1) dp (- db 1)}
+        {sig/scan-back text (- pos 1) dp db}}
+      {sig/scan-back text (- pos 1) dp db}}}})}
+})
+
+(sig 'sig/extract-name {-> Str Num Any})
+(fun {sig/extract-name text open-pos} {do
+  (= {start} (+ open-pos 1))
+  (= {end} (scan-word-end text start))
+  (if (>= start end) {nil}
+    {str/slice text start end})
+})
+
+(sig 'sig/count-args {-> Str Num Num Num Num Num Num Num})
+(fun {sig/count-args text start end dp db count in-word} {
+  if (>= start end) {count}
+  {do
+    (= {ch} (str/slice text start (+ start 1)))
+    (if (== ch "(") {sig/count-args text (+ start 1) end (+ dp 1) db count 0}
+    {if (== ch ")") {sig/count-args text (+ start 1) end (- dp 1) db count 0}
+    {if (== ch "{") {sig/count-args text (+ start 1) end dp (+ db 1) count 0}
+    {if (== ch "}") {sig/count-args text (+ start 1) end dp (- db 1) count 0}
+    {if (if (== dp 0) {== db 0} {0})
+      {if (if (== ch " ") {1} {if (== ch "\n") {1} {if (== ch "\t") {1} {0}}})
+        {sig/count-args text (+ start 1) end dp db count 0}
+        {sig/count-args text (+ start 1) end dp db
+          (if (== in-word 0) {+ count 1} {count}) 1}}
+      {sig/count-args text (+ start 1) end dp db count in-word}}}}})}
+})
+
+(sig 'sig/lookup-params {-> Str List Any Any})
+(fun {sig/lookup-params name ast db} {do
+  (= {local} (hint/collect-local-params ast))
+  (= {params} (plist/get local name))
+  (if (not (nil? params)) {params}
+    {hint/query-db-params db name})
+})
+
+(sig 'sig/lookup-params-db-first {-> Str Ref List Any})
+(fun {sig/lookup-params-db-first name db ast} {do
+  (= {db-params} (hint/query-db-params db name))
+  (if (not (nil? db-params)) {db-params}
+    {do
+      (= {local} (hint/collect-local-params ast))
+      (plist/get local name)})
+})
+
+(sig 'handle-signature-help {-> Num TextDocPosParams Nil})
+(fun {handle-signature-help id params} {do
+  (= {ctx} (lsp/get-text-pos params))
+  (if (nil? ctx) {lsp/send-response id (None)}
+    {do
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {open-pos} (sig/scan-back ctx:text (- offset 1) 0 0))
+      (if (nil? open-pos) {lsp/send-response id (None)}
+        {do
+          (= {name} (sig/extract-name ctx:text open-pos))
+          (if (nil? name) {lsp/send-response id (None)}
+            {do
+              (= {fn-params} (sig/lookup-params-db-first name lsp/db ctx:ast))
+              (if (nil? fn-params) {lsp/send-response id (None)}
+                {do
+                  (= {name-end} (+ open-pos 1 (len name)))
+                  (= {arg-idx} (sig/count-args ctx:text name-end offset 0 0 0 0))
+                  (= {active} (if (>= arg-idx (len fn-params))
+                    {- (len fn-params) 1} {arg-idx}))
+                  (= {param-items} (map (\ {p} {list :label p}) fn-params))
+                  (= {sig-label} (str "(" name " " (str/join fn-params " ") ")"))
+                  (lsp/send-response id
+                    (list :signatures
+                      (list (list :label sig-label
+                                  :parameters param-items
+                                  :activeParameter (if (< active 0) {0} {active})))
+                      :activeSignature 0
+                      :activeParameter (if (< active 0) {0} {active})))})})})})
+})
+
+; ---------------------------------------------------------------------------
+; Document highlight — highlight all occurrences of symbol under cursor
+; ---------------------------------------------------------------------------
+
+(sig 'ref->highlight {-> Str List List})
+(fun {ref->highlight text r} {do
+  (= {lc} (offset->line-col text r:offset))
+  (= {rname} r:name)
+  (= {kind} (if (== r:is-def 1) {3} {2}))
+  (list :range (list
+    :start (list :line (head lc) :character (head (tail lc)))
+    :end (list :line (head lc) :character (+ (head (tail lc)) (len rname))))
+  :kind kind)
+})
+
+(sig 'ref->highlight-db {-> Str List List})
+(fun {ref->highlight-db text r} {do
+  (= {rpos} (plist/get r :pos))
+  (= {rname} (plist/get r :name))
+  (= {rlen} (plist/get r :len))
+  (= {rdef} (plist/get r :is_def))
+  (= {lc} (offset->line-col text rpos))
+  (= {kind} (if (== rdef 1) {3} {2}))
+  (list :range (list
+    :start (list :line (head lc) :character (head (tail lc)))
+    :end (list :line (head lc) :character (+ (head (tail lc)) (if (nil? rlen) {(len rname)} {rlen}))))
+  :kind kind)
+})
+
+(sig 'handle-document-highlight {-> Num TextDocPosParams Nil})
+(fun {handle-document-highlight id params} {do
+  (= {ctx} (lsp/get-word-ctx params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {do
+      (= {path} (uri->path ctx:uri))
+      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {target} (if (nil? lsp/db) {nil}
+        {symdb/get-ref-at-offset lsp/db path offset}))
+      (= {db-refs} (if (nil? target) {nil}
+        {do
+          (= {sid} (plist/get target :scope_id))
+          (= {tname} (plist/get target :name))
+          (if (== sid -1)
+            {symdb/get-all-file-refs lsp/db path tname}
+            {symdb/get-scoped-refs lsp/db path tname sid})}))
+      (= {refs} (if (not (nil? db-refs)) {db-refs}
+        {do
+          (= {ast-refs} (ref/find-scoped-refs-from-ast ctx:ast ctx:text ctx:line ctx:col))
+          (if (not (nil? ast-refs)) {ast-refs}
+            {do
+              (= {all-refs} (ref/collect-refs-from-ast ctx:ast))
+              (filter (\ {r} {== (plist/get r :name) ctx:word}) all-refs)})}))
+      (lsp/send-response id (map (\ {r} {
+        if (plist/get r :pos)
+          {ref->highlight-db ctx:text r}
+          {ref->highlight ctx:text r}
+      }) refs))})
+})
+
+; ---------------------------------------------------------------------------
+; Document links — make (load "path") clickable
+; ---------------------------------------------------------------------------
+
+(sig 'link/collect-loads {-> List Str Str List})
+(fun {link/collect-loads ast text root} {
+  link/walk-exprs ast text root nil
+})
+
+(sig 'link/walk-exprs {-> List Str Str List List})
+(fun {link/walk-exprs exprs text root acc} {
+  if (nil? exprs) {acc}
+  {link/walk-exprs (tail exprs) text root
+    (link/walk-one (head exprs) text root acc)}
+})
+
+(sig 'link/walk-one {-> Any Str Str List List})
+(fun {link/walk-one expr text root acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {link/check-load expr (head expr) (tail expr) text root acc}}
+})
+
+(sig 'link/check-load {-> List Any List Str Str List List})
+(fun {link/check-load expr hd tl text root acc} {
+  if (not (sym? hd)) {acc}
+  {if (not (== (str hd) "load")) {link/walk-exprs tl text root acc}
+  {if (nil? tl) {acc}
+  {link/extract-load-target (head tl) text root acc}}}
+})
+
+(sig 'link/extract-load-target {-> Any Str Str List List})
+(fun {link/extract-load-target target text root acc} {
+  if (not (str? target)) {acc}
+  {do
+    (= {path} (str target))
+    (= {pos} (src-pos target))
+    (if (< pos 0) {acc}
+      {do
+        (= {lc} (offset->line-col text pos))
+        (= {line} (head lc))
+        (= {col} (head (tail lc)))
+        (= {full-path} (if (str/starts-with? path "/") {path}
+          {str root "/" path}))
+        (qcons (list :range (list
+          :start (list :line line :character col)
+          :end (list :line line :character (+ col (len path) 2)))
+          :target (str "file://" full-path)) acc)})}
+})
+
+(sig 'handle-document-link {-> Num DocParams Nil})
+(fun {handle-document-link id params} {do
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {if (error? ctx:ast) {lsp/send-response id nil}
+      {do
+        (= {root} (if (nil? lsp/root-path) {"."} {lsp/root-path}))
+        (lsp/send-response id (link/collect-loads ctx:ast ctx:text root))}})
+})
+
+; ---------------------------------------------------------------------------
+; Folding ranges — fold fun, do, match, type, let blocks
+; ---------------------------------------------------------------------------
+
+(def {FOLD_FORMS}
+  (dict/from-keys {"fun" "do" "match" "select" "case" "type" "let" "\\"
+   "aio/do" "aio/let" "if" "ctx/with" "ctx/with-deadline"}))
+
+(sig 'fold/collect {-> List Str List})
+(fun {fold/collect ast text} {
+  fold/walk-exprs ast text nil
+})
+
+(sig 'fold/walk-exprs {-> List Str List List})
+(fun {fold/walk-exprs exprs text acc} {
+  if (nil? exprs) {acc}
+  {fold/walk-exprs (tail exprs) text
+    (fold/walk-one (head exprs) text acc)}
+})
+
+(sig 'fold/walk-one {-> Any Str List List})
+(fun {fold/walk-one expr text acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {fold/check-form expr (head expr) (tail expr) text acc}}
+})
+
+(sig 'fold/check-form {-> List Any List Str List List})
+(fun {fold/check-form expr hd tl text acc} {do
+  (= {acc2} (fold/walk-exprs tl text acc))
+  (if (not (sym? hd)) {fold/walk-exprs tl text acc}
+    {if (dict/has? FOLD_FORMS (str hd))
+      {fold/emit-range expr text acc2}
+      {fold/walk-exprs tl text acc}})
+})
+
+(sig 'fold/emit-range {-> List Str List List})
+(fun {fold/emit-range expr text acc} {do
+  (= {start-pos} (src-pos expr))
+  (if (< start-pos 0) {acc}
+    {do
+      (= 'start-lc (offset->line-col text start-pos))
+      (= 'start-line (head start-lc))
+      (= 'expr-str (str expr))
+      (= 'end-offset (+ start-pos (len expr-str)))
+      (= 'end-lc (offset->line-col text end-offset))
+      (= 'end-line (head end-lc))
+      (if (<= end-line start-line) {acc}
+        {qcons (list :startLine start-line
+                     :endLine end-line
+                     :kind "region") acc})})
+})
+
+(sig 'handle-folding-range {-> Num DocParams Nil})
+(fun {handle-folding-range id params} {do
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {if (error? ctx:ast) {lsp/send-response id nil}
+      {lsp/send-response id (fold/collect ctx:ast ctx:text)}})
+})
+
+; ---------------------------------------------------------------------------
+; Selection range — smart selection expansion using AST structure
+; ---------------------------------------------------------------------------
+
+(sig 'sel/find-ranges {-> Str List List List})
+(fun {sel/find-ranges text ast positions} {
+  map (\ {pos} {do
+    (= {line} pos:line)
+    (= {col} pos:character)
+    (= {offset} (line-col->offset text line col))
+    (if (error? ast)
+      {list :range (list :start pos :end pos)}
+      {do
+        (= {ranges} (sel/collect-enclosing ast text offset nil))
+        (sel/build-nested ranges)})
+  }) positions
+})
+
+(sig 'sel/collect-enclosing {-> List Str Num List List})
+(fun {sel/collect-enclosing exprs text offset acc} {
+  if (nil? exprs) {acc}
+  {sel/collect-enclosing (tail exprs) text offset
+    (sel/check-one (head exprs) text offset acc)}
+})
+
+(sig 'sel/check-one {-> Any Str Num List List})
+(fun {sel/check-one expr text offset acc} {
+  if (not (list? expr)) {acc}
+  {do
+    (= {start} (src-pos expr))
+    (if (< start 0) {acc}
+      {do
+        (= {expr-str} (str expr))
+        (= {end} (+ start (len expr-str)))
+        (if (if (>= offset start) {<= offset end} {0})
+          {do
+            (= {start-lc} (offset->line-col text start))
+            (= {end-lc} (offset->line-col text end))
+            (= {range} (list :start (list :line (head start-lc) :character (head (tail start-lc)))
+                              :end (list :line (head end-lc) :character (head (tail end-lc)))))
+            (sel/collect-enclosing expr text offset (qcons range acc))}
+          {acc})})}
+})
+
+(sig 'sel/build-nested {-> List List})
+(fun {sel/build-nested ranges} {
+  if (nil? ranges) {list :range (list :start (list :line 0 :character 0)
+                                       :end (list :line 0 :character 0))}
+  {sel/build-nested-walk ranges}
+})
+
+(sig 'sel/build-nested-walk {-> List List})
+(fun {sel/build-nested-walk ranges} {
+  if (nil? ranges) {nil}
+  {if (nil? (tail ranges))
+    {list :range (head ranges)}
+    {list :range (head ranges)
+          :parent (sel/build-nested-walk (tail ranges))}}
+})
+
+(sig 'handle-selection-range {-> Num SelectionParams Nil})
+(fun {handle-selection-range id params} {do
+  (= {positions} params:positions)
+  (= {ctx} (lsp/get-doc params))
+  (if (nil? ctx) {lsp/send-response id nil}
+    {lsp/send-response id (sel/find-ranges ctx:text ctx:ast positions)})
+})
+
+; ---------------------------------------------------------------------------
+; Code lens — show reference counts above function definitions
+; ---------------------------------------------------------------------------
+
+(sig 'handle-code-lens {-> Num DocParams Nil})
+(fun {handle-code-lens id params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (if (nil? lsp/db) {lsp/send-response id nil}
+    {do
+      (= {path} (uri->path uri))
+      (= {syms} (symdb/file-symbols lsp/db path))
+      (= {lenses} (lens/build-from-syms syms lsp/db))
+      (lsp/send-response id lenses)})})
+
+(sig 'lens/build-from-syms {-> List Ref List})
+(fun {lens/build-from-syms syms db} {
+  if (nil? syms) {nil}
+  {do
+    (= {s} (head syms))
+    (= {kind} s:kind)
+    (if (== kind SYMKIND_FUNCTION)
+      {do
+        (= {name} s:name)
+        (= {count} (symdb/ref-count db name))
+        (= {sym-line} s:line)
+        (= {sym-col} s:col)
+        (= {lens} (list :range (list
+          :start (list :line sym-line :character sym-col)
+          :end (list :line sym-line :character (+ sym-col (len name))))
+          :command (list :title (str count " reference" (if (== count 1) {""} {"s"}))
+                         :command "")))
+        (qcons lens (lens/build-from-syms (tail syms) db))}
+      {lens/build-from-syms (tail syms) db})}
+})
+
+; ---------------------------------------------------------------------------
+; Code action — quick fixes for undefined symbols
+; ---------------------------------------------------------------------------
+
+(sig 'handle-code-action {-> Num CodeActionParams Nil})
+(fun {handle-code-action id params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {context} params:context)
+  (= {diagnostics} context:diagnostics)
+  (if (nil? diagnostics) {lsp/send-response id nil}
+    {do
+      (= {actions} (ca/collect-actions diagnostics uri))
+      (lsp/send-response id actions)})})
+
+(sig 'ca/collect-actions {-> List Str List})
+(fun {ca/collect-actions diags uri} {
+  if (nil? diags) {nil}
+  {do
+    (= {d} (head diags))
+    (= {msg} d:message)
+    (= {actions} (if (nil? msg) {nil}
+      {ca/check-undefined msg d uri}))
+    (join actions (ca/collect-actions (tail diags) uri))}
+})
+
+(sig 'ca/check-undefined {-> Str List Str List})
+(fun {ca/check-undefined msg d uri} {
+  if (not (str/starts-with? msg "Symbol '")) {
+    if (not (str/starts-with? msg "Function '")) {nil}
+    {ca/suggest-similar msg d uri}}
+  {ca/suggest-similar msg d uri}
+})
+
+(sig 'ca/extract-name-from-msg {-> Str Any})
+(fun {ca/extract-name-from-msg msg} {do
+  (= {parts} (str/split msg "'"))
+  (if (< (len parts) 3) {nil}
+    {nth 2 parts})
+})
+
+(sig 'ca/suggest-similar {-> Str List Str List})
+(fun {ca/suggest-similar msg d uri} {
+  if (nil? lsp/db) {nil}
+  {do
+    (= {name} (ca/extract-name-from-msg msg))
+    (if (nil? name) {nil}
+      {do
+        (= {candidates} (symdb/search-symbols lsp/db name))
+        (= {range} d:range)
+        (ca/make-fix-actions candidates name range uri d)})}
+})
+
+(sig 'ca/make-fix-actions {-> List Str List Str List List})
+(fun {ca/make-fix-actions candidates original range uri d} {
+  if (nil? candidates) {nil}
+  {do
+    (= {c} (head candidates))
+    (= {cname} c:name)
+    (if (== cname original) {ca/make-fix-actions (tail candidates) original range uri d}
+      {do
+        (= {action} (list :title (str "Did you mean '" cname "'?")
+                          :kind "quickfix"
+                          :diagnostics (list d)
+                          :edit (list :changes
+                            (list uri (list (list :range range :newText cname))))))
+        (qcons action (ca/make-fix-actions (tail candidates) original range uri d))})}
+})

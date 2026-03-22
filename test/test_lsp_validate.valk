@@ -1,8 +1,8 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 (load "src/symdb.valk")
-(load "src/lsp-analysis.valk")
-(load "src/lsp-validate.valk")
+(load "src/lsp/analysis.valk")
+(load "src/lsp/validate.valk")
 
 (= {BUILTIN_KNOWN} (dict/new 400))
 (= {_seed_loop} (\ {pairs} {
