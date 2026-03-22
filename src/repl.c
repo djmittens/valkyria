@@ -54,6 +54,8 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
+  valk_lval_init_singletons();
+
   valk_gc_heap_t* gc_heap = sys->heap;
 
   // Note: valk_system_create() already registers the calling thread for GC.
@@ -232,9 +234,7 @@ int main(int argc, char* argv[]) {
 
     valk_lval_t* result = valk_lval_nil();
     VALK_WITH_ALLOC((void*)scratch) {
-      // Parse and evaluate each expression in the input
       while (input[pos] != '\0') {
-        // Skip whitespace
         while (input[pos] && strchr(" \t\n\r", input[pos])) pos++;
         if (input[pos] == '\0') break;
 

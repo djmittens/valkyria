@@ -5,9 +5,11 @@
 #include "aio_stream_body.h"
 #include "aio_tcp_helpers.h"
 
+// LCOV_EXCL_START - libuv close callback: invoked by platform during handle cleanup
 static void __maintenance_timer_close_cb(uv_handle_t *handle) {
   UNUSED(handle);
 }
+// LCOV_EXCL_STOP
 
 void valk_maintenance_check_orphaned_streams(valk_aio_system_t *sys);
 
@@ -26,6 +28,7 @@ void __loop_maintenance_timer_cb(uv_timer_t *timer) {
   valk_aio_update_queue_stats(sys);
 }
 
+// LCOV_EXCL_START - timer lifecycle: called by AIO system on event loop thread, not instrumented in coverage
 void valk_maintenance_timer_init(valk_aio_system_t *sys) {
   uv_timer_init(sys->eventloop, &sys->loops[0].maintenance_timer);
   sys->loops[0].maintenance_timer.data = sys;
@@ -44,10 +47,11 @@ void valk_maintenance_timer_stop(valk_aio_system_t *sys) {
 }
 
 void valk_maintenance_timer_close(valk_aio_system_t *sys) {
-  if (!uv_is_closing((uv_handle_t *)&sys->loops[0].maintenance_timer)) { // LCOV_EXCL_BR_LINE
+  if (!uv_is_closing((uv_handle_t *)&sys->loops[0].maintenance_timer)) {
     uv_close((uv_handle_t *)&sys->loops[0].maintenance_timer, __maintenance_timer_close_cb);
   }
 }
+// LCOV_EXCL_STOP
 
 void valk_maintenance_check_connection_timeouts(valk_aio_system_t *sys, u64 now) {
   if (sys->config.connection_idle_timeout_ms == 0) return; // LCOV_EXCL_BR_LINE

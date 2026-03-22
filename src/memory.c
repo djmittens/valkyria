@@ -209,14 +209,22 @@ void *valk_mem_arena_alloc(valk_mem_arena_t *self, sz bytes) {
     // Check if allocation would exceed capacity - fall back to heap
     if (end >= self->capacity) {
       // OVERFLOW: Fall back to heap allocation
-      atomic_fetch_add_explicit(&self->stats.overflow_fallbacks, 1, memory_order_relaxed);
+      u64 prev = atomic_fetch_add_explicit(&self->stats.overflow_fallbacks, 1, memory_order_relaxed);
       atomic_fetch_add_explicit(&self->stats.overflow_bytes, bytes, memory_order_relaxed);
 
-      // Track that overflow occurred (logged at checkpoint)
-      self->warned_overflow = true;
+      if (!self->warned_overflow) {
+        self->warned_overflow = true;
+        u64 allocs = atomic_load_explicit(&self->stats.total_allocations, memory_order_relaxed);
+        sz total = atomic_load_explicit(&self->stats.total_bytes_allocated, memory_order_relaxed);
+        sz avg = allocs > 0 ? total / allocs : 0;
+        fprintf(stderr, "[scratch] overflow: %zu/%zu bytes used, %llu allocs (avg %zu bytes), "
+                "spilling %zu bytes to heap\n",
+                (sz)old, self->capacity, (unsigned long long)allocs, avg, bytes);
+      } else if (prev == 999) {
+        sz spilled = atomic_load_explicit(&self->stats.overflow_bytes, memory_order_relaxed);
+        fprintf(stderr, "[scratch] overflow: 1000+ allocations spilled (%zu bytes total)\n", spilled);
+      }
 
-      // Allocate from heap instead - value will have LVAL_ALLOC_HEAP flag
-      // and will be in GC object list, so no evacuation needed
       valk_gc_heap_t *heap = (valk_gc_heap_t *)valk_thread_ctx.heap;
       if (heap == nullptr) { // LCOV_EXCL_BR_LINE
         VALK_ERROR("Scratch overflow but no heap available!");

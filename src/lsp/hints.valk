@@ -1,0 +1,698 @@
+; LSP Inlay Hints — parameter name hints for function calls
+;
+; Walks the AST to find function calls and emits parameter name hints
+; using known function signatures from local definitions and symdb.
+;
+; IMPORTANT: AST nodes must never be stored via = or def.
+; Pass through function arguments only.
+
+(def {HINT_SKIP_FORMS}
+  (dict/from-keys {"fun" "\\" "def" "=" "if" "do" "match" "select" "case"
+   "type" "sig" "load" "let" "and" "or" "not" "quote"
+   "quasiquote" "unquote" "unquote-splicing"
+   "aio/let" "aio/do" "ctx/with" "ctx/with-deadline"
+   "eval" "read" "<-"}))
+
+(def {HINT_OPERATOR_SET}
+  (dict/from-keys {"+" "-" "*" "/" ">" "<" ">=" "<=" "==" "!=" "%" "ord"}))
+
+; ---------------------------------------------------------------------------
+; First pass: collect local fun params from AST
+; Returns plist mapping function-name -> param-names-list
+; ---------------------------------------------------------------------------
+
+(sig 'hint/collect-local-params {-> List List})
+(fun {hint/collect-local-params ast} {
+  hint/params-walk ast nil
+})
+
+(sig 'hint/params-walk {-> List List List})
+(fun {hint/params-walk exprs params} {
+  if (nil? exprs) {params}
+  {hint/params-walk (tail exprs)
+    (hint/params-one (head exprs) params)}
+})
+
+(sig 'hint/params-one {-> Any List List})
+(fun {hint/params-one expr params} {
+  if (not (list? expr)) {params}
+  {if (nil? expr) {params}
+  {hint/params-dispatch (head expr) (tail expr) params}}
+})
+
+(sig 'hint/params-dispatch {-> Any List List List})
+(fun {hint/params-dispatch hd tl params} {
+  if (not (sym? hd)) {hint/params-walk tl params}
+  {do
+    (= {name} (str hd))
+    (if (== name "fun") {hint/params-from-fun tl params}
+    {if (== name "do") {hint/params-walk tl params}
+    {if (== name "\\") {hint/params-walk-lambda tl params}
+    {if (== name "if") {hint/params-walk tl params}
+    {if (== name "match") {hint/params-walk tl params}
+    {if (== name "select") {hint/params-walk tl params}
+    {if (== name "let") {hint/params-walk tl params}
+    {hint/params-walk tl params}}}}}}})}
+})
+
+(sig 'hint/params-walk-lambda {-> List List List})
+(fun {hint/params-walk-lambda tl params} {
+  if (< (len tl) 2) {params}
+  {hint/params-walk (tail tl) params}
+})
+
+(sig 'hint/params-from-fun {-> List List List})
+(fun {hint/params-from-fun tl params} {
+  if (< (len tl) 2) {params}
+  {do
+    (= {params2} (hint/params-from-formals (head tl) params))
+    (hint/params-walk (tail tl) params2)}
+})
+
+(sig 'hint/params-from-formals {-> List List List})
+(fun {hint/params-from-formals formals params} {
+  if (not (list? formals)) {params}
+  {if (nil? formals) {params}
+  {hint/params-extract (head formals) (tail formals) params}}
+})
+
+(sig 'hint/params-extract {-> Str List List List})
+(fun {hint/params-extract fname rest params} {
+  if (not (sym? fname)) {params}
+  {plist/set params (str fname) (hint/filter-formals rest nil)}
+})
+
+; ---------------------------------------------------------------------------
+; Filter param list: extract names, stop at &, skip :: and -> annotations
+; ---------------------------------------------------------------------------
+
+(sig 'hint/filter-formals {-> List List List})
+(fun {hint/filter-formals formals acc} {
+  if (nil? formals) {reverse acc}
+  {hint/filter-one (head formals) (tail formals) acc}
+})
+
+(sig 'hint/filter-one {-> Any List List List})
+(fun {hint/filter-one p rest acc} {
+  if (not (sym? p)) {hint/filter-formals rest acc}
+  {hint/filter-str (str p) rest acc}
+})
+
+(sig 'hint/filter-str {-> Str List List List})
+(fun {hint/filter-str name rest acc} {
+  if (== name "&") {reverse acc}
+  {if (== name "::") {hint/skip-ann rest acc}
+  {if (== name "->") {hint/skip-ann rest acc}
+  {hint/filter-formals rest (qcons name acc)}}}
+})
+
+(sig 'hint/skip-ann {-> List List List})
+(fun {hint/skip-ann rest acc} {
+  if (nil? rest) {reverse acc}
+  {hint/filter-formals (tail rest) acc}
+})
+
+; ---------------------------------------------------------------------------
+; Parse params from symdb sig string
+; sig format: "(fun {name p1 p2 ...} ...)"
+; ---------------------------------------------------------------------------
+
+(sig 'hint/parse-sig-params {-> Str List})
+(fun {hint/parse-sig-params sig} {
+  if (nil? sig) {nil}
+  {do
+    (= {brace-parts} (str/split sig "{"))
+    (if (<= (len brace-parts) 1) {nil}
+      {do
+        (= {close-parts} (str/split (nth 2 brace-parts) "}"))
+        (if (nil? close-parts) {nil}
+          {do
+            (= {words} (str/split (head close-parts) " "))
+            (if (<= (len words) 1) {nil}
+              {hint/filter-sig-words (tail words) nil})})})}
+})
+
+(sig 'hint/filter-sig-words {-> List List List})
+(fun {hint/filter-sig-words words acc} {
+  if (nil? words) {reverse acc}
+  {do
+    (= {w} (head words))
+    (if (== (len w) 0) {hint/filter-sig-words (tail words) acc}
+    {if (== w "&") {reverse acc}
+    {if (== w "::") {hint/skip-sig-ann (tail words) acc}
+    {if (== w "->") {hint/skip-sig-ann (tail words) acc}
+    {if (== w "...") {reverse acc}
+    {hint/filter-sig-words (tail words) (qcons w acc)}}}}})}
+})
+
+(sig 'hint/skip-sig-ann {-> List List List})
+(fun {hint/skip-sig-ann rest acc} {
+  if (nil? rest) {reverse acc}
+  {hint/filter-sig-words (tail rest) acc}
+})
+
+; ---------------------------------------------------------------------------
+; Lazy per-name symdb lookup (0.05ms per query via prepared statement)
+; ---------------------------------------------------------------------------
+
+(sig 'hint/query-db-params {-> Ref Str List})
+(fun {hint/query-db-params db name} {
+  if (nil? db) {nil}
+  {do
+    (= {row} (sqlite/query-maybe db
+      "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '(fun %' AND kind=1 LIMIT 1"
+      name))
+    (if (nil? row) {nil}
+      {hint/parse-sig-params row:sig})}
+})
+
+; ---------------------------------------------------------------------------
+; Walk AST and collect hints
+; ---------------------------------------------------------------------------
+
+(sig 'hint/walk-exprs {-> List List List List})
+(fun {hint/walk-exprs exprs ctx acc} {
+  if (nil? exprs) {acc}
+  {hint/walk-exprs (tail exprs) ctx
+    (hint/walk-code (head exprs) ctx acc)}
+})
+
+(sig 'hint/walk-code {-> Any List List List})
+(fun {hint/walk-code expr ctx acc} {
+  if (nil? expr) {acc}
+  {if (not (list? expr)) {acc}
+  {hint/walk-list (head expr) (tail expr) ctx acc}}
+})
+
+(sig 'hint/walk-list {-> Any List List List List})
+(fun {hint/walk-list hd tl ctx acc} {
+  if (not (sym? hd))
+    {hint/walk-exprs tl ctx (hint/walk-code hd ctx acc)}
+  {hint/walk-dispatch (str hd) tl ctx acc}
+})
+
+(sig 'hint/walk-dispatch {-> Str List List List List})
+(fun {hint/walk-dispatch name tl ctx acc} {
+  if (dict/has? HINT_SKIP_FORMS name)
+    {hint/walk-special name tl ctx acc}
+  {if (dict/has? HINT_OPERATOR_SET name)
+    {hint/walk-exprs tl ctx acc}
+  {hint/walk-call name tl ctx acc}}
+})
+
+; ---------------------------------------------------------------------------
+; Special forms: walk sub-expressions but skip formals/bindings
+; ---------------------------------------------------------------------------
+
+(sig 'hint/walk-special {-> Str List List List List})
+(fun {hint/walk-special name tl ctx acc} {
+  if (== name "fun") {hint/walk-fun-body tl ctx acc}
+  {if (== name "\\") {hint/walk-fun-body tl ctx acc}
+  {if (== name "def") {hint/walk-def-vals tl ctx acc}
+  {if (== name "=") {hint/walk-def-vals tl ctx acc}
+  {if (== name "type") {acc}
+  {if (== name "sig") {acc}
+  {if (== name "load") {acc}
+  {hint/walk-exprs tl ctx acc}}}}}}}
+})
+
+(sig 'hint/walk-fun-body {-> List List List List})
+(fun {hint/walk-fun-body tl ctx acc} {
+  if (< (len tl) 2) {acc}
+  {hint/walk-code (head (tail tl)) ctx acc}
+})
+
+(sig 'hint/walk-def-vals {-> List List List List})
+(fun {hint/walk-def-vals tl ctx acc} {
+  if (nil? tl) {acc}
+  {hint/walk-exprs (tail tl) ctx acc}
+})
+
+; ---------------------------------------------------------------------------
+; Function call: emit param hints + recurse into args
+; ---------------------------------------------------------------------------
+
+(sig 'hint/walk-call {-> Str List List List List})
+(fun {hint/walk-call name args ctx acc} {do
+  (= {params} (hint/lookup-params name ctx))
+  (= {acc2} (if (nil? params) {acc}
+    {if (< (len args) 2) {acc}
+    {hint/emit-param-hints args params acc}}))
+  (hint/walk-exprs args ctx acc2)
+})
+
+(sig 'hint/lookup-params {-> Str List List})
+(fun {hint/lookup-params name ctx} {do
+  (= {local} (plist/get ctx:local name))
+  (if (not (nil? local)) {local}
+    {hint/query-db-params ctx:db name})
+})
+
+; ---------------------------------------------------------------------------
+; Emit parameter hints: match args to param names
+; ---------------------------------------------------------------------------
+
+(sig 'hint/emit-param-hints {-> List List List List})
+(fun {hint/emit-param-hints args params acc} {
+  if (nil? args) {acc}
+  {if (nil? params) {acc}
+  {hint/emit-one (head args) (head params)
+    (tail args) (tail params) acc}}
+})
+
+(sig 'hint/emit-one {-> Any Str List List List List})
+(fun {hint/emit-one arg param-name rest-args rest-params acc} {
+  hint/emit-param-hints rest-args rest-params
+    (if (hint/skip-hint? arg param-name) {acc}
+    {do
+      (= {pos} (src-pos arg))
+      (if (< pos 0) {acc}
+        {qcons (list :offset pos :label (str param-name ":") :kind 2
+                     :paddingRight :true) acc})})
+})
+
+(sig 'hint/skip-hint? {-> Any Str Num})
+(fun {hint/skip-hint? arg param-name} {
+  if (not (sym? arg)) {0}
+  {do
+    (= {name} (str arg))
+    (if (<= (len name) 0) {0}
+    {if (== (str/slice name 0 1) ":") {1}
+    {== name param-name}})}
+})
+
+; ---------------------------------------------------------------------------
+; Format hints for LSP response
+; ---------------------------------------------------------------------------
+
+(sig 'hint/insert-sorted {-> List List List})
+(fun {hint/insert-sorted item sorted} {
+  if (nil? sorted) {list item}
+  {if (<= (plist/get item :offset) (plist/get (head sorted) :offset))
+    {qcons item sorted}
+    {qcons (head sorted) (hint/insert-sorted item (tail sorted))}}
+})
+
+(sig 'hint/sort-by-offset {-> List List List})
+(fun {hint/sort-by-offset hints acc} {
+  if (nil? hints) {acc}
+  {hint/sort-by-offset (tail hints) (hint/insert-sorted (head hints) acc)}
+})
+
+(sig 'hint/format-hints {-> List Str List List})
+(fun {hint/format-hints raw-hints text range} {
+  if (nil? raw-hints) {nil}
+  {do
+    (= {sorted} (hint/sort-by-offset raw-hints nil))
+    (= {offsets} (map (\ {h} {plist/get h :offset}) sorted))
+    (= {lcs} (offsets->line-cols text offsets))
+    (hint/format-with-lcs sorted lcs text range nil)}
+})
+
+(sig 'hint/format-with-lcs {-> List List Str List List List})
+(fun {hint/format-with-lcs hints lcs text range acc} {
+  if (nil? hints) {acc}
+  {if (nil? lcs) {acc}
+  {do
+    (= {h} (head hints))
+    (= {lc} (head lcs))
+    (= {line} (head lc))
+    (= {col} (head (tail lc)))
+    (= {padL} (plist/get h :paddingLeft))
+    (= {padR} (plist/get h :paddingRight))
+    (= {formatted} (list :position (list :line line :character col)
+                         :label h:label
+                         :kind h:kind))
+    (= {formatted} (if (not (nil? padL))
+      {plist/set formatted :paddingLeft padL} {formatted}))
+    (= {formatted} (if (not (nil? padR))
+      {plist/set formatted :paddingRight padR} {formatted}))
+    (hint/format-with-lcs (tail hints) (tail lcs) text range
+      (if (hint/in-range? line range)
+        {qcons formatted acc}
+        {acc}))}}
+})
+
+(sig 'hint/format-db-rows {-> List Str List List})
+(fun {hint/format-db-rows rows text range} {
+  hint/format-db-loop rows text range nil
+})
+
+(sig 'hint/format-db-loop {-> List Str List List List})
+(fun {hint/format-db-loop rows text range acc} {
+  if (nil? rows) {acc}
+  {do
+    (= {r} (head rows))
+    (= {pos} (plist/get r :pos))
+    (= {label} (plist/get r :label))
+    (= {kind} (plist/get r :kind))
+    (= {pad} (plist/get r :padding))
+    (= {pad} (if (nil? pad) {0} {pad}))
+    (= {lc} (offset->line-col text pos))
+    (= {line} (head lc))
+    (= {col} (head (tail lc)))
+    (= {formatted} (list :position (list :line line :character col)
+                         :label label :kind kind))
+    (= {formatted} (if (> (mod pad 2) 0)
+      {plist/set formatted :paddingLeft :true} {formatted}))
+    (= {formatted} (if (> (mod (/ pad 2) 2) 0)
+      {plist/set formatted :paddingRight :true} {formatted}))
+    (hint/format-db-loop (tail rows) text range
+      (if (hint/in-range? line range)
+        {qcons formatted acc}
+        {acc}))}
+})
+
+(sig 'hint/in-range? {-> Num List Num})
+(fun {hint/in-range? line range} {
+  if (nil? range) {1}
+  {do
+    (= {start-pos} range:start)
+    (= {end-pos} range:end)
+    (= {start-line} start-pos:line)
+    (= {end-line} end-pos:line)
+    (and (>= line start-line) (<= line end-line))}
+})
+
+; ---------------------------------------------------------------------------
+; Type hints — show types at definitions and bindings
+; sig format in symdb: {-> ParamType1 ParamType2 ... ReturnType}
+; ---------------------------------------------------------------------------
+
+(sig 'hint/count-char-loop {-> Str Str Num Num Num})
+(fun {hint/count-char-loop s ch pos count} {
+  if (>= pos (len s)) {count}
+  {hint/count-char-loop s ch (+ pos 1)
+    (if (== (str/slice s pos (+ pos 1)) ch) {+ count 1} {count})}
+})
+
+(sig 'hint/count-char {-> Str Str Num})
+(fun {hint/count-char s ch} {
+  hint/count-char-loop s ch 0 0
+})
+
+(sig 'hint/parse-sig-tokens {-> List Num Str List List})
+(fun {hint/parse-sig-tokens tokens depth current groups} {
+  if (nil? tokens) {
+    if (nil? current) {reverse groups}
+    {reverse (qcons (str/join (reverse current) " ") groups)}}
+  {do
+    (= {tok} (head tokens))
+    (= {rest} (tail tokens))
+    (= {opens} (hint/count-char tok "("))
+    (= {closes} (hint/count-char tok ")"))
+    (= {new-depth} (+ (- (+ depth opens) closes) 0))
+    (if (== new-depth 0)
+      {if (nil? current)
+        {hint/parse-sig-tokens rest 0 nil (qcons tok groups)}
+        {hint/parse-sig-tokens rest 0 nil
+          (qcons (str/join (reverse (qcons tok current)) " ") groups)}}
+      {hint/parse-sig-tokens rest new-depth (qcons tok current) groups})}
+})
+
+(sig 'hint/parse-prefix-sig {-> Str List})
+(fun {hint/parse-prefix-sig sig-str} {
+  if (nil? sig-str) {nil}
+  {do
+    (= {inner} (str/slice sig-str 1 (- (len sig-str) 1)))
+    (= {tokens} (str/split inner " "))
+    (if (< (len tokens) 2) {nil}
+      {if (not (== (head tokens) "->")) {nil}
+        {hint/parse-sig-tokens (tail tokens) 0 nil nil}})}
+})
+
+(sig 'hint/query-sig-types {-> Ref Str List})
+(fun {hint/query-sig-types db name} {
+  if (nil? db) {nil}
+  {do
+    (= {row} (sqlite/query-maybe db
+      "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
+      name))
+    (if (nil? row) {nil}
+      {hint/parse-prefix-sig row:sig})}
+})
+
+(sig 'hint/infer-call-return-type {-> Str Ref Any})
+(fun {hint/infer-call-return-type name db} {
+  if (nil? db) {nil}
+  {do
+    (= {sig-types} (hint/query-sig-types db name))
+    (if (nil? sig-types) {nil}
+      {last sig-types})}
+})
+
+(sig 'hint/skip-inline-ann {-> List List Num List List})
+(fun {hint/skip-inline-ann rest sig-types type-idx acc} {
+  if (nil? rest) {acc}
+  {hint/emit-def-type-hints (tail rest) sig-types type-idx acc}
+})
+
+(sig 'hint/emit-def-hint-sym {-> List Num List List Num List List})
+(fun {hint/emit-def-hint-sym ps pos rest sig-types type-idx acc} {
+  if (== ps "::") {hint/skip-inline-ann rest sig-types type-idx acc}
+  {if (== ps "->") {acc}
+  {if (== ps "&") {acc}
+  {do
+    (= {num-param-types} (- (len sig-types) 1))
+    (= {type-str} (if (< type-idx num-param-types)
+      {nth (+ type-idx 1) sig-types} {nil}))
+    (= {acc2} (if (or (nil? type-str) (< pos 0)) {acc}
+      {qcons (list :offset (+ pos (len ps)) :label (str ":: " type-str) :kind 1
+                   :paddingLeft :true) acc}))
+    (hint/emit-def-type-hints rest sig-types (+ type-idx 1) acc2)}}}
+})
+
+(sig 'hint/emit-def-hint-one {-> Any List List Num List List})
+(fun {hint/emit-def-hint-one p rest sig-types type-idx acc} {
+  if (not (sym? p)) {hint/emit-def-type-hints rest sig-types type-idx acc}
+  {hint/emit-def-hint-sym (str p) (src-pos p) rest sig-types type-idx acc}
+})
+
+(sig 'hint/emit-def-type-hints {-> List List Num List List})
+(fun {hint/emit-def-type-hints params sig-types type-idx acc} {
+  if (nil? params) {acc}
+  {hint/emit-def-hint-one (head params) (tail params) sig-types type-idx acc}
+})
+
+(sig 'hint/infer-val-type {-> Any Ref Any})
+(fun {hint/infer-val-type val db} {
+  if (num? val) {"Num"}
+  {if (str? val) {"Str"}
+  {if (sym? val) {hint/infer-field-chain (str val) db}
+  {if (not (list? val)) {nil}
+  {if (nil? val) {nil}
+  {hint/infer-from-head (head val) db}}}}}
+})
+
+; Resolve chained field access like params:range:start:line
+; by walking the type chain through symdb constructor sigs.
+(sig 'hint/infer-field-chain {-> Str Ref Any})
+(fun {hint/infer-field-chain name db} {do
+  (= {colon} (str/index-of name ":"))
+  (if (< colon 1) {nil}
+    {if (nil? db) {nil}
+      {do
+        (= {resolved} (hint/resolve-chain-fields
+          (str ":" (str/slice name (+ colon 1) (len name))) db))
+        (if (== resolved "Any") {nil} {resolved})}})
+})
+
+; Walk fields right-to-left: resolve the last field's type.
+; For a:b:c — find any ctor with field :c, return its type.
+; For a:b:c:d — find ctor with :d, but :d's context is the type of :c.
+(sig 'hint/resolve-chain-fields {-> Str Ref Any})
+(fun {hint/resolve-chain-fields fields db} {do
+  (= {last-colon} (hint/last-colon-pos fields 0 -1))
+  (if (< last-colon 0) {nil}
+    {do
+      (= {field-key} (str/slice fields last-colon (len fields)))
+      (= {prefix} (str/slice fields 0 last-colon))
+      (= {parent-type} (if (== prefix "")
+        {nil}
+        {hint/resolve-chain-fields prefix db}))
+      (if (nil? parent-type)
+        {hint/lookup-any-field-type field-key db}
+        {hint/lookup-ctor-field-type parent-type field-key db})})
+})
+
+(sig 'hint/last-colon-pos {-> Str Num Num Num})
+(fun {hint/last-colon-pos s i found} {
+  if (>= i (len s)) {found}
+  {hint/last-colon-pos s (+ i 1)
+    (if (== (str/slice s i (+ i 1)) ":") {i} {found})}
+})
+
+; Look up field type from a specific constructor
+(sig 'hint/lookup-ctor-field-type {-> Str Str Ref Any})
+(fun {hint/lookup-ctor-field-type ctor-name field-key db} {do
+  (= {row} (sqlite/query-maybe db
+    "SELECT sig FROM symbols WHERE name=?1 AND kind=4 LIMIT 1"
+    ctor-name))
+  (if (nil? row) {nil}
+    {hint/extract-field-from-sig row:sig field-key})
+})
+
+; Look up field type from any constructor that has this field
+(sig 'hint/lookup-any-field-type {-> Str Ref Any})
+(fun {hint/lookup-any-field-type field-key db} {do
+  (= {row} (sqlite/query-maybe db
+    (str "SELECT sig FROM symbols WHERE kind=4 AND sig LIKE '%" field-key " %' LIMIT 1")))
+  (if (nil? row) {nil}
+    {hint/extract-field-from-sig row:sig field-key})
+})
+
+; Extract field type from a sig like ":line Num :character Num"
+(sig 'hint/extract-field-from-sig {-> Str Str Any})
+(fun {hint/extract-field-from-sig sig field-key} {do
+  (= {parts} (str/split sig " "))
+  (hint/find-field-in-parts parts field-key)
+})
+
+(sig 'hint/find-field-in-parts {-> List Str Any})
+(fun {hint/find-field-in-parts parts field-key} {
+  if (nil? parts) {nil}
+  {if (< (len parts) 2) {nil}
+  {if (== (head parts) field-key) {nth 2 parts}
+    {hint/find-field-in-parts (tail parts) field-key}}}
+})
+
+(sig 'hint/infer-from-head {-> Any Ref Any})
+(fun {hint/infer-from-head hd db} {
+  if (not (sym? hd)) {nil}
+  {hint/infer-by-name (str hd) db}
+})
+
+(sig 'hint/infer-by-name {-> Str Ref Any})
+(fun {hint/infer-by-name n db} {
+  if (== n "list") {"List"}
+  {if (== n "dict/new") {"Dict"}
+  {if (== n "dict/from-keys") {"Dict"}
+  {if (== n "None") {"Option"}
+  {if (== n "Some") {"Option"}
+  {if (== n "\\") {"Fn"}
+  {if (== n "fun") {"Fn"}
+  {if (hint/is-ctor-name n) {n}
+  {hint/infer-call-return-type n db}}}}}}}}
+})
+
+(sig 'hint/is-ctor-name {-> Str Num})
+(fun {hint/is-ctor-name n} {
+  if (<= (len n) 0) {0}
+  {do
+    (= {c} (str/slice n 0 1))
+    (>= (str/index-of "ABCDEFGHIJKLMNOPQRSTUVWXYZ" c) 0)}
+})
+
+(sig 'hint/emit-binding-type {-> List Any Ref List List})
+(fun {hint/emit-binding-type formals val db acc} {
+  if (not (list? formals)) {acc}
+  {if (nil? formals) {acc}
+  {hint/emit-binding-for (head formals) val db acc}}
+})
+
+(sig 'hint/emit-binding-for {-> Any Any Ref List List})
+(fun {hint/emit-binding-for name-sym val db acc} {
+  if (not (sym? name-sym)) {acc}
+  {do
+    (= {type-str} (hint/infer-val-type val db))
+    (if (nil? type-str) {acc}
+      {do
+        (= {pos} (src-pos name-sym))
+        (= {ns} (str name-sym))
+        (if (< pos 0) {acc}
+          {qcons (list :offset (+ pos (len ns)) :label (str ":: " type-str) :kind 1
+                       :paddingLeft :true) acc})})}
+})
+
+(sig 'hint/type-from-fun {-> List Ref List List})
+(fun {hint/type-from-fun tl db acc} {
+  if (< (len tl) 2) {acc}
+  {hint/type-fun-with-parts (head tl) (head (tail tl)) db acc}
+})
+
+(sig 'hint/type-fun-with-parts {-> List List Ref List List})
+(fun {hint/type-fun-with-parts formals body db acc} {
+  if (not (list? formals)) {acc}
+  {if (nil? formals) {acc}
+  {hint/type-fun-extract (head formals) (tail formals) body db acc}}
+})
+
+(sig 'hint/type-fun-extract {-> Str List List Ref List List})
+(fun {hint/type-fun-extract fname params body db acc} {
+  if (not (sym? fname)) {acc}
+  {hint/type-fun-emit (str fname) params body db acc}
+})
+
+(sig 'hint/type-fun-emit {-> Str List List Ref List List})
+(fun {hint/type-fun-emit name params body db acc} {do
+  (= {sig-types} (hint/query-sig-types db name))
+  (= {acc2} (if (nil? sig-types) {acc}
+    {hint/emit-def-type-hints params sig-types 0 acc}))
+  (= {ret-type} (if (or (nil? sig-types) (< (len sig-types) 2)) {nil}
+    {last sig-types}))
+  (= {acc3} (if (nil? ret-type) {acc2}
+    {do
+       (= {bpos} (src-pos body))
+      (if (< bpos 0) {acc2}
+        {qcons (list :offset bpos :label (str "-> " ret-type) :kind 1
+                     :paddingRight :true) acc2})}))
+
+  (hint/type-one body db acc3)
+})
+
+(sig 'hint/type-from-def {-> List Ref List List})
+(fun {hint/type-from-def tl db acc} {
+  if (< (len tl) 2) {acc}
+  {hint/type-def-with-parts (head tl) (head (tail tl)) db acc}
+})
+
+(sig 'hint/type-def-with-parts {-> List Any Ref List List})
+(fun {hint/type-def-with-parts formals val db acc} {do
+  (= {acc2} (hint/emit-binding-type formals val db acc))
+  (hint/type-one val db acc2)
+})
+
+(sig 'hint/type-walk-body {-> List Ref List List})
+(fun {hint/type-walk-body tl db acc} {
+  if (< (len tl) 2) {acc}
+  {hint/type-one (head (tail tl)) db acc}
+})
+
+(sig 'hint/type-one {-> Any Ref List List})
+(fun {hint/type-one expr db acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {hint/type-dispatch (head expr) (tail expr) db acc}}
+})
+
+(sig 'hint/type-dispatch {-> Any List Ref List List})
+(fun {hint/type-dispatch hd tl db acc} {
+  if (not (sym? hd)) {hint/type-walk tl db acc}
+  {hint/type-by-name (str hd) tl db acc}
+})
+
+(sig 'hint/type-by-name {-> Str List Ref List List})
+(fun {hint/type-by-name n tl db acc} {
+  if (== n "fun") {hint/type-from-fun tl db acc}
+  {if (== n "def") {hint/type-from-def tl db acc}
+  {if (== n "=") {hint/type-from-def tl db acc}
+  {if (== n "do") {hint/type-walk tl db acc}
+  {if (== n "\\") {hint/type-walk-body tl db acc}
+  {if (== n "if") {hint/type-walk tl db acc}
+  {if (== n "match") {hint/type-walk tl db acc}
+  {if (== n "let") {hint/type-walk tl db acc}
+  {hint/type-walk tl db acc}}}}}}}}
+})
+
+(sig 'hint/type-walk {-> List Ref List List})
+(fun {hint/type-walk exprs db acc} {
+  if (nil? exprs) {acc}
+  {hint/type-walk (tail exprs) db
+    (hint/type-one (head exprs) db acc)}
+})
+
+(sig 'hint/collect-type-hints {-> List Ref List})
+(fun {hint/collect-type-hints ast db} {
+  hint/type-walk ast db nil
+})
+

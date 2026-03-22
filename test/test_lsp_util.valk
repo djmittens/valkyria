@@ -1,8 +1,8 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 (load "src/symdb.valk")
-(load "src/lsp-analysis.valk")
-(load "src/lsp-validate.valk")
+(load "src/lsp/analysis.valk")
+(load "src/lsp/validate.valk")
 
 (test/run (list
 
@@ -53,7 +53,7 @@
   (test "word-at-on-delimiter"
     {do
       (= {w} (word-at-position "a b" 0 1))
-      (test/assert (nil? w) "cursor on space should return nil")
+      (test/assert-eq "a" w "cursor on space returns adjacent word")
       true
     })
 
@@ -70,16 +70,17 @@
     {do
       (= {r} (word-range-at-position "hello world" 0 0))
       (test/assert (not (nil? r)) "should return range")
-      (test/assert-eq "hello" (plist/get r :word) "word should be hello")
-      (test/assert-eq 0 (plist/get r :start) "start should be 0")
-      (test/assert-eq 5 (plist/get r :end) "end should be 5")
+      (test/assert-eq "hello" r:word "word should be hello")
+      (test/assert-eq 0 r:start "start should be 0")
+      (test/assert-eq 5 r:end "end should be 5")
       true
     })
 
   (test "word-range-nil-on-delimiter"
     {do
       (= {r} (word-range-at-position "a b" 0 1))
-      (test/assert (nil? r) "space should return nil")
+      (test/assert (not (nil? r)) "space returns adjacent word range")
+      (test/assert-eq "a" r:word "should return word a")
       true
     })
 
@@ -131,27 +132,24 @@
       true
     })
 
-  ; === starts-with ===
+  ; === str/starts-with? ===
 
   (test "starts-with-true"
     {do
-      (test/assert-eq 1 (starts-with "hello world" "hello")
+      (test/assert-eq 1 (str/starts-with? "hello world" "hello")
         "hello world starts with hello")
-      true
     })
 
   (test "starts-with-false"
     {do
-      (test/assert-eq 0 (starts-with "hello" "world")
+      (test/assert-eq 0 (str/starts-with? "hello" "world")
         "hello does not start with world")
-      true
     })
 
   (test "starts-with-longer-prefix"
     {do
-      (test/assert-eq 0 (starts-with "hi" "hello")
+      (test/assert-eq 0 (str/starts-with? "hi" "hello")
         "prefix longer than string should be false")
-      true
     })
 
   ; === ends-with (from lsp.valk — loaded indirectly if needed) ===
@@ -275,11 +273,11 @@
     {do
       (= {text} "hello world")
       (= {d} (vd/make-diag text 6 5 1 "test error"))
-      (test/assert-eq 0 (plist/get d :line) "should be line 0")
-      (test/assert-eq 6 (plist/get d :col) "should be col 6")
-      (test/assert-eq 11 (plist/get d :end-col) "end-col = 6 + 5")
-      (test/assert-eq 1 (plist/get d :severity) "severity should be 1")
-      (test/assert-eq "test error" (plist/get d :message) "message should match")
+      (test/assert-eq 0 d:line "should be line 0")
+      (test/assert-eq 6 d:col "should be col 6")
+      (test/assert-eq 11 d:end-col "end-col = 6 + 5")
+      (test/assert-eq 1 d:severity "severity should be 1")
+      (test/assert-eq "test error" d:message "message should match")
       true
     })
 
@@ -287,8 +285,8 @@
     {do
       (= {text} "line1\nline2\nworld")
       (= {d} (vd/make-diag text 12 5 2 "warn"))
-      (test/assert-eq 2 (plist/get d :line) "world is on line 2")
-      (test/assert-eq 0 (plist/get d :col) "world starts at col 0")
+      (test/assert-eq 2 d:line "world is on line 2")
+      (test/assert-eq 0 d:col "world starts at col 0")
       true
     })
 

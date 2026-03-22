@@ -46,3 +46,4 @@ node_modules/
 
 # Editor/tool local config
 opencode.json
+.claude/

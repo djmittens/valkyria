@@ -56,6 +56,8 @@ jobs:
           make build build-coverage
       
       - name: Run Tests (with JUnit XML output)
+        env:
+          VALK_HEAP_HARD_LIMIT: "2147483648"
         run: |
           build/valk bin/run-tests.valk -- --build-dir build-coverage --junit-dir build/junit --examples
       

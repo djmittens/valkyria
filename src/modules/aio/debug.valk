@@ -38,7 +38,8 @@
 (fun {aio/debug-parse-param config param}
   {(= {kv} (str/split param "="))
    (if (== (len kv) 2)
-     {(= {k} (head kv))
+     {do
+      (= {k} (head kv))
       (= {v} (head (tail kv)))
       (select
         {(== k "slab") (plist/set config :slab v)}
@@ -62,10 +63,10 @@
     (= {config} (foldl aio/debug-parse-param defaults params))
 
     ; Extract parsed values
-    (= {slab-name} (plist/get config :slab))
-    (= {start-val} (plist/get config :start))
-    (= {end-val} (plist/get config :end))
-    (= {num-buckets} (plist/get config :buckets))
+    (= {slab-name} config:slab)
+    (= {start-val} config:start)
+    (= {end-val} config:end)
+    (= {num-buckets} config:buckets)
 
     ; Call the builtin
     (= {result} (aio/slab-buckets sys slab-name start-val end-val num-buckets))
@@ -132,7 +133,7 @@
     ; Extract request path - support both ref (runtime) and qexpr (testing)
     (= {path} (if (ref? req)
                 {(req/path req)}
-                {(plist/get req :path)}))
+                {req:path}))
 
     ; Split path and query string (HTTP/2 :path includes query)
     (= {path-parts} (str/split path "?"))

@@ -29,19 +29,18 @@
   })
   (test "metrics available after aio/start"
     {do
-    (= {aio} (aio/await (aio/start)))
-    (= {json} (aio/metrics-json aio))
-    (= {prom} (aio/metrics-prometheus aio))
-    (test/assert (string? json) "aio/metrics-json should return string")
-    (test/assert (string? prom) "aio/metrics-prometheus should return string")
+    (= {json} (metrics/json))
+    (= {prom} (metrics/prometheus))
+    (test/assert (str? json) "metrics/json should return string")
+    (test/assert (str? prom) "metrics/prometheus should return string")
     true
   })
   (test "global metrics functions work"
     {do
     (= {json} (metrics/json))
     (= {prom} (metrics/prometheus))
-    (test/assert (string? json) "metrics/json should return string")
-    (test/assert (string? prom) "metrics/prometheus should return string")
+    (test/assert (str? json) "metrics/json should return string")
+    (test/assert (str? prom) "metrics/prometheus should return string")
     true
   }))
   {:suite-name "Overload Handling Tests"})

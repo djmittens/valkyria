@@ -88,8 +88,6 @@ valk_stream_body_t *valk_stream_body_new(
   data_prd_out->source.ptr = body;
   data_prd_out->read_callback = __stream_data_read_callback;
 
-  fprintf(stderr, "[DBG] body_new id=%llu stream=%d conn=%p\n",
-          (unsigned long long)body->id, stream_id, (void*)conn);
   VALK_DEBUG("stream_body: created id=%llu, http2_stream=%d, arena=%p",
              (unsigned long long)body->id, stream_id, (void*)arena);
 

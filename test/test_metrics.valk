@@ -200,17 +200,16 @@
     (= {counter} (metrics/counter "test_accumulator"))
     (= {iterations} 10)
 
-    ; Loop to increment counter
-    (fun {increment-loop n} {
+    (= {increment-loop} (\ {c n} {
       if (<= n 0)
         {true}
         {do
-          (metrics/counter-inc counter)
-          (increment-loop (- n 1))
+          (= {_} (metrics/counter-inc c))
+          (increment-loop c (- n 1))
         }
-    })
+    }))
 
-    (increment-loop iterations)
+    (= {_} (increment-loop counter iterations))
 
     ; Verify metrics still accessible
     (= {result} (metrics/json))

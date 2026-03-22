@@ -40,52 +40,61 @@
  
 ; === Option utilities ===
 
+(sig 'some? {-> A Num})
 (fun {some? x} {
   if (not (list? x)) {false}
     {match x {(Some :value _) true} {_ false}}
 })
 
+(sig 'none? {-> A Num})
 (fun {none? x} {
   if (not (list? x)) {false}
     {match x {(None) true} {_ false}}
 })
 
+(sig 'option/unwrap-or {-> A B B})
 (fun {option/unwrap-or opt default} {
   match opt
     {(Some :value v) v}
     {(None) default}
 })
 
+(sig 'option/map {-> A (-> B C) A})
 (fun {option/map opt f} {
   match opt
     {(Some :value v) (Some (f v))}
     {(None) (None)}
 })
 
+(sig 'option/flat-map {-> A (-> B A) A})
 (fun {option/flat-map opt f} {
   match opt
     {(Some :value v) (f v)}
     {(None) (None)}
 })
 
+(sig 'option/filter {-> A (-> B Num) A})
 (fun {option/filter opt pred} {
   match opt
     {(Some :value v) (if (pred v) {(Some v)} {(None)})}
     {(None) (None)}
 })
 
+(sig 'option/or {-> A A A})
 (fun {option/or a b} {
   match a
     {(Some :value v) (Some v)}
     {(None) b}
 })
 
+(sig 'option/from-nullable {-> A A})
 (fun {option/from-nullable val} {
   if (== val nil) {(None)} {(Some val)}
 })
 
 ; traverse: apply f (returning Option) to each element, collect into Option of list
 ; If any f returns None, the whole result is None
+(sig 'option/traverse {-> (List A) (-> A B) B})
 (fun {option/traverse l f} {
   if (== l nil)
     {(Some nil)}
@@ -100,11 +109,13 @@
 })
 
 ; sequence: turn a list of Options into an Option of list
+(sig 'option/sequence {-> (List A) A})
 (fun {option/sequence l} {
   (option/traverse l id)
 })
 
 ; Applicative: apply a wrapped function to a wrapped value
+(sig 'option/ap {-> A A A})
 (fun {option/ap of ov} {
   match of
     {(Some :value f) (option/map ov f)}
@@ -113,39 +124,46 @@
 
 ; === Result utilities ===
 
+(sig 'ok? {-> A Num})
 (fun {ok? x} {
   if (not (list? x)) {false}
     {match x {(Ok :value _) true} {_ false}}
 })
+(sig 'err? {-> A Num})
 (fun {err? x} {
   if (not (list? x)) {false}
     {match x {(Err :error _) true} {_ false}}
 })
 
+(sig 'result/unwrap-or {-> A B B})
 (fun {result/unwrap-or res default} {
   match res
     {(Ok :value v) v}
     {(Err :error e) default}
 })
 
+(sig 'result/map {-> A (-> B C) A})
 (fun {result/map res f} {
   match res
     {(Ok :value v) (Ok (f v))}
     {(Err :error e) (Err e)}
 })
 
+(sig 'result/map-err {-> A (-> B C) A})
 (fun {result/map-err res f} {
   match res
     {(Ok :value v) (Ok v)}
     {(Err :error e) (Err (f e))}
 })
 
+(sig 'result/flat-map {-> A (-> B A) A})
 (fun {result/flat-map res f} {
   match res
     {(Ok :value v) (f v)}
     {(Err :error e) (Err e)}
 })
 
+(sig 'result/ap {-> A A A})
 (fun {result/ap rf rv} {
   match rf
     {(Ok :value f) (result/map rv f)}
@@ -154,6 +172,7 @@
 
 ; traverse: apply f (returning Result) to each element, collect into Result of list
 ; If any f returns Err, the whole result is that Err
+(sig 'result/traverse {-> (List A) (-> A B) B})
 (fun {result/traverse l f} {
   if (== l nil)
     {(Ok nil)}
@@ -168,22 +187,26 @@
 })
 
 ; sequence: turn a list of Results into a Result of list
+(sig 'result/sequence {-> (List A) A})
 (fun {result/sequence l} {
   (result/traverse l id)
 })
 
+(sig 'result/or {-> A A A})
 (fun {result/or a b} {
   match a
     {(Ok :value v) (Ok v)}
     {(Err :error e) b}
 })
 
+(sig 'result/to-option {-> A A})
 (fun {result/to-option res} {
   match res
     {(Ok :value v) (Some v)}
     {(Err :error e) (None)}
 })
 
+(sig 'option/to-result {-> A B A})
 (fun {option/to-result opt err} {
   match opt
     {(Some :value v) (Ok v)}
@@ -192,22 +215,27 @@
 
 ; === Pair utilities ===
 
+(sig 'pair {-> A B List})
 (fun {pair a b} {(Pair :fst a :snd b)})
 
+(sig 'pair/map-fst {-> A (-> B C) A})
 (fun {pair/map-fst p f} {
   (Pair :fst (f (Pair:fst p)) :snd (Pair:snd p))
 })
 
+(sig 'pair/map-snd {-> A (-> B C) A})
 (fun {pair/map-snd p f} {
   (Pair :fst (Pair:fst p) :snd (f (Pair:snd p)))
 })
 
+(sig 'pair/bimap {-> A (-> B C) (-> D E) A})
 (fun {pair/bimap p f g} {
   (Pair :fst (f (Pair:fst p)) :snd (g (Pair:snd p)))
 })
 
 ; === Order utilities ===
 
+(sig 'compare {-> A A List})
 (fun {compare a b} {
   if (< a b) {(LT)} {if (== a b) {(EQ)} {(GT)}}
 })
@@ -240,6 +268,7 @@
 ; This is a necessary primitive for control flow with side effects
 
 ; Open a new scope
+(sig 'let {-> QExpr A})
 (fun {let  b} {
    ((\ {_} b) ())
 })
@@ -248,15 +277,19 @@
 ; LISTS ARE 1-BASED LIKE LUA
 
 ; Identity function for unpacking
+(sig 'id {-> A A})
 (fun {id x} {x})
 
 ; Return first item in the list
+(sig 'fst {-> (List A) A})
 (fun {fst _l} {head _l})
 
 ; Return the second item in the list
+(sig 'snd {-> (List A) A})
 (fun {snd _y} {head (tail _y)})
 
 ; Return the third item in the list
+(sig 'trd {-> (List A) A})
 (fun {trd l} {head (tail (tail l))})
 
 ; length of the list (there is a builtin for that??)
@@ -273,6 +306,7 @@
 (sig 'nth {-> (List A) Num A})
 
 ;last item in the list
+(sig 'last {-> (List A) A})
 (fun {last l} {nth (len l) l})
 
 ; Take N items from the front of the list
@@ -295,6 +329,7 @@
 ; valkyria> split 4 {1 2 3 4 5 6 7 8}
 ; Qexpr{ Qexpr{ Num[1] Num[2] Num[3] Num[4] } Qexpr{ Num[5] Num[6] Num[7] Num[8] } }
 ; {{1 2 3 4} {5 6 7 8}}
+(sig 'split {-> Num (List A) (List (List A))})
 (fun {split n l} { 
      list (take n l) (drop n l)
 })
@@ -358,31 +393,21 @@
 
 ; Logics
 
-; Logical negation
+(sig 'not {-> Num Num})
 (fun {not x} {- 1 x})
 
-; x or y 
+(sig 'or {-> Num Num Num})
 (fun {or x y} {+ x y})
 
-; x and y
+(sig 'and {-> Num Num Num})
 (fun {and x y} {* x y})
 
 ; Higher-order function utilities
 
-; TODO(main): there is a bug where partial application doesnt work
-; definitely need to look into that. Also the error message is broken
-; valkyria> flip def
-; > 
-;   regex 
-;   expr|symbol|regex:1:1 'flip'
-;   expr|symbol|regex:1:6 'def'
-;   regex 
-; AST: Sexpr( Sym[flip] Sym[def] )
-; Result: Error[LEnv: Symbol `(null)` is not ]
-; Flip arguments of a function that  takes 2
+(sig 'flip {-> (-> A B C) B A C})
 (fun {flip f a b} {f b a})
 
-; Compose two functions such that (comp f g) == f(g(_))
+(sig 'comp {-> (-> B C) (-> A B) A C})
 (fun {comp f g x} {f (g x)})
 
 ; Coniditionals
@@ -405,6 +430,7 @@
 ; Usage: (case val {{1} "one"} {{2} "two"} {{3} "three"})
 ; Helper: takes x and cases as separate args (allows recursion without unpack)
 ; With QEXPR: {1} evals directly to 1, so no fst needed after eval
+(sig 'case-impl {-> A (List QExpr) B})
 (fun {case-impl x cs} {
      if (== cs nil)
       {error "No case found"}
@@ -413,6 +439,7 @@
           {case-impl x (tail cs)}
       }
 })
+(sig 'case {-> A & QExpr B})
 (fun {case x & cs} {case-impl x cs})
 
 ; Property Lists (plists)
@@ -423,6 +450,7 @@
 
 ; Set/update a key in plist, returns new plist
 ; Usage: (plist/set {:name "Alice"} :age 30) => {:name "Alice" :age 30}
+(sig 'plist/set {-> List A B List})
 (fun {plist/set pl key val} {
   if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
     {list key val}
@@ -433,6 +461,7 @@
 
 ; Check if key exists in plist
 ; Usage: (plist/has? {:name "Alice"} :name) => true
+(sig 'plist/has? {-> List A Num})
 (fun {plist/has? pl key} {
   if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
     {false}
@@ -443,6 +472,7 @@
 
 ; Get all keys from plist
 ; Usage: (plist/keys {:name "Alice" :age 30}) => {:name :age}
+(sig 'plist/keys {-> List List})
 (fun {plist/keys pl} {
   if (== pl nil)
     {nil}
@@ -451,6 +481,7 @@
 
 ; Get all values from plist
 ; Usage: (plist/vals {:name "Alice" :age 30}) => {"Alice" 30}
+(sig 'plist/vals {-> List List})
 (fun {plist/vals pl} {
   if (== pl nil)
     {nil}

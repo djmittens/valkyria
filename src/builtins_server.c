@@ -14,11 +14,13 @@ extern valk_lval_t* valk_async_handle_await(valk_async_handle_t* handle);
 static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
                                                      valk_lval_t* a) {
   u64 argc = valk_lval_list_count(a);
+  // LCOV_EXCL_BR_START - arg validation: type dispatch branches
   LVAL_ASSERT(a, argc >= 3 && argc <= 4,
               "http2/server-listen expects 3 or 4 arguments, got %zu", argc);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_REF);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_FUN);
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = valk_lval_list_nth(a, 0)->ref.ptr;
   int port = (int)valk_lval_list_nth(a, 1)->num;
@@ -79,7 +81,7 @@ static valk_lval_t* valk_builtin_http2_server_listen(valk_lenv_t* e,
 static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
                                                    valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1); // LCOV_EXCL_BR_LINE - arg validation
 
   valk_lval_t* arg = valk_lval_list_nth(a, 0);
   valk_lval_t* server_ref = NULL;
@@ -87,24 +89,24 @@ static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
   if (LVAL_TYPE(arg) == LVAL_HANDLE) { // LCOV_EXCL_BR_LINE - type dispatch
     valk_async_handle_t* handle = arg->async.handle;
     valk_async_status_t status = valk_async_handle_get_status(handle);
-    if (status != VALK_ASYNC_COMPLETED) { // LCOV_EXCL_BR_LINE - handle usually completed by call time
+    if (status != VALK_ASYNC_COMPLETED) { // LCOV_EXCL_BR_LINE - completion race
       server_ref = valk_async_handle_await(handle);
       if (LVAL_TYPE(server_ref) == LVAL_ERR) { // LCOV_EXCL_BR_LINE - await error
         return server_ref; // LCOV_EXCL_LINE
       }
     } else {
-      server_ref = atomic_load_explicit(&handle->result, memory_order_acquire);
+      server_ref = atomic_load_explicit(&handle->result, memory_order_acquire); // LCOV_EXCL_LINE
     }
     if (!server_ref || LVAL_TYPE(server_ref) != LVAL_REF) { // LCOV_EXCL_BR_LINE - defensive type check
       return valk_lval_err("http2/server-port: handle result is not a server ref"); // LCOV_EXCL_LINE
     }
   } else if (LVAL_TYPE(arg) == LVAL_REF) { // LCOV_EXCL_BR_LINE - type dispatch: tests always pass handle
     server_ref = arg; // LCOV_EXCL_LINE
+  // LCOV_EXCL_START - type error: tests always pass handle or ref
   } else {
-    // LCOV_EXCL_START - type error: tests always pass handle or ref
     return valk_lval_err("http2/server-port: expected Handle or Reference, got %s",
                          valk_ltype_name(LVAL_TYPE(arg)));
-    // LCOV_EXCL_STOP
+  // LCOV_EXCL_STOP
   }
 
   valk_aio_http_server* srv = (valk_aio_http_server*)server_ref->ref.ptr;
@@ -117,7 +119,7 @@ static valk_lval_t* valk_builtin_http2_server_port(valk_lenv_t* e,
 static valk_lval_t* valk_builtin_http2_server_stop(valk_lenv_t* e,
                                                    valk_lval_t* a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1); // LCOV_EXCL_BR_LINE - arg validation
 
   valk_lval_t* arg = valk_lval_list_nth(a, 0);
   valk_lval_t* server_ref = NULL;
@@ -125,28 +127,28 @@ static valk_lval_t* valk_builtin_http2_server_stop(valk_lenv_t* e,
   if (LVAL_TYPE(arg) == LVAL_HANDLE) { // LCOV_EXCL_BR_LINE - type dispatch
     valk_async_handle_t* handle = arg->async.handle;
     valk_async_status_t status = valk_async_handle_get_status(handle);
-    if (status != VALK_ASYNC_COMPLETED) { // LCOV_EXCL_BR_LINE - handle usually completed by call time
+    if (status != VALK_ASYNC_COMPLETED) { // LCOV_EXCL_BR_LINE - completion race
       server_ref = valk_async_handle_await(handle);
       if (LVAL_TYPE(server_ref) == LVAL_ERR) { // LCOV_EXCL_BR_LINE - await error
         return server_ref; // LCOV_EXCL_LINE
       }
     } else {
-      server_ref = atomic_load_explicit(&handle->result, memory_order_acquire);
+      server_ref = atomic_load_explicit(&handle->result, memory_order_acquire); // LCOV_EXCL_LINE
     }
     if (!server_ref || LVAL_TYPE(server_ref) != LVAL_REF) { // LCOV_EXCL_BR_LINE - defensive type check
       return valk_lval_err("http2/server-stop: handle result is not a server ref"); // LCOV_EXCL_LINE
     }
   } else if (LVAL_TYPE(arg) == LVAL_REF) { // LCOV_EXCL_BR_LINE - type dispatch: tests always pass handle
     server_ref = arg; // LCOV_EXCL_LINE
+  // LCOV_EXCL_START - type error: tests always pass handle or ref
   } else {
-    // LCOV_EXCL_START - type error: tests always pass handle or ref
     return valk_lval_err("http2/server-stop: expected Handle or Reference, got %s",
                          valk_ltype_name(LVAL_TYPE(arg)));
-    // LCOV_EXCL_STOP
+  // LCOV_EXCL_STOP
   }
 
   valk_aio_http_server* srv = (valk_aio_http_server*)server_ref->ref.ptr;
-  if (valk_aio_http2_server_is_stopped(srv)) {
+  if (valk_aio_http2_server_is_stopped(srv)) { // LCOV_EXCL_BR_LINE - double-stop: tests call stop once
     valk_aio_system_t* sys = srv->sys;
     valk_async_handle_t* handle = valk_async_handle_new(sys, nullptr);
     valk_async_handle_complete(handle, valk_lval_nil());
@@ -185,7 +187,8 @@ static valk_lval_t* valk_builtin_http2_server_handle(valk_lenv_t* e,
 // LCOV_EXCL_STOP
 
 static valk_lval_t* valk_builtin_http2_client_request(valk_lenv_t* e,
-                                                       valk_lval_t* a) {
+                                                        valk_lval_t* a) {
+  // LCOV_EXCL_BR_START - arg validation: type dispatch branches
   LVAL_ASSERT_COUNT_EQ(a, a, 4);
 
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
@@ -199,6 +202,7 @@ static valk_lval_t* valk_builtin_http2_client_request(valk_lenv_t* e,
 
   valk_lval_t* path_arg = valk_lval_list_nth(a, 3);
   LVAL_ASSERT_TYPE(a, path_arg, LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   const char* host = host_arg->str;
@@ -209,7 +213,8 @@ static valk_lval_t* valk_builtin_http2_client_request(valk_lenv_t* e,
 }
 
 static valk_lval_t* valk_builtin_http2_client_request_with_headers(valk_lenv_t* e,
-                                                                    valk_lval_t* a) {
+                                                                     valk_lval_t* a) {
+  // LCOV_EXCL_BR_START - arg validation: type dispatch branches
   LVAL_ASSERT_COUNT_EQ(a, a, 5);
 
   valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
@@ -226,6 +231,7 @@ static valk_lval_t* valk_builtin_http2_client_request_with_headers(valk_lenv_t* 
 
   valk_lval_t* headers_arg = valk_lval_list_nth(a, 4);
   LVAL_ASSERT_TYPE(a, headers_arg, LVAL_QEXPR);
+  // LCOV_EXCL_BR_STOP
 
   valk_aio_system_t* sys = aio_ref->ref.ptr;
   const char* host = host_arg->str;

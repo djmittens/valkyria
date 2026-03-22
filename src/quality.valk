@@ -18,8 +18,8 @@
   if (nil? entries) {acc}
   {do
     (= {entry} (head entries))
-    (= {name} (plist/get entry :name))
-    (= {etype} (plist/get entry :type))
+    (= {name} entry:name)
+    (= {etype} entry:type)
     (= {path} (str dir "/" name))
     (= {rest} (tail entries))
     (if (== etype "file")
@@ -122,7 +122,7 @@
   if (nil? rows) {0}
   {do
     (= {row} (head rows))
-    (= {p} (plist/get row :path))
+    (= {p} row:path)
     (if (== p path) {plist/get row key}
     {if (== p (str "file://" path)) {plist/get row key}
       {quality/lookup-by-path (tail rows) path key}})}
@@ -161,9 +161,9 @@
     (= {text} (read-file path))
     (= {lines} (if (error? text) {0} {quality/count-lines text}))
     (= {stats} (quality/find-file-stat file-stats path))
-    (= {sym-count} (if (nil? stats) {0} {plist/get stats :sym_count}))
-    (= {fun-count} (if (nil? stats) {0} {plist/get stats :fun_count}))
-    (= {dead-count} (if (nil? stats) {0} {plist/get stats :dead_count}))
+    (= {sym-count} (if (nil? stats) {0} {stats:sym_count}))
+    (= {fun-count} (if (nil? stats) {0} {stats:fun_count}))
+    (= {dead-count} (if (nil? stats) {0} {stats:dead_count}))
     (= {fi} (quality/lookup-by-path fan-in-data path :fan_in))
     (= {fo} (quality/lookup-by-path fan-out-data path :fan_out))
     (= {mfo} (quality/lookup-by-path max-fo-data path :max_fan_out))
@@ -187,7 +187,7 @@
   if (nil? file-stats) {nil}
   {do
     (= {row} (head file-stats))
-    (= {db-path} (plist/get row :path))
+    (= {db-path} row:path)
     (if (== db-path path) {row}
     {if (== db-path (str "file://" path)) {row}
       {quality/find-file-stat (tail file-stats) path}})}
@@ -201,9 +201,9 @@
   if (nil? dead) {reverse acc}
   {do
     (= {d} (head dead))
-    (= {entry} (str "    {\"name\": " (json/str (plist/get d :name))
-                    ", \"file\": " (json/str (quality/strip-prefix (plist/get d :path) root))
-                    ", \"line\": " (json/num (plist/get d :line))
+    (= {entry} (str "    {\"name\": " (json/str d:name)
+                    ", \"file\": " (json/str (quality/strip-prefix d:path root))
+                    ", \"line\": " (json/num d:line)
                     "}"))
     (quality/emit-dead-walk (tail dead) root (qcons entry acc))}
 })
@@ -216,9 +216,9 @@
   if (nil? hotspots) {reverse acc}
   {do
     (= {h} (head hotspots))
-    (= {entry} (str "    {\"name\": " (json/str (plist/get h :name))
-                    ", \"file\": " (json/str (quality/strip-prefix (plist/get h :path) root))
-                    ", \"refs\": " (json/num (plist/get h :cnt))
+    (= {entry} (str "    {\"name\": " (json/str h:name)
+                    ", \"file\": " (json/str (quality/strip-prefix h:path root))
+                    ", \"refs\": " (json/num h:cnt)
                     "}"))
     (quality/emit-hotspots-walk (tail hotspots) root (qcons entry acc))}
 })
@@ -231,9 +231,9 @@
   if (nil? fanout) {reverse acc}
   {do
     (= {f} (head fanout))
-    (= {entry} (str "    {\"name\": " (json/str (plist/get f :name))
-                    ", \"file\": " (json/str (quality/strip-prefix (plist/get f :path) root))
-                    ", \"deps\": " (json/num (plist/get f :cnt))
+    (= {entry} (str "    {\"name\": " (json/str f:name)
+                    ", \"file\": " (json/str (quality/strip-prefix f:path root))
+                    ", \"deps\": " (json/num f:cnt)
                     "}"))
     (quality/emit-fanout-walk (tail fanout) root (qcons entry acc))}
 })
@@ -246,9 +246,9 @@
   if (nil? coupling) {reverse acc}
   {do
     (= {c} (head coupling))
-    (= {entry} (str "    {\"source\": " (json/str (quality/strip-prefix (plist/get c :source) root))
-                    ", \"target\": " (json/str (quality/strip-prefix (plist/get c :target) root))
-                    ", \"refs\": " (json/num (plist/get c :cnt))
+    (= {entry} (str "    {\"source\": " (json/str (quality/strip-prefix c:source root))
+                    ", \"target\": " (json/str (quality/strip-prefix c:target root))
+                    ", \"refs\": " (json/num c:cnt)
                     "}"))
     (quality/emit-coupling-walk (tail coupling) root (qcons entry acc))}
 })

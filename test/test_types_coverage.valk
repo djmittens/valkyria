@@ -54,11 +54,11 @@
         match a
           {(Cat :name n)
             (= {prefix} "cat:")
-            (str/concat prefix n)}
+            (str prefix n)}
           {(Dog :name n :breed b)
             (= {prefix} "dog:")
-            (= {info} (str/concat n "-" b))
-            (str/concat prefix info)}
+            (= {info} (str n "-" b))
+            (str prefix info)}
           {(Fish) "fish"}
       }))
       (test/assert-eq "cat:whiskers" (process (Cat :name "whiskers")) "multi-expr cat")
@@ -123,8 +123,8 @@
     {do
       (= {which} (\ {a} {
         match a
-          {(Animal::Cat :name n) (str/concat "cat:" n)}
-          {(Animal::Dog :name n :breed b) (str/concat "dog:" n)}
+          {(Animal::Cat :name n) (str "cat:" n)}
+          {(Animal::Dog :name n :breed b) (str "dog:" n)}
           {(Animal::Fish) "fish"}
       }))
       (test/assert-eq "cat:mr" (which (Cat :name "mr")) "qualified Cat match")
@@ -202,7 +202,7 @@
     {do
       (= {describe-dog} (\ {a} {
         match a
-          {(Dog n b) (str/concat n " the " b)}
+          {(Dog n b) (str n " the " b)}
           {_ "not a dog"}
       }))
       (test/assert-eq "rex the lab" (describe-dog (Dog "rex" "lab")) "positional multi-bind")
@@ -238,8 +238,10 @@
   (test "redeclare-existing-type-is-noop"
     {do
       (type {Color} {Red} {Green} {Blue})
-      (= {c} (Red))
-      (test/assert (== (head c) (head {Color::Red})) "redeclared type still works")
+      (= {c1} (Red))
+      (type {Color} {Red} {Green} {Blue})
+      (= {c2} (Red))
+      (test/assert (== c1 c2) "redeclared type still works")
       true
     })
 

@@ -112,8 +112,8 @@ static int find_sym_offset(const char *text, const char *sym,
 
 static const char *SPECIAL_FORMS[] = {
   "=", "\\", "def", "fun", "if", "do", "select", "case", "quote",
-  "load", "eval", "read", "let", "aio/let", "aio/do", "<-",
-  "type", "match", "sig", "ctx/with", "ctx/with-deadline",
+  "load", "load-raw", "eval", "read", "let", "aio/let", "aio/do", "<-",
+  "type", "match", "sig", "ctx/with", "ctx/with-deadline", "with",
   nullptr
 };
 
@@ -145,7 +145,10 @@ static void extract_type_ctors(valk_lval_t *tail, symset_t *globals) {
     valk_lval_t *name_q = valk_lval_head(tail);
     if (name_q && LVAL_TYPE(name_q) == LVAL_CONS) {
       valk_lval_t *tn = valk_lval_head(name_q);
-      if (tn && LVAL_TYPE(tn) == LVAL_SYM) type_name = tn->str;
+      if (tn && LVAL_TYPE(tn) == LVAL_SYM) {
+        type_name = tn->str;
+        symset_add(globals, type_name);
+      }
     }
     tail = valk_lval_tail(tail);
   }
@@ -191,6 +194,46 @@ static void extract_global_symbols_from_text(const char *text,
       if (sig_name && LVAL_TYPE(sig_name) == LVAL_SYM)
         symset_add(globals, sig_name->str);
     }
+  }
+}
+
+static void resolve_load_exports(const char *text, symset_t *globals,
+                                 symset_t *visited) {
+  int pos = 0, len = (int)strlen(text);
+  while (pos < len) {
+    while (pos < len && strchr(" \t\r\n", text[pos])) pos++;
+    if (pos >= len) break;
+    if (text[pos] == ';') { while (pos < len && text[pos] != '\n') pos++; continue; }
+    valk_lval_t *expr = valk_lval_read(&pos, text);
+    if (LVAL_TYPE(expr) == LVAL_ERR) break;
+    if (LVAL_TYPE(expr) != LVAL_CONS) continue;
+
+    valk_lval_t *head = valk_lval_head(expr);
+    if (!head || LVAL_TYPE(head) != LVAL_SYM) continue;
+    if (strcmp(head->str, "load") != 0) continue;
+
+    valk_lval_t *tail = valk_lval_tail(expr);
+    if (!tail || LVAL_TYPE(tail) != LVAL_CONS) continue;
+    valk_lval_t *arg = valk_lval_head(tail);
+    if (!arg || LVAL_TYPE(arg) != LVAL_STR) continue;
+
+    const char *path = arg->str;
+    if (symset_contains(visited, path)) continue;
+    symset_add(visited, path);
+
+    FILE *f = fopen(path, "rb");
+    if (!f) continue;
+    fseek(f, 0, SEEK_END);
+    long flen = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (flen <= 0) { fclose(f); continue; }
+    char *dep_text = calloc(flen + 1, 1);
+    fread(dep_text, 1, flen, f);
+    fclose(f);
+
+    extract_global_symbols_from_text(dep_text, globals);
+    resolve_load_exports(dep_text, globals, visited);
+    free(dep_text);
   }
 }
 
@@ -259,6 +302,15 @@ static void walk_sym(walk_ctx_t *w, valk_lval_t *expr) {
   if (name[0] >= 'A' && name[0] <= 'Z') {
     const char *colon = strchr(name, ':');
     if (colon && colon != name && colon[1] != '\0' && colon[1] != ':') {
+      advance_cursor(w, name);
+      return;
+    }
+  }
+
+  if (name[0] >= 'a' && name[0] <= 'z') {
+    const char *colon = strchr(name, ':');
+    if (colon && colon != name && colon[1] >= 'a' && colon[1] <= 'z' &&
+        colon[1] != ':') {
       advance_cursor(w, name);
       return;
     }
@@ -633,6 +685,11 @@ valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
   symset_init(&file_defs);
   extract_global_symbols_from_text(text, &file_defs);
 
+  symset_t visited;
+  symset_init(&visited);
+  resolve_load_exports(text, &file_defs, &visited);
+  symset_free(&visited);
+
   valk_diag_list_t diags;
   valk_diag_init(&diags);
 
@@ -657,7 +714,7 @@ valk_diag_list_t valk_validate_ast(valk_lval_t *ast, const char *text,
   while (rest && LVAL_TYPE(rest) == LVAL_CONS) {
     valk_lval_t *expr = valk_lval_head(rest);
     if (LVAL_TYPE(expr) == LVAL_ERR) break;
-    if (expr->src_pos >= 0) cursor = expr->src_pos;
+    if (LVAL_SRC_POS(expr) >= 0) cursor = LVAL_SRC_POS(expr);
     walk_expr(&w, expr);
     rest = valk_lval_tail(rest);
   }

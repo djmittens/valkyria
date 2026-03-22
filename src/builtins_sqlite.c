@@ -113,9 +113,11 @@ typedef struct {
 
 static valk_lval_t *prepare_query(valk_lval_t *a, const char *fn_name,
                                   query_ctx_t *ctx) {
+  // LCOV_EXCL_BR_START - arg validation
   valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_DB(a, db_ref);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   ctx->db = db_ref->ref.ptr;
   if (!ctx->db) LVAL_RAISE(a, "%s: database is closed", fn_name);
@@ -148,8 +150,10 @@ static void cleanup_query(query_ctx_t *ctx) {
 
 static valk_lval_t *valk_builtin_sqlite_open(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_GE(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   const char *path = valk_lval_list_nth(a, 0)->str;
   sqlite3 *db = nullptr;
@@ -172,9 +176,11 @@ static valk_lval_t *valk_builtin_sqlite_open(valk_lenv_t *e, valk_lval_t *a) {
 
 static valk_lval_t *valk_builtin_sqlite_close(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_DB(a, db_ref);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3 *db = db_ref->ref.ptr;
   if (db) {
@@ -191,10 +197,12 @@ static valk_lval_t *valk_builtin_sqlite_close(valk_lenv_t *e, valk_lval_t *a) {
 
 static valk_lval_t *valk_builtin_sqlite_exec(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_GE(a, a, 2);
   valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_DB(a, db_ref);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3 *db = db_ref->ref.ptr;
   if (!db) LVAL_RAISE(a, "sqlite/exec: database is closed");
@@ -231,10 +239,12 @@ static valk_lval_t *valk_builtin_sqlite_exec(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_sqlite_exec_script(valk_lenv_t *e,
                                                      valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_DB(a, db_ref);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3 *db = db_ref->ref.ptr;
   if (!db) LVAL_RAISE(a, "sqlite/exec-script: database is closed");
@@ -258,7 +268,7 @@ static valk_lval_t *valk_builtin_sqlite_exec_script(valk_lenv_t *e,
 
 static valk_lval_t *valk_builtin_sqlite_query(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_GE(a, a, 2);
+  LVAL_ASSERT_COUNT_GE(a, a, 2); // LCOV_EXCL_BR_LINE - arg validation
 
   query_ctx_t ctx;
   valk_lval_t *err = prepare_query(a, "sqlite/query", &ctx);
@@ -297,7 +307,7 @@ static valk_lval_t *valk_builtin_sqlite_query(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_sqlite_query_row(valk_lenv_t *e,
                                                    valk_lval_t *a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_GE(a, a, 2);
+  LVAL_ASSERT_COUNT_GE(a, a, 2); // LCOV_EXCL_BR_LINE - arg validation
 
   query_ctx_t ctx;
   valk_lval_t *err = prepare_query(a, "sqlite/query-row", &ctx);
@@ -328,7 +338,7 @@ static valk_lval_t *valk_builtin_sqlite_query_row(valk_lenv_t *e,
 static valk_lval_t *valk_builtin_sqlite_query_maybe(valk_lenv_t *e,
                                                      valk_lval_t *a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_GE(a, a, 2);
+  LVAL_ASSERT_COUNT_GE(a, a, 2); // LCOV_EXCL_BR_LINE - arg validation
 
   query_ctx_t ctx;
   valk_lval_t *err = prepare_query(a, "sqlite/query-maybe", &ctx);
@@ -364,7 +374,7 @@ static valk_lval_t *valk_builtin_sqlite_query_maybe(valk_lenv_t *e,
 static valk_lval_t *valk_builtin_sqlite_query_value(valk_lenv_t *e,
                                                      valk_lval_t *a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_GE(a, a, 2);
+  LVAL_ASSERT_COUNT_GE(a, a, 2); // LCOV_EXCL_BR_LINE - arg validation
 
   query_ctx_t ctx;
   valk_lval_t *err = prepare_query(a, "sqlite/query-value", &ctx);
@@ -400,10 +410,12 @@ static valk_lval_t *valk_builtin_sqlite_query_value(valk_lenv_t *e,
 static valk_lval_t *valk_builtin_sqlite_prepare(valk_lenv_t *e,
                                                  valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_DB(a, db_ref);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3 *db = db_ref->ref.ptr;
   if (!db) LVAL_RAISE(a, "sqlite/prepare: database is closed");
@@ -420,9 +432,11 @@ static valk_lval_t *valk_builtin_sqlite_prepare(valk_lenv_t *e,
 
 static valk_lval_t *valk_builtin_sqlite_bind(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_GE(a, a, 1);
   valk_lval_t *stmt_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_STMT(a, stmt_ref);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3_stmt *stmt = stmt_ref->ref.ptr;
   if (!stmt) LVAL_RAISE(a, "sqlite/bind: statement is finalized");
@@ -439,9 +453,11 @@ static valk_lval_t *valk_builtin_sqlite_bind(valk_lenv_t *e, valk_lval_t *a) {
 
 static valk_lval_t *valk_builtin_sqlite_step(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t *stmt_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_STMT(a, stmt_ref);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3_stmt *stmt = stmt_ref->ref.ptr;
   if (!stmt) LVAL_RAISE(a, "sqlite/step: statement is finalized");
@@ -463,9 +479,11 @@ static valk_lval_t *valk_builtin_sqlite_step(valk_lenv_t *e, valk_lval_t *a) {
 static valk_lval_t *valk_builtin_sqlite_finalize(valk_lenv_t *e,
                                                   valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t *stmt_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_STMT(a, stmt_ref);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3_stmt *stmt = stmt_ref->ref.ptr;
   if (stmt) {
@@ -483,9 +501,11 @@ static valk_lval_t *valk_builtin_sqlite_finalize(valk_lenv_t *e,
 static valk_lval_t *valk_builtin_sqlite_last_insert_id(valk_lenv_t *e,
                                                         valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_DB(a, db_ref);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3 *db = db_ref->ref.ptr;
   if (!db) LVAL_RAISE(a, "sqlite/last-insert-id: database is closed");
@@ -496,9 +516,11 @@ static valk_lval_t *valk_builtin_sqlite_last_insert_id(valk_lenv_t *e,
 static valk_lval_t *valk_builtin_sqlite_changes(valk_lenv_t *e,
                                                  valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
   valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_DB(a, db_ref);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3 *db = db_ref->ref.ptr;
   if (!db) LVAL_RAISE(a, "sqlite/changes: database is closed");
@@ -509,10 +531,12 @@ static valk_lval_t *valk_builtin_sqlite_changes(valk_lenv_t *e,
 static valk_lval_t *valk_builtin_sqlite_busy_timeout(valk_lenv_t *e,
                                                       valk_lval_t *a) {
   UNUSED(e);
+  // LCOV_EXCL_BR_START - arg validation
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
   valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_SQLITE_DB(a, db_ref);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+  // LCOV_EXCL_BR_STOP
 
   sqlite3 *db = db_ref->ref.ptr;
   if (!db) LVAL_RAISE(a, "sqlite/busy-timeout: database is closed");

@@ -1,8 +1,8 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 (load "src/symdb.valk")
-(load "src/lsp-analysis.valk")
-(load "src/lsp-validate.valk")
+(load "src/lsp/analysis.valk")
+(load "src/lsp/validate.valk")
 
 (fun {make-test-db} {do
   (= {db} (sqlite/open ":memory:"))
@@ -30,9 +30,9 @@
       (= {syms} (symdb/extract-symbols "(fun {add x y} {+ x y})"))
       (test/assert-eq 1 (len syms) "should extract 1 symbol")
       (= {s} (head syms))
-      (test/assert-eq "add" (plist/get s :name) "name should be add")
-      (test/assert-eq SYMKIND_FUNCTION (plist/get s :kind) "kind should be function")
-      (test/assert-eq 2 (plist/get s :arity) "arity should be 2")
+      (test/assert-eq "add" s:name "name should be add")
+      (test/assert-eq SYMKIND_FUNCTION s:kind "kind should be function")
+      (test/assert-eq 2 s:arity "arity should be 2")
       true
     })
 
@@ -41,8 +41,8 @@
       (= {syms} (symdb/extract-symbols "(def {MY_CONST} 42)"))
       (test/assert-eq 1 (len syms) "should extract 1 symbol")
       (= {s} (head syms))
-      (test/assert-eq "MY_CONST" (plist/get s :name) "name should be MY_CONST")
-      (test/assert-eq SYMKIND_VARIABLE (plist/get s :kind) "kind should be variable")
+      (test/assert-eq "MY_CONST" s:name "name should be MY_CONST")
+      (test/assert-eq SYMKIND_VARIABLE s:kind "kind should be variable")
       true
     })
 
@@ -50,7 +50,7 @@
     {do
       (= {syms} (symdb/extract-symbols "(type {Color} {Red} {Green} {Blue})"))
       (test/assert-eq 4 (len syms) "type + 3 constructors = 4 symbols")
-      (= {names} (map (\{s} {plist/get s :name}) syms))
+      (= {names} (map (\{s} {s:name}) syms))
       (test/assert (member? "Color" names) "should have Color")
       (test/assert (member? "Red" names) "should have Red")
       (test/assert (member? "Green" names) "should have Green")
@@ -61,9 +61,9 @@
   (test "extract-type-ctor-arity"
     {do
       (= {syms} (symdb/extract-symbols "(type {Point} {Point :x :y})"))
-      (= {ctor} (head (filter (\{s} {== (plist/get s :kind) SYMKIND_CONSTRUCTOR}) syms)))
-      (test/assert-eq "Point" (plist/get ctor :name) "ctor name should be Point")
-      (test/assert-eq 2 (plist/get ctor :arity) "ctor arity should be 2")
+      (= {ctor} (head (filter (\{s} {== s:kind SYMKIND_CONSTRUCTOR}) syms)))
+      (test/assert-eq "Point" ctor:name "ctor name should be Point")
+      (test/assert-eq 2 ctor:arity "ctor arity should be 2")
       true
     })
 
@@ -72,8 +72,8 @@
       (= {syms} (symdb/extract-symbols "(sig 'my-fn {-> Num Num Num})"))
       (test/assert-eq 1 (len syms) "should extract 1 sig symbol")
       (= {s} (head syms))
-      (test/assert-eq "my-fn" (plist/get s :name) "name should be my-fn")
-      (test/assert-eq 1 (plist/get s :is-sig) "should be marked as sig")
+      (test/assert-eq "my-fn" s:name "name should be my-fn")
+      (test/assert-eq 1 s:is-sig "should be marked as sig")
       true
     })
 
@@ -95,7 +95,7 @@
     {do
       (= {syms} (symdb/extract-symbols "(fun {f x & rest} {rest})"))
       (= {s} (head syms))
-      (test/assert-eq 1 (plist/get s :arity) "arity should stop at &")
+      (test/assert-eq 1 s:arity "arity should stop at &")
       true
     })
 
@@ -103,7 +103,7 @@
     {do
       (= {syms} (symdb/extract-symbols "(fun {f x :: Num -> Num} {x})"))
       (= {s} (head syms))
-      (test/assert-eq 1 (plist/get s :arity) "arity should stop at ::")
+      (test/assert-eq 1 s:arity "arity should stop at ::")
       true
     })
 
@@ -113,7 +113,7 @@
     {do
       (= {refs} (symdb/extract-refs "(+ foo bar)"))
       (test/assert (>= (len refs) 3) "should extract refs for +, foo, bar")
-      (= {names} (map (\{r} {plist/get r :name}) refs))
+      (= {names} (map (\{r} {r:name}) refs))
       (test/assert (member? "+" names) "should have +")
       (test/assert (member? "foo" names) "should have foo")
       (test/assert (member? "bar" names) "should have bar")
@@ -143,8 +143,8 @@
       (symdb/sync-document db "file:///test.valk" text)
       (= {def} (symdb/find-definition db "greet"))
       (test/assert (not (nil? def)) "should find definition")
-      (test/assert-eq "greet" (plist/get def :name) "name should be greet")
-      (test/assert-eq "/test.valk" (plist/get def :path) "path should match")
+      (test/assert-eq "greet" def:name "name should be greet")
+      (test/assert-eq "/test.valk" def:path "path should match")
       (sqlite/close db)
       true
     })
@@ -166,7 +166,8 @@
       (symdb/sync-document db "file:///t.valk" "(fun {my-func x} {x})")
       (= {results} (symdb/search-symbols db "my"))
       (test/assert (>= (len results) 1) "should find my-func by prefix")
-      (test/assert-eq "my-func" (plist/get (head results) :name) "name should match")
+      (= {first-result} (head results))
+      (test/assert-eq "my-func" first-result:name "name should match")
       (sqlite/close db)
       true
     })
@@ -195,13 +196,13 @@
   (test "sync-updates-on-change"
     {do
       (= {db} (make-test-db))
-      (symdb/sync-document db "file:///t.valk" "(fun {old-fn} {1})")
-      (symdb/sync-document db "file:///t.valk" "(fun {new-fn} {1})")
+      (= {_} (symdb/sync-document db "file:///t.valk" "(fun {old-fn} {1})"))
+      (= {_} (symdb/sync-document db "file:///t.valk" "(fun {new-fn a} {a})"))
       (= {old} (symdb/find-definition db "old-fn"))
       (= {new} (symdb/find-definition db "new-fn"))
       (test/assert (nil? old) "old-fn should be gone after resync")
       (test/assert (not (nil? new)) "new-fn should exist after resync")
-      (sqlite/close db)
+      (= {_} (sqlite/close db))
       true
     })
 
@@ -224,7 +225,7 @@
       (symdb/sync-document db "file:///t.valk" text)
       (= {hover} (symdb/symbol-hover db "add"))
       (test/assert (not (nil? hover)) "should find hover info")
-      (= {sig} (plist/get hover :sig))
+      (= {sig} hover:sig)
       (test/assert (not (nil? sig)) "should have sig from sig declaration")
       (sqlite/close db)
       true
@@ -237,7 +238,7 @@
       (= {text} "; Add two numbers\n(fun {add x y} {+ x y})")
       (= {syms} (symdb/extract-symbols text))
       (= {s} (head syms))
-      (= {doc} (plist/get s :doc))
+      (= {doc} s:doc)
       (test/assert (not (nil? doc)) "should extract doc comment")
       (test/assert-eq "Add two numbers" doc "doc should match comment text")
       true
@@ -247,7 +248,7 @@
     {do
       (= {syms} (symdb/extract-symbols "(fun {f} {1})"))
       (= {s} (head syms))
-      (test/assert (nil? (plist/get s :doc)) "no comment = nil doc")
+      (test/assert (nil? s:doc) "no comment = nil doc")
       true
     })
 
@@ -259,8 +260,8 @@
       (symdb/sync-document db "file:///t.valk" "; Add nums\n(fun {add x y} {+ x y})")
       (= {h} (symdb/symbol-hover db "add"))
       (test/assert (not (nil? h)) "hover should return info")
-      (test/assert-eq "add" (plist/get h :name) "name should match")
-      (test/assert (not (nil? (plist/get h :doc))) "should have doc")
+      (test/assert-eq "add" h:name "name should match")
+      (test/assert (not (nil? h:doc)) "should have doc")
       (sqlite/close db)
       true
     })

@@ -30,6 +30,10 @@ valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
   }
   // LCOV_EXCL_BR_STOP
 
+#ifdef MADV_NOHUGEPAGE
+  madvise(heap->base, heap->reserved, MADV_NOHUGEPAGE);
+#endif
+
   sz region_size = heap->reserved / VALK_GC_NUM_SIZE_CLASSES;
   region_size = region_size & ~(sz)4095;
 

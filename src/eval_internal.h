@@ -27,7 +27,8 @@ typedef enum {
 typedef struct valk_cont_frame {
   valk_cont_kind_e kind;
   valk_lenv_t *env;
-  
+  sz scratch_offset;
+
   union {
     struct {
       valk_lval_t *func;

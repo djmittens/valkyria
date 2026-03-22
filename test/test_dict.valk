@@ -29,9 +29,9 @@
   (test "dict-put-symbol-key"
     {do
       (= {d} (dict/new))
-      (dict/put! d 'foo)
+      (dict/put! d :foo)
       (test/assert-eq 1 (dict/count d) "should have 1 element")
-      (test/assert-eq 1 (dict/has? d 'foo) "should contain symbol foo")
+      (test/assert-eq 1 (dict/has? d :foo) "should contain symbol foo")
       true
     })
 
@@ -70,9 +70,9 @@
   (test "dict-has-symbol"
     {do
       (= {d} (dict/new))
-      (dict/put! d 'bar)
-      (test/assert-eq 1 (dict/has? d 'bar) "should find symbol key")
-      (test/assert-eq 0 (dict/has? d 'baz) "should not find missing symbol")
+      (dict/put! d :bar)
+      (test/assert-eq 1 (dict/has? d :bar) "should find symbol key")
+      (test/assert-eq 0 (dict/has? d :baz) "should not find missing symbol")
       true
     })
 
@@ -88,9 +88,9 @@
 
   (test "dict-from-keys-symbols"
     {do
-      (= {d} (dict/from-keys (list 'x 'y 'z)))
+      (= {d} (dict/from-keys (list :x :y :z)))
       (test/assert-eq 3 (dict/count d) "should have 3 keys")
-      (test/assert-eq 1 (dict/has? d 'x) "should contain x")
+      (test/assert-eq 1 (dict/has? d :x) "should contain x")
       true
     })
 
@@ -227,8 +227,8 @@
   (test "dict-set-symbol-key"
     {do
       (= {d} (dict/new))
-      (dict/set! d 'status "active")
-      (test/assert-eq "active" (dict/get d 'status) "should get value with symbol key")
+      (dict/set! d :status "active")
+      (test/assert-eq "active" (dict/get d :status) "should get value with symbol key")
       true
     })
 

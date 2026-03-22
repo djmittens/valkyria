@@ -6,18 +6,20 @@
   (test "parse-self-closing"
     {do
     (= {doc} (xml/parse "<root/>"))
-    (test/assert-eq "root" (plist/get doc :tag) "tag name")
-    (test/assert-eq 0 (len (plist/get doc :children)) "no children")
+    (test/assert-eq "root" doc:tag "tag name")
+    (test/assert-eq 0 (len doc:children) "no children")
     true
   })
 
   (test "parse-with-children"
     {do
     (= {doc} (xml/parse "<root><a/><b/></root>"))
-    (= {children} (plist/get doc :children))
+    (= {children} doc:children)
     (test/assert-eq 2 (len children) "two children")
-    (test/assert-eq "a" (plist/get (nth 1 children) :tag) "first child")
-    (test/assert-eq "b" (plist/get (nth 2 children) :tag) "second child")
+    (= {c1} (nth 1 children))
+    (test/assert-eq "a" c1:tag "first child")
+    (= {c2} (nth 2 children))
+    (test/assert-eq "b" c2:tag "second child")
     true
   })
 
@@ -25,16 +27,16 @@
     {do
     (= {xml} "<item name=\"hello\" count=\"42\"/>")
     (= {doc} (xml/parse xml))
-    (= {attrs} (plist/get doc :attrs))
-    (test/assert-eq "hello" (plist/get attrs :name) "string attr")
-    (test/assert-eq "42" (plist/get attrs :count) "number-valued attr is string")
+    (= {attrs} doc:attrs)
+    (test/assert-eq "hello" attrs:name "string attr")
+    (test/assert-eq "42" attrs:count "number-valued attr is string")
     true
   })
 
   (test "parse-text-content"
     {do
     (= {doc} (xml/parse "<msg>hello world</msg>"))
-    (test/assert-eq "hello world" (plist/get doc :text) "text content")
+    (test/assert-eq "hello world" doc:text "text content")
     true
   })
 
@@ -42,17 +44,18 @@
     {do
     (= {xml} "<root><parent><child val=\"1\"/></parent></root>")
     (= {doc} (xml/parse xml))
-    (= {parent} (head (plist/get doc :children)))
-    (= {child} (head (plist/get parent :children)))
-    (test/assert-eq "child" (plist/get child :tag) "nested tag")
-    (test/assert-eq "1" (plist/get (plist/get child :attrs) :val) "nested attr")
+    (= {parent} (head doc:children))
+    (= {child} (head parent:children))
+    (test/assert-eq "child" child:tag "nested tag")
+    (= {a} child:attrs)
+    (test/assert-eq "1" a:val "nested attr")
     true
   })
 
   (test "parse-no-attrs-gives-nil"
     {do
     (= {doc} (xml/parse "<bare/>"))
-    (= {attrs} (plist/get doc :attrs))
+    (= {attrs} doc:attrs)
     (test/assert-eq 0 (len attrs) "no attrs is empty")
     true
   })
@@ -75,19 +78,24 @@
         "</packages>"
       "</coverage>"))
     (= {doc} (xml/parse xml))
-    (test/assert-eq "coverage" (plist/get doc :tag) "root tag")
-    (= {pkgs} (plist/get doc :children))
-    (= {pkg} (head (plist/get (head pkgs) :children)))
-    (= {cls} (head (plist/get (head (plist/get pkg :children)) :children)))
-    (test/assert-eq "src/foo.c" (plist/get (plist/get cls :attrs) :filename) "class filename")
-    (= {lines-elem} (head (plist/get cls :children)))
-    (= {lines} (plist/get lines-elem :children))
+    (test/assert-eq "coverage" doc:tag "root tag")
+    (= {pkgs} doc:children)
+    (= {first-pkg} (head pkgs))
+    (= {pkg} (head first-pkg:children))
+    (= {first-child} (head pkg:children))
+    (= {cls} (head first-child:children))
+    (= {ca} cls:attrs)
+    (test/assert-eq "src/foo.c" ca:filename "class filename")
+    (= {lines-elem} (head cls:children))
+    (= {lines} lines-elem:children)
     (test/assert-eq 2 (len lines) "two line elements")
     (= {line1} (nth 1 lines))
-    (test/assert-eq "10" (plist/get (plist/get line1 :attrs) :number) "line number")
-    (test/assert-eq "5" (plist/get (plist/get line1 :attrs) :hits) "hit count")
+    (= {al1} line1:attrs)
+    (test/assert-eq "10" al1:number "line number")
+    (test/assert-eq "5" al1:hits "hit count")
     (= {line2} (nth 2 lines))
-    (test/assert-eq "50% (1/2)" (plist/get (plist/get line2 :attrs) :condition-coverage) "condition coverage")
+    (= {al2} line2:attrs)
+    (test/assert-eq "50% (1/2)" al2:condition-coverage "condition coverage")
     true
   })
 
@@ -107,9 +115,29 @@
     {do
     (= {xml} (str "<root>\n  <child/>\n</root>"))
     (= {doc} (xml/parse xml))
-    (= {children} (plist/get doc :children))
+    (= {children} doc:children)
     (test/assert-eq 1 (len children) "whitespace-only text nodes ignored")
-    (test/assert-eq "child" (plist/get (head children) :tag) "child tag")
+    (= {fc} (head children))
+    (test/assert-eq "child" fc:tag "child tag")
+    true
+  })
+
+  (test "parse-empty-string"
+    {do
+    (test/assert (error? (xml/parse "")) "empty string should error")
+    true
+  })
+
+  (test "parse-malformed-xml"
+    {do
+    (test/assert (error? (xml/parse "<")) "bare angle bracket should error")
+    (test/assert (error? (xml/parse "not xml at all")) "non-xml text should error")
+    true
+  })
+
+  (test "parse-mismatched-tags"
+    {do
+    (test/assert (error? (xml/parse "<a></b>")) "mismatched tags should error")
     true
   })
 

@@ -1171,7 +1171,7 @@ void test_lval_copy_builtin(VALK_TEST_ARGS()) {
   valk_lval_t *copy = valk_lval_copy(plus);
 
   VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
-  VALK_TEST_ASSERT(copy != plus, "copy should be different pointer");
+  VALK_TEST_ASSERT(copy == plus, "immortal builtin copy should return same pointer");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_FUN, "copy type should be FUN");
   VALK_TEST_ASSERT(copy->fun.builtin == plus->fun.builtin, "copy should have same builtin");
   VALK_TEST_ASSERT(copy->fun.env == nullptr, "copy env should be null for builtin");

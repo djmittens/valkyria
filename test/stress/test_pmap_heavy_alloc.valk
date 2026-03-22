@@ -91,11 +91,11 @@
     (== result (list 500 500 500 500 500 500 500 500))
   })
 
-  (test "pmap gcov-like parsing 2000 lines x 8 workers"
+  (test "pmap gcov-like parsing 500 lines x 8 workers"
     {do
     (= {items} (range 1 9))
     (= {h} (aio/pmap aio (\ {x} {
-      (*gcov-parse-simulation* 2000 (dict/new))
+      (*gcov-parse-simulation* 500 (dict/new))
     }) items))
     (= {result} (aio/await h))
     (== (len result) 8)

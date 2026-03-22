@@ -1,5 +1,6 @@
 #include "gc.h"
 #include "parser.h"
+#include "dict.h"
 #include "memory.h"
 #include "async_handle.h"
 #include "eval_internal.h"
@@ -105,6 +106,23 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
         if (obj->ref.mark)
           obj->ref.mark(obj->ref.ptr, ctx);
         return;
+      case LVAL_DICT: {
+        valk_dict_t *d = obj->dict.data;
+        if (d) {
+          mark_ptr_only(d, ctx);
+          valk_dict_cell_t *cells = dict_cells(d);
+          u32 *buckets = dict_buckets(d);
+          for (u32 b = 0; b < d->num_buckets; b++) {
+            u32 ci = buckets[b];
+            while (ci != DICT_EMPTY) {
+              if (cells[ci].value != nullptr)
+                mark_lval(cells[ci].value, ctx);
+              ci = cells[ci].next;
+            }
+          }
+        }
+        return;
+      }
       default:
         return;
     }
@@ -512,6 +530,7 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
     }
   }
 
+  // LCOV_EXCL_START - GC pause histogram: bucket timing is non-deterministic, untestable
   if (pause_us < 1000)
     atomic_fetch_add(&heap->runtime_metrics.pause_0_1ms, 1);
   else if (pause_us < 5000)
@@ -533,6 +552,7 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
             (unsigned long long)bytes_before,
             (unsigned long long)bytes_after);
   }
+  // LCOV_EXCL_STOP
 
   atomic_fetch_add(&valk_sys->parallel_cycles, 1);
   atomic_fetch_add(&valk_sys->parallel_pause_ns_total, pause_ns);

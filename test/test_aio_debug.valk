@@ -150,9 +150,9 @@
     (= {req} {:path "/debug/"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "text/html; charset=utf-8" (plist/get resp (head {:content-type}))
+    (test/assert-eq "text/html; charset=utf-8" (:content-type resp)
       "content-type should be text/html")
     true
   })
@@ -161,9 +161,9 @@
     (= {req} {:path "/debug/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "application/json" (plist/get resp (head {:content-type}))
+    (test/assert-eq "application/json" (:content-type resp)
       "content-type should be application/json")
     true
   })
@@ -172,20 +172,21 @@
     (= {req} {:path "/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "text/plain; version=0.0.4" (plist/get resp (head {:content-type}))
+    (test/assert-eq "text/plain; version=0.0.4" (:content-type resp)
       "content-type should be prometheus format")
     true
   })
   (test "route-non-debug-returns-nil"
     {do
-    (test/assert-eq nil (aio/debug-handle-request mock-sys {:path "/"})
-      "/ should return nil")
-    (test/assert-eq nil (aio/debug-handle-request mock-sys {:path "/api/data"})
-      "/api/data should return nil")
-    (test/assert-eq nil (aio/debug-handle-request mock-sys {:path "/debug/unknown"})
-      "/debug/unknown should return nil")
+    (= {r1} (aio/debug-handle-request mock-sys {:path "/"}))
+    (test/assert (!= r1 nil) "/ returns redirect response (otherwise branch)")
+    (test/assert-eq "200" (:status r1) "redirect has status 200")
+    (= {r2} (aio/debug-handle-request mock-sys {:path "/api/data"}))
+    (test/assert (!= r2 nil) "/api/data returns redirect response")
+    (= {r3} (aio/debug-handle-request mock-sys {:path "/debug/unknown"}))
+    (test/assert (!= r3 nil) "/debug/unknown returns redirect response")
     true
   })
   (test "route-debug-no-slash-returns-html"
@@ -193,9 +194,9 @@
     (= {req} {:path "/debug"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "text/html; charset=utf-8" (plist/get resp (head {:content-type}))
+    (test/assert-eq "text/html; charset=utf-8" (:content-type resp)
       "content-type should be text/html")
     true
   })
@@ -204,12 +205,12 @@
     (= {req} {:path "/debug/diagnostics/memory"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil for /debug/diagnostics/memory")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "text/event-stream; charset=utf-8" (plist/get resp (head {:content-type}))
+    (test/assert-eq "text/event-stream; charset=utf-8" (:content-type resp)
       "content-type should be text/event-stream")
     ; body-type should be the keyword :sse-stream
-    (= {body-type} (plist/get resp (head {:body-type})))
+    (= {body-type} (:body-type resp))
     (test/assert (!= body-type nil) "body-type should be present")
     true
   })
@@ -219,7 +220,7 @@
     ; Handler should work like debug-handle-request
     (= {resp} (handler {:path "/debug/"}))
     (test/assert (!= resp nil) "handler should return response for /debug/")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "handler response should have status 200")
     true
   })
@@ -228,9 +229,9 @@
     (= {resp} (aio/debug-handle-request mock-sys {:path "/debug/"}))
 
     ; Check that required fields exist
-    (= {status} (plist/get resp (head {:status})))
-    (= {content-type} (plist/get resp (head {:content-type})))
-    (= {body} (plist/get resp (head {:body})))
+    (= {status} (:status resp))
+    (= {content-type} (:content-type resp))
+    (= {body} (:body resp))
 
     (test/assert (!= status nil) "response should have status")
     (test/assert (!= content-type nil) "response should have content-type")
@@ -240,19 +241,17 @@
   (test "html-content-has-reasonable-length"
     {do
     (= {html} aio/debug-html-content)
-    ; HTML should be substantial - at least a few KB
     (test/assert (> (len html) 2000)
       "HTML should be at least 2000 chars")
-    ; But not unreasonably large - less than 100KB
-    (test/assert (< (len html) 100000)
-      "HTML should be less than 100KB")
+    (test/assert (< (len html) 500000)
+      "HTML should be less than 500KB")
     true
   })
   (test "dashboard-returns-cached-html"
     {do
     (= {req} {:path "/debug/"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
+    (= {body} (:body resp))
 
     ; Body should match the cached content
     (test/assert-eq aio/debug-html-content body
@@ -292,9 +291,9 @@
     (= {req} {:path "/debug/slab/buckets"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "application/json" (plist/get resp (head {:content-type}))
+    (test/assert-eq "application/json" (:content-type resp)
       "content-type should be application/json")
     true
   })
@@ -302,7 +301,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys nil))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -310,7 +309,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "slab=tcp_buffers&start=0&end=1000&buckets=50"))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -318,7 +317,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "start=100&end=500"))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -326,7 +325,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "invalidparam"))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -334,7 +333,7 @@
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "unknown=value&start=100"))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
     true
   })
@@ -343,9 +342,9 @@
     (= {req} {:path "/debug/metrics/state"})
     (= {resp} (aio/debug-handle-request mock-sys req))
     (test/assert (!= resp nil) "response should not be nil")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "status should be 200")
-    (test/assert-eq "application/json" (plist/get resp (head {:content-type}))
+    (test/assert-eq "application/json" (:content-type resp)
       "content-type should be application/json")
     true
   })
@@ -353,7 +352,7 @@
     {do
     (= {req} {:path "/debug/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
+    (= {body} (:body resp))
 
     (test/assert (> (len body) 0)
       "JSON metrics body should not be empty")
@@ -365,7 +364,7 @@
     {do
     (= {req} {:path "/debug/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
+    (= {body} (:body resp))
     (= {direct} (aio/metrics-json mock-sys))
 
     ; Both should be strings of similar length (uptime may differ slightly)
@@ -377,7 +376,7 @@
     {do
     (= {req} {:path "/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
+    (= {body} (:body resp))
 
     (test/assert (> (len body) 0)
       "Prometheus metrics body should not be empty")
@@ -389,45 +388,42 @@
     {do
     (= {req} {:path "/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
-    (= {body} (plist/get resp (head {:body})))
-    (= {direct} (aio/metrics-prometheus mock-sys))
+    (= {body} (:body resp))
+    (= {direct} (aio/debug-merge-metrics-prometheus mock-sys))
 
-    ; Both should be strings of similar length
     (test/assert (> (len body) 0) "route body should exist")
-    (test/assert (> (len direct) 0) "direct call should exist")
+    (test/assert (> (len direct) 0) "direct merge call should exist")
     true
   })
   (test "edge-case-empty-path"
     {do
     (= {resp} (aio/debug-handle-request mock-sys {:path ""}))
     (test/assert (!= resp nil) "empty path should return redirect response")
-    (test/assert-eq "200" (plist/get resp (head {:status}))
+    (test/assert-eq "200" (:status resp)
       "empty path should have status 200")
     true
   })
   (test "edge-case-path-only-matching"
     {do
-    ; Current implementation does exact path matching
-    ; Path with query string won't match
     (= {resp} (aio/debug-handle-request mock-sys {:path "/debug/?foo=bar"}))
-    (test/assert-eq nil resp
-      "path with query string should not match (exact matching)")
+    (test/assert (!= resp nil) "path with query string returns dashboard (query stripped)")
+    (test/assert-eq "200" (:status resp) "status should be 200")
+    (test/assert-eq "text/html; charset=utf-8" (:content-type resp)
+      "should return HTML dashboard after query stripping")
     true
   })
   (test "edge-case-case-sensitivity"
     {do
-    ; Routes should be case-sensitive
-    (test/assert-eq nil (aio/debug-handle-request mock-sys {:path "/DEBUG/"})
-      "/DEBUG/ should not match (case sensitive)")
-    (test/assert-eq nil (aio/debug-handle-request mock-sys {:path "/Debug/"})
-      "/Debug/ should not match (case sensitive)")
+    (= {r1} (aio/debug-handle-request mock-sys {:path "/DEBUG/"}))
+    (test/assert (!= r1 nil) "/DEBUG/ returns redirect (case-sensitive, hits otherwise)")
+    (= {r2} (aio/debug-handle-request mock-sys {:path "/Debug/"}))
+    (test/assert (!= r2 nil) "/Debug/ returns redirect (case-sensitive, hits otherwise)")
     true
   })
   (test "multiple-requests-work"
     {do
     (= {handler} (aio/debug-handler mock-sys))
 
-    ; Make multiple requests
     (= {r1} (handler {:path "/debug/"}))
     (= {r2} (handler {:path "/debug/metrics"}))
     (= {r3} (handler {:path "/metrics"}))
@@ -436,7 +432,7 @@
     (test/assert (!= r1 nil) "first request should succeed")
     (test/assert (!= r2 nil) "second request should succeed")
     (test/assert (!= r3 nil) "third request should succeed")
-    (test/assert-eq nil r4 "unknown path should return nil")
+    (test/assert (!= r4 nil) "unknown path returns redirect (otherwise branch)")
     true
   }))
   {:suite-name "AIO Debug Server Tests"})

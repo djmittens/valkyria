@@ -1,8 +1,8 @@
 (load "src/prelude.valk")
 (load "src/modules/test.valk")
 (load "src/symdb.valk")
-(load "src/lsp-analysis.valk")
-(load "src/lsp-validate.valk")
+(load "src/lsp/analysis.valk")
+(load "src/lsp/validate.valk")
 
 (fun {tok-count text} {do
   (= {data} (sem/tokenize text))
@@ -117,7 +117,7 @@
   (test "fun-body-params-classified"
     {do
       (= {toks} (tok-groups "(fun {f x} {x})"))
-      (= {body-x} (nth 5 toks))
+      (= {body-x} (nth 4 toks))
       (test/assert-eq SEM_PARAMETER (tok-type body-x) "x in body should be parameter (in scope)")
       true
     })
@@ -274,7 +274,7 @@
       (= {text} "(fun {greet name} {str \"Hello \" name})")
       (= {data} (sem/tokenize text))
       (= {groups} (list/group 5 data))
-      (= {valid} (foldl (\{acc tok} {and acc (>= (nth 1 tok) 0) (>= (nth 3 tok) 0)}) 1 groups))
+      (= {valid} (foldl (\{acc tok} {* acc (* (>= (nth 1 tok) 0) (>= (nth 3 tok) 0))}) 1 groups))
       (test/assert valid "all deltaLine and length values should be >= 0")
       true
     })

@@ -107,8 +107,8 @@
 (def {do-handler}
   (\ {req} {
     (aio/do {
-      (x <- (aio/sleep aio 5))
-      (y <- (aio/sleep aio 5))
+      (<- x (aio/sleep aio 5))
+      (<- y (aio/sleep aio 5))
       {:status "200" :body "do-sequential"}})
   }))
 
@@ -240,8 +240,8 @@
 (def {do-result-handler}
   (\ {req} {
     (aio/do {
-      (x <- (aio/sleep aio 5))
-      (y <- (aio/sleep aio 5))
+      (<- x (aio/sleep aio 5))
+      (<- y (aio/sleep aio 5))
       {:status "200" :body "do-result-ok"}})
   }))
 

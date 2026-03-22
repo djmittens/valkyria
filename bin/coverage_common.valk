@@ -146,6 +146,7 @@
   (= {er} (*count-exprs* keys lines 0 0))
   (dict/set! fc "_ef" (nth 1 er))
   (dict/set! fc "_eh" (nth 2 er))
+
 })
 
 (fun {fc/lines-found fc} {(dict/get fc "_lf")})
@@ -372,7 +373,7 @@
     {(str/starts-with? line "branch ")
      (do
        (= {src-file} (dict/get st "sf"))
-       (if (or (or (or (== src-file nil) (== (dict/get st "ie") 1)) (== (dict/get st "ib") 1)) (== (dict/get st "cb") 1))
+        (if (or (or (or (== src-file nil) (== (dict/get st "ie") 1)) (== (dict/get st "ib") 1)) (!= (dict/get st "cb") 0))
          {}
          {do
             (= {line-no} (dict/get st "ln"))

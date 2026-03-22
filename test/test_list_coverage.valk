@@ -142,19 +142,19 @@
   (test "plist-get-basic"
     {do
     (= {p} (list :name "alice" :age 30))
-    (test/assert-eq "alice" (plist/get p :name) "plist get name")
-    (test/assert-eq 30 (plist/get p :age) "plist get age")
+    (test/assert-eq "alice" p:name "plist get name")
+    (test/assert-eq 30 p:age "plist get age")
     true
   })
   (test "plist-get-missing"
     {do
     (= {p} (list :name "alice"))
-    (test/assert-eq nil (plist/get p :missing) "plist get missing returns nil")
+    (test/assert-eq nil p:missing "plist get missing returns nil")
     true
   })
   (test "plist-get-nil"
     {do
-    (test/assert-eq nil (plist/get nil :key) "plist get from nil returns nil")
+    (test/assert-eq nil nil:key "plist get from nil returns nil")
     true
   })
   (test "plist-get-string-key"
@@ -314,7 +314,7 @@
   (test "plist-get-odd-count"
     {do
     (= {p} (list :a 1 :b))
-    (test/assert-eq nil (plist/get p :b) "plist with odd count returns nil for incomplete pair")
+    (test/assert-eq nil p:b "plist with odd count returns nil for incomplete pair")
     true
   })
   (test "list-group-exact"
@@ -370,8 +370,8 @@
   (test "plist-get-long-list"
     {do
     (= {p} (list :a 1 :b 2 :c 3 :d 4))
-    (test/assert-eq 3 (plist/get p :c) "plist get from middle")
-    (test/assert-eq 4 (plist/get p :d) "plist get from end")
+    (test/assert-eq 3 p:c "plist get from middle")
+    (test/assert-eq 4 p:d "plist get from end")
     true
   })
   (test "member-in-cons-list"
@@ -457,8 +457,8 @@
   (test "plist-get-deeply-nested"
     {do
     (= {p} (list :a 1 :b 2 :c 3 :d 4 :e 5 :f 6))
-    (test/assert-eq 6 (plist/get p :f) "plist get last of many pairs")
-    (test/assert-eq nil (plist/get p :z) "plist get missing from many pairs")
+    (test/assert-eq 6 p:f "plist get last of many pairs")
+    (test/assert-eq nil p:z "plist get missing from many pairs")
     true
   })
   (test "list-group-single-element-groups"

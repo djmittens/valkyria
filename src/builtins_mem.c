@@ -68,7 +68,7 @@ static valk_lval_t* valk_builtin_gc_metrics(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
   valk_gc_heap_t* heap = (valk_gc_heap_t*)valk_thread_ctx.heap;
-  if (!heap) return valk_lval_nil();
+  if (!heap) return valk_lval_nil(); // LCOV_EXCL_LINE - heap always initialized before builtins run
 
   u64 cycles, pause_total, pause_max;
   sz reclaimed, used, total;

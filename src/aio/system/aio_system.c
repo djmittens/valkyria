@@ -288,6 +288,10 @@ void valk_aio_wait_for_shutdown(valk_aio_system_t *sys) {
     }
   }
 
+  for (u32 i = 0; i < sys->num_loops; i++) {
+    valk_aio_loop_task_queue_destroy(&sys->loops[i]);
+  }
+
   free(sys->http_queue.request_items);
   free(sys->http_queue.response_items);
   valk_mutex_destroy(&sys->http_queue.request_mutex);

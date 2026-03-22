@@ -45,7 +45,7 @@ static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
   for (u64 i = 0; i < valk_lval_list_count(syms); i++) {
     valk_lval_t* sym = valk_lval_list_nth(syms, i);
     valk_lval_t* val = valk_resolve_symbol(e, valk_lval_list_nth(a, i + 1));
-    if (LVAL_TYPE(val) == LVAL_ERR) {
+    if (LVAL_TYPE(val) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
       return val;
     }
     valk_lenv_def(e, sym, val);
@@ -203,21 +203,7 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_err("No selection found");
 }
 
-static valk_lval_t* valk_builtin_do(valk_lenv_t* e, valk_lval_t* a) {
-  u64 count = valk_lval_list_count(a);
 
-  if (count == 0) {
-    return valk_lval_nil();
-  }
-
-  for (u64 i = 0; i < count - 1; i++) {
-    valk_lval_t* expr = valk_lval_list_nth(a, i);
-    valk_lval_eval(e, expr);
-  }
-
-  valk_lval_t* last = valk_lval_list_nth(a, count - 1);
-  return valk_lval_eval(e, last);
-}
 
 void valk_register_env_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "def", valk_builtin_def);
@@ -225,5 +211,5 @@ void valk_register_env_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
   valk_lenv_put_builtin(env, "select", valk_builtin_select);
-  valk_lenv_put_builtin(env, "do", valk_builtin_do);
+
 }

@@ -51,11 +51,13 @@ void valk_lenv_free(valk_lenv_t* env) {
     }
     if (env->vals.items && env->vals.items[i]) {
       valk_lval_t* lval = env->vals.items[i];
-      if (LVAL_TYPE(lval) == LVAL_SYM || LVAL_TYPE(lval) == LVAL_STR ||
-          LVAL_TYPE(lval) == LVAL_ERR) {
-        if (lval->str) free(lval->str);
+      if (!valk_lval_is_immortal(lval)) {
+        if (LVAL_TYPE(lval) == LVAL_SYM || LVAL_TYPE(lval) == LVAL_STR ||
+            LVAL_TYPE(lval) == LVAL_ERR) {
+          if (lval->str && !(lval->flags & LVAL_FLAG_INTERNED)) free(lval->str);
+        }
+        free(lval);
       }
-      free(lval);
     }
   }
   if (env->symbols.items) free(env->symbols.items);
@@ -163,16 +165,15 @@ static valk_lval_t* __lenv_ensure_safe_val(valk_lenv_t* env, valk_lval_t* val) {
   }
   if (!env_alloc) return val;
 
-  void *val_alloc = val->origin_allocator;
-  if (!val_alloc) return val;
+  valk_lifetime_e env_lt = valk_allocator_lifetime(env_alloc);
+  valk_lifetime_e val_lt = valk_lval_alloc_lifetime(val);
 
-  if (valk_region_write_barrier(env_alloc, val_alloc, false)) {
+  if (valk_lifetime_can_reference(env_lt, val_lt)) {
     return val;
   }
 
-  valk_mem_allocator_t *alloc = (valk_mem_allocator_t *)env_alloc;
-  if (alloc->type == VALK_ALLOC_REGION) {
-    return valk_region_promote_lval((valk_region_t *)env_alloc, val);
+  if (LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH) {
+    return valk_evacuate_to_heap(val);
   }
 
   return val;
@@ -262,6 +263,8 @@ void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   while (env->parent) {
     env = env->parent;
   }
+  if (val && LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH)
+    val = valk_evacuate_to_heap(val);
   valk_lenv_put(env, key, val);
 }
 
@@ -278,7 +281,6 @@ void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
     valk_lval_set_immortal(lfun);
     valk_lval_t* sym = valk_lval_sym(key);
     valk_lenv_put(env, sym, lfun);
-    valk_mem_free(sym->str);
     valk_mem_free(sym);
   }
 }

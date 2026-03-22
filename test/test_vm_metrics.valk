@@ -103,14 +103,14 @@
   })
   (test "gc-stats-no-error"
     {do
-    (gc-stats)
-    (test/assert true "gc-stats should run without error")
+    (= {s} (mem/gc/stats))
+    (test/assert (not (error? s)) "mem/gc/stats should run without error")
     true
   })
   (test "memory-stats-no-error"
     {do
-    (memory-stats)
-    (test/assert true "memory-stats should run without error")
+    (= {s} (mem/stats))
+    (test/assert (not (error? s)) "mem/stats should run without error")
     true
   }))
   {:suite-name "VM Metrics Builtins Tests"})

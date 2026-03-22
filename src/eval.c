@@ -20,6 +20,8 @@ void valk_eval_stack_init(valk_eval_stack_t *stack) {
 }
 
 void valk_eval_stack_push(valk_eval_stack_t *stack, valk_cont_frame_t frame) {
+  valk_mem_arena_t *scratch = valk_thread_ctx.scratch;
+  frame.scratch_offset = scratch ? scratch->offset : 0;
   if (stack->count >= stack->capacity) {
     stack->capacity *= 2;
     stack->frames = realloc(stack->frames, sizeof(valk_cont_frame_t) * stack->capacity);
@@ -55,11 +57,7 @@ void valk_eval_stack_destroy(valk_eval_stack_t *stack) {
     return err;                                                          \
   } while (0)
 
-#define VALK_SET_ORIGIN_ALLOCATOR(obj)                   \
-  do {                                                   \
-    (obj)->origin_allocator = valk_thread_ctx.allocator; \
-    (obj)->gc_next = nullptr;                            \
-  } while (0)
+#define VALK_SET_ORIGIN_ALLOCATOR(obj) ((void)(obj))
 
 #define LVAL_ASSERT(args, cond, fmt, ...) \
   if ((cond)) {                           \
@@ -202,6 +200,26 @@ static valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) 
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args);
 
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args) {
+  if (LVAL_TYPE(func) == LVAL_SYM && func->str[0] == ':') {
+    u64 argc = valk_lval_list_count(args);
+    if (argc != 1)
+      return valk_eval_value(valk_lval_err("Keyword '%s' called with %llu args, expected 1", func->str, argc));
+    valk_lval_t *plist = valk_lval_list_nth(args, 0);
+    if (!plist || LVAL_TYPE(plist) == LVAL_NIL)
+      return valk_eval_value(valk_lval_nil());
+    const char *key_str = func->str;
+    valk_lval_t *curr = plist;
+    while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+      valk_lval_t *k = curr->cons.head;
+      valk_lval_t *rest = curr->cons.tail;
+      if (!rest || LVAL_TYPE(rest) != LVAL_CONS) break;
+      if ((LVAL_TYPE(k) == LVAL_SYM || LVAL_TYPE(k) == LVAL_STR) &&
+          strcmp(k->str, key_str) == 0)
+        return valk_eval_value(rest->cons.head);
+      curr = rest->cons.tail;
+    }
+    return valk_eval_value(valk_lval_nil());
+  }
   if (LVAL_TYPE(func) != LVAL_FUN) {
     return valk_eval_value(valk_lval_err("Cannot call non-function: %s", valk_ltype_name(LVAL_TYPE(func))));
   }
@@ -378,7 +396,7 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
       if (LVAL_TYPE(expr) == LVAL_NUM || LVAL_TYPE(expr) == LVAL_STR ||
           LVAL_TYPE(expr) == LVAL_FUN || LVAL_TYPE(expr) == LVAL_ERR ||
           LVAL_TYPE(expr) == LVAL_NIL || LVAL_TYPE(expr) == LVAL_REF ||
-          LVAL_TYPE(expr) == LVAL_HANDLE ||
+          LVAL_TYPE(expr) == LVAL_HANDLE || LVAL_TYPE(expr) == LVAL_DICT ||
           (LVAL_TYPE(expr) == LVAL_CONS && (expr->flags & LVAL_FLAG_QUOTED))) {
         // LCOV_EXCL_BR_STOP
         value = expr;
@@ -408,16 +426,23 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
           goto apply_cont;
         }
         
+        valk_lval_t* first = expr->cons.head;
+
+        if (count == 1 && LVAL_TYPE(first) == LVAL_SYM && strcmp(first->str, "do") == 0) {
+          value = valk_lval_nil();
+          expr = NULL;
+          goto apply_cont;
+        }
+
         if (count == 1) {
           valk_eval_stack_push(&stack, (valk_cont_frame_t){
             .kind = CONT_SINGLE_ELEM,
             .env = cur_env
           });
-          expr = valk_lval_list_nth(expr, 0);
+          expr = first;
           continue;
         }
         
-        valk_lval_t* first = expr->cons.head;
         if (LVAL_TYPE(first) == LVAL_SYM) {
           if (strcmp(first->str, "quasiquote") == 0) {
             if (count != 2) {
@@ -445,6 +470,17 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
               .if_branch = {.true_branch = true_branch, .false_branch = false_branch}
             });
             expr = cond;
+            continue;
+          }
+
+          if (strcmp(first->str, "do") == 0) {
+            valk_lval_t* remaining = expr->cons.tail;
+            valk_eval_stack_push(&stack, (valk_cont_frame_t){
+              .kind = CONT_DO_NEXT,
+              .env = cur_env,
+              .do_next = {.remaining = remaining->cons.tail}
+            });
+            expr = remaining->cons.head;
             continue;
           }
 
@@ -504,8 +540,19 @@ apply_cont:
       VALK_ASSERT(value != nullptr, "value must not be null at apply_cont");
       valk_cont_frame_t frame = valk_eval_stack_pop(&stack);
 
+      if (LVAL_ALLOC(value) == LVAL_ALLOC_SCRATCH)
+        value = valk_evacuate_to_heap(value);
+
+      if (frame.kind != CONT_DONE &&
+          frame.kind != CONT_DO_NEXT &&
+          frame.kind != CONT_BODY_NEXT) {
+        valk_mem_arena_t *sa = valk_thread_ctx.scratch;
+        if (sa && frame.scratch_offset < sa->offset)
+          sa->offset = frame.scratch_offset;
+      }
+
       switch (frame.kind) {  // LCOV_EXCL_BR_LINE - continuation dispatch (not all types exercised)
-        case CONT_DONE:
+        case CONT_DONE: {
           valk_thread_ctx.eval_stack_depth = my_depth;
           valk_eval_stack_destroy(&stack);
           valk_thread_ctx.eval_stack = saved_stack;
@@ -513,6 +560,7 @@ apply_cont:
           valk_thread_ctx.eval_value = saved_value;
           valk_thread_ctx.eval_env = valk_thread_ctx.saved_eval_envs[my_depth];
           return value;
+        }
           
         case CONT_SINGLE_ELEM:
           if (LVAL_TYPE(value) == LVAL_FUN) {
@@ -603,8 +651,22 @@ apply_cont:
           continue;
         }
 
-        case CONT_DO_NEXT:
-          __builtin_unreachable();
+        case CONT_DO_NEXT: {
+          if (LVAL_TYPE(value) == LVAL_ERR) {
+            goto apply_cont;
+          }
+          if (valk_lval_list_is_empty(frame.do_next.remaining)) {
+            goto apply_cont;
+          }
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_DO_NEXT,
+            .env = frame.env,
+            .do_next = {.remaining = frame.do_next.remaining->cons.tail}
+          });
+          expr = frame.do_next.remaining->cons.head;
+          cur_env = frame.env;
+          continue;
+        }
 
         case CONT_BODY_NEXT: {
           if (LVAL_TYPE(value) == LVAL_ERR) {
