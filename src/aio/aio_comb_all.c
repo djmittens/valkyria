@@ -4,6 +4,7 @@ typedef struct {
   valk_async_handle_t *all_handle;
   valk_lval_t **results;
   valk_async_handle_t **handles;
+  _Atomic(u8) *notified;
   u64 total;
   _Atomic(u64) completed;
   valk_mem_allocator_t *allocator;
@@ -20,6 +21,7 @@ static void valk_all_ctx_cleanup(void *ctx) {
   if (!all_ctx) return;
   if (all_ctx->results) free(all_ctx->results);
   if (all_ctx->handles) free(all_ctx->handles);
+  if (all_ctx->notified) free(all_ctx->notified);
   free(all_ctx);
 }
 // LCOV_EXCL_STOP
@@ -117,9 +119,20 @@ static valk_lval_t* valk_builtin_aio_all(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("Failed to allocate all context");
   }
   // LCOV_EXCL_STOP
+  _Atomic(u8) *notified = calloc(count, sizeof(_Atomic(u8)));
+  // LCOV_EXCL_START - allocation failure: requires OOM
+  if (!notified) {
+    valk_mem_free(results);
+    valk_mem_free(handles);
+    free(ctx);
+    valk_async_handle_free(all_handle);
+    return valk_lval_err("Failed to allocate notified array");
+  }
+  // LCOV_EXCL_STOP
   ctx->all_handle = all_handle;
   ctx->results = results;
   ctx->handles = handles;
+  ctx->notified = notified;
   ctx->total = count;
   atomic_store(&ctx->completed, 0);
   ctx->allocator = &valk_malloc_allocator;
@@ -187,23 +200,21 @@ static void valk_async_all_child_completed(valk_async_handle_t *child) {
   i64 idx = valk_async_all_find_index(ctx, child);
   if (idx < 0) return; // LCOV_EXCL_LINE - child always in handles
 
+  u8 expected = 0;
+  if (!atomic_compare_exchange_strong(&ctx->notified[idx], &expected, 1))
+    return;
+
   ctx->results[idx] = atomic_load_explicit(&child->result, memory_order_acquire);
   u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
 
   if (new_completed == ctx->total) {
-    if (!valk_async_handle_try_transition(ctx->all_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED)) { // LCOV_EXCL_BR_LINE - race protection
-      return; // LCOV_EXCL_LINE
-    }
-
     valk_lval_t *result_list = valk_lval_nil();
     for (u64 i = ctx->total; i > 0; i--) {
       result_list = valk_lval_cons(ctx->results[i-1], result_list);
     }
 
     valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
-    atomic_store_explicit(&ctx->all_handle->result, heap_result, memory_order_release);
-
-    valk_async_handle_finish(ctx->all_handle);
+    valk_async_handle_complete(ctx->all_handle, heap_result);
   }
 }
 
@@ -236,23 +247,21 @@ static void valk_async_all_child_completed_with_ctx(valk_all_ctx_t *ctx, u64 idx
     return; // LCOV_EXCL_LINE
   }
 
+  u8 expected = 0;
+  if (!atomic_compare_exchange_strong(&ctx->notified[idx], &expected, 1))
+    return;
+
   ctx->results[idx] = atomic_load_explicit(&child->result, memory_order_acquire);
   u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
 
   if (new_completed == ctx->total) {
-    if (!valk_async_handle_try_transition(ctx->all_handle, VALK_ASYNC_RUNNING, VALK_ASYNC_COMPLETED)) { // LCOV_EXCL_BR_LINE - race protection
-      return; // LCOV_EXCL_LINE
-    }
-
     valk_lval_t *result_list = valk_lval_nil();
     for (u64 i = ctx->total; i > 0; i--) {
       result_list = valk_lval_cons(ctx->results[i-1], result_list);
     }
 
     valk_lval_t *heap_result = valk_evacuate_to_heap(result_list);
-    atomic_store_explicit(&ctx->all_handle->result, heap_result, memory_order_release);
-
-    valk_async_handle_finish(ctx->all_handle);
+    valk_async_handle_complete(ctx->all_handle, heap_result);
   }
 }
 
