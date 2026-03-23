@@ -284,6 +284,121 @@ static valk_lval_t* valk_builtin_nth(valk_lenv_t* e, valk_lval_t* a) {
   return curr->cons.head;
 }
 
+#define AST_WRAPPED_BIT (1ULL << 20)
+
+static valk_lval_t* valk_builtin_ast_node_type(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  switch (LVAL_TYPE(v)) {
+    case LVAL_SYM: return valk_lval_str("sym");
+    case LVAL_NUM: return valk_lval_str("num");
+    case LVAL_STR: return valk_lval_str("str");
+    case LVAL_CONS:
+      if (v->flags & AST_WRAPPED_BIT) return valk_lval_str("sexpr");
+      return (v->flags & LVAL_FLAG_QUOTED) ? valk_lval_str("qexpr") : valk_lval_str("sexpr");
+    case LVAL_NIL: return valk_lval_str("nil");
+    case LVAL_FUN: return valk_lval_str("fun");
+    case LVAL_ERR: return valk_lval_str("err");
+    default: return valk_lval_str("unknown");
+  }
+}
+
+static valk_lval_t* valk_builtin_ast_node_name(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(v) == LVAL_SYM) return valk_lval_str(v->str);
+  if (LVAL_TYPE(v) == LVAL_STR) return v;
+  if (LVAL_TYPE(v) == LVAL_NUM) {
+    char buf[32]; snprintf(buf, sizeof(buf), "%ld", (long)v->num);
+    return valk_lval_str(buf);
+  }
+  return valk_lval_nil();
+}
+
+// Convert a raw AST lval into a safe data representation.
+// Symbols become strings (no evaluation). Lists become quoted.
+// Returns a plist: {:type "sym" :name "def" :pos 0}
+//                  {:type "num" :val 42 :pos 5}
+//                  {:type "sexpr" :children (...) :pos 0}
+static valk_lval_t* ast_to_data(valk_lval_t* v);
+static valk_lval_t* ast_children_to_data(valk_lval_t* list);
+
+static valk_lval_t* ast_children_to_data(valk_lval_t* list) {
+  if (!list || LVAL_TYPE(list) == LVAL_NIL) return valk_lval_nil();
+  if (LVAL_TYPE(list) != LVAL_CONS) return valk_lval_cons(ast_to_data(list), valk_lval_nil());
+  valk_lval_t* hd = ast_to_data(list->cons.head);
+  valk_lval_t* tl = ast_children_to_data(list->cons.tail);
+  return valk_lval_cons(hd, tl);
+}
+
+static valk_lval_t* ast_to_data(valk_lval_t* v) {
+  if (!v || LVAL_TYPE(v) == LVAL_NIL) return valk_lval_nil();
+  i64 pos = LVAL_SRC_POS(v);
+  switch (LVAL_TYPE(v)) {
+    case LVAL_SYM:
+      return valk_lval_cons(valk_lval_sym(":type"), valk_lval_cons(valk_lval_str("sym"),
+        valk_lval_cons(valk_lval_sym(":name"), valk_lval_cons(valk_lval_str(v->str),
+        valk_lval_cons(valk_lval_sym(":pos"), valk_lval_cons(valk_lval_num(pos),
+        valk_lval_nil()))))));
+    case LVAL_NUM: {
+      char buf[32]; snprintf(buf, sizeof(buf), "%ld", (long)v->num);
+      return valk_lval_cons(valk_lval_sym(":type"), valk_lval_cons(valk_lval_str("num"),
+        valk_lval_cons(valk_lval_sym(":name"), valk_lval_cons(valk_lval_str(buf),
+        valk_lval_cons(valk_lval_sym(":pos"), valk_lval_cons(valk_lval_num(pos),
+        valk_lval_nil()))))));
+    }
+    case LVAL_STR:
+      return valk_lval_cons(valk_lval_sym(":type"), valk_lval_cons(valk_lval_str("str"),
+        valk_lval_cons(valk_lval_sym(":name"), valk_lval_cons(valk_lval_str(v->str),
+        valk_lval_cons(valk_lval_sym(":pos"), valk_lval_cons(valk_lval_num(pos),
+        valk_lval_cons(valk_lval_sym(":len"), valk_lval_cons(valk_lval_num((i64)strlen(v->str) + 2),
+        valk_lval_nil()))))))));
+    case LVAL_CONS: {
+      const char *kind = (v->flags & LVAL_FLAG_QUOTED) ? "qexpr" : "sexpr";
+      valk_lval_t* children = ast_children_to_data(v);
+      return valk_lval_cons(valk_lval_sym(":type"), valk_lval_cons(valk_lval_str(kind),
+        valk_lval_cons(valk_lval_sym(":children"), valk_lval_cons(children,
+        valk_lval_cons(valk_lval_sym(":pos"), valk_lval_cons(valk_lval_num(pos),
+        valk_lval_nil()))))));
+    }
+    default: return valk_lval_nil();
+  }
+}
+
+static valk_lval_t* valk_builtin_ast_to_data(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return ast_children_to_data(v);
+}
+
+static valk_lval_t* valk_builtin_ast_src_pos(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return valk_lval_num(LVAL_SRC_POS(v));
+}
+
+static valk_lval_t* valk_builtin_ast_nil(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  if (v == NULL || LVAL_TYPE(v) == LVAL_NIL) return valk_lval_num(1);
+  if (LVAL_TYPE(v) == LVAL_CONS) return valk_lval_num(valk_lval_list_count(v) == 0 ? 1 : 0);
+  return valk_lval_num(0);
+}
+
+static valk_lval_t* valk_builtin_ast_len(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return valk_lval_num((long)valk_lval_list_count(v));
+}
+
+
+
 static valk_lval_t* valk_builtin_member(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
@@ -319,6 +434,12 @@ void valk_register_list_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "repeat", valk_builtin_repeat);
   valk_lenv_put_builtin(env, "eval", valk_builtin_eval);
   valk_lenv_put_builtin(env, "nth", valk_builtin_nth);
+  valk_lenv_put_builtin(env, "ast/to-data", valk_builtin_ast_to_data);
+  valk_lenv_put_builtin(env, "ast/node-type", valk_builtin_ast_node_type);
+  valk_lenv_put_builtin(env, "ast/node-name", valk_builtin_ast_node_name);
+  valk_lenv_put_builtin(env, "ast/src-pos", valk_builtin_ast_src_pos);
+  valk_lenv_put_builtin(env, "ast/nil?", valk_builtin_ast_nil);
+  valk_lenv_put_builtin(env, "ast/len", valk_builtin_ast_len);
   valk_lenv_put_builtin(env, "member?", valk_builtin_member);
   valk_lenv_put_builtin(env, "reverse", valk_builtin_reverse);
   valk_lenv_put_builtin(env, "list/group", valk_builtin_list_group);

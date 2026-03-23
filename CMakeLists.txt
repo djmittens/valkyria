@@ -119,6 +119,7 @@ set(VALKYRIA_SOURCES
   src/builtins_stdio.c
   src/builtins_sqlite.c
   src/lsp_index.c
+  src/ast_visit.c
   src/builtins_dict.c
   src/builtins_xml.c
   src/builtins_pipe.c

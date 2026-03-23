@@ -340,7 +340,7 @@
           "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
           fpath fp)
     (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" fpath))
-    (if (not (nil? file-id)) {lsp/index-ast db file-id ast text 1} {})
+    (if (not (nil? file-id)) {idx/index-file-fast db file-id ast text} {})
     1})}
 })
 

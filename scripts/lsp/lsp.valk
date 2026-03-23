@@ -2,10 +2,12 @@
 
 (load "stdlib/diag/symdb.valk")
 (load "stdlib/diag/validate.valk")
+(load "stdlib/ast/walk.valk")
 (load "scripts/lsp/analysis.valk")
 (load "scripts/lsp/hints.valk")
 (load "scripts/lsp/hints-fields.valk")
 (load "scripts/lsp/io.valk")
+(load "scripts/lsp/indexer.valk")
 (load "scripts/lsp/workspace.valk")
 (load "scripts/lsp/nav.valk")
 (load "scripts/lsp/features.valk")

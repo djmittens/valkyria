@@ -981,6 +981,8 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "file/fingerprint", valk_builtin_file_fingerprint);
   valk_lenv_put_builtin(env, "sem/encode-deltas", valk_builtin_sem_encode_deltas);
   valk_lenv_put_builtin(env, "lsp/index-ast", valk_builtin_lsp_index_file);
+  extern valk_lval_t *valk_builtin_ast_visit(valk_lenv_t *, valk_lval_t *);
+  valk_lenv_put_builtin(env, "ast/visit", valk_builtin_ast_visit);
   valk_lenv_put_builtin(env, "offsets->line-cols", valk_builtin_offsets_to_lines);
   valk_lenv_put_builtin(env, "write-file", valk_builtin_write_file);
   valk_lenv_put_builtin(env, "file/exists?", valk_builtin_file_exists);
