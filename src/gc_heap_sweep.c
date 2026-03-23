@@ -202,7 +202,7 @@ void valk_gc_rebuild_partial_lists(valk_gc_heap_t *heap) {
     for (valk_gc_page_t *page = list->all_pages; page != nullptr; page = page->next) {
       u32 allocated = atomic_load(&page->num_allocated);
 
-      if (allocated < page->slots_per_page) {
+      if (allocated < page->slots_per_page || page->reclaimed) {
         page->next_partial = list->partial_pages;
         list->partial_pages = page;
       }

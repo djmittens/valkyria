@@ -369,13 +369,12 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
     return ptr;
   }
 
-  if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) { // LCOV_EXCL_BR_LINE - refill only fails if size_class invalid, excluded above
+  if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
     valk_gc_heap_collect(heap);
     // LCOV_EXCL_START - double refill failure is OOM
     if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
       valk_gc_oom_abort(heap, bytes);
     }
-    // LCOV_EXCL_STOP
   }
 
   ptr = valk_gc_tlab_alloc(valk_gc_local_tlab, size_class);

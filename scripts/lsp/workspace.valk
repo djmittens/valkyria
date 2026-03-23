@@ -555,7 +555,8 @@
 })
 
 ; Dispatch one file at a time in dependency order.
-; Each callback commits, then dispatches the next file.
+; Worker does all heavy work (prepare + commit) in scratch arena.
+; Only a number (0 or 1) crosses back to the callback via evacuate.
 (sig 'lsp/scan-next {-> Ref Dict Num Nil})
 (fun {lsp/scan-next db state tok} {do
   (= {remaining} (dict/get state :remaining))
@@ -571,13 +572,14 @@
       (= {path} (head remaining))
       (dict/set! state :remaining (tail remaining))
       (aio/dispatch lsp/sys
-        (\ {_} {lsp/prepare-file path})
-        nil
-        (\ {result} {do
-          (if (and (not (nil? result)) (== (dict/get state :begun) 0))
+        (\ {_} {do
+          (if (== (dict/get state :begun) 0)
             {do (sqlite/exec db "BEGIN") (dict/set! state :begun 1)} {})
-          (= {did-raw} (lsp/commit-prepared db result))
-          (= {did} (if (num? did-raw) {did-raw} {0}))
+          (= {prep} (lsp/prepare-file path))
+          (= {did} (lsp/commit-prepared db prep))
+          (if (num? did) {did} {0})})
+        nil
+        (\ {did} {do
           (dict/set! state :indexed (+ (dict/get state :indexed) did))
           (= {total} (dict/get state :total))
           (= {left} (len (dict/get state :remaining)))
@@ -602,7 +604,10 @@
       (def {lsp/root-path} (symdb/uri->path root-uri))
       (= {db-dir} (str lsp/root-path "/.valk"))
       (= {db-path} (str db-dir "/symdb.sqlite"))
-      (def {lsp/db} (symdb/init db-path))}
+      (= {result} (symdb/init db-path))
+      (if (error? result)
+        {stderr/write (str "[valk-lsp] symdb init failed: " result "\n")}
+        {def {lsp/db} result})}
     {})
   (lsp/send-response id lsp/capabilities)})
 

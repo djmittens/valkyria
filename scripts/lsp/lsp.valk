@@ -83,14 +83,6 @@
           {nil}
           {do (lsp/handle-readonly method id params) nil}})
         nil lsp/noop-cb))}
-    {"textDocument/completion" (do
-      (def {lsp/comp-version} (+ lsp/comp-version 1))
-      (= {v} lsp/comp-version)
-      (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/comp-version v))
-          {nil}
-          {do (lsp/handle-readonly method id params) nil}})
-        nil lsp/noop-cb))}
     {"textDocument/inlayHint" (do
       (def {lsp/hint-version} (+ lsp/hint-version 1))
       (= {v} lsp/hint-version)

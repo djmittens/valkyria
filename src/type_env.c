@@ -526,6 +526,11 @@ static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_l
   const char *resolved = resolve_type_name(env, rhs_name);
   if (resolved) { scope_add(scope, var_name, resolved); return; }
 
+  valk_type_sig_t *call_sig = valk_type_env_find_sig(env, rhs_name);
+  if (call_sig && call_sig->return_type) {
+    resolved = resolve_type_name(env, call_sig->return_type);
+    if (resolved) { scope_add(scope, var_name, resolved); return; }
+  }
 
   if (strcmp(rhs_name, "head") == 0 && valk_lval_list_count(rhs) == 2) {
     valk_lval_t *arg = valk_lval_list_nth(rhs, 1);
@@ -1091,8 +1096,8 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
     return result;
   }
 
-  // Check for (DEF {name} (LAMBDA {params} body)) — expanded fun macro
-  if (LVAL_TYPE(head) == LVAL_FUN && head->fun.builtin != NULL) {
+  // Detect expanded fun macro: (def {name} (\ {params} body))
+  if (LVAL_TYPE(head) == LVAL_SYM && strcmp(head->str, "def") == 0) {
     u64 cnt = valk_lval_list_count(expr);
     if (cnt == 3) {
       valk_lval_t *name_arg = valk_lval_list_nth(expr, 1);
@@ -1100,8 +1105,10 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
       if (is_qexpr(name_arg) && LVAL_TYPE(val_arg) == LVAL_CONS &&
           !(val_arg->flags & LVAL_FLAG_QUOTED)) {
         valk_lval_t *val_head = val_arg->cons.head;
-        bool val_is_lambda = false;
-        if (LVAL_TYPE(val_head) == LVAL_FUN && val_head->fun.builtin != NULL) {
+        bool val_is_lambda = (LVAL_TYPE(val_head) == LVAL_SYM &&
+                              strcmp(val_head->str, "\\") == 0);
+        if (!val_is_lambda && LVAL_TYPE(val_head) == LVAL_FUN &&
+            val_head->fun.builtin != NULL) {
           extern valk_lenv_t *valk_macro_env(void);
           valk_lval_t *lr = valk_lenv_get(valk_macro_env(), valk_lval_sym("\\"));
           if (LVAL_TYPE(lr) == LVAL_FUN && val_head->fun.builtin == lr->fun.builtin)
@@ -1110,16 +1117,23 @@ static valk_lval_t *transform_expr(valk_type_env_t *env, valk_type_scope_t *scop
         if (val_is_lambda) {
           valk_lval_t *fn_name = name_arg->cons.head;
           valk_lval_t *lambda_formals = valk_lval_list_nth(val_arg, 1);
-          // Build synthetic fun formals: {name params...}
           valk_lval_t *combined = valk_lval_qcons(fn_name, lambda_formals);
           valk_type_scope_t child = { .count = 0, .parent = scope };
           track_fun_params(env, &child, combined);
-          // Transform the lambda body with the scoped params
-          valk_lval_t *body = (valk_lval_list_count(val_arg) > 2) ?
-                              valk_lval_list_nth(val_arg, 2) : valk_lval_nil();
-          transform_expr(env, &child, body);
+          u64 lambda_cnt = valk_lval_list_count(val_arg);
+          valk_lval_t **litems = valk_mem_alloc(sizeof(valk_lval_t *) * lambda_cnt);
+          litems[0] = val_head;
+          if (lambda_cnt > 1) litems[1] = lambda_formals;
+          for (u64 i = 2; i < lambda_cnt; i++) {
+            valk_lval_t *child_expr = valk_lval_list_nth(val_arg, i);
+            track_binding(env, &child, child_expr);
+            litems[i] = transform_expr(env, &child, child_expr);
+          }
+          valk_lval_t *new_lambda = valk_lval_nil();
+          for (u64 i = lambda_cnt; i > 0; i--)
+            new_lambda = valk_lval_cons(litems[i - 1], new_lambda);
           scope_cleanup(&child);
-          return expr;
+          return valk_lval_cons(head, valk_lval_cons(name_arg, valk_lval_cons(new_lambda, valk_lval_nil())));
         }
       }
     }

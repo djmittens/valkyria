@@ -74,7 +74,7 @@
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
-      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
       (= {path} (symdb/uri->path ctx:uri))
       (= {info} (if (nil? lsp/db) {nil}
         {do (= {r} (symdb/node-at-offset lsp/db path offset))
@@ -123,7 +123,7 @@
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
       (= {path} (symdb/uri->path ctx:uri))
-      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
       (= {local-def} (lsp/find-local-def ctx:ast ctx:text ctx:line ctx:col ctx:word path offset))
       (if (not (nil? local-def))
         {lsp/respond-def-offset id ctx:uri ctx:text local-def}
@@ -208,7 +208,7 @@
   (if (nil? ctx) {lsp/send-response id nil}
     {do
       (= {path} (symdb/uri->path ctx:uri))
-      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
       (= {target} (if (nil? lsp/db) {nil}
         {symdb/get-ref-at-offset lsp/db path offset}))
       (= {local-refs} (if (nil? target) {nil}
@@ -245,7 +245,7 @@
 
 (sig 'lsp/in-string? {-> Str Num Num Num})
 (fun {lsp/in-string? text line col} {do
-  (= {offset} (line-col->offset text line col))
+  (= {offset} (analysis/line-col->offset text line col))
   (lsp/count-quotes-from text offset)
 })
 

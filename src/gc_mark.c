@@ -491,10 +491,15 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
 
   valk_barrier_wait(&valk_sys->barrier);
 
-  if (valk_thread_ctx.gc_thread_id == 0) { // LCOV_EXCL_BR_LINE - only lead GC thread
-    valk_gc_rebuild_partial_lists(heap);
-    valk_gc_reclaim_empty_pages(heap);
-    heap->generation = valk_gc_heap_next_generation();
+  {
+    static _Atomic u64 __gc_lead_claimed = 0;
+    u64 expected = 0;
+    if (atomic_compare_exchange_strong(&__gc_lead_claimed, &expected, 1)) {
+      valk_gc_rebuild_partial_lists(heap);
+      valk_gc_reclaim_empty_pages(heap);
+      heap->generation = valk_gc_heap_next_generation();
+      atomic_store(&__gc_lead_claimed, 0);
+    }
   }
 
   atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);

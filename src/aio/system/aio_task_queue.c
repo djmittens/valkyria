@@ -2,6 +2,18 @@
 
 #define TASK_QUEUE_CAPACITY 4096
 
+static inline void __run_task_in_scratch(valk_aio_task_item_t *task) {
+  valk_mem_arena_t *scratch = valk_thread_ctx.scratch;
+  if (scratch) {
+    VALK_WITH_ALLOC((void *)scratch) {
+      task->fn(task->ctx);
+    }
+    valk_mem_arena_reset(scratch);
+  } else {
+    task->fn(task->ctx); // LCOV_EXCL_LINE
+  }
+}
+
 static void __loop_task_notify_cb(uv_async_t *handle) {
   valk_aio_loop_t *loop = handle->data;
   if (!loop || loop->sys->shuttingDown) return; // LCOV_EXCL_BR_LINE - handle->data always set in init
@@ -16,7 +28,7 @@ static void __loop_task_notify_cb(uv_async_t *handle) {
     if (!item) break;
 
     valk_aio_task_item_t *task = (valk_aio_task_item_t *)item;
-    task->fn(task->ctx);
+    __run_task_in_scratch(task);
     free(task);
     processed++;
   }
@@ -38,7 +50,7 @@ static void __loop_task_drain_cb(uv_check_t *handle) {
     if (!item) break;
 
     valk_aio_task_item_t *task = (valk_aio_task_item_t *)item;
-    task->fn(task->ctx);
+    __run_task_in_scratch(task);
     free(task);
     processed++;
   }

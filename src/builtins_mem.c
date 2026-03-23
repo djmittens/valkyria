@@ -233,6 +233,14 @@ static valk_lval_t* valk_builtin_arena_high_water(valk_lenv_t* e,
   return valk_lval_num((long)scratch->stats.high_water_mark);
 }
 
+static valk_lval_t* valk_builtin_scratch_reset(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
+  if (scratch) valk_mem_arena_reset(scratch);
+  return valk_lval_nil();
+}
+
 void valk_register_mem_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "time-us", valk_builtin_time_us);
   valk_lenv_put_builtin(env, "sleep", valk_builtin_sleep);
@@ -254,6 +262,7 @@ void valk_register_mem_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "mem/arena/capacity", valk_builtin_arena_capacity);
   valk_lenv_put_builtin(env, "mem/arena/high-water",
                         valk_builtin_arena_high_water);
+  valk_lenv_put_builtin(env, "mem/scratch/reset", valk_builtin_scratch_reset);
   valk_lenv_put_builtin(env, "mem/checkpoint/stats",
                         valk_builtin_checkpoint_stats);
   valk_lenv_put_builtin(env, "sys/log/set-level", valk_builtin_set_log_level);

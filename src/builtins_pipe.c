@@ -335,7 +335,7 @@ static void __lsp_reader_try_parse(valk_lsp_reader_t *reader) {
       valk_lval_t *cb = valk_handle_resolve(&valk_sys->handle_table, reader->callback_handle);
       if (cb) {
       // LCOV_EXCL_STOP
-        valk_lval_t *body_str = valk_lval_str(reader->buf);
+      valk_lval_t *body_str = valk_lval_str(reader->buf);
         valk_lval_t *args = valk_lval_cons(body_str, valk_lval_nil());
         valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
         if (LVAL_TYPE(result) == LVAL_ERR) {
@@ -490,22 +490,13 @@ static void __dispatch_worker(void *ctx) {
   valk_lval_t *args = valk_lval_cons(arg, valk_lval_nil());
   VALK_GC_ROOT(args);
 
-  valk_mem_arena_t *scratch = valk_thread_ctx.scratch;
-  valk_lval_t *result;
-  if (scratch) {
-    VALK_WITH_ALLOC((void *)scratch) {
-      result = valk_lval_eval_call(fn->fun.env, fn, args);
-    }
-  } else {
-    result = valk_lval_eval_call(fn->fun.env, fn, args); // LCOV_EXCL_LINE
-  }
+  valk_lval_t *result = valk_lval_eval_call(fn->fun.env, fn, args);
   VALK_GC_ROOT(result);
 
   valk_handle_release(&valk_sys->handle_table, dctx->fn_handle);
   valk_handle_release(&valk_sys->handle_table, dctx->arg_handle);
 
   valk_lval_t *heap_result = valk_evacuate_to_heap(result);
-  if (scratch) valk_mem_arena_reset(scratch);
 
   dispatch_completion_t *comp = malloc(sizeof(dispatch_completion_t));
   comp->sys = dctx->sys;
