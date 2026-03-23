@@ -321,6 +321,29 @@
     1})}
 })
 
+; Fast index — symbols + refs only (for initial workspace scan)
+(sig 'lsp/commit-prepared-fast {-> Ref List Num})
+(fun {lsp/commit-prepared-fast db prep} {
+  if (nil? prep) {0}
+  {do
+    (= {path} (plist/get prep :path))
+    (= {fp} (plist/get prep :fp))
+    (= {fpath} (symdb/uri->path (str "file://" path)))
+    (= {existing} (sqlite/query-maybe db
+      "SELECT hash FROM files WHERE path=?1" fpath))
+    (if (and (not (nil? existing)) (and (not (error? existing)) (== existing:hash fp)))
+      {0}
+      {do
+        (= {text} (plist/get prep :text))
+        (= {ast} (plist/get prep :ast))
+        (sqlite/exec db
+          "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
+          fpath fp)
+    (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" fpath))
+    (if (not (nil? file-id)) {lsp/index-ast db file-id ast text 1} {})
+    1})}
+})
+
 ; ---------------------------------------------------------------------------
 ; Stale file cleanup
 ; ---------------------------------------------------------------------------
@@ -541,7 +564,7 @@
       (\ {_} {lsp/prepare-file path})
       nil
       (\ {result} {do
-        (= {did-raw} (lsp/commit-prepared db result))
+        (= {did-raw} (lsp/commit-prepared-fast db result))
         (= {did} (if (num? did-raw) {did-raw} {0}))
         (dict/set! state :indexed (+ (dict/get state :indexed) did))
         (dict/set! state :done (+ (dict/get state :done) 1))

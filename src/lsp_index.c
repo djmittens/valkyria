@@ -31,6 +31,7 @@ typedef struct {
   int text_len;
   const char *current_call;
   bool is_top_level;
+  bool fast_mode;
 
   sqlite3_stmt *stmt_node;
   sqlite3_stmt *stmt_semtok;
@@ -170,6 +171,7 @@ static bool is_scope_param(index_ctx_t *ctx, const char *name) {
 }
 
 static void push_scope(index_ctx_t *ctx, int pos) {
+  if (ctx->fast_mode) { ctx->scope_depth++; return; }
   if (ctx->scope_depth >= MAX_SCOPE_DEPTH) return; // LCOV_EXCL_LINE
   scope_entry_t *s = &ctx->scopes[ctx->scope_depth];
   s->pos = pos;
@@ -206,6 +208,7 @@ static void pop_scope(index_ctx_t *ctx) {
 
 static void emit_node_ctx(index_ctx_t *ctx, int pos, int end, const char *type,
                           const char *name, const char *context) {
+  if (ctx->fast_mode) return;
   sqlite3_reset(ctx->stmt_node);
   sqlite3_bind_int(ctx->stmt_node, 1, ctx->file_id);
   sqlite3_bind_int(ctx->stmt_node, 2, pos);
@@ -226,6 +229,7 @@ static void emit_node(index_ctx_t *ctx, int pos, int end, const char *type,
 
 static void emit_semtok(index_ctx_t *ctx, int pos, int len, int type,
                         int mods) {
+  if (ctx->fast_mode) return;
   sqlite3_reset(ctx->stmt_semtok);
   sqlite3_bind_int(ctx->stmt_semtok, 1, ctx->file_id);
   sqlite3_bind_int(ctx->stmt_semtok, 2, pos);
@@ -237,6 +241,7 @@ static void emit_semtok(index_ctx_t *ctx, int pos, int len, int type,
 
 static void emit_ref(index_ctx_t *ctx, const char *name, int pos, int len,
                      int scope_id, int is_def) {
+  if (ctx->fast_mode) return;
   sqlite3_reset(ctx->stmt_ref);
   sqlite3_bind_int(ctx->stmt_ref, 1, ctx->file_id);
   sqlite3_bind_text(ctx->stmt_ref, 2, name, -1, SQLITE_STATIC);
@@ -816,12 +821,16 @@ static const char *SQL_INSERT_GLOBAL_REF =
 
 valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
-  LVAL_ASSERT_COUNT_EQ(a, a, 4); // LCOV_EXCL_BR_LINE
+
+  u64 argc = valk_lval_list_count(a);
+  if (argc < 4) return valk_lval_err("lsp/index-ast: need at least 4 args");
 
   valk_lval_t *db_ref = valk_lval_list_nth(a, 0);
   valk_lval_t *fid_v = valk_lval_list_nth(a, 1);
   valk_lval_t *ast = valk_lval_list_nth(a, 2);
   valk_lval_t *text_v = valk_lval_list_nth(a, 3);
+  bool fast = (argc > 4 && LVAL_TYPE(valk_lval_list_nth(a, 4)) == LVAL_NUM &&
+               valk_lval_list_nth(a, 4)->num != 0);
 
   if (LVAL_TYPE(db_ref) != LVAL_REF || strcmp(db_ref->ref.type, SQLITE_REF_TYPE) != 0)
     return valk_lval_nil(); // LCOV_EXCL_LINE
@@ -836,35 +845,55 @@ valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
     .text_len = (int)strlen(text_v->str),
     .scope_depth = 0,
     .is_top_level = true,
+    .fast_mode = fast,
   };
 
-  // Delete ALL old data for this file
-  sqlite3_stmt *del;
-  for (int i = 0; SQL_DELETE_ALL[i]; i++) {
-    sqlite3_prepare_v2(db, SQL_DELETE_ALL[i], -1, &del, NULL);
-    sqlite3_bind_int(del, 1, file_id);
-    sqlite3_step(del);
-    sqlite3_finalize(del);
+  // Delete old data — only relevant tables
+  if (fast) {
+    sqlite3_stmt *del;
+    const char *fast_dels[] = {
+      "DELETE FROM symbols WHERE file_id=?1",
+      "DELETE FROM refs WHERE file_id=?1",
+      NULL
+    };
+    for (int i = 0; fast_dels[i]; i++) {
+      sqlite3_prepare_v2(db, fast_dels[i], -1, &del, NULL);
+      sqlite3_bind_int(del, 1, file_id);
+      sqlite3_step(del);
+      sqlite3_finalize(del);
+    }
+  } else {
+    sqlite3_stmt *del;
+    for (int i = 0; SQL_DELETE_ALL[i]; i++) {
+      sqlite3_prepare_v2(db, SQL_DELETE_ALL[i], -1, &del, NULL);
+      sqlite3_bind_int(del, 1, file_id);
+      sqlite3_step(del);
+      sqlite3_finalize(del);
+    }
   }
 
-  // Prepare all insert statements
-  sqlite3_prepare_v2(db, SQL_INSERT_NODE, -1, &ctx.stmt_node, NULL);
-  sqlite3_prepare_v2(db, SQL_INSERT_SEMTOK, -1, &ctx.stmt_semtok, NULL);
-  sqlite3_prepare_v2(db, SQL_INSERT_REF, -1, &ctx.stmt_ref, NULL);
-  sqlite3_prepare_v2(db, SQL_INSERT_SCOPE, -1, &ctx.stmt_scope, NULL);
-  sqlite3_prepare_v2(db, SQL_INSERT_HINT, -1, &ctx.stmt_hint, NULL);
+  // Prepare insert statements (skip unused in fast mode)
+  if (!fast) {
+    sqlite3_prepare_v2(db, SQL_INSERT_NODE, -1, &ctx.stmt_node, NULL);
+    sqlite3_prepare_v2(db, SQL_INSERT_SEMTOK, -1, &ctx.stmt_semtok, NULL);
+    sqlite3_prepare_v2(db, SQL_INSERT_REF, -1, &ctx.stmt_ref, NULL);
+    sqlite3_prepare_v2(db, SQL_INSERT_SCOPE, -1, &ctx.stmt_scope, NULL);
+    sqlite3_prepare_v2(db, SQL_INSERT_HINT, -1, &ctx.stmt_hint, NULL);
+  }
   sqlite3_prepare_v2(db, SQL_INSERT_SYMBOL, -1, &ctx.stmt_symbol, NULL);
   sqlite3_prepare_v2(db, SQL_INSERT_GLOBAL_REF, -1, &ctx.stmt_global_ref, NULL);
 
-  // Single pass — produces everything
+  // Single pass
   walk_each(&ctx, ast);
 
   // Cleanup
-  sqlite3_finalize(ctx.stmt_node);
-  sqlite3_finalize(ctx.stmt_semtok);
-  sqlite3_finalize(ctx.stmt_ref);
-  sqlite3_finalize(ctx.stmt_scope);
-  sqlite3_finalize(ctx.stmt_hint);
+  if (!fast) {
+    sqlite3_finalize(ctx.stmt_node);
+    sqlite3_finalize(ctx.stmt_semtok);
+    sqlite3_finalize(ctx.stmt_ref);
+    sqlite3_finalize(ctx.stmt_scope);
+    sqlite3_finalize(ctx.stmt_hint);
+  }
   sqlite3_finalize(ctx.stmt_symbol);
   sqlite3_finalize(ctx.stmt_global_ref);
 
