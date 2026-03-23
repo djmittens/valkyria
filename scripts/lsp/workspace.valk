@@ -168,7 +168,7 @@
       (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
       (map make-lsp-diag diags)})})
 
-(sig 'handle-pull-diagnostics {-> Num DocParams Nil})
+(sig 'handle-pull-diagnostics {-> Num io/DocParams Nil})
 (fun {handle-pull-diagnostics id params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
@@ -593,7 +593,7 @@
 ; Method handlers — notifications
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-initialize {-> Num InitParams Nil})
+(sig 'handle-initialize {-> Num io/InitParams Nil})
 (fun {handle-initialize id params} {do
   (= {root-uri} params:rootUri)
   (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
@@ -608,7 +608,7 @@
 
 (def {lsp/noop-cb} (\ {_} {}))
 
-(sig 'handle-did-open {-> OpenParams Nil})
+(sig 'handle-did-open {-> io/OpenParams Nil})
 (fun {handle-did-open params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
@@ -616,7 +616,7 @@
   (lsp/doc-store uri text)
   (dict/remove! lsp/line-index-cache uri)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
-  (= {snap} (DocSnapshot uri text lsp/doc-version))
+  (= {snap} (io/DocSnapshot uri text lsp/doc-version))
   (aio/dispatch lsp/sys
     (\ {_} {do (lsp/cache-ast snap:uri snap:text)
                (lsp/sync-doc snap:uri snap:text)
@@ -624,7 +624,7 @@
                nil})
     nil lsp/noop-cb)})
 
-(sig 'handle-did-change {-> ChangeParams Nil})
+(sig 'handle-did-change {-> io/ChangeParams Nil})
 (fun {handle-did-change params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
@@ -639,7 +639,7 @@
       (dict/remove! lsp/ast-cache uri)
       (dict/remove! lsp/line-index-cache uri)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (= {snap} (DocSnapshot uri text lsp/doc-version))
+      (= {snap} (io/DocSnapshot uri text lsp/doc-version))
       (= {v} lsp/doc-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/doc-version v)) {nil}
@@ -654,7 +654,7 @@
           {do (lsp/publish-diagnostics snap:uri snap:text) nil}})
         nil lsp/noop-cb)})})
 
-(sig 'handle-did-close {-> DocParams Nil})
+(sig 'handle-did-close {-> io/DocParams Nil})
 (fun {handle-did-close params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
@@ -676,7 +676,7 @@
       (lsp/doc-store uri save-text)
       (dict/remove! lsp/line-index-cache uri)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (= {snap} (DocSnapshot uri save-text lsp/doc-version))
+      (= {snap} (io/DocSnapshot uri save-text lsp/doc-version))
       (aio/dispatch lsp/sys
         (\ {_} {do (lsp/cache-ast snap:uri snap:text)
                    (lsp/sync-doc snap:uri snap:text)

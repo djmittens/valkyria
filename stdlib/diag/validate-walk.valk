@@ -156,7 +156,7 @@
   {if (== name "match")  {vd/walk-match tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "aio/do") {vd/walk-aio-do tl ctx}
   {if (== name "aio/let") {vd/walk-aio-let tl ctx}
-  {if (dict/has? VALIDATE_SPECIAL_FORMS name)
+  {if (dict/has? vd/VALIDATE_SPECIAL_FORMS name)
     {vd/walk-body tl (vd/check-special-arity name tl ctx hd)}
   {vd/walk-call expr hd name tl ctx}}}}}}}}}}}}}
 })

@@ -9,18 +9,18 @@
 ; Constants
 ; ---------------------------------------------------------------------------
 
-(def {DIAG_ERROR}   1)
-(def {DIAG_WARNING} 2)
+(def {vd/DIAG_ERROR}   1)
+(def {vd/DIAG_WARNING} 2)
 
-(def {VALIDATE_SPECIAL_FORMS}
+(def {vd/VALIDATE_SPECIAL_FORMS}
   (dict/from-keys {"=" "\\" "def" "fun" "if" "do" "select" "case" "quote"
    "load" "eval" "read" "let" "aio/let" "aio/do" "<-"
    "type" "match" "sig" "ctx/with" "ctx/with-deadline" "with"}))
 
-(def {VALIDATE_CONSTANTS}
+(def {vd/VALIDATE_CONSTANTS}
   (dict/from-keys {"true" "false" "nil" "otherwise" "_"}))
 
-(def {VALIDATE_BUILTIN_TYPES}
+(def {vd/VALIDATE_BUILTIN_TYPES}
   (dict/from-keys {"Num" "Str" "Nil" "Bool" "Err" "QExpr" "Fun" "Sym"
                    "Ref" "Handle" "List" "Dict" "Never" "Any"}))
 
@@ -324,8 +324,8 @@
 
 (sig 'vd/is-known {-> Str List Dict Dict Num})
 (fun {vd/is-known name scope globals-set known-set} {
-  if (dict/has? VALIDATE_CONSTANTS name) {1}
-  {if (dict/has? VALIDATE_SPECIAL_FORMS name) {1}
+  if (dict/has? vd/VALIDATE_CONSTANTS name) {1}
+  {if (dict/has? vd/VALIDATE_SPECIAL_FORMS name) {1}
   {if (vd/in-scope? name scope) {1}
   {if (dict/has? globals-set name) {1}
   {if (dict/has? known-set name) {1}
@@ -338,7 +338,7 @@
   plist/set ctx :diags
     (qcons (vd/make-diag ctx:text
                          (src-pos expr) (len name)
-                         DIAG_ERROR message)
+                         vd/DIAG_ERROR message)
            ctx:diags)
 })
 
@@ -347,7 +347,7 @@
   plist/set ctx :diags
     (qcons (vd/make-diag ctx:text
                          (src-pos expr) (len name)
-                         DIAG_WARNING message)
+                         vd/DIAG_WARNING message)
            ctx:diags)
 })
 
@@ -764,7 +764,7 @@
 
 (sig 'vd/is-known-type {-> Str Dict Num})
 (fun {vd/is-known-type name types-set} {
-  if (dict/has? VALIDATE_BUILTIN_TYPES name) {1}
+  if (dict/has? vd/VALIDATE_BUILTIN_TYPES name) {1}
   {dict/has? types-set name}
 })
 
@@ -901,7 +901,7 @@
 
 (sig 'vd/infer-by-callee {-> Str List Any})
 (fun {vd/infer-by-callee name ctx} {
-  if (dict/has? VALIDATE_SPECIAL_FORMS name) {1}
+  if (dict/has? vd/VALIDATE_SPECIAL_FORMS name) {1}
   {if (if (> (len name) 0) {== (str/slice name 0 1) ":"} {0}) {1}
   {if (== name "list") {1}
   {if (== name "dict/new") {1}

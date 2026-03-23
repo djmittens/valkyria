@@ -69,7 +69,7 @@
       {hover/format-markdown info name})}
 })
 
-(sig 'handle-hover {-> Num TextDocPosParams Nil})
+(sig 'handle-hover {-> Num io/TextDocPosParams Nil})
 (fun {handle-hover id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
@@ -117,7 +117,7 @@
 ; Definition and references
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-definition {-> Num TextDocPosParams Nil})
+(sig 'handle-definition {-> Num io/TextDocPosParams Nil})
 (fun {handle-definition id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id (None)}
@@ -202,7 +202,7 @@
           :end (list :line (head lc) :character (+ (head (tail lc)) (len rname)))))
 })
 
-(sig 'handle-references {-> Num TextDocPosParams Nil})
+(sig 'handle-references {-> Num io/TextDocPosParams Nil})
 (fun {handle-references id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -374,7 +374,7 @@
   CompletionRow (plist/get r :name) (plist/get r :kind) (plist/get r :sig) (plist/get r :doc)
 })
 
-(sig 'handle-completion {-> Num TextDocPosParams Nil})
+(sig 'handle-completion {-> Num io/TextDocPosParams Nil})
 (fun {handle-completion id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -402,7 +402,7 @@
 ; Document and workspace symbols, semantic tokens
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-document-symbols {-> Num DocParams Nil})
+(sig 'handle-document-symbols {-> Num io/DocParams Nil})
 (fun {handle-document-symbols id params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
@@ -451,7 +451,7 @@
       }) syms))
       (lsp/send-response id lsp-syms)})})
 
-(sig 'handle-semantic-tokens {-> Num DocParams Nil})
+(sig 'handle-semantic-tokens {-> Num io/DocParams Nil})
 (fun {handle-semantic-tokens id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id (list :data nil)}
@@ -478,7 +478,7 @@
 ; Rename support
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-prepare-rename {-> Num TextDocPosParams Nil})
+(sig 'handle-prepare-rename {-> Num io/TextDocPosParams Nil})
 (fun {handle-prepare-rename id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
@@ -538,7 +538,7 @@
     (rename/make-doc-changes-walk (tail (tail pairs)) (qcons doc-edit acc))}
 })
 
-(sig 'handle-rename {-> Num RenameParams Nil})
+(sig 'handle-rename {-> Num io/RenameParams Nil})
 (fun {handle-rename id params} {do
   (= {new-name} params:newName)
   (= {ctx} (lsp/get-word-ctx params))

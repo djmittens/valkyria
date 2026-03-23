@@ -5,7 +5,7 @@
 ; Inlay hints — parameter name hints for function calls
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-inlay-hints {-> Num RangeParams Nil})
+(sig 'handle-inlay-hints {-> Num io/RangeParams Nil})
 (fun {handle-inlay-hints id params} {do
   (= {range} (plist/get params :range))
   (= {ctx} (lsp/get-doc params))
@@ -85,7 +85,7 @@
       (plist/get local name)})
 })
 
-(sig 'handle-signature-help {-> Num TextDocPosParams Nil})
+(sig 'handle-signature-help {-> Num io/TextDocPosParams Nil})
 (fun {handle-signature-help id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
@@ -144,7 +144,7 @@
   :kind kind)
 })
 
-(sig 'handle-document-highlight {-> Num TextDocPosParams Nil})
+(sig 'handle-document-highlight {-> Num io/TextDocPosParams Nil})
 (fun {handle-document-highlight id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -224,7 +224,7 @@
           :target (str "file://" full-path)) acc)})}
 })
 
-(sig 'handle-document-link {-> Num DocParams Nil})
+(sig 'handle-document-link {-> Num io/DocParams Nil})
 (fun {handle-document-link id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -287,7 +287,7 @@
                      :kind "region") acc})})
 })
 
-(sig 'handle-folding-range {-> Num DocParams Nil})
+(sig 'handle-folding-range {-> Num io/DocParams Nil})
 (fun {handle-folding-range id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -367,7 +367,7 @@
 ; Code lens — show reference counts above function definitions
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-code-lens {-> Num DocParams Nil})
+(sig 'handle-code-lens {-> Num io/DocParams Nil})
 (fun {handle-code-lens id params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
