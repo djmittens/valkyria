@@ -2,8 +2,6 @@
 ; Debug dashboard routes for Valkyria AIO system
 ; Load with: (load "stdlib/aio/debug.valk")
 
-(load "stdlib/aio/sse.valk")
-(load "stdlib/aio/debug-broadcaster.valk")
 
 ; Base path for debug assets (relative to where valk is run from)
 (def {aio/debug-assets-path} "src/modules/aio/debug/")

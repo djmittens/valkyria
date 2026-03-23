@@ -2,6 +2,8 @@
 ; Tests whether metrics/collect-delta uses per-connection or shared state
 
 (load "stdlib/test/test.valk")
+(load "stdlib/aio/sse.valk")
+(load "stdlib/aio/debug-broadcaster.valk")
 (load "stdlib/aio/debug.valk")
 
 (def {aio} (aio/await (aio/start)))

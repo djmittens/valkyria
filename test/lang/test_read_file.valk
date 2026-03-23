@@ -32,7 +32,9 @@
   })
   (test/case "debug-module-loads"
     {do
-    (load "stdlib/aio/debug.valk")
+    (load "stdlib/aio/sse.valk")
+(load "stdlib/aio/debug-broadcaster.valk")
+(load "stdlib/aio/debug.valk")
     (test/assert (> (len aio/debug-html-content) 1000) "debug HTML content should be loaded")
   })
   (test/case "str-concat-files"

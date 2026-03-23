@@ -7,11 +7,6 @@
 ;   null         -> (None) (Option type from prelude)
 ;   nil          -> []     (nil = empty list, always)
 
-(load "stdlib/diag/symdb.valk")
-(load "scripts/lsp/analysis.valk")
-(load "stdlib/diag/validate.valk")
-(load "scripts/lsp/hints.valk")
-(load "scripts/lsp/hints-fields.valk")
 
 
 ; ---------------------------------------------------------------------------

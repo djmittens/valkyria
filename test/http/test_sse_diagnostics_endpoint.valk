@@ -3,6 +3,8 @@
 ; Note: Due to Lisp scoping, verifies via successful completion
 
 (load "stdlib/test/test.valk")
+(load "stdlib/aio/sse.valk")
+(load "stdlib/aio/debug-broadcaster.valk")
 (load "stdlib/aio/debug.valk")
 
 (def {aio} (aio/await (aio/start)))

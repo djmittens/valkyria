@@ -1,6 +1,5 @@
 ; Valkyria LSP Server — hover, definition, references, completion, symbols, rename
 
-(load "scripts/lsp/workspace.valk")
 
 ; ---------------------------------------------------------------------------
 ; Hover — format and describe symbols

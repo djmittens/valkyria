@@ -14,6 +14,8 @@
 (load "stdlib/test/test.valk")
 
 ; Load the debug module
+(load "stdlib/aio/sse.valk")
+(load "stdlib/aio/debug-broadcaster.valk")
 (load "stdlib/aio/debug.valk")
 
 ; Set the test suite name
