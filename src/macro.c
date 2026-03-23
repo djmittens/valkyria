@@ -209,9 +209,13 @@ static void rewrite_node(valk_lval_t *cell, valk_module_t *mod,
   bool is_lambda = false;
   if (LVAL_TYPE(head) == LVAL_SYM && strcmp(head->str, "\\") == 0)
     is_lambda = true;
-  if (LVAL_TYPE(head) == LVAL_FUN && head->fun.name &&
-      strcmp(head->fun.name, "\\") == 0)
-    is_lambda = true;
+  if (LVAL_TYPE(head) == LVAL_FUN && head->fun.builtin != NULL) {
+    valk_lval_t *lambda_sym = valk_lval_sym("\\");
+    valk_lval_t *lambda_val = valk_lenv_get(valk_macro_env(), lambda_sym);
+    if (LVAL_TYPE(lambda_val) == LVAL_FUN &&
+        head->fun.builtin == lambda_val->fun.builtin)
+      is_lambda = true;
+  }
 
   if (!is_lambda && LVAL_TYPE(head) != LVAL_SYM) {
     rewrite_list(expr, mod, fqn, root_env, shadows);
