@@ -16,10 +16,10 @@
 
 ; Run all tests
 (test/run (list
-  (test "arena-capacity-positive"
+  (test/case "arena-capacity-positive"
     {> (mem/arena/capacity) 0})
-  (test "arena-usage-returns-number"
+  (test/case "arena-usage-returns-number"
     {>= (mem/arena/usage) 0})
-  (test "arena-usage-less-than-capacity"
+  (test/case "arena-usage-less-than-capacity"
     {< (mem/arena/usage) (mem/arena/capacity)}))
   {:suite-name "Checkpoint API Tests"})

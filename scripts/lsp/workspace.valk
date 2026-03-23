@@ -1,6 +1,5 @@
 ; Valkyria LSP Server — diagnostics, document sync, workspace indexing, notification handlers
 
-(load "scripts/lsp/io.valk")
 
 ; ---------------------------------------------------------------------------
 ; File indexing and seeding (must be defined before diagnostic publishing)

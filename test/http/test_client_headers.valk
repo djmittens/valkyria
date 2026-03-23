@@ -28,7 +28,7 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "custom headers are received by server" (\ {} {
+  (test/case-async "custom headers are received by server" (\ {} {
     (aio/then (http2/client-request-with-headers aio "127.0.0.1" test-port "/test" 
       {{"x-custom-header" "test-value"} {"user-agent" "TestClient/1.0"}})
       (\ {resp} {

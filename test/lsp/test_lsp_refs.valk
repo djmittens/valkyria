@@ -39,14 +39,14 @@
 
   ; --- Basic reference collection ---
 
-  (test "empty-no-refs"
+  (test/case "empty-no-refs"
     {do
       (test/assert-eq 0 (ref-count "")
         "empty input should produce 0 refs")
       true
     })
 
-  (test "single-symbol-ref"
+  (test/case "single-symbol-ref"
     {do
       (test/assert-eq 1 (ref-count "foo")
         "single symbol should produce 1 ref")
@@ -58,21 +58,21 @@
       true
     })
 
-  (test "keywords-excluded"
+  (test/case "keywords-excluded"
     {do
       (test/assert-eq 0 (ref-count ":foo")
         "keyword :foo should not produce refs")
       true
     })
 
-  (test "numbers-excluded"
+  (test/case "numbers-excluded"
     {do
       (test/assert-eq 0 (ref-count "42")
         "numbers should not produce refs")
       true
     })
 
-  (test "strings-excluded"
+  (test/case "strings-excluded"
     {do
       (test/assert-eq 0 (ref-count "\"hello\"")
         "strings should not produce refs")
@@ -81,7 +81,7 @@
 
   ; --- Function definitions ---
 
-  (test "fun-records-name-as-def"
+  (test/case "fun-records-name-as-def"
     {do
       (= {defs} (ref-defs "(fun {f x} {x})"))
       (= {names} (map (\{r} {r:name}) defs))
@@ -89,7 +89,7 @@
       true
     })
 
-  (test "fun-params-recorded-as-defs"
+  (test/case "fun-params-recorded-as-defs"
     {do
       (= {defs} (ref-defs "(fun {f a b} {+ a b})"))
       (= {names} (map (\{r} {r:name}) defs))
@@ -98,7 +98,7 @@
       true
     })
 
-  (test "fun-name-is-global-scope"
+  (test/case "fun-name-is-global-scope"
     {do
       (= {defs} (ref-defs "(fun {f x} {x})"))
       (= {f-def} (head (filter (\{r} {== r:name "f"}) defs)))
@@ -107,7 +107,7 @@
       true
     })
 
-  (test "fun-params-scoped-to-fun"
+  (test/case "fun-params-scoped-to-fun"
     {do
       (= {defs} (ref-defs "(fun {f x} {x})"))
       (= {x-def} (head (filter (\{r} {== r:name "x"}) defs)))
@@ -118,7 +118,7 @@
 
   ; --- Lambda ---
 
-  (test "lambda-params-as-defs"
+  (test/case "lambda-params-as-defs"
     {do
       (= {defs} (ref-defs "(\\ {a} {a})"))
       (= {names} (map (\{r} {r:name}) defs))
@@ -126,7 +126,7 @@
       true
     })
 
-  (test "lambda-body-uses-scoped"
+  (test/case "lambda-body-uses-scoped"
     {do
       (= {uses} (ref-uses "(\\ {x} {x})"))
       (= {x-use} (head (filter (\{r} {== r:name "x"}) uses)))
@@ -138,7 +138,7 @@
 
   ; --- def / = bindings ---
 
-  (test "def-records-global-defs"
+  (test/case "def-records-global-defs"
     {do
       (= {defs} (ref-defs "(def {myvar} 42)"))
       (= {names} (map (\{r} {r:name}) defs))
@@ -148,7 +148,7 @@
       true
     })
 
-  (test "assign-records-local-defs"
+  (test/case "assign-records-local-defs"
     {do
       (= {refs} (ref/collect-refs "(fun {f} {do (= {x} 1) x})"))
       (= {defs} (filter (\{r} {== r:is-def 1}) refs))
@@ -159,7 +159,7 @@
 
   ; --- do block scope threading ---
 
-  (test "do-threads-assign-scope"
+  (test/case "do-threads-assign-scope"
     {do
       (= {refs} (ref/collect-refs "(fun {f} {do (= {x} 1) x})"))
       (= {uses} (filter (\{r} {== r:is-def 0}) refs))
@@ -172,7 +172,7 @@
 
   ; --- type ---
 
-  (test "type-records-type-and-ctors"
+  (test/case "type-records-type-and-ctors"
     {do
       (= {defs} (ref-defs "(type {Color} {Red} {Green} {Blue})"))
       (= {names} (map (\{r} {r:name}) defs))
@@ -184,7 +184,7 @@
 
   ; --- sig skipped ---
 
-  (test "sig-produces-no-refs"
+  (test/case "sig-produces-no-refs"
     {do
       (test/assert-eq 0 (ref-count "(sig 'foo {-> Num Num})")
         "sig should not produce any refs")
@@ -193,7 +193,7 @@
 
   ; --- Ampersand ---
 
-  (test "ampersand-skipped"
+  (test/case "ampersand-skipped"
     {do
       (= {defs} (ref-defs "(fun {f x & rest} {rest})"))
       (= {names} (map (\{r} {r:name}) defs))
@@ -204,7 +204,7 @@
 
   ; --- ref/find-at-offset ---
 
-  (test "find-at-offset-hit"
+  (test/case "find-at-offset-hit"
     {do
       (= {refs} (ref/collect-refs "foo"))
       (= {r} (ref/find-at-offset refs 0))
@@ -213,7 +213,7 @@
       true
     })
 
-  (test "find-at-offset-miss"
+  (test/case "find-at-offset-miss"
     {do
       (= {refs} (ref/collect-refs "foo"))
       (= {r} (ref/find-at-offset refs 100))
@@ -223,7 +223,7 @@
 
   ; --- ref/matching-refs ---
 
-  (test "matching-refs-by-scope"
+  (test/case "matching-refs-by-scope"
     {do
       (= {refs} (ref/collect-refs "(fun {f x} {x})"))
       (= {x-ref} (head (filter (\{r} {== r:name "x"}) refs)))
@@ -236,21 +236,21 @@
 
   ; --- line-col->offset ---
 
-  (test "line-col-first-line"
+  (test/case "line-col-first-line"
     {do
       (test/assert-eq 3 (line-col->offset "abcdef" 0 3)
         "line 0, col 3 = offset 3")
       true
     })
 
-  (test "line-col-second-line"
+  (test/case "line-col-second-line"
     {do
       (test/assert-eq 4 (line-col->offset "abc\ndef" 1 0)
         "line 1, col 0 = offset 4 (after abc\\n)")
       true
     })
 
-  (test "line-col-second-line-with-col"
+  (test/case "line-col-second-line-with-col"
     {do
       (test/assert-eq 6 (line-col->offset "abc\ndef" 1 2)
         "line 1, col 2 = offset 6")
@@ -259,7 +259,7 @@
 
   ; --- ref/find-scoped-refs ---
 
-  (test "scoped-refs-local"
+  (test/case "scoped-refs-local"
     {do
       (= {text} "(fun {f x} {+ x x})")
       (= {refs} (ref/find-scoped-refs text 0 7))
@@ -267,7 +267,7 @@
       true
     })
 
-  (test "scoped-refs-global-returns-nil"
+  (test/case "scoped-refs-global-returns-nil"
     {do
       (= {text} "(fun {f x} {x})")
       (= {refs} (ref/find-scoped-refs text 0 5))
@@ -277,7 +277,7 @@
 
   ; --- Parse error ---
 
-  (test "parse-error-no-crash"
+  (test/case "parse-error-no-crash"
     {do
       (= {refs} (ref/collect-refs "(unclosed"))
       (test/assert (nil? refs) "parse error should return nil, not crash")
@@ -288,7 +288,7 @@
   ; symdb/extract-refs — position accuracy
   ; =========================================================================
 
-  (test "extract-refs-single-line-positions"
+  (test/case "extract-refs-single-line-positions"
     {do
       (= {refs} (symdb/extract-refs "(+ a b)"))
       (test/assert-eq 3 (len refs) "should extract 3 refs")
@@ -304,7 +304,7 @@
       true
     })
 
-  (test "extract-refs-multiline-positions"
+  (test/case "extract-refs-multiline-positions"
     {do
       (= {refs} (symdb/extract-refs "(fun {f x}\n  {+ x 1})"))
       (= {r-fun} (find-ref-by-name refs "fun"))
@@ -327,7 +327,7 @@
       true
     })
 
-  (test "extract-refs-nested-expr"
+  (test/case "extract-refs-nested-expr"
     {do
       (= {refs} (symdb/extract-refs "(if (> a 0) {a} {b})"))
       (= {names} (map (\{r} {r:name}) refs))
@@ -345,7 +345,7 @@
       true
     })
 
-  (test "extract-refs-fun-all-symbols"
+  (test/case "extract-refs-fun-all-symbols"
     {do
       (= {refs} (symdb/extract-refs "(fun {f x y} {+ x y})"))
       (= {names} (map (\{r} {r:name}) refs))
@@ -361,7 +361,7 @@
       true
     })
 
-  (test "extract-refs-skips-nil-false-otherwise"
+  (test/case "extract-refs-skips-nil-false-otherwise"
     {do
       (= {refs1} (symdb/extract-refs "nil"))
       (test/assert-eq 0 (len refs1) "nil should produce 0 refs")
@@ -375,7 +375,7 @@
       true
     })
 
-  (test "extract-refs-numbers-strings-not-extracted"
+  (test/case "extract-refs-numbers-strings-not-extracted"
     {do
       (= {refs} (symdb/extract-refs "(+ 42 \"hello\")"))
       (test/assert-eq 1 (len refs) "only + should be extracted")
@@ -384,14 +384,14 @@
       true
     })
 
-  (test "extract-refs-empty-input"
+  (test/case "extract-refs-empty-input"
     {do
       (= {refs} (symdb/extract-refs ""))
       (test/assert (nil? refs) "empty input produces nil")
       true
     })
 
-  (test "extract-refs-def-form"
+  (test/case "extract-refs-def-form"
     {do
       (= {refs} (symdb/extract-refs "(def {val} 42)"))
       (= {names} (map (\{r} {r:name}) refs))
@@ -404,7 +404,7 @@
       true
     })
 
-  (test "extract-refs-type-form"
+  (test/case "extract-refs-type-form"
     {do
       (= {refs} (symdb/extract-refs "(type {Color} {Red} {Green})"))
       (= {names} (map (\{r} {r:name}) refs))
@@ -415,7 +415,7 @@
       true
     })
 
-  (test "extract-refs-lambda"
+  (test/case "extract-refs-lambda"
     {do
       (= {refs} (symdb/extract-refs "(map (\\{x} {+ x 1}) items)"))
       (= {names} (map (\{r} {r:name}) refs))
@@ -430,7 +430,7 @@
   ; symdb cross-file find-refs
   ; =========================================================================
 
-  (test "find-refs-single-file-positions"
+  (test/case "find-refs-single-file-positions"
     {do
       (= {db} (make-test-db))
       (= {text} "(fun {helper x} {+ x 1})")
@@ -451,7 +451,7 @@
       true
     })
 
-  (test "find-refs-cross-file"
+  (test/case "find-refs-cross-file"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///a.valk" "(fun {helper x} {+ x 1})")
@@ -469,7 +469,7 @@
       true
     })
 
-  (test "find-refs-cross-file-three-files"
+  (test/case "find-refs-cross-file-three-files"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///lib.valk" "(fun {add x y} {+ x y})")
@@ -485,7 +485,7 @@
       true
     })
 
-  (test "find-refs-resync-clears-old"
+  (test/case "find-refs-resync-clears-old"
     {do
       (= {db} (make-test-db))
       (= {_} (symdb/sync-document db "file:///t.valk" "(fun {old-fn x} {+ x 1})"))
@@ -500,7 +500,7 @@
       true
     })
 
-  (test "find-refs-nonexistent-symbol"
+  (test/case "find-refs-nonexistent-symbol"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "(fun {f x} {x})")
@@ -510,7 +510,7 @@
       true
     })
 
-  (test "find-refs-ordering"
+  (test/case "find-refs-ordering"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///b.valk" "(+ 1 2)")
@@ -529,7 +529,7 @@
       true
     })
 
-  (test "find-refs-multiline-accuracy"
+  (test/case "find-refs-multiline-accuracy"
     {do
       (= {db} (make-test-db))
       (= {text} "(fun {calc x y}\n  {+ (* x y)\n     (- x y)})")
@@ -546,7 +546,7 @@
       true
     })
 
-  (test "find-refs-keywords-not-indexed"
+  (test/case "find-refs-keywords-not-indexed"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "(list :name \"foo\" :age 42)")
@@ -558,7 +558,7 @@
       true
     })
 
-  (test "find-refs-constants-not-indexed"
+  (test/case "find-refs-constants-not-indexed"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "(if true {nil} {false})")
@@ -572,7 +572,7 @@
       true
     })
 
-  (test "find-refs-sig-not-indexed"
+  (test/case "find-refs-sig-not-indexed"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///b.valk"
@@ -589,7 +589,7 @@
       true
     })
 
-  (test "find-refs-resync-preserves-other-files"
+  (test/case "find-refs-resync-preserves-other-files"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///a.valk" "(fun {shared x} {x})")
@@ -605,7 +605,7 @@
       true
     })
 
-  (test "find-refs-definition-included"
+  (test/case "find-refs-definition-included"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "(fun {greet name} {str name})")
@@ -621,7 +621,7 @@
   ; sync-file-symbols indexes refs and replaces stale data
   ; =========================================================================
 
-  (test "sync-file-symbols-reindexes-refs"
+  (test/case "sync-file-symbols-reindexes-refs"
     {do
       (= {db} (make-test-db))
       (= {v1} "(fun {helper x} {+ x 1})")
@@ -641,7 +641,7 @@
       true
     })
 
-  (test "sync-file-symbols-updates-positions"
+  (test/case "sync-file-symbols-updates-positions"
     {do
       (= {db} (make-test-db))
       (= {v1} "(fun {f x} {x})")
@@ -661,7 +661,7 @@
       true
     })
 
-  (test "sync-file-symbols-preserves-other-file-refs"
+  (test/case "sync-file-symbols-preserves-other-file-refs"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///a.valk" "(fun {shared} {1})")
@@ -677,7 +677,7 @@
       true
     })
 
-  (test "sync-file-symbols-removes-old-symbol-refs"
+  (test/case "sync-file-symbols-removes-old-symbol-refs"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "(fun {f x} {x})")

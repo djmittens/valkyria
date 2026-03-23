@@ -45,19 +45,19 @@
 
   ; --- Basic cases ---
 
-  (test "no-hints-empty"
+  (test/case "no-hints-empty"
     {do
       (test/assert-eq 0 (hint-count "") "empty input")
       true
     })
 
-  (test "no-hints-number"
+  (test/case "no-hints-number"
     {do
       (test/assert-eq 0 (hint-count "42") "number literal")
       true
     })
 
-  (test "no-hints-operators"
+  (test/case "no-hints-operators"
     {do
       (test/assert-eq 0 (hint-count "(+ 1 2)") "operators excluded")
       (test/assert-eq 0 (hint-count "(- 10 3)") "minus excluded")
@@ -65,7 +65,7 @@
       true
     })
 
-  (test "no-hints-special-forms"
+  (test/case "no-hints-special-forms"
     {do
       (test/assert-eq 0 (hint-count "(if 1 {2} {3})") "if excluded")
       (test/assert-eq 1 (hint-count "(def {x} 1)") "def has type hint")
@@ -75,7 +75,7 @@
 
   ; --- Local function parameter hints ---
 
-  (test "local-fun-two-params"
+  (test/case "local-fun-two-params"
     {do
       (= {text} "(fun {add a b} {+ a b}) (add 1 2)")
       (= {hints} (hint/collect text nil nil))
@@ -86,7 +86,7 @@
       true
     })
 
-  (test "local-fun-three-params"
+  (test/case "local-fun-three-params"
     {do
       (= {text} "(fun {make-point x y z} {list x y z}) (make-point 1 2 3)")
       (= {hints} (hint/collect text nil nil))
@@ -94,7 +94,7 @@
       true
     })
 
-  (test "single-arg-no-hint"
+  (test/case "single-arg-no-hint"
     {do
       (= {text} "(fun {negate x} {- 0 x}) (negate 5)")
       (test/assert-eq 0 (hint-count text) "single-arg calls get no hints")
@@ -103,7 +103,7 @@
 
   ; --- Hint filtering ---
 
-  (test "skip-matching-arg-name"
+  (test/case "skip-matching-arg-name"
     {do
       (= {text} "(fun {greet name age} {list name age}) (greet name 25)")
       (= {hints} (hint/collect text nil nil))
@@ -113,7 +113,7 @@
       true
     })
 
-  (test "skip-keyword-arg"
+  (test/case "skip-keyword-arg"
     {do
       (= {text} "(fun {make a b} {list a b}) (make :foo :bar)")
       (= {hints} (hint/collect text nil nil))
@@ -123,7 +123,7 @@
 
   ; --- Type annotation handling ---
 
-  (test "params-with-annotations"
+  (test/case "params-with-annotations"
     {do
       (= {text} "(fun {calc x :: Num y :: Num} {+ x y}) (calc 1 2)")
       (= {hints} (hint/collect text nil nil))
@@ -134,7 +134,7 @@
       true
     })
 
-  (test "return-type-annotation"
+  (test/case "return-type-annotation"
     {do
       (= {text} "(fun {add a b -> Num} {+ a b}) (add 1 2)")
       (= {hints} (hint/collect text nil nil))
@@ -147,7 +147,7 @@
 
   ; --- Rest params ---
 
-  (test "rest-params-stop"
+  (test/case "rest-params-stop"
     {do
       (= {text} "(fun {foo a b & rest} {list a b rest}) (foo 1 2 3 4)")
       (= {hints} (hint/collect text nil nil))
@@ -160,7 +160,7 @@
 
   ; --- Nested calls ---
 
-  (test "nested-calls"
+  (test/case "nested-calls"
     {do
       (= {text} "(fun {add a b} {+ a b}) (add (add 1 2) 3)")
       (= {hints} (hint/collect text nil nil))
@@ -170,7 +170,7 @@
 
   ; --- Hints inside special forms ---
 
-  (test "call-inside-do"
+  (test/case "call-inside-do"
     {do
       (= {text} "(fun {foo a b} {list a b}) (do (foo 1 2))")
       (= {hints} (hint/collect text nil nil))
@@ -178,7 +178,7 @@
       true
     })
 
-  (test "call-inside-if"
+  (test/case "call-inside-if"
     {do
       (= {text} "(fun {foo a b} {list a b}) (if 1 {foo 1 2} {foo 3 4})")
       (= {hints} (hint/collect text nil nil))
@@ -186,7 +186,7 @@
       true
     })
 
-  (test "fun-body-gets-hints"
+  (test/case "fun-body-gets-hints"
     {do
       (= {text} "(fun {bar x y} {list x y}) (fun {baz} {bar 1 2})")
       (= {hints} (hint/collect text nil nil))
@@ -196,7 +196,7 @@
 
   ; --- sig parsing ---
 
-  (test "parse-sig-simple"
+  (test/case "parse-sig-simple"
     {do
       (= {params} (hint/parse-sig-params "(fun {foo a b c} ...)"))
       (test/assert-eq 3 (len params) "3 params from sig")
@@ -206,7 +206,7 @@
       true
     })
 
-  (test "parse-sig-with-annotations"
+  (test/case "parse-sig-with-annotations"
     {do
       (= {params} (hint/parse-sig-params "(fun {calc x :: Num y :: Str} ...)"))
       (test/assert-eq 2 (len params) "annotations stripped")
@@ -215,7 +215,7 @@
       true
     })
 
-  (test "parse-sig-with-rest"
+  (test/case "parse-sig-with-rest"
     {do
       (= {params} (hint/parse-sig-params "(fun {foo a & rest} ...)"))
       (test/assert-eq 1 (len params) "stop at &")
@@ -223,21 +223,21 @@
       true
     })
 
-  (test "parse-sig-no-params"
+  (test/case "parse-sig-no-params"
     {do
       (= {params} (hint/parse-sig-params "(fun {foo} ...)"))
       (test/assert (nil? params) "no params")
       true
     })
 
-  (test "parse-sig-nil"
+  (test/case "parse-sig-nil"
     {do
       (= {params} (hint/parse-sig-params nil))
       (test/assert (nil? params) "nil sig")
       true
     })
 
-  (test "parse-sig-type-only"
+  (test/case "parse-sig-type-only"
     {do
       (= {params} (hint/parse-sig-params "{-> Num Num Num}"))
       (test/assert (not (nil? params)) "type sig returns types as params")
@@ -246,7 +246,7 @@
 
   ; --- Range filtering ---
 
-  (test "range-filter"
+  (test/case "range-filter"
     {do
       (= {text} "(fun {foo a b} {list a b})\n\n\n(foo 1 2)")
       (= {range} (list :start (list :line 3 :character 0)
@@ -256,7 +256,7 @@
       true
     })
 
-  (test "range-excludes-other-lines"
+  (test/case "range-excludes-other-lines"
     {do
       (= {text} "(fun {foo a b} {list a b})\n(foo 1 2)\n(foo 3 4)")
       (= {range} (list :start (list :line 1 :character 0)
@@ -268,7 +268,7 @@
 
   ; --- Position correctness ---
 
-  (test "hint-kind-is-parameter"
+  (test/case "hint-kind-is-parameter"
     {do
       (= {text} "(fun {foo a b} {list a b}) (foo 1 2)")
       (= {hints} (hint/collect text nil nil))
@@ -277,7 +277,7 @@
       true
     })
 
-  (test "hint-has-padding-right"
+  (test/case "hint-has-padding-right"
     {do
       (= {text} "(fun {foo a b} {list a b}) (foo 1 2)")
       (= {hints} (hint/collect text nil nil))
@@ -288,7 +288,7 @@
 
   ; --- Unknown function ---
 
-  (test "unknown-fun-no-hints"
+  (test/case "unknown-fun-no-hints"
     {do
       (= {text} "(unknown-fn 1 2 3)")
       (test/assert-eq 0 (hint-count text) "unknown function gets no hints")
@@ -297,7 +297,7 @@
 
   ; --- Multiple calls same function ---
 
-  (test "multiple-calls"
+  (test/case "multiple-calls"
     {do
       (= {text} "(fun {foo a b} {list a b}) (foo 1 2) (foo 3 4)")
       (= {hints} (hint/collect text nil nil))
@@ -307,7 +307,7 @@
 
   ; --- Lambda body ---
 
-  (test "call-inside-lambda"
+  (test/case "call-inside-lambda"
     {do
       (= {text} "(fun {foo a b} {list a b}) (\\ {x} {foo x 1})")
       (= {hints} (hint/collect text nil nil))
@@ -317,7 +317,7 @@
 
   ; --- Type hint: parse-prefix-sig ---
 
-  (test "prefix-sig-simple"
+  (test/case "prefix-sig-simple"
     {do
       (= {types} (hint/parse-prefix-sig "{-> Num Num Num}"))
       (test/assert-eq 3 (len types) "3 types")
@@ -326,7 +326,7 @@
       true
     })
 
-  (test "prefix-sig-compound"
+  (test/case "prefix-sig-compound"
     {do
       (= {types} (hint/parse-prefix-sig "{-> (List A) A}"))
       (test/assert-eq 2 (len types) "2 types")
@@ -335,7 +335,7 @@
       true
     })
 
-  (test "prefix-sig-higher-order"
+  (test/case "prefix-sig-higher-order"
     {do
       (= {types} (hint/parse-prefix-sig "{-> (-> A B) (List A) (List B)}"))
       (test/assert-eq 3 (len types) "3 types")
@@ -345,19 +345,19 @@
       true
     })
 
-  (test "prefix-sig-nil-input"
+  (test/case "prefix-sig-nil-input"
     {do
       (test/assert (nil? (hint/parse-prefix-sig nil)) "nil returns nil")
       true
     })
 
-  (test "prefix-sig-no-arrow"
+  (test/case "prefix-sig-no-arrow"
     {do
       (test/assert (nil? (hint/parse-prefix-sig "{Num}")) "no arrow returns nil")
       true
     })
 
-  (test "prefix-sig-zero-arg"
+  (test/case "prefix-sig-zero-arg"
     {do
       (= {r} (hint/parse-prefix-sig "{-> Num}"))
       (test/assert (not (nil? r)) "zero-arg sig should parse")
@@ -368,7 +368,7 @@
 
   ; --- Type hint: infer-val-type (tested via hint/collect through def/= path) ---
 
-  (test "infer-num"
+  (test/case "infer-num"
     {do
       (= {ast} (parse "(= {x} 42)"))
       (= {val} (head (tail (tail (head ast)))))
@@ -376,7 +376,7 @@
       true
     })
 
-  (test "infer-str"
+  (test/case "infer-str"
     {do
       (= {ast} (parse "(= {x} \"hello\")"))
       (= {val} (head (tail (tail (head ast)))))
@@ -384,7 +384,7 @@
       true
     })
 
-  (test "infer-list"
+  (test/case "infer-list"
     {do
       (= {ast} (parse "(= {x} (list 1 2 3))"))
       (= {val} (head (tail (tail (head ast)))))
@@ -392,7 +392,7 @@
       true
     })
 
-  (test "infer-dict"
+  (test/case "infer-dict"
     {do
       (= {ast} (parse "(= {x} (dict/new))"))
       (= {val} (head (tail (tail (head ast)))))
@@ -400,7 +400,7 @@
       true
     })
 
-  (test "infer-option-none"
+  (test/case "infer-option-none"
     {do
       (= {ast} (parse "(= {x} (None))"))
       (= {val} (head (tail (tail (head ast)))))
@@ -408,7 +408,7 @@
       true
     })
 
-  (test "infer-option-some"
+  (test/case "infer-option-some"
     {do
       (= {ast} (parse "(= {x} (Some 42))"))
       (= {val} (head (tail (tail (head ast)))))
@@ -416,7 +416,7 @@
       true
     })
 
-  (test "infer-lambda"
+  (test/case "infer-lambda"
     {do
       (= {ast} (parse "(= {x} (\\ {y} {+ y 1}))"))
       (= {val} (head (tail (tail (head ast)))))
@@ -424,7 +424,7 @@
       true
     })
 
-  (test "infer-unknown-nil"
+  (test/case "infer-unknown-nil"
     {do
       (= {ast} (parse "(= {x} (foo 1))"))
       (= {val} (head (tail (tail (head ast)))))
@@ -434,7 +434,7 @@
 
   ; --- Type hint: def bindings ---
 
-  (test "type-hint-def-num"
+  (test/case "type-hint-def-num"
     {do
       (= {text} "(def {x} 42)")
       (= {hints} (hint/collect text nil nil))
@@ -443,7 +443,7 @@
       true
     })
 
-  (test "type-hint-assign-str"
+  (test/case "type-hint-assign-str"
     {do
       (= {text} "(= {s} \"hello\")")
       (= {hints} (hint/collect text nil nil))
@@ -452,7 +452,7 @@
       true
     })
 
-  (test "type-hint-def-list"
+  (test/case "type-hint-def-list"
     {do
       (= {text} "(= {items} (list 1 2 3))")
       (= {hints} (hint/collect text nil nil))
@@ -461,7 +461,7 @@
       true
     })
 
-  (test "type-hint-def-dict"
+  (test/case "type-hint-def-dict"
     {do
       (= {text} "(= {m} (dict/new))")
       (= {hints} (hint/collect text nil nil))
@@ -470,7 +470,7 @@
       true
     })
 
-  (test "type-hint-def-lambda"
+  (test/case "type-hint-def-lambda"
     {do
       (= {text} "(= {f} (\\ {x} {+ x 1}))")
       (= {hints} (hint/collect text nil nil))
@@ -479,7 +479,7 @@
       true
     })
 
-  (test "type-hint-def-option"
+  (test/case "type-hint-def-option"
     {do
       (= {text} "(= {result} (None))")
       (= {hints} (hint/collect text nil nil))
@@ -488,7 +488,7 @@
       true
     })
 
-  (test "type-hint-kind-is-type"
+  (test/case "type-hint-kind-is-type"
     {do
       (= {text} "(def {x} 42)")
       (= {hints} (hint/collect text nil nil))
@@ -497,7 +497,7 @@
       true
     })
 
-  (test "type-hint-has-padding-left"
+  (test/case "type-hint-has-padding-left"
     {do
       (= {text} "(def {x} 42)")
       (= {hints} (hint/collect text nil nil))
@@ -507,7 +507,7 @@
       true
     })
 
-  (test "type-hint-no-unknown-binding"
+  (test/case "type-hint-no-unknown-binding"
     {do
       (= {text} "(= {x} (unknown-fn 1))")
       (= {hints} (hint/collect text nil nil))
@@ -515,7 +515,7 @@
       true
     })
 
-  (test "type-hint-nested-in-do"
+  (test/case "type-hint-nested-in-do"
     {do
       (= {text} "(do (= {x} 42) (= {s} \"hello\"))")
       (= {hints} (hint/collect text nil nil))
@@ -527,7 +527,7 @@
 
   ; --- collect-local-params ---
 
-  (test "local-params-basic"
+  (test/case "local-params-basic"
     {do
       (= {params} (hint/collect-local-params
         (parse "(fun {add a b} {+ a b}) (fun {mul x y} {* x y})")))
@@ -540,7 +540,7 @@
       true
     })
 
-  (test "local-params-inside-do"
+  (test/case "local-params-inside-do"
     {do
       (= {params} (hint/collect-local-params
         (parse "(do (fun {helper a b} {+ a b}))")))
@@ -552,7 +552,7 @@
 
   ; --- Parameter type hints on function definitions ---
 
-  (test "param-type-direct-simple"
+  (test/case "param-type-direct-simple"
     {do
       (= {params} (extract-fun-params "(fun {add a b} {+ a b})"))
       (= {sig-types} (list "Num" "Num" "Num"))
@@ -563,7 +563,7 @@
       true
     })
 
-  (test "param-type-direct-mixed"
+  (test/case "param-type-direct-mixed"
     {do
       (= {params} (extract-fun-params "(fun {greet name age} {list name age})"))
       (= {sig-types} (list "Str" "Num" "Str"))
@@ -575,7 +575,7 @@
       true
     })
 
-  (test "param-type-direct-rest-stops"
+  (test/case "param-type-direct-rest-stops"
     {do
       (= {params} (extract-fun-params "(fun {foo a & rest} {list a rest})"))
       (= {sig-types} (list "Num" "List" "List"))
@@ -586,7 +586,7 @@
       true
     })
 
-  (test "param-type-direct-kind"
+  (test/case "param-type-direct-kind"
     {do
       (= {params} (extract-fun-params "(fun {add a b} {+ a b})"))
       (= {sig-types} (list "Num" "Num" "Num"))
@@ -596,7 +596,7 @@
       true
     })
 
-  (test "param-type-direct-compound"
+  (test/case "param-type-direct-compound"
     {do
       (= {params} (extract-fun-params "(fun {mymap f xs} {list f xs})"))
       (= {sig-types} (list "(-> A B)" "(List A)" "(List B)"))
@@ -608,14 +608,14 @@
       true
     })
 
-  (test "param-type-direct-nil-params"
+  (test/case "param-type-direct-nil-params"
     {do
       (= {hints} (hint/emit-def-type-hints nil (list "Num") 0 nil))
       (test/assert-eq 0 (len hints) "nil params no hints")
       true
     })
 
-  (test "param-type-pipeline-with-db"
+  (test/case "param-type-pipeline-with-db"
     {do
       (= {db} (make-sig-db))
       (seed-sig db "add" "{-> Num Num Num}")
@@ -626,7 +626,7 @@
       true
     })
 
-  (test "param-type-pipeline-no-sig"
+  (test/case "param-type-pipeline-no-sig"
     {do
       (= {db} (make-sig-db))
       (= {text} "(fun {add a b} {+ a b})")
@@ -636,7 +636,7 @@
       true
     })
 
-  (test "param-type-pipeline-padding-left"
+  (test/case "param-type-pipeline-padding-left"
     {do
       (= {db} (make-sig-db))
       (seed-sig db "add" "{-> Num Num Num}")
@@ -650,7 +650,7 @@
       true
     })
 
-  (test "param-type-pipeline-return-type"
+  (test/case "param-type-pipeline-return-type"
     {do
       (= {db} (make-sig-db))
       (seed-sig db "add" "{-> Num Num Num}")
@@ -664,7 +664,7 @@
 
   ; --- Field-access type hints ---
 
-  (test "field-access-hint-from-sig"
+  (test/case "field-access-hint-from-sig"
     {do
       (= {db} (make-sig-db))
       (seed-sig db "get-info" "{-> Str SymInfo}")
@@ -676,7 +676,7 @@
       true
     })
 
-  (test "field-access-hint-from-ctor"
+  (test/case "field-access-hint-from-ctor"
     {do
       (= {db} (make-sig-db))
       (seed-sig db "dist" "{-> Point Num}")
@@ -688,7 +688,7 @@
       true
     })
 
-  (test "field-access-no-hint-untyped"
+  (test/case "field-access-no-hint-untyped"
     {do
       (= {text} "(fun {foo x} {do\n  (= {n} x:name)\n  n})")
       (= {hints} (hint/collect text nil nil))
@@ -698,7 +698,7 @@
       true
     })
 
-  (test "field-access-cross-file-via-db"
+  (test/case "field-access-cross-file-via-db"
     {do
       (= {db} (make-sig-db))
       (sqlite/exec db
@@ -712,7 +712,7 @@
       true
     })
 
-  (test "field-access-from-function-return-type"
+  (test/case "field-access-from-function-return-type"
     {do
       (= {db} (make-sig-db))
       (= {text} "(type {Point} {:x Num :y Num})\n(sig 'make-pt {-> Num Num Point})\n(fun {use-pt a b} {do\n  (= {p} (make-pt a b))\n  (= {px} p:x)\n  px})")
@@ -724,7 +724,7 @@
       true
     })
 
-  (test "field-access-suppresses-any"
+  (test/case "field-access-suppresses-any"
     {do
       (= {db} (make-sig-db))
       (seed-sig db "get-thing" "{-> Str ThingInfo}")

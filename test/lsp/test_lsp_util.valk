@@ -8,56 +8,56 @@
 
   ; === word-at-position ===
 
-  (test "word-at-simple"
+  (test/case "word-at-simple"
     {do
       (= {w} (word-at-position "hello world" 0 0))
       (test/assert-eq "hello" w "should get hello at col 0")
       true
     })
 
-  (test "word-at-middle"
+  (test/case "word-at-middle"
     {do
       (= {w} (word-at-position "hello world" 0 6))
       (test/assert-eq "world" w "should get world at col 6")
       true
     })
 
-  (test "word-at-multiline"
+  (test/case "word-at-multiline"
     {do
       (= {w} (word-at-position "foo\nbar\nbaz" 1 0))
       (test/assert-eq "bar" w "should get bar on line 1")
       true
     })
 
-  (test "word-at-paren-boundary"
+  (test/case "word-at-paren-boundary"
     {do
       (= {w} (word-at-position "(hello)" 0 1))
       (test/assert-eq "hello" w "should get hello inside parens")
       true
     })
 
-  (test "word-at-col-beyond-line"
+  (test/case "word-at-col-beyond-line"
     {do
       (= {w} (word-at-position "hi" 0 100))
       (test/assert (nil? w) "col beyond line length should return nil")
       true
     })
 
-  (test "word-at-line-beyond-file"
+  (test/case "word-at-line-beyond-file"
     {do
       (= {w} (word-at-position "hi" 100 0))
       (test/assert (nil? w) "line beyond file should return nil")
       true
     })
 
-  (test "word-at-on-delimiter"
+  (test/case "word-at-on-delimiter"
     {do
       (= {w} (word-at-position "a b" 0 1))
       (test/assert-eq "a" w "cursor on space returns adjacent word")
       true
     })
 
-  (test "word-at-braces"
+  (test/case "word-at-braces"
     {do
       (= {w} (word-at-position "{fun}" 0 1))
       (test/assert-eq "fun" w "should get word inside braces")
@@ -66,7 +66,7 @@
 
   ; === word-range-at-position ===
 
-  (test "word-range-basic"
+  (test/case "word-range-basic"
     {do
       (= {r} (word-range-at-position "hello world" 0 0))
       (test/assert (not (nil? r)) "should return range")
@@ -76,7 +76,7 @@
       true
     })
 
-  (test "word-range-nil-on-delimiter"
+  (test/case "word-range-nil-on-delimiter"
     {do
       (= {r} (word-range-at-position "a b" 0 1))
       (test/assert (not (nil? r)) "space returns adjacent word range")
@@ -86,7 +86,7 @@
 
   ; === is-delim ===
 
-  (test "delim-space"
+  (test/case "delim-space"
     {do
       (test/assert-eq 1 (is-delim " ") "space is delimiter")
       (test/assert-eq 1 (is-delim "(") "( is delimiter")
@@ -100,7 +100,7 @@
       true
     })
 
-  (test "delim-non-delim"
+  (test/case "delim-non-delim"
     {do
       (test/assert-eq 0 (is-delim "a") "a is not delimiter")
       (test/assert-eq 0 (is-delim "1") "1 is not delimiter")
@@ -111,21 +111,21 @@
 
   ; === uri->path ===
 
-  (test "uri-strips-prefix"
+  (test/case "uri-strips-prefix"
     {do
       (test/assert-eq "/foo/bar.valk" (uri->path "file:///foo/bar.valk")
         "should strip file:// prefix")
       true
     })
 
-  (test "uri-no-prefix"
+  (test/case "uri-no-prefix"
     {do
       (test/assert-eq "/foo/bar" (uri->path "/foo/bar")
         "non-URI string returned as-is")
       true
     })
 
-  (test "uri-short-string"
+  (test/case "uri-short-string"
     {do
       (test/assert-eq "abc" (uri->path "abc")
         "short string returned as-is")
@@ -134,19 +134,19 @@
 
   ; === str/starts-with? ===
 
-  (test "starts-with-true"
+  (test/case "starts-with-true"
     {do
       (test/assert-eq 1 (str/starts-with? "hello world" "hello")
         "hello world starts with hello")
     })
 
-  (test "starts-with-false"
+  (test/case "starts-with-false"
     {do
       (test/assert-eq 0 (str/starts-with? "hello" "world")
         "hello does not start with world")
     })
 
-  (test "starts-with-longer-prefix"
+  (test/case "starts-with-longer-prefix"
     {do
       (test/assert-eq 0 (str/starts-with? "hi" "hello")
         "prefix longer than string should be false")
@@ -156,21 +156,21 @@
 
   ; === str/index-of ===
 
-  (test "str-index-of-found"
+  (test/case "str-index-of-found"
     {do
       (test/assert-eq 5 (str/index-of "hello:world" ":")
         "colon at position 5")
       true
     })
 
-  (test "str-index-of-not-found"
+  (test/case "str-index-of-not-found"
     {do
       (test/assert-eq -1 (str/index-of "hello" ":")
         "no colon should return -1")
       true
     })
 
-  (test "str-index-of-start"
+  (test/case "str-index-of-start"
     {do
       (test/assert-eq 0 (str/index-of ":foo" ":")
         "colon at start = 0")
@@ -179,7 +179,7 @@
 
   ; === extract-doc-comment ===
 
-  (test "doc-comment-single-line"
+  (test/case "doc-comment-single-line"
     {do
       (= {lines} (str/split "; This is a doc\n(fun {f} {1})" "\n"))
       (= {doc} (extract-doc-comment lines 1))
@@ -187,7 +187,7 @@
       true
     })
 
-  (test "doc-comment-multi-line"
+  (test/case "doc-comment-multi-line"
     {do
       (= {lines} (str/split "; Line one\n; Line two\n(fun {f} {1})" "\n"))
       (= {doc} (extract-doc-comment lines 2))
@@ -195,7 +195,7 @@
       true
     })
 
-  (test "doc-comment-none"
+  (test/case "doc-comment-none"
     {do
       (= {lines} (str/split "(fun {f} {1})" "\n"))
       (= {doc} (extract-doc-comment lines 0))
@@ -203,7 +203,7 @@
       true
     })
 
-  (test "doc-comment-blank-line-breaks"
+  (test/case "doc-comment-blank-line-breaks"
     {do
       (= {lines} (str/split "; orphan\n\n(fun {f} {1})" "\n"))
       (= {doc} (extract-doc-comment lines 2))
@@ -213,14 +213,14 @@
 
   ; === vd/is-accessor ===
 
-  (test "accessor-valid"
+  (test/case "accessor-valid"
     {do
       (test/assert-eq 1 (vd/is-accessor "Foo:bar") "Foo:bar is accessor")
       (test/assert-eq 1 (vd/is-accessor "Point:x") "Point:x is accessor")
       true
     })
 
-  (test "accessor-invalid"
+  (test/case "accessor-invalid"
     {do
       (test/assert-eq 0 (vd/is-accessor "foo:bar") "lowercase = not accessor")
       (test/assert-eq 0 (vd/is-accessor "Foo") "no colon = not accessor")
@@ -232,7 +232,7 @@
 
   ; === vd/collect-globals ===
 
-  (test "collect-globals-fun"
+  (test/case "collect-globals-fun"
     {do
       (= {ast} (parse "(fun {f x} {x})\n(fun {g y} {y})"))
       (= {names} (vd/collect-globals ast))
@@ -241,7 +241,7 @@
       true
     })
 
-  (test "collect-globals-def"
+  (test/case "collect-globals-def"
     {do
       (= {ast} (parse "(def {MY_VAR} 42)"))
       (= {names} (vd/collect-globals ast))
@@ -249,7 +249,7 @@
       true
     })
 
-  (test "collect-globals-type"
+  (test/case "collect-globals-type"
     {do
       (= {ast} (parse "(type {Color} {Red} {Green})"))
       (= {names} (vd/collect-globals ast))
@@ -259,7 +259,7 @@
       true
     })
 
-  (test "collect-globals-sig"
+  (test/case "collect-globals-sig"
     {do
       (= {ast} (parse "(sig 'my-fn {-> Num Num})"))
       (= {names} (vd/collect-globals ast))
@@ -269,7 +269,7 @@
 
   ; === make-lsp-diag (test the conversion) ===
 
-  (test "vd-make-diag-shape"
+  (test/case "vd-make-diag-shape"
     {do
       (= {text} "hello world")
       (= {d} (vd/make-diag text 6 5 1 "test error"))
@@ -281,7 +281,7 @@
       true
     })
 
-  (test "vd-make-diag-multiline"
+  (test/case "vd-make-diag-multiline"
     {do
       (= {text} "line1\nline2\nworld")
       (= {d} (vd/make-diag text 12 5 2 "warn"))

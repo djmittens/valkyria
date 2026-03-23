@@ -3,21 +3,21 @@
 
 (test/run (list
 
-  (test "dict-new-no-args"
+  (test/case "dict-new-no-args"
     {do
       (= {d} (dict/new))
       (test/assert-eq 0 (dict/count d) "new dict should be empty")
       true
     })
 
-  (test "dict-new-with-capacity-hint"
+  (test/case "dict-new-with-capacity-hint"
     {do
       (= {d} (dict/new 100))
       (test/assert-eq 0 (dict/count d) "new dict with capacity hint should be empty")
       true
     })
 
-  (test "dict-put-string-key"
+  (test/case "dict-put-string-key"
     {do
       (= {d} (dict/new))
       (dict/put! d "hello")
@@ -26,7 +26,7 @@
       true
     })
 
-  (test "dict-put-symbol-key"
+  (test/case "dict-put-symbol-key"
     {do
       (= {d} (dict/new))
       (dict/put! d :foo)
@@ -35,7 +35,7 @@
       true
     })
 
-  (test "dict-put-duplicate-key"
+  (test/case "dict-put-duplicate-key"
     {do
       (= {d} (dict/new))
       (dict/put! d "dup")
@@ -44,7 +44,7 @@
       true
     })
 
-  (test "dict-put-returns-dict"
+  (test/case "dict-put-returns-dict"
     {do
       (= {d} (dict/new))
       (= {r} (dict/put! d "x"))
@@ -52,7 +52,7 @@
       true
     })
 
-  (test "dict-has-existing"
+  (test/case "dict-has-existing"
     {do
       (= {d} (dict/new))
       (dict/put! d "exists")
@@ -60,14 +60,14 @@
       true
     })
 
-  (test "dict-has-missing"
+  (test/case "dict-has-missing"
     {do
       (= {d} (dict/new))
       (test/assert-eq 0 (dict/has? d "missing") "should not find missing key")
       true
     })
 
-  (test "dict-has-symbol"
+  (test/case "dict-has-symbol"
     {do
       (= {d} (dict/new))
       (dict/put! d :bar)
@@ -76,7 +76,7 @@
       true
     })
 
-  (test "dict-from-keys-strings"
+  (test/case "dict-from-keys-strings"
     {do
       (= {d} (dict/from-keys (list "a" "b" "c")))
       (test/assert-eq 3 (dict/count d) "should have 3 keys")
@@ -86,7 +86,7 @@
       true
     })
 
-  (test "dict-from-keys-symbols"
+  (test/case "dict-from-keys-symbols"
     {do
       (= {d} (dict/from-keys (list :x :y :z)))
       (test/assert-eq 3 (dict/count d) "should have 3 keys")
@@ -94,28 +94,28 @@
       true
     })
 
-  (test "dict-from-keys-duplicates"
+  (test/case "dict-from-keys-duplicates"
     {do
       (= {d} (dict/from-keys (list "a" "b" "a")))
       (test/assert-eq 2 (dict/count d) "duplicates should be deduplicated")
       true
     })
 
-  (test "dict-from-keys-empty"
+  (test/case "dict-from-keys-empty"
     {do
       (= {d} (dict/from-keys (list)))
       (test/assert-eq 0 (dict/count d) "empty list should give empty dict")
       true
     })
 
-  (test "dict-count-empty"
+  (test/case "dict-count-empty"
     {do
       (= {d} (dict/new))
       (test/assert-eq 0 (dict/count d) "empty dict count is 0")
       true
     })
 
-  (test "dict-count-populated"
+  (test/case "dict-count-populated"
     {do
       (= {d} (dict/new))
       (dict/put! d "a")
@@ -125,7 +125,7 @@
       true
     })
 
-  (test "dict-keys-empty"
+  (test/case "dict-keys-empty"
     {do
       (= {d} (dict/new))
       (= {k} (dict/keys d))
@@ -133,7 +133,7 @@
       true
     })
 
-  (test "dict-keys-populated"
+  (test/case "dict-keys-populated"
     {do
       (= {d} (dict/new))
       (dict/put! d "alpha")
@@ -143,7 +143,7 @@
       true
     })
 
-  (test "dict-grow-many-elements"
+  (test/case "dict-grow-many-elements"
     {do
       (= {d} (dict/new))
       (dict/put! d "k01")
@@ -167,7 +167,7 @@
 
   ;; === dict/set! and dict/get tests ===
 
-  (test "dict-set-and-get-string"
+  (test/case "dict-set-and-get-string"
     {do
       (= {d} (dict/new))
       (dict/set! d "name" "Alice")
@@ -175,7 +175,7 @@
       true
     })
 
-  (test "dict-set-and-get-number"
+  (test/case "dict-set-and-get-number"
     {do
       (= {d} (dict/new))
       (dict/set! d "count" 42)
@@ -183,7 +183,7 @@
       true
     })
 
-  (test "dict-set-overwrites"
+  (test/case "dict-set-overwrites"
     {do
       (= {d} (dict/new))
       (dict/set! d "x" 1)
@@ -193,7 +193,7 @@
       true
     })
 
-  (test "dict-set-returns-dict"
+  (test/case "dict-set-returns-dict"
     {do
       (= {d} (dict/new))
       (= {r} (dict/set! d "k" "v"))
@@ -201,7 +201,7 @@
       true
     })
 
-  (test "dict-get-missing-returns-nil"
+  (test/case "dict-get-missing-returns-nil"
     {do
       (= {d} (dict/new))
       (= {r} (dict/get d "missing"))
@@ -209,14 +209,14 @@
       true
     })
 
-  (test "dict-get-missing-with-default"
+  (test/case "dict-get-missing-with-default"
     {do
       (= {d} (dict/new))
       (test/assert-eq 0 (dict/get d "missing" 0) "missing with default should return default")
       true
     })
 
-  (test "dict-get-existing-ignores-default"
+  (test/case "dict-get-existing-ignores-default"
     {do
       (= {d} (dict/new))
       (dict/set! d "x" 10)
@@ -224,7 +224,7 @@
       true
     })
 
-  (test "dict-set-symbol-key"
+  (test/case "dict-set-symbol-key"
     {do
       (= {d} (dict/new))
       (dict/set! d :status "active")
@@ -232,7 +232,7 @@
       true
     })
 
-  (test "dict-set-list-value"
+  (test/case "dict-set-list-value"
     {do
       (= {d} (dict/new))
       (dict/set! d "items" (list 1 2 3))
@@ -241,7 +241,7 @@
       true
     })
 
-  (test "dict-set-nested-dict"
+  (test/case "dict-set-nested-dict"
     {do
       (= {inner} (dict/new))
       (dict/set! inner "x" 1)
@@ -252,7 +252,7 @@
       true
     })
 
-  (test "dict-set-many-values-with-growth"
+  (test/case "dict-set-many-values-with-growth"
     {do
       (= {d} (dict/new))
       (dict/set! d "k01" 1)
@@ -276,7 +276,7 @@
 
   ;; === dict/remove! tests ===
 
-  (test "dict-remove-existing"
+  (test/case "dict-remove-existing"
     {do
       (= {d} (dict/new))
       (dict/set! d "a" 1)
@@ -288,7 +288,7 @@
       true
     })
 
-  (test "dict-remove-missing"
+  (test/case "dict-remove-missing"
     {do
       (= {d} (dict/new))
       (dict/set! d "a" 1)
@@ -297,7 +297,7 @@
       true
     })
 
-  (test "dict-remove-returns-dict"
+  (test/case "dict-remove-returns-dict"
     {do
       (= {d} (dict/new))
       (dict/set! d "x" 1)
@@ -306,7 +306,7 @@
       true
     })
 
-  (test "dict-remove-then-reinsert"
+  (test/case "dict-remove-then-reinsert"
     {do
       (= {d} (dict/new))
       (dict/set! d "key" 1)
@@ -319,14 +319,14 @@
 
   ;; === dict/values tests ===
 
-  (test "dict-values-empty"
+  (test/case "dict-values-empty"
     {do
       (= {d} (dict/new))
       (test/assert-eq 0 (len (dict/values d)) "empty dict should have no values")
       true
     })
 
-  (test "dict-values-populated"
+  (test/case "dict-values-populated"
     {do
       (= {d} (dict/new))
       (dict/set! d "a" 10)
@@ -338,14 +338,14 @@
 
   ;; === dict/entries tests ===
 
-  (test "dict-entries-empty"
+  (test/case "dict-entries-empty"
     {do
       (= {d} (dict/new))
       (test/assert-eq 0 (len (dict/entries d)) "empty dict should have no entries")
       true
     })
 
-  (test "dict-entries-populated"
+  (test/case "dict-entries-populated"
     {do
       (= {d} (dict/new))
       (dict/set! d "x" 42)
@@ -359,21 +359,21 @@
 
   ;; === Error cases ===
 
-  (test "dict-new-too-many-args"
+  (test/case "dict-new-too-many-args"
     {do
       (= {r} (error? (dict/new 10 20)))
       (test/assert r "dict/new with 2 args should error")
       true
     })
 
-  (test "dict-new-wrong-type"
+  (test/case "dict-new-wrong-type"
     {do
       (= {r} (error? (dict/new "abc")))
       (test/assert r "dict/new with string arg should error")
       true
     })
 
-  (test "dict-put-wrong-arg-count"
+  (test/case "dict-put-wrong-arg-count"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/put! d)))
@@ -381,14 +381,14 @@
       true
     })
 
-  (test "dict-put-non-ref"
+  (test/case "dict-put-non-ref"
     {do
       (= {r} (error? (dict/put! 42 "key")))
       (test/assert r "dict/put! on non-ref should error")
       true
     })
 
-  (test "dict-put-bad-key-type"
+  (test/case "dict-put-bad-key-type"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/put! d 42)))
@@ -396,7 +396,7 @@
       true
     })
 
-  (test "dict-set-wrong-arg-count"
+  (test/case "dict-set-wrong-arg-count"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/set! d "k")))
@@ -404,14 +404,14 @@
       true
     })
 
-  (test "dict-set-non-ref"
+  (test/case "dict-set-non-ref"
     {do
       (= {r} (error? (dict/set! 42 "k" "v")))
       (test/assert r "dict/set! on non-ref should error")
       true
     })
 
-  (test "dict-set-bad-key-type"
+  (test/case "dict-set-bad-key-type"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/set! d 42 "v")))
@@ -419,7 +419,7 @@
       true
     })
 
-  (test "dict-get-wrong-arg-count"
+  (test/case "dict-get-wrong-arg-count"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/get d)))
@@ -427,14 +427,14 @@
       true
     })
 
-  (test "dict-get-non-ref"
+  (test/case "dict-get-non-ref"
     {do
       (= {r} (error? (dict/get 42 "k")))
       (test/assert r "dict/get on non-ref should error")
       true
     })
 
-  (test "dict-get-bad-key-type"
+  (test/case "dict-get-bad-key-type"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/get d 42)))
@@ -442,7 +442,7 @@
       true
     })
 
-  (test "dict-remove-wrong-arg-count"
+  (test/case "dict-remove-wrong-arg-count"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/remove! d)))
@@ -450,14 +450,14 @@
       true
     })
 
-  (test "dict-remove-non-ref"
+  (test/case "dict-remove-non-ref"
     {do
       (= {r} (error? (dict/remove! 42 "k")))
       (test/assert r "dict/remove! on non-ref should error")
       true
     })
 
-  (test "dict-remove-bad-key-type"
+  (test/case "dict-remove-bad-key-type"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/remove! d 42)))
@@ -465,7 +465,7 @@
       true
     })
 
-  (test "dict-has-wrong-arg-count"
+  (test/case "dict-has-wrong-arg-count"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/has? d)))
@@ -473,14 +473,14 @@
       true
     })
 
-  (test "dict-has-non-ref"
+  (test/case "dict-has-non-ref"
     {do
       (= {r} (error? (dict/has? 42 "key")))
       (test/assert r "dict/has? on non-ref should error")
       true
     })
 
-  (test "dict-has-bad-key-type"
+  (test/case "dict-has-bad-key-type"
     {do
       (= {d} (dict/new))
       (= {r} (error? (dict/has? d 42)))
@@ -488,70 +488,70 @@
       true
     })
 
-  (test "dict-count-wrong-arg-count"
+  (test/case "dict-count-wrong-arg-count"
     {do
       (= {r} (error? (dict/count)))
       (test/assert r "dict/count with 0 args should error")
       true
     })
 
-  (test "dict-count-non-ref"
+  (test/case "dict-count-non-ref"
     {do
       (= {r} (error? (dict/count 42)))
       (test/assert r "dict/count on non-ref should error")
       true
     })
 
-  (test "dict-keys-wrong-arg-count"
+  (test/case "dict-keys-wrong-arg-count"
     {do
       (= {r} (error? (dict/keys)))
       (test/assert r "dict/keys with 0 args should error")
       true
     })
 
-  (test "dict-keys-non-ref"
+  (test/case "dict-keys-non-ref"
     {do
       (= {r} (error? (dict/keys "not-a-dict")))
       (test/assert r "dict/keys on non-ref should error")
       true
     })
 
-  (test "dict-values-wrong-arg-count"
+  (test/case "dict-values-wrong-arg-count"
     {do
       (= {r} (error? (dict/values)))
       (test/assert r "dict/values with 0 args should error")
       true
     })
 
-  (test "dict-values-non-ref"
+  (test/case "dict-values-non-ref"
     {do
       (= {r} (error? (dict/values 42)))
       (test/assert r "dict/values on non-ref should error")
       true
     })
 
-  (test "dict-entries-wrong-arg-count"
+  (test/case "dict-entries-wrong-arg-count"
     {do
       (= {r} (error? (dict/entries)))
       (test/assert r "dict/entries with 0 args should error")
       true
     })
 
-  (test "dict-entries-non-ref"
+  (test/case "dict-entries-non-ref"
     {do
       (= {r} (error? (dict/entries "nope")))
       (test/assert r "dict/entries on non-ref should error")
       true
     })
 
-  (test "dict-from-keys-wrong-arg-count"
+  (test/case "dict-from-keys-wrong-arg-count"
     {do
       (= {r} (error? (dict/from-keys)))
       (test/assert r "dict/from-keys with 0 args should error")
       true
     })
 
-  (test "dict-from-keys-large-list"
+  (test/case "dict-from-keys-large-list"
     {do
       (= {d} (dict/from-keys (list "a" "b" "c" "d" "e" "f" "g" "h"
                                     "i" "j" "k" "l" "m" "n" "o" "p"
@@ -564,7 +564,7 @@
 
   ;; === put-only key returns nil from get ===
 
-  (test "dict-put-only-key-get-returns-nil"
+  (test/case "dict-put-only-key-get-returns-nil"
     {do
       (= {d} (dict/new))
       (dict/put! d "key-only")
@@ -576,7 +576,7 @@
 
   ;; === remove with rehash (backward shift) ===
 
-  (test "dict-remove-with-chain"
+  (test/case "dict-remove-with-chain"
     {do
       (= {d} (dict/new))
       (dict/set! d "a" 1)

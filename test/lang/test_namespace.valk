@@ -6,7 +6,7 @@
 ; Test that / works in symbol names (module namespacing)
 
 (test/run (list
-  (test "namespaced-symbols"
+  (test/case "namespaced-symbols"
     {(do
     (fun {foo/bar x} {(* 2 x)})
     (fun {baz/qux a b} {(+ a b)})

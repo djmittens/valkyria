@@ -29,7 +29,7 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async client-aio (list
-  (test-async "requests recover via resume, not timeout" (\ {} {
+  (test/case-async "requests recover via resume, not timeout" (\ {} {
     (= {reqs} (list
       (http2/client-request client-aio "127.0.0.1" test-port "/a")
       (http2/client-request client-aio "127.0.0.1" test-port "/b")
@@ -45,7 +45,7 @@
     }))
   }))
 
-  (test-async "sequential recovery without timeout" (\ {} {
+  (test/case-async "sequential recovery without timeout" (\ {} {
     ; Wait for idle timeouts to close client connections and free buffers
     (aio/then (aio/sleep client-aio 500) (\ {_} {
       (aio/then (http2/client-request client-aio "127.0.0.1" test-port "/recovery1")

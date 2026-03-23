@@ -24,14 +24,14 @@
 
   ; --- Basic token counts ---
 
-  (test "empty-input-no-tokens"
+  (test/case "empty-input-no-tokens"
     {do
       (test/assert-eq 0 (tok-count "")
         "empty input should produce 0 tokens")
       true
     })
 
-  (test "number-literal"
+  (test/case "number-literal"
     {do
       (test/assert-eq 1 (tok-count "42")
         "single number should produce 1 token")
@@ -40,7 +40,7 @@
       true
     })
 
-  (test "symbol-classified"
+  (test/case "symbol-classified"
     {do
       (test/assert (>= (tok-count "foo") 1)
         "standalone symbol should produce at least 1 token")
@@ -49,7 +49,7 @@
       true
     })
 
-  (test "keyword-property"
+  (test/case "keyword-property"
     {do
       (= {tok} (nth-tok ":foo" 1))
       (test/assert-eq SEM_PROPERTY (tok-type tok) ":keyword should be property")
@@ -58,7 +58,7 @@
 
   ; --- Function calls ---
 
-  (test "function-call-head"
+  (test/case "function-call-head"
     {do
       (= {toks} (tok-groups "(+ 1 2)"))
       (= {head-tok} (nth 1 toks))
@@ -66,7 +66,7 @@
       true
     })
 
-  (test "named-function-call"
+  (test/case "named-function-call"
     {do
       (= {toks} (tok-groups "(foo 1)"))
       (= {head-tok} (nth 1 toks))
@@ -76,7 +76,7 @@
 
   ; --- Keywords ---
 
-  (test "if-keyword"
+  (test/case "if-keyword"
     {do
       (= {toks} (tok-groups "(if true {1} {2})"))
       (= {head-tok} (nth 1 toks))
@@ -84,7 +84,7 @@
       true
     })
 
-  (test "do-keyword"
+  (test/case "do-keyword"
     {do
       (= {toks} (tok-groups "(do 1 2)"))
       (= {head-tok} (nth 1 toks))
@@ -94,7 +94,7 @@
 
   ; --- fun declaration ---
 
-  (test "fun-keyword-and-name"
+  (test/case "fun-keyword-and-name"
     {do
       (= {toks} (tok-groups "(fun {add x y} {+ x y})"))
       (= {kw} (nth 1 toks))
@@ -104,7 +104,7 @@
       true
     })
 
-  (test "fun-params-are-parameter"
+  (test/case "fun-params-are-parameter"
     {do
       (= {toks} (tok-groups "(fun {f x y} {x})"))
       (= {x-tok} (nth 3 toks))
@@ -114,7 +114,7 @@
       true
     })
 
-  (test "fun-body-params-classified"
+  (test/case "fun-body-params-classified"
     {do
       (= {toks} (tok-groups "(fun {f x} {x})"))
       (= {body-x} (nth 4 toks))
@@ -124,7 +124,7 @@
 
   ; --- Lambda ---
 
-  (test "lambda-keyword"
+  (test/case "lambda-keyword"
     {do
       (= {toks} (tok-groups "(\\ {x} {x})"))
       (= {kw} (nth 1 toks))
@@ -132,7 +132,7 @@
       true
     })
 
-  (test "lambda-param-in-scope"
+  (test/case "lambda-param-in-scope"
     {do
       (= {toks} (tok-groups "(\\ {a} {a})"))
       (= {body-a} (nth 3 toks))
@@ -142,7 +142,7 @@
 
   ; --- def / = bindings ---
 
-  (test "def-keyword-and-var"
+  (test/case "def-keyword-and-var"
     {do
       (= {toks} (tok-groups "(def {x} 42)"))
       (= {kw} (nth 1 toks))
@@ -152,7 +152,7 @@
       true
     })
 
-  (test "assign-keyword-and-var"
+  (test/case "assign-keyword-and-var"
     {do
       (= {toks} (tok-groups "(= {y} 10)"))
       (= {kw} (nth 1 toks))
@@ -162,7 +162,7 @@
 
   ; --- type declarations ---
 
-  (test "type-keyword-and-names"
+  (test/case "type-keyword-and-names"
     {do
       (= {toks} (tok-groups "(type {Color} {Red} {Green})"))
       (= {kw} (nth 1 toks))
@@ -174,7 +174,7 @@
       true
     })
 
-  (test "type-field-properties"
+  (test/case "type-field-properties"
     {do
       (= {toks} (tok-groups "(type {Point} {Point :x :y})"))
       (= {field-x} (nth 4 toks))
@@ -184,7 +184,7 @@
 
   ; --- Operators ---
 
-  (test "arithmetic-operators"
+  (test/case "arithmetic-operators"
     {do
       (= {toks} (tok-groups "(* 2 3)"))
       (= {op} (nth 1 toks))
@@ -192,7 +192,7 @@
       true
     })
 
-  (test "comparison-operators"
+  (test/case "comparison-operators"
     {do
       (= {toks} (tok-groups "(>= 1 2)"))
       (= {op} (nth 1 toks))
@@ -202,7 +202,7 @@
 
   ; --- Delta encoding ---
 
-  (test "delta-same-line"
+  (test/case "delta-same-line"
     {do
       (= {data} (sem/tokenize "(+ 1 2)"))
       (= {groups} (list/group 5 data))
@@ -211,7 +211,7 @@
       true
     })
 
-  (test "delta-new-line"
+  (test/case "delta-new-line"
     {do
       (= {data} (sem/tokenize "1\n2"))
       (= {groups} (list/group 5 data))
@@ -223,7 +223,7 @@
 
   ; --- Quasiquote source lengths (regression for crash fix) ---
 
-  (test "quote-source-len"
+  (test/case "quote-source-len"
     {do
       (test/assert-eq 1 (sem/source-len "quote") "quote = ' = 1 char")
       (test/assert-eq 1 (sem/source-len "quasiquote") "quasiquote = ` = 1 char")
@@ -232,7 +232,7 @@
       true
     })
 
-  (test "regular-name-source-len"
+  (test/case "regular-name-source-len"
     {do
       (test/assert-eq 3 (sem/source-len "foo") "foo = 3 chars")
       (test/assert-eq 2 (sem/source-len "if") "if = 2 chars")
@@ -241,7 +241,7 @@
 
   ; --- Ampersand skipped ---
 
-  (test "ampersand-skipped-in-params"
+  (test/case "ampersand-skipped-in-params"
     {do
       (= {toks} (tok-groups "(fun {f x & rest} {rest})"))
       (= {types} (map tok-type toks))
@@ -251,7 +251,7 @@
 
   ; --- No tokens for strings ---
 
-  (test "string-not-tokenized"
+  (test/case "string-not-tokenized"
     {do
       (test/assert-eq 0 (tok-count "\"hello\"")
         "string literals should not produce semantic tokens")
@@ -260,7 +260,7 @@
 
   ; --- Multi-expression input ---
 
-  (test "multiple-top-level-exprs"
+  (test/case "multiple-top-level-exprs"
     {do
       (= {n} (tok-count "(def {a} 1)\n(def {b} 2)"))
       (test/assert (>= n 4) "two defs should produce at least 4 tokens")
@@ -269,7 +269,7 @@
 
   ; --- Regression: tokens in range ---
 
-  (test "all-tokens-non-negative"
+  (test/case "all-tokens-non-negative"
     {do
       (= {text} "(fun {greet name} {str \"Hello \" name})")
       (= {data} (sem/tokenize text))

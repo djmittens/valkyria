@@ -95,25 +95,25 @@
 
 ; Run all tests
 (test/run (list
-  (test "metrics-json-returns-string"
+  (test/case "metrics-json-returns-string"
     {do
     (= {result} (metrics/json))
     (test/assert (is-string? result) "metrics/json should return a string")
     true
   })
-  (test "metrics-json-non-empty"
+  (test/case "metrics-json-non-empty"
     {do
     (= {result} (metrics/json))
     (test/assert (> (len result) 0) "metrics/json should return non-empty string")
     true
   })
-  (test "metrics-prometheus-returns-string"
+  (test/case "metrics-prometheus-returns-string"
     {do
     (= {result} (metrics/prometheus))
     (test/assert (is-string? result) "metrics/prometheus should return a string")
     true
   })
-  (test "metrics-prometheus-with-metric"
+  (test/case "metrics-prometheus-with-metric"
     {do
     ; Create a metric first (V2 API: create counter handle, then increment)
     (= {counter} (metrics/counter "test_prom_basic"))
@@ -122,7 +122,7 @@
     (test/assert (> (len result) 0) "metrics/prometheus should return non-empty string after creating metric")
     true
   })
-  (test "counter-inc-no-labels"
+  (test/case "counter-inc-no-labels"
     {do
     ; Create and increment a test counter (V2 API)
     (= {counter} (metrics/counter "test_counter_basic"))
@@ -139,7 +139,7 @@
 
     true
   })
-  (test "counter-inc-single-label"
+  (test/case "counter-inc-single-label"
     {do
     ; Create counters with labels (V2 API)
     (= {counter-get} (metrics/counter "test_counter_labeled" "method" "GET"))
@@ -157,7 +157,7 @@
 
     true
   })
-  (test "counter-inc-multiple-labels"
+  (test/case "counter-inc-multiple-labels"
     {do
     ; Create counters with multiple labels (V2 API)
     (= {c1} (metrics/counter "test_counter_multi" "method" "GET" "status" "200"))
@@ -176,7 +176,7 @@
 
     true
   })
-  (test "counter-different-label-values"
+  (test/case "counter-different-label-values"
     {do
     ; Create counters with same name but different label values (V2 API)
     (= {users-counter} (metrics/counter "test_requests" "endpoint" "/api/users"))
@@ -194,7 +194,7 @@
 
     true
   })
-  (test "counter-accumulation"
+  (test/case "counter-accumulation"
     {do
     ; Create a counter and increment it multiple times (V2 API)
     (= {counter} (metrics/counter "test_accumulator"))
@@ -217,7 +217,7 @@
 
     true
   })
-  (test "prometheus-format-structure"
+  (test/case "prometheus-format-structure"
     {do
     ; Create some metrics (V2 API)
     (= {counter} (metrics/counter "test_prom_counter" "label" "value"))
@@ -232,7 +232,7 @@
 
     true
   })
-  (test "both-formats-work"
+  (test/case "both-formats-work"
     {do
     ; Create a counter (V2 API)
     (= {counter} (metrics/counter "test_dual_format"))
@@ -252,7 +252,7 @@
 
     true
   })
-  (test "empty-metric-name"
+  (test/case "empty-metric-name"
     {do
     ; Try to create counter with empty name (V2 API)
     ; This should either work or fail gracefully
@@ -265,7 +265,7 @@
 
     true
   })
-  (test "metrics-persistence"
+  (test/case "metrics-persistence"
     {do
     ; Create and increment a counter (V2 API)
     (= {counter} (metrics/counter "test_persist"))

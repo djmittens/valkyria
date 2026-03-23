@@ -5,7 +5,7 @@
 (load "stdlib/test/test.valk")
 
 (test/run (list
-  (test "aio/retry returns a handle"
+  (test/case "aio/retry returns a handle"
     {do
     (= {sys} (aio/await (aio/start)))
     (= {h} (aio/retry sys
@@ -14,7 +14,7 @@
     (= {_} (aio/stop sys))
     (not (== h nil))
     })
-  (test "aio/retry with exponential backoff"
+  (test/case "aio/retry with exponential backoff"
     {do
     (= {sys} (aio/await (aio/start)))
     (= {h} (aio/retry sys
@@ -24,7 +24,7 @@
     (= {status} (aio/status h))
     (not (== status nil))
     })
-  (test "aio/retry with linear backoff"
+  (test/case "aio/retry with linear backoff"
     {do
     (= {sys} (aio/await (aio/start)))
     (= {h} (aio/retry sys
@@ -34,7 +34,7 @@
     (= {status} (aio/status h))
     (not (== status nil))
     })
-  (test "aio/retry with no backoff"
+  (test/case "aio/retry with no backoff"
     {do
     (= {sys} (aio/await (aio/start)))
     (= {h} (aio/retry sys
@@ -44,19 +44,19 @@
     (= {status} (aio/status h))
     (not (== status nil))
     })
-  (test "aio/retry with wrong arg count returns error"
+  (test/case "aio/retry with wrong arg count returns error"
     {do
     (= {result} (aio/retry))
     (error? result)
     })
-  (test "aio/retry with non-function second arg returns error"
+  (test/case "aio/retry with non-function second arg returns error"
     {do
     (= {sys} (aio/await (aio/start)))
     (= {result} (aio/retry sys 42 {:max-attempts 1}))
     (= {_} (aio/stop sys))
     (error? result)
     })
-  (test "aio/retry with non-qexpr third arg returns error"
+  (test/case "aio/retry with non-qexpr third arg returns error"
     {do
     (= {sys} (aio/await (aio/start)))
     (= {result} (aio/retry sys (\ {} {(aio/pure 1)}) 42))

@@ -43,16 +43,16 @@
      (cons (test-sse-connection) (run-batch (- n 1))))})
 
 (test/run-async aio (list
-  (test-async "Single SSE connection receives events" (\ {} {
+  (test/case-async "Single SSE connection receives events" (\ {} {
     (test-sse-connection)}))
 
-  (test-async "10 concurrent SSE connections" (\ {} {
+  (test/case-async "10 concurrent SSE connections" (\ {} {
     (aio/then (aio/all (run-batch CONCURRENT_CONNECTIONS))
       (\ {results}
         {(= {ok-count} (len (filter (\ {r} {r}) results)))
          (>= ok-count 8)}))}))
 
-  (test-async "Two batches of concurrent connections" (\ {} {
+  (test/case-async "Two batches of concurrent connections" (\ {} {
     (aio/then (aio/all (run-batch CONCURRENT_CONNECTIONS))
       (\ {results1}
         {(aio/then (aio/all (run-batch CONCURRENT_CONNECTIONS))

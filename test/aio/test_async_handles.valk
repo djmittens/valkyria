@@ -51,81 +51,81 @@
 
 ; Run all tests
 (test/run (list
-  (test "handle? returns true for completed handle"
+  (test/case "handle? returns true for completed handle"
     {do
     (def {h} (aio/pure 42))
     (== (handle? h) true)
   })
-  (test "handle? returns true for failed handle"
+  (test/case "handle? returns true for failed handle"
     {do
     (def {h} (aio/fail "error"))
     (== (handle? h) true)
   })
-  (test "handle? returns false for number"
+  (test/case "handle? returns false for number"
     {do
     (== (handle? 42) false)
   })
-  (test "handle? returns false for string"
+  (test/case "handle? returns false for string"
     {do
     (== (handle? "hello") false)
   })
-  (test "handle? returns false for list"
+  (test/case "handle? returns false for list"
     {do
     (== (handle? (list 1 2 3)) false)
   })
-  (test "handle? returns false for nil"
+  (test/case "handle? returns false for nil"
     {do
     (== (handle? nil) false)
   })
-  (test "as-handle returns handle unchanged"
+  (test/case "as-handle returns handle unchanged"
     {do
     (def {h} (aio/pure 42))
     (def {h2} (as-handle h))
     (== (aio/status h2) :completed)
   })
-  (test "as-handle wraps non-handle value"
+  (test/case "as-handle wraps non-handle value"
     {do
     (def {h} (as-handle 42))
     (== (aio/status h) :completed)
   })
-  (test "as-handle wraps string"
+  (test/case "as-handle wraps string"
     {do
     (def {h} (as-handle "hello"))
     (== (aio/status h) :completed)
   })
-  (test "as-handle wraps list"
+  (test/case "as-handle wraps list"
     {do
     (def {h} (as-handle (list 1 2 3)))
     (== (aio/status h) :completed)
   })
-  (test "as-handle wraps nil"
+  (test/case "as-handle wraps nil"
     {do
     (def {h} (as-handle nil))
     (== (aio/status h) :completed)
   })
-  (test "aio/try wraps success in :ok"
+  (test/case "aio/try wraps success in :ok"
     {do
     (def {h} (aio/try (aio/pure 42)))
     (== (aio/status h) :completed)
   })
-  (test "aio/try wraps failure in :err"
+  (test/case "aio/try wraps failure in :err"
     {do
     (def {h} (aio/try (aio/fail "error")))
     (== (aio/status h) :completed)
   })
-  (test "chain with empty fns returns start"
+  (test/case "chain with empty fns returns start"
     {do
     (def {start} (aio/pure 10))
     (def {result} (chain start ()))
     (== (aio/status result) :completed)
   })
-  (test "chain with single fn"
+  (test/case "chain with single fn"
     {do
     (def {start} (aio/pure 10))
     (def {result} (chain start (list (\ {x} {(aio/pure (* x 2))}))))
     (== (aio/status result) :completed)
   })
-  (test "chain with multiple fns"
+  (test/case "chain with multiple fns"
     {do
     (def {start} (aio/pure 1))
     (def {fns} (list 
@@ -136,49 +136,49 @@
     (def {result} (chain start fns))
     (== (aio/status result) :completed)
   })
-  (test "aio/map transforms value"
+  (test/case "aio/map transforms value"
     {do
     (def {h} (aio/pure 10))
     (def {result} (aio/map h (\ {x} {(* x 2)})))
     (== (aio/status result) :completed)
   })
-  (test "aio/map on failed handle propagates failure"
+  (test/case "aio/map on failed handle propagates failure"
     {do
     (def {h} (aio/fail "error"))
     (def {result} (aio/map h (\ {x} {(* x 2)})))
     (== (aio/status result) :failed)
   })
-  (test "parallel-map with empty list"
+  (test/case "parallel-map with empty list"
     {do
     (def {result} (parallel-map (\ {x} {(aio/pure (* x 2))}) ()))
     (== (aio/status result) :completed)
   })
-  (test "parallel-map with single item"
+  (test/case "parallel-map with single item"
     {do
     (def {result} (parallel-map (\ {x} {(aio/pure (* x 2))}) (list 5)))
     (== (aio/status result) :completed)
   })
-  (test "parallel-map with multiple items"
+  (test/case "parallel-map with multiple items"
     {do
     (def {result} (parallel-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
     (== (aio/status result) :completed)
   })
-  (test "sequential-map with empty list"
+  (test/case "sequential-map with empty list"
     {do
     (def {result} (sequential-map (\ {x} {(aio/pure (* x 2))}) ()))
     (== (aio/status result) :completed)
   })
-  (test "sequential-map with single item"
+  (test/case "sequential-map with single item"
     {do
     (def {result} (sequential-map (\ {x} {(aio/pure (* x 2))}) (list 5)))
     (== (aio/status result) :completed)
   })
-  (test "sequential-map with multiple items"
+  (test/case "sequential-map with multiple items"
     {do
     (def {result} (sequential-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
     (== (aio/status result) :completed)
   })
-  (test "delay-value returns handle"
+  (test/case "delay-value returns handle"
     {do
     (def {sys} (aio/await (aio/start)))
     (def {h} (delay-value sys 1 42))
@@ -186,7 +186,7 @@
     (aio/stop sys)
     (or (== status :pending) (or (== status :running) (== status :completed)))
   })
-  (test "with-timeout on completed handle"
+  (test/case "with-timeout on completed handle"
     {do
     (def {sys} (aio/await (aio/start)))
     (def {h} (aio/pure 42))
@@ -194,7 +194,7 @@
     (aio/stop sys)
     (== (aio/status result) :completed)
   })
-  (test "with-timeout passes handle to race"
+  (test/case "with-timeout passes handle to race"
     {do
     (def {sys} (aio/await (aio/start)))
     (def {h} (aio/pure "test-value"))
@@ -202,7 +202,7 @@
     (aio/stop sys)
     (== (aio/status result) :completed)
   })
-  (test "retry-backoff with n=0 calls function once"
+  (test/case "retry-backoff with n=0 calls function once"
     {do
     (def {sys} (aio/await (aio/start)))
     (def {call-count} 0)
@@ -213,7 +213,7 @@
     (aio/stop sys)
     (== (aio/status result) :completed)
   })
-  (test "retry-backoff with n>0 and failure triggers catch path"
+  (test/case "retry-backoff with n>0 and failure triggers catch path"
     {do
     (def {sys} (aio/await (aio/start)))
     (def {result} (retry-backoff sys 1 1 (\ {} {
@@ -222,7 +222,7 @@
     (= {_} (aio/stop sys))
     true
   })
-  (test "retry-backoff with n>0 and success returns immediately"
+  (test/case "retry-backoff with n>0 and success returns immediately"
     {do
     (def {sys} (aio/await (aio/start)))
     (def {result} (retry-backoff sys 3 10 (\ {} {
@@ -231,14 +231,14 @@
     (aio/stop sys)
     (== (aio/status result) :completed)
   })
-  (test "graceful-shutdown with empty handle list"
+  (test/case "graceful-shutdown with empty handle list"
     {do
     (def {sys} (aio/await (aio/start)))
     (def {result} (graceful-shutdown sys () 1000))
     (aio/stop sys)
     (== (aio/status result) :completed)
   })
-  (test "graceful-shutdown with completed handles"
+  (test/case "graceful-shutdown with completed handles"
     {do
     (def {sys} (aio/await (aio/start)))
     (def {handles} (list (aio/pure 1) (aio/pure 2)))

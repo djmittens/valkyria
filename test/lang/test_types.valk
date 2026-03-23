@@ -32,19 +32,19 @@
 (test/run (list
 
   ; === Enum tests ===
-  (test "enum-constructor-red"
+  (test/case "enum-constructor-red"
     {do
       (= {c} (Red))
       (test/assert (== (head c) (head {Color::Red})) "Red should have tag Color::Red")
     })
 
-  (test "enum-constructor-blue"
+  (test/case "enum-constructor-blue"
     {do
       (= {c} (Blue))
       (test/assert (== (head c) (head {Color::Blue})) "Blue should have tag Color::Blue")
     })
 
-  (test "enum-match"
+  (test/case "enum-match"
     {do
       (= {color-name} (\ {c} {
         match c
@@ -58,7 +58,7 @@
     })
 
   ; === Product type tests ===
-  (test "product-keyword-construction"
+  (test/case "product-keyword-construction"
     {do
       (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
       (test/assert (== (head p) (head {Person})) "tag is Person")
@@ -67,14 +67,14 @@
       (test/assert (== (nth 4 p) "a@b.com") "email is a@b.com")
     })
 
-  (test "product-positional-construction"
+  (test/case "product-positional-construction"
     {do
       (= {p} (Person "Bob" 25 "b@b.com"))
       (test/assert (== (nth 2 p) "Bob") "name is Bob")
       (test/assert (== (nth 3 p) 25) "age is 25")
     })
 
-  (test "product-accessor"
+  (test/case "product-accessor"
     {do
       (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
       (test/assert (== (Person:name p) "Alice") "Person:name works")
@@ -83,7 +83,7 @@
     })
 
   ; === Sum type tests ===
-  (test "sum-keyword-construction"
+  (test/case "sum-keyword-construction"
     {do
       (= {s1} (Circle :radius 5))
       (= {s2} (Rect :w 10 :h 20))
@@ -93,20 +93,20 @@
       (test/assert (== (nth 2 s2) 10) "Rect width")
     })
 
-  (test "sum-positional-construction"
+  (test/case "sum-positional-construction"
     {do
       (= {s} (Circle 7))
       (test/assert (== (Circle:radius s) 7) "positional Circle:radius")
     })
 
-  (test "sum-accessor"
+  (test/case "sum-accessor"
     {do
       (= {s} (Rect :w 10 :h 20))
       (test/assert (== (Rect:w s) 10) "Rect:w works")
       (test/assert (== (Rect:h s) 20) "Rect:h works")
     })
 
-  (test "sum-match-named"
+  (test/case "sum-match-named"
     {do
       (= {area} (\ {s} {
         match s
@@ -117,7 +117,7 @@
       (test/assert (== (area (Rect 10 20)) 200) "Rect area")
     })
 
-  (test "sum-match-positional"
+  (test/case "sum-match-positional"
     {do
       (= {area2} (\ {s} {
         match s
@@ -129,20 +129,20 @@
     })
 
   ; === Option type tests ===
-  (test "option-some"
+  (test/case "option-some"
     {do
       (= {x} (Some :value 42))
       (test/assert (== (head x) (head {Option::Some})) "Some tag")
       (test/assert (== (Some:value x) 42) "Some:value")
     })
 
-  (test "option-none"
+  (test/case "option-none"
     {do
       (= {y} (None))
       (test/assert (== (head y) (head {Option::None})) "None tag")
     })
 
-  (test "option-match"
+  (test/case "option-match"
     {do
       (= {unwrap-or} (\ {opt default} {
         match opt
@@ -153,7 +153,7 @@
       (test/assert (== (unwrap-or (None) 0) 0) "unwrap None")
     })
 
-  (test "match-wildcard"
+  (test/case "match-wildcard"
     {do
       (= {is-some} (\ {opt} {
         match opt
@@ -165,19 +165,19 @@
     })
 
   ; === Result type tests ===
-  (test "result-ok"
+  (test/case "result-ok"
     {do
       (= {r} (Ok :value 42))
       (test/assert (== (Ok:value r) 42) "Ok:value")
     })
 
-  (test "result-err"
+  (test/case "result-err"
     {do
       (= {r} (Err :error "oops"))
       (test/assert (== (Err:error r) "oops") "Err:error")
     })
 
-  (test "result-match"
+  (test/case "result-match"
     {do
       (= {result-or} (\ {r default} {
         match r
@@ -189,7 +189,7 @@
     })
 
   ; === Constructor in nested expressions ===
-  (test "nested-constructor"
+  (test/case "nested-constructor"
     {do
       (= {x} (Some (Some 42)))
       (test/assert (== (head x) (head {Option::Some})) "outer Some tag")
@@ -200,7 +200,7 @@
 
   ; === var:field inference tests ===
 
-  (test "field-access-product"
+  (test/case "field-access-product"
     {do
       (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
       (test/assert (== p:name "Alice") "name:p works")
@@ -208,32 +208,32 @@
       (test/assert (== p:email "a@b.com") "email:p works")
     })
 
-  (test "field-access-sum"
+  (test/case "field-access-sum"
     {do
       (= {s} (Circle :radius 5))
       (test/assert (== s:radius 5) "radius:s works")
     })
 
-  (test "field-access-sum-rect"
+  (test/case "field-access-sum-rect"
     {do
       (= {r} (Rect :w 10 :h 20))
       (test/assert (== r:w 10) "w:r works")
       (test/assert (== r:h 20) "h:r works")
     })
 
-  (test "field-access-inline"
+  (test/case "field-access-inline"
     {do
       (= {p} (Person :name "Bob" :age 25 :email "b@b.com"))
       (test/assert (== (str/join (list p:name "!") "") "Bob!") "field access inline in call")
     })
 
-  (test "field-access-in-condition"
+  (test/case "field-access-in-condition"
     {do
       (= {p} (Person :name "Alice" :age 30 :email "a@b.com"))
       (test/assert (if (> p:age 18) true false) "field access in condition")
     })
 
-  (test "field-access-nested-do"
+  (test/case "field-access-nested-do"
     {do
       (= {result}
         (do
@@ -242,7 +242,7 @@
       (test/assert (== result "Inner") "field access in nested do")
     })
 
-  (test "field-access-multiple-bindings"
+  (test/case "field-access-multiple-bindings"
     {do
       (= {p1} (Person :name "Alice" :age 30 :email "a@a.com"))
       (= {p2} (Person :name "Bob" :age 25 :email "b@b.com"))
@@ -250,13 +250,13 @@
       (test/assert (== p2:name "Bob") "p2 name")
     })
 
-  (test "field-access-option"
+  (test/case "field-access-option"
     {do
       (= {x} (Some :value 42))
       (test/assert (== x:value 42) "value:x works for Some")
     })
 
-  (test "field-access-result"
+  (test/case "field-access-result"
     {do
       (= {r} (Ok :value 99))
       (test/assert (== r:value 99) "value:r works for Ok")
@@ -265,13 +265,13 @@
 
   ; === sig-based type inference tests ===
 
-  (test "sig-return-type-inference"
+  (test/case "sig-return-type-inference"
     {do
       (= {lookup-result} (Some :value 42))
       (test/assert (== lookup-result:value 42) "inferred from constructor binding")
     })
 
-  (test "sig-param-inference"
+  (test/case "sig-param-inference"
     {do
       (= {check-name} (\ {p} {do (Person:name p)}))
       (test/assert (== (check-name (Person :name "Z" :age 1 :email "z")) "Z") "explicit accessor in lambda")
@@ -280,7 +280,7 @@
 
   ; === parametric type inference ===
 
-  (test "parametric-head-infers-type"
+  (test/case "parametric-head-infers-type"
     {do
       (= {items} (get-items 10))
       (= {first} (head items))
@@ -288,7 +288,7 @@
       (test/assert-eq 10 first:value "field:var on head result")
     })
 
-  (test "parametric-tail-preserves-type"
+  (test/case "parametric-tail-preserves-type"
     {do
       (= {items} (get-items 10))
       (= {rest} (tail items))
@@ -297,7 +297,7 @@
       (test/assert-eq 11 second:value "field:var on head-of-tail")
     })
 
-  (test "parametric-filter-preserves-type"
+  (test/case "parametric-filter-preserves-type"
     {do
       (= {items} (get-items 10))
       (= {filtered} (filter (\ {x} {== (Item:label x) "b"}) items))
@@ -305,7 +305,7 @@
       (test/assert-eq "b" first:label "head of filter result")
     })
 
-  (test "parametric-reverse-preserves-type"
+  (test/case "parametric-reverse-preserves-type"
     {do
       (= {items} (get-items 10))
       (= {rev} (reverse items))
@@ -315,7 +315,7 @@
 
   ; === record update (with) ===
 
-  (test "with-single-field"
+  (test/case "with-single-field"
     {do
       (= {p} (Person :name "Alice" :age 30 :email "a@b"))
       (= {p2} (with p :age 31))
@@ -324,7 +324,7 @@
       (test/assert-eq "a@b" p2:email "other unchanged field preserved")
     })
 
-  (test "with-multiple-fields"
+  (test/case "with-multiple-fields"
     {do
       (= {p} (Person :name "Bob" :age 25 :email "b@c"))
       (= {p2} (with p :name "Robert" :email "robert@c"))
@@ -333,7 +333,7 @@
       (test/assert-eq "robert@c" p2:email "second override applied")
     })
 
-  (test "with-preserves-type-inference"
+  (test/case "with-preserves-type-inference"
     {do
       (= {p} (Person :name "Carol" :age 40 :email "c@d"))
       (= {p2} (with p :age 41))
@@ -343,7 +343,7 @@
       (test/assert-eq "carol@d" p3:email "chained with applies email update")
     })
 
-  (test "with-in-fun-body"
+  (test/case "with-in-fun-body"
     {do
       (= {p} (Person :name "Dan" :age 20 :email "d@e"))
       (= {p2} (with p :age (+ p:age 1)))
@@ -353,25 +353,25 @@
 
   ; === callable keywords ===
 
-  (test "keyword-as-function"
+  (test/case "keyword-as-function"
     {do
       (= {pl} (list :name "Alice" :age 30))
       (test/assert-eq "Alice" (:name pl) "keyword call extracts value")
       (test/assert-eq 30 (:age pl) "keyword call extracts number")
     })
 
-  (test "keyword-on-nil"
+  (test/case "keyword-on-nil"
     {do
       (test/assert (nil? (:name nil)) "keyword on nil returns nil")
     })
 
-  (test "keyword-missing-key"
+  (test/case "keyword-missing-key"
     {do
       (= {pl} (list :name "Alice"))
       (test/assert (nil? (:age pl)) "missing key returns nil")
     })
 
-  (test "keyword-nested-access"
+  (test/case "keyword-nested-access"
     {do
       (= {outer} (list :inner (list :value 42)))
       (test/assert-eq 42 (:value (:inner outer)) "nested keyword access")
@@ -380,13 +380,13 @@
 
 
   ; === Plist fallback tests ===
-  (test "field-var-plist-fallback"
+  (test/case "field-var-plist-fallback"
     {do
       (= {td} (list :uri "/test.valk" :text "hello"))
       (test/assert-eq "/test.valk" td:uri "field:var falls back to plist/get for untyped vars")
     })
 
-  (test "field-var-plist-fallback-multiple"
+  (test/case "field-var-plist-fallback-multiple"
     {do
       (= {info} (list :name "Alice" :age 30 :city "NYC"))
       (test/assert-eq "Alice" info:name "plist fallback name")
@@ -394,13 +394,13 @@
       (test/assert-eq "NYC" info:city "plist fallback city")
     })
 
-  (test "field-var-plist-fallback-nil"
+  (test/case "field-var-plist-fallback-nil"
     {do
       (= {data} (list :x 1))
       (test/assert (nil? data:y) "plist fallback returns nil for missing key")
     })
 
-  (test "field-var-typed-still-works"
+  (test/case "field-var-typed-still-works"
     {do
       (= {p} (Person :name "Bob" :age 25 :email "bob@x.com"))
       (test/assert-eq "Bob" p:name "typed var:field still compiles to nth")
@@ -410,27 +410,27 @@
 
 
   ; === Chaining tests ===
-  (test "chain-plist-two-levels"
+  (test/case "chain-plist-two-levels"
     {do
       (= {data} (list :user (list :name "Alice" :age 30)))
       (test/assert-eq "Alice" data:user:name "two-level chain")
       (test/assert-eq 30 data:user:age "two-level chain age")
     })
 
-  (test "chain-plist-three-levels"
+  (test/case "chain-plist-three-levels"
     {do
       (= {root} (list :a (list :b (list :c 42))))
       (test/assert-eq 42 root:a:b:c "three-level chain")
     })
 
-  (test "chain-plist-nested-object"
+  (test/case "chain-plist-nested-object"
     {do
       (= {data} (list :person (list :name "Bob" :age 25)))
       (test/assert-eq "Bob" data:person:name "plist nested object")
       (test/assert-eq 25 data:person:age "plist nested age")
     })
 
-  (test "chain-nil-propagates"
+  (test/case "chain-nil-propagates"
     {do
       (= {data} (list :x (list :y 1)))
       (test/assert (nil? data:z:y) "missing first field returns nil, second is nil")

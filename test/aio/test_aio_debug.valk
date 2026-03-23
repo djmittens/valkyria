@@ -125,7 +125,7 @@
 
 ; Run all tests
 (test/run (list
-  (test "debug-module-loads"
+  (test/case "debug-module-loads"
     {do
     ; Check that the handler can be called (it's a function)
     ; We verify by calling it and checking we get a response
@@ -134,10 +134,10 @@
     (test/assert (!= resp nil) "aio/debug-handle-request should work")
     true
   })
-  (test "debug-assets-path-configured"
+  (test/case "debug-assets-path-configured"
     {test/assert (== aio/debug-assets-path "src/modules/aio/debug/")
     "assets path should be src/modules/aio/debug/"})
-  (test "debug-html-content-loaded"
+  (test/case "debug-html-content-loaded"
     {do
     (test/assert (> (len aio/debug-html-content) 0)
       "HTML content should not be empty")
@@ -145,7 +145,7 @@
       "HTML content should be substantial (>1000 chars)")
     true
   })
-  (test "route-debug-slash-returns-html"
+  (test/case "route-debug-slash-returns-html"
     {do
     (= {req} {:path "/debug/"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -156,7 +156,7 @@
       "content-type should be text/html")
     true
   })
-  (test "route-debug-metrics-returns-json"
+  (test/case "route-debug-metrics-returns-json"
     {do
     (= {req} {:path "/debug/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -167,7 +167,7 @@
       "content-type should be application/json")
     true
   })
-  (test "route-metrics-returns-prometheus"
+  (test/case "route-metrics-returns-prometheus"
     {do
     (= {req} {:path "/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -178,7 +178,7 @@
       "content-type should be prometheus format")
     true
   })
-  (test "route-non-debug-returns-nil"
+  (test/case "route-non-debug-returns-nil"
     {do
     (= {r1} (aio/debug-handle-request mock-sys {:path "/"}))
     (test/assert (!= r1 nil) "/ returns redirect response (otherwise branch)")
@@ -189,7 +189,7 @@
     (test/assert (!= r3 nil) "/debug/unknown returns redirect response")
     true
   })
-  (test "route-debug-no-slash-returns-html"
+  (test/case "route-debug-no-slash-returns-html"
     {do
     (= {req} {:path "/debug"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -200,7 +200,7 @@
       "content-type should be text/html")
     true
   })
-  (test "route-diagnostics-memory-returns-sse"
+  (test/case "route-diagnostics-memory-returns-sse"
     {do
     (= {req} {:path "/debug/diagnostics/memory"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -214,7 +214,7 @@
     (test/assert (!= body-type nil) "body-type should be present")
     true
   })
-  (test "debug-handler-factory"
+  (test/case "debug-handler-factory"
     {do
     (= {handler} (aio/debug-handler mock-sys))
     ; Handler should work like debug-handle-request
@@ -224,7 +224,7 @@
       "handler response should have status 200")
     true
   })
-  (test "response-has-required-fields"
+  (test/case "response-has-required-fields"
     {do
     (= {resp} (aio/debug-handle-request mock-sys {:path "/debug/"}))
 
@@ -238,7 +238,7 @@
     (test/assert (!= body nil) "response should have body")
     true
   })
-  (test "html-content-has-reasonable-length"
+  (test/case "html-content-has-reasonable-length"
     {do
     (= {html} aio/debug-html-content)
     (test/assert (> (len html) 2000)
@@ -247,7 +247,7 @@
       "HTML should be less than 500KB")
     true
   })
-  (test "dashboard-returns-cached-html"
+  (test/case "dashboard-returns-cached-html"
     {do
     (= {req} {:path "/debug/"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -258,35 +258,35 @@
       "response body should be cached HTML content")
     true
   })
-  (test "merge-metrics-json-function"
+  (test/case "merge-metrics-json-function"
     {do
     (= {result} (aio/debug-merge-metrics-json mock-sys))
     (test/assert (> (len result) 0) "merged JSON should not be empty")
     (test/assert (> (len result) 100) "merged JSON should have substantial content")
     true
   })
-  (test "merge-metrics-prometheus-function"
+  (test/case "merge-metrics-prometheus-function"
     {do
     (= {result} (aio/debug-merge-metrics-prometheus mock-sys))
     (test/assert (> (len result) 0) "merged Prometheus should not be empty")
     (test/assert (> (len result) 100) "merged Prometheus should have substantial content")
     true
   })
-  (test "diagnostics-state-function"
+  (test/case "diagnostics-state-function"
     {do
     (= {result} (aio/debug-diagnostics-state mock-sys))
     (test/assert (> (len result) 0) "diagnostics state should not be empty")
     (test/assert (> (len result) 50) "diagnostics state should have substantial content")
     true
   })
-  (test "diagnostics-delta-function"
+  (test/case "diagnostics-delta-function"
     {do
     (= {result} (aio/debug-diagnostics-delta mock-sys))
     (test/assert (> (len result) 0) "diagnostics delta should not be empty")
     (test/assert (> (len result) 50) "diagnostics delta should have substantial content")
     true
   })
-  (test "route-slab-buckets-returns-json"
+  (test/case "route-slab-buckets-returns-json"
     {do
     (= {req} {:path "/debug/slab/buckets"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -297,7 +297,7 @@
       "content-type should be application/json")
     true
   })
-  (test "slab-buckets-nil-query"
+  (test/case "slab-buckets-nil-query"
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys nil))
     (test/assert (!= resp nil) "response should not be nil")
@@ -305,7 +305,7 @@
       "status should be 200")
     true
   })
-  (test "slab-buckets-with-query"
+  (test/case "slab-buckets-with-query"
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "slab=tcp_buffers&start=0&end=1000&buckets=50"))
     (test/assert (!= resp nil) "response should not be nil")
@@ -313,7 +313,7 @@
       "status should be 200")
     true
   })
-  (test "slab-buckets-partial-query"
+  (test/case "slab-buckets-partial-query"
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "start=100&end=500"))
     (test/assert (!= resp nil) "response should not be nil")
@@ -321,7 +321,7 @@
       "status should be 200")
     true
   })
-  (test "slab-buckets-invalid-query-format"
+  (test/case "slab-buckets-invalid-query-format"
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "invalidparam"))
     (test/assert (!= resp nil) "response should not be nil")
@@ -329,7 +329,7 @@
       "status should be 200")
     true
   })
-  (test "slab-buckets-unknown-param-key"
+  (test/case "slab-buckets-unknown-param-key"
     {do
     (= {resp} (aio/debug-handle-slab-buckets mock-sys "unknown=value&start=100"))
     (test/assert (!= resp nil) "response should not be nil")
@@ -337,7 +337,7 @@
       "status should be 200")
     true
   })
-  (test "route-debug-metrics-state-returns-json"
+  (test/case "route-debug-metrics-state-returns-json"
     {do
     (= {req} {:path "/debug/metrics/state"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -348,7 +348,7 @@
       "content-type should be application/json")
     true
   })
-  (test "json-metrics-body-non-empty"
+  (test/case "json-metrics-body-non-empty"
     {do
     (= {req} {:path "/debug/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -360,7 +360,7 @@
       "JSON metrics body should have substantial content")
     true
   })
-  (test "json-metrics-matches-aio-metrics-json"
+  (test/case "json-metrics-matches-aio-metrics-json"
     {do
     (= {req} {:path "/debug/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -372,7 +372,7 @@
     (test/assert (> (len direct) 0) "direct call should exist")
     true
   })
-  (test "prometheus-metrics-body-non-empty"
+  (test/case "prometheus-metrics-body-non-empty"
     {do
     (= {req} {:path "/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -384,7 +384,7 @@
       "Prometheus metrics body should have substantial content")
     true
   })
-  (test "prometheus-metrics-matches-aio-metrics-prometheus"
+  (test/case "prometheus-metrics-matches-aio-metrics-prometheus"
     {do
     (= {req} {:path "/metrics"})
     (= {resp} (aio/debug-handle-request mock-sys req))
@@ -395,7 +395,7 @@
     (test/assert (> (len direct) 0) "direct merge call should exist")
     true
   })
-  (test "edge-case-empty-path"
+  (test/case "edge-case-empty-path"
     {do
     (= {resp} (aio/debug-handle-request mock-sys {:path ""}))
     (test/assert (!= resp nil) "empty path should return redirect response")
@@ -403,7 +403,7 @@
       "empty path should have status 200")
     true
   })
-  (test "edge-case-path-only-matching"
+  (test/case "edge-case-path-only-matching"
     {do
     (= {resp} (aio/debug-handle-request mock-sys {:path "/debug/?foo=bar"}))
     (test/assert (!= resp nil) "path with query string returns dashboard (query stripped)")
@@ -412,7 +412,7 @@
       "should return HTML dashboard after query stripping")
     true
   })
-  (test "edge-case-case-sensitivity"
+  (test/case "edge-case-case-sensitivity"
     {do
     (= {r1} (aio/debug-handle-request mock-sys {:path "/DEBUG/"}))
     (test/assert (!= r1 nil) "/DEBUG/ returns redirect (case-sensitive, hits otherwise)")
@@ -420,7 +420,7 @@
     (test/assert (!= r2 nil) "/Debug/ returns redirect (case-sensitive, hits otherwise)")
     true
   })
-  (test "multiple-requests-work"
+  (test/case "multiple-requests-work"
     {do
     (= {handler} (aio/debug-handler mock-sys))
 

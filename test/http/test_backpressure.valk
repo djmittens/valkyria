@@ -13,7 +13,7 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async client-aio (list
-  (test-async "batched requests under load" (\ {} {
+  (test/case-async "batched requests under load" (\ {} {
     (printf "[BP] Creating batches\n")
     (= {batch1} (aio/then (aio/sleep client-aio 50) (\ {_} {
       (printf "[BP] Batch 1\n")

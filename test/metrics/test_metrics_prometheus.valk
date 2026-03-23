@@ -2,13 +2,13 @@
 (load "stdlib/test/test.valk")
 
 (test/run (list
-  (test "metrics/prometheus returns string"
+  (test/case "metrics/prometheus returns string"
     {do
     (= {result} (metrics/prometheus))
     (test/assert (str? result) "metrics/prometheus should return a string")
     true
   })
-  (test "counter with labels in prometheus output"
+  (test/case "counter with labels in prometheus output"
     {do
     (= {c} (metrics/counter "prom_test_requests" "test" "server" "api" "port" "8443"))
     (= {_} (metrics/counter-inc c))
@@ -19,7 +19,7 @@
     (test/assert (> (len result) 0) "prometheus output should be non-empty after adding counters")
     true
   })
-  (test "multiple label combinations"
+  (test/case "multiple label combinations"
     {do
     (= {c1} (metrics/counter "prom_test_multi_web" "test" "server" "web" "port" "8080"))
     (= {_} (metrics/counter-inc c1))
@@ -31,7 +31,7 @@
     (test/assert (> (len result) 0) "prometheus output should be non-empty")
     true
   })
-  (test "counter without labels in prometheus"
+  (test/case "counter without labels in prometheus"
     {do
     (= {c} (metrics/counter "prom_test_simple" "test"))
     (= {_} (metrics/counter-inc c))

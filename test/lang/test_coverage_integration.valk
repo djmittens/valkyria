@@ -2,7 +2,7 @@
 (load "stdlib/test/test.valk")
 
 (test/run (list
-  (test "if-both-branches"
+  (test/case "if-both-branches"
     {do
     (fun {test-if x} {
       if (> x 0)
@@ -13,7 +13,7 @@
     (test/assert-eq "non-positive" (test-if -1) "false branch")
     true
   })
-  (test "nested-if-coverage"
+  (test/case "nested-if-coverage"
     {do
     (fun {classify x} {
       if (> x 0)
@@ -27,7 +27,7 @@
     (test/assert-eq "non-positive" (classify -5) "non-positive path")
     true
   })
-  (test "select-clause-coverage"
+  (test/case "select-clause-coverage"
     {do
     (fun {day-type d} {
       select
@@ -40,7 +40,7 @@
     (test/assert-eq "weekday" (day-type 3) "weekday")
     true
   })
-  (test "higher-order-coverage"
+  (test/case "higher-order-coverage"
     {do
     (= {doubled} (map (\ {x} {* x 2}) {1 2 3}))
     (= {positives} (filter (\ {x} {> x 0}) {-1 0 1 2}))
@@ -48,7 +48,7 @@
     (test/assert-eq 2 (len positives) "filter result length")
     true
   })
-  (test "recursive-coverage"
+  (test/case "recursive-coverage"
     {do
     (fun {factorial n} {
       if (<= n 1)
@@ -58,7 +58,7 @@
     (test/assert-eq 120 (factorial 5) "factorial 5")
     true
   })
-  (test "do-block-coverage"
+  (test/case "do-block-coverage"
     {do
     (= {a} 1)
     (= {b} 2)
@@ -66,7 +66,7 @@
     (test/assert-eq 6 (+ a b c) "sum of three")
     true
   })
-  (test "error-path-coverage"
+  (test/case "error-path-coverage"
     {do
     (fun {safe-div a b} {
       if (== b 0)

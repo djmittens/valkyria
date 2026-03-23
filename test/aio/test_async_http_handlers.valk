@@ -562,181 +562,181 @@
 (def {server} (http2/server-listen aio 0 router))
 (def {TEST_PORT} (http2/server-port server))
 (test/run-async aio (list
-  (test-async "aio/delay handler" (\ {} {
+  (test/case-async "aio/delay handler" (\ {} {
     (make-test "/delay" "200" "delayed-response")
   }))
-  (test-async "aio/sleep handler" (\ {} {
+  (test/case-async "aio/sleep handler" (\ {} {
     (make-test "/sleep" "200" "slept")
   }))
-  (test-async "aio/sleep chain handler" (\ {} {
+  (test/case-async "aio/sleep chain handler" (\ {} {
     (make-test "/sleep-chain" "200" "slept-twice")
   }))
-  (test-async "aio/catch handler" (\ {} {
+  (test/case-async "aio/catch handler" (\ {} {
     (make-test "/catch" "200" "recovered")
   }))
-  (test-async "aio/finally success handler" (\ {} {
+  (test/case-async "aio/finally success handler" (\ {} {
     (make-test "/finally-success" "200" "with-finally")
   }))
-  (test-async "aio/finally fail handler" (\ {} {
+  (test/case-async "aio/finally fail handler" (\ {} {
     (make-test "/finally-fail" "200" "finally-recovered")
   }))
-  (test-async "aio/all handler" (\ {} {
+  (test/case-async "aio/all handler" (\ {} {
     (make-test "/all" "200" "all-completed")
   }))
-  (test-async "aio/all fail handler" (\ {} {
+  (test/case-async "aio/all fail handler" (\ {} {
     (make-test "/all-fail" "200" "all-failed")
   }))
-  (test-async "aio/race handler" (\ {} {
+  (test/case-async "aio/race handler" (\ {} {
     (make-test "/race" "200" "race-won")
   }))
-  (test-async "aio/any handler" (\ {} {
+  (test/case-async "aio/any handler" (\ {} {
     (make-test "/any" "200" "any-success")
   }))
-  (test-async "aio/any all fail handler" (\ {} {
+  (test/case-async "aio/any all fail handler" (\ {} {
     (make-test "/any-all-fail" "200" "any-all-failed")
   }))
-  (test-async "aio/let single handler" (\ {} {
+  (test/case-async "aio/let single handler" (\ {} {
     (make-test "/let-single" "200" "let-single")
   }))
-  (test-async "aio/let parallel handler" (\ {} {
+  (test/case-async "aio/let parallel handler" (\ {} {
     (make-test "/let-parallel" "200" "let-parallel")
   }))
-  (test-async "aio/let :then handler" (\ {} {
+  (test/case-async "aio/let :then handler" (\ {} {
     (make-test "/let-then" "200" "let-then")
   }))
-  (test-async "aio/do handler" (\ {} {
+  (test/case-async "aio/do handler" (\ {} {
     (make-test "/do" "200" "do-sequential")
   }))
-  (test-async "aio/bracket handler" (\ {} {
+  (test/case-async "aio/bracket handler" (\ {} {
     (make-test "/bracket" "200" "bracket-used")
   }))
-  (test-async "aio/on-cancel handler" (\ {} {
+  (test/case-async "aio/on-cancel handler" (\ {} {
     (make-test "/on-cancel" "200" "on-cancel-done")
   }))
-  (test-async "triple aio/then handler" (\ {} {
+  (test/case-async "triple aio/then handler" (\ {} {
     (make-test "/triple-then" "200" "triple-then")
   }))
-  (test-async "aio/catch rethrow handler" (\ {} {
+  (test/case-async "aio/catch rethrow handler" (\ {} {
     (make-test "/catch-rethrow" "200" "catch-rethrow")
   }))
-  (test-async "complex combinator chain handler" (\ {} {
+  (test/case-async "complex combinator chain handler" (\ {} {
     (make-test "/complex-chain" "200" "complex-chain")
   }))
-  (test-async "aio/let multi :then handler" (\ {} {
+  (test/case-async "aio/let multi :then handler" (\ {} {
     (make-test "/let-multi-then" "200" "let-multi-then")
   }))
-  (test-async "aio/pure handler" (\ {} {
+  (test/case-async "aio/pure handler" (\ {} {
     (make-test "/pure" "200" "pure-ok")
   }))
-  (test-async "aio/status handler" (\ {} {
+  (test/case-async "aio/status handler" (\ {} {
     (make-test "/status" "200" "status-ok")
   }))
-  (test-async "aio/all mixed handler" (\ {} {
+  (test/case-async "aio/all mixed handler" (\ {} {
     (make-test "/all-mixed" "200" "all-mixed-ok")
   }))
-  (test-async "aio/race immediate fail handler" (\ {} {
+  (test/case-async "aio/race immediate fail handler" (\ {} {
     (make-test "/race-immediate-fail" "200" "race-fail-caught")
   }))
-  (test-async "aio/race pure handler" (\ {} {
+  (test/case-async "aio/race pure handler" (\ {} {
     (make-test "/race-pure" "200" "race-pure-ok")
   }))
-  (test-async "aio/any pure handler" (\ {} {
+  (test/case-async "aio/any pure handler" (\ {} {
     (make-test "/any-pure" "200" "any-pure-ok")
   }))
-  (test-async "aio/catch chain handler" (\ {} {
+  (test/case-async "aio/catch chain handler" (\ {} {
     (make-test "/catch-chain" "200" "catch-chain-ok")
   }))
-  (test-async "aio/all empty handler" (\ {} {
+  (test/case-async "aio/all empty handler" (\ {} {
     (make-test "/all-empty" "200" "all-empty-ok")
   }))
-  (test-async "aio/race single handler" (\ {} {
+  (test/case-async "aio/race single handler" (\ {} {
     (make-test "/race-single" "200" "race-single-ok")
   }))
-  (test-async "aio/any single handler" (\ {} {
+  (test/case-async "aio/any single handler" (\ {} {
     (make-test "/any-single" "200" "any-single-ok")
   }))
-  (test-async "aio/let many bindings handler" (\ {} {
+  (test/case-async "aio/let many bindings handler" (\ {} {
     (make-test "/let-many" "200" "let-many-ok")
   }))
-  (test-async "aio/do result handler" (\ {} {
+  (test/case-async "aio/do result handler" (\ {} {
     (make-test "/do-result" "200" "do-result-ok")
   }))
-  (test-async "aio/bracket error handler" (\ {} {
+  (test/case-async "aio/bracket error handler" (\ {} {
     (make-test "/bracket-error" "200" "bracket-error-ok")
   }))
-  (test-async "aio/on-cancel complete handler" (\ {} {
+  (test/case-async "aio/on-cancel complete handler" (\ {} {
     (make-test "/on-cancel-complete" "200" "on-cancel-complete-ok")
   }))
-  (test-async "aio/scope sync handler" (\ {} {
+  (test/case-async "aio/scope sync handler" (\ {} {
     (make-test "/scope-sync" "200" "scope-sync-ok")
   }))
-  (test-async "aio/scope async handler" (\ {} {
+  (test/case-async "aio/scope async handler" (\ {} {
     (make-test "/scope-async" "200" "scope-async-ok")
   }))
-  (test-async "aio/scope error handler" (\ {} {
+  (test/case-async "aio/scope error handler" (\ {} {
     (make-test "/scope-error" "200" "scope-error-ok")
   }))
-  (test-async "aio/any async all fail handler" (\ {} {
+  (test/case-async "aio/any async all fail handler" (\ {} {
     (make-test "/any-async-fail" "200" "any-async-fail-ok")
   }))
-  (test-async "aio/all async fail handler" (\ {} {
+  (test/case-async "aio/all async fail handler" (\ {} {
     (make-test "/all-async-fail" "200" "all-async-fail-ok")
   }))
-  (test-async "aio/race async fail handler" (\ {} {
+  (test/case-async "aio/race async fail handler" (\ {} {
     (make-test "/race-async-fail" "200" "race-async-fail-ok")
   }))
-  (test-async "deep aio/then chain handler" (\ {} {
+  (test/case-async "deep aio/then chain handler" (\ {} {
     (make-test "/deep-chain" "200" "deep-chain-ok")
   }))
-  (test-async "aio/scope async fail handler" (\ {} {
+  (test/case-async "aio/scope async fail handler" (\ {} {
     (make-test "/scope-async-fail" "200" "scope-async-fail-ok")
   }))
-  (test-async "immediate aio/pure handler" (\ {} {
+  (test/case-async "immediate aio/pure handler" (\ {} {
     (make-test "/immediate-complete" "200" "immediate-complete-ok")
   }))
-  (test-async "immediate aio/fail handler" (\ {} {
+  (test/case-async "immediate aio/fail handler" (\ {} {
     (make-test "/immediate-fail" "500" "Async operation failed")
   }))
-  (test-async "raw handler error" (\ {} {
+  (test/case-async "raw handler error" (\ {} {
     (make-test "/raw-error" "500" "raw-handler-error")
   }))
-  (test-async "race cancel handler" (\ {} {
+  (test/case-async "race cancel handler" (\ {} {
     (make-test "/race-cancel" "200" "race-cancel-ok")
   }))
-  (test-async "nested cancel handler" (\ {} {
+  (test/case-async "nested cancel handler" (\ {} {
     (make-test "/nested-cancel" "200" "nested-cancel-ok")
   }))
-  (test-async "pre-cancelled handler" (\ {} {
+  (test/case-async "pre-cancelled handler" (\ {} {
     (make-test "/pre-cancelled" "503" "Request cancelled")
   }))
-  (test-async "aio/pure with error result" (\ {} {
+  (test/case-async "aio/pure with error result" (\ {} {
     (make-test "/pure-error" "500" "pure-wrapped-error")
   }))
-  (test-async "async completion with error result" (\ {} {
+  (test/case-async "async completion with error result" (\ {} {
     (make-test "/async-pure-error" "500" "async-pure-error")
   }))
-  (test-async "async VALK_ASYNC_FAILED handler" (\ {} {
+  (test/case-async "async VALK_ASYNC_FAILED handler" (\ {} {
     (make-test "/async-direct-fail" "500" "async-direct-fail")
   }))
-  (test-async "with-timeout timeout path wins" (\ {} {
+  (test/case-async "with-timeout timeout path wins" (\ {} {
     (make-test "/with-timeout-wins" "200" "timeout-won")
   }))
-  (test-async "retry-backoff immediate success" (\ {} {
+  (test/case-async "retry-backoff immediate success" (\ {} {
     (make-test "/retry-backoff-success" "200" "retry-success")
   }))
-  (test-async "delay-value helper" (\ {} {
+  (test/case-async "delay-value helper" (\ {} {
     (make-test "/delay-value" "200" "delayed-val")
   }))
-  (test-async "chain with multiple fns" (\ {} {
+  (test/case-async "chain with multiple fns" (\ {} {
     (make-test "/chain-fns" "200" "chain-14")
   }))
-  (test-async "aio/map transform" (\ {} {
+  (test/case-async "aio/map transform" (\ {} {
     (make-test "/aio-map" "200" "aiomap-30")
   }))
-  (test-async "aio/try on success" (\ {} {
+  (test/case-async "aio/try on success" (\ {} {
     (make-test "/aio-try-success" "200" "try-ok")
   }))
-  (test-async "aio/try on failure" (\ {} {
+  (test/case-async "aio/try on failure" (\ {} {
     (make-test "/aio-try-fail" "200" "try-err-ok")
   })))
   {:suite-name "Async HTTP Handlers"})

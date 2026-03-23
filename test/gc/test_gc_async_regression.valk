@@ -17,7 +17,7 @@
 (def {port} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "4+ parallel HTTP requests via timer don't crash GC" (\ {} {
+  (test/case-async "4+ parallel HTTP requests via timer don't crash GC" (\ {} {
     (aio/then (aio/sleep aio 1) (\ {_} {
       (aio/then
         (aio/all (list

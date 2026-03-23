@@ -42,21 +42,21 @@
 
   ; --- No false positives on valid code ---
 
-  (test "valid-fun-no-diags"
+  (test/case "valid-fun-no-diags"
     {do
       (test/assert-eq 0 (diag-count "(fun {add x y} {+ x y})")
         "valid fun should produce 0 diagnostics")
       true
     })
 
-  (test "valid-def-no-diags"
+  (test/case "valid-def-no-diags"
     {do
       (test/assert-eq 0 (diag-count "(def {x} 42)")
         "valid def should produce 0 diagnostics")
       true
     })
 
-  (test "valid-builtin-constants"
+  (test/case "valid-builtin-constants"
     {do
       (test/assert-eq 0 (diag-count "(if true {1} {nil})")
         "true/nil should be known constants")
@@ -65,7 +65,7 @@
       true
     })
 
-  (test "valid-special-forms"
+  (test/case "valid-special-forms"
     {do
       (test/assert-eq 0 (diag-count "(do 1 2 3)")
         "do is a special form")
@@ -76,7 +76,7 @@
       true
     })
 
-  (test "valid-keywords-not-flagged"
+  (test/case "valid-keywords-not-flagged"
     {do
       (test/assert-eq 0 (diag-count ":foo")
         "keyword :foo should not be flagged")
@@ -85,7 +85,7 @@
       true
     })
 
-  (test "valid-lambda-params-in-scope"
+  (test/case "valid-lambda-params-in-scope"
     {do
       (test/assert-eq 0 (diag-count "(\\ {x y} {+ x y})")
         "lambda params should be in scope in body")
@@ -94,21 +94,21 @@
 
   ; --- Undefined symbol detection ---
 
-  (test "undefined-symbol-detected"
+  (test/case "undefined-symbol-detected"
     {do
       (test/assert (> (diag-count "bogus_symbol") 0)
         "undefined symbol should produce a diagnostic")
       true
     })
 
-  (test "undefined-function-detected"
+  (test/case "undefined-function-detected"
     {do
       (test/assert (> (diag-count "(not-a-real-function 1 2)") 0)
         "undefined function should produce a diagnostic")
       true
     })
 
-  (test "undefined-sym-message-format"
+  (test/case "undefined-sym-message-format"
     {do
       (= {d} (first-diag "bogus"))
       (test/assert (not (nil? d)) "should have a diagnostic")
@@ -118,7 +118,7 @@
       true
     })
 
-  (test "undefined-fn-message-format"
+  (test/case "undefined-fn-message-format"
     {do
       (= {d} (first-diag "(nope 1)"))
       (test/assert (not (nil? d)) "should have a diagnostic")
@@ -130,7 +130,7 @@
 
   ; --- Scope management ---
 
-  (test "fun-params-scoped-to-body"
+  (test/case "fun-params-scoped-to-body"
     {do
       (test/assert-eq 0
         (diag-count "(fun {f x} {x})")
@@ -140,7 +140,7 @@
       true
     })
 
-  (test "lambda-params-scoped-to-body"
+  (test/case "lambda-params-scoped-to-body"
     {do
       (test/assert-eq 0
         (diag-count "(\\ {a b} {+ a b})")
@@ -148,7 +148,7 @@
       true
     })
 
-  (test "def-adds-to-globals"
+  (test/case "def-adds-to-globals"
     {do
       (test/assert-eq 0
         (diag-count "(do (def {myvar} 10) (myvar))")
@@ -156,7 +156,7 @@
       true
     })
 
-  (test "local-binding-in-do"
+  (test/case "local-binding-in-do"
     {do
       (test/assert-eq 0
         (diag-count "(do (= {x} 1) (= {y} (+ x 1)) y)")
@@ -164,7 +164,7 @@
       true
     })
 
-  (test "nested-fun-scopes"
+  (test/case "nested-fun-scopes"
     {do
       (test/assert-eq 0
         (diag-count "(fun {outer a} {fun {inner b} {+ a b}})")
@@ -174,7 +174,7 @@
 
   ; --- Type declarations ---
 
-  (test "type-and-ctors-in-scope"
+  (test/case "type-and-ctors-in-scope"
     {do
       (test/assert-eq 0
         (diag-count "(do (type {Color} {Red} {Green} {Blue}) (Red))")
@@ -182,7 +182,7 @@
       true
     })
 
-  (test "type-with-fields"
+  (test/case "type-with-fields"
     {do
       (test/assert-eq 0
         (diag-count "(do (type {Point} {Point :x :y}) (Point 1 2))")
@@ -192,7 +192,7 @@
 
   ; --- sig declarations ---
 
-  (test "sig-adds-name"
+  (test/case "sig-adds-name"
     {do
       (= {count} (diag-count "(do (sig 'myfn {-> Num Num}) (myfn 1))"))
       (test/assert-eq 1 count "sig does not yet add name to globals (known limitation)")
@@ -201,7 +201,7 @@
 
   ; --- match expressions ---
 
-  (test "match-pattern-binds"
+  (test/case "match-pattern-binds"
     {do
       (test/assert-eq 0
         (diag-count "(do (type {Maybe} {Just :val} {Nothing}) (match (Just 1) {(Just v) v} {(Nothing) 0}))")
@@ -209,7 +209,7 @@
       true
     })
 
-  (test "match-wildcard"
+  (test/case "match-wildcard"
     {do
       (test/assert-eq 0
         (diag-count "(match 1 {_ 0})")
@@ -219,14 +219,14 @@
 
   ; --- Accessor pattern ---
 
-  (test "accessor-not-flagged"
+  (test/case "accessor-not-flagged"
     {do
       (= {count} (diag-count "(Foo:bar x)"))
       (test/assert-eq 1 count "Foo:bar accessor params are flagged (known limitation)")
       true
     })
 
-  (test "non-accessor-flagged"
+  (test/case "non-accessor-flagged"
     {do
       (test/assert (> (diag-count "(bar:foo x)") 0)
         "lowercase bar:foo is not an accessor pattern")
@@ -235,7 +235,7 @@
 
   ; --- aio/do bindings ---
 
-  (test "aio-do-bind"
+  (test/case "aio-do-bind"
     {do
       (= {count} (diag-count "(do (def {aio/do} 1) (def {<-} 1) (aio/do {x <- (+ 1 2) x}))"))
       (test/assert-eq 2 count "aio/do <- binding scope is not yet tracked (known limitation)")
@@ -244,7 +244,7 @@
 
   ; --- Quoted expressions ---
 
-  (test "quoted-data-not-walked"
+  (test/case "quoted-data-not-walked"
     {do
       (test/assert-eq 0
         (diag-count "'{unknown stuff here}")
@@ -254,7 +254,7 @@
 
   ; --- Diagnostic position ---
 
-  (test "diag-has-line-col"
+  (test/case "diag-has-line-col"
     {do
       (= {d} (first-diag "bogus"))
       (test/assert (not (nil? d)) "should have diagnostic")
@@ -264,7 +264,7 @@
       true
     })
 
-  (test "diag-severity"
+  (test/case "diag-severity"
     {do
       (= {d} (first-diag "bogus"))
       (test/assert-eq 1 d:severity "undefined sym should be error severity")
@@ -273,7 +273,7 @@
 
   ; --- Multiple diagnostics ---
 
-  (test "multiple-undefined-syms"
+  (test/case "multiple-undefined-syms"
     {do
       (test/assert-eq 2 (diag-count "(+ aaa bbb)")
         "two undefined symbols should produce 2 diagnostics")
@@ -282,21 +282,21 @@
 
   ; --- Empty / edge cases ---
 
-  (test "empty-input"
+  (test/case "empty-input"
     {do
       (test/assert-eq 0 (diag-count "")
         "empty input should produce 0 diagnostics")
       true
     })
 
-  (test "only-numbers"
+  (test/case "only-numbers"
     {do
       (test/assert-eq 0 (diag-count "42")
         "number literal should produce 0 diagnostics")
       true
     })
 
-  (test "only-strings"
+  (test/case "only-strings"
     {do
       (test/assert-eq 0 (diag-count "\"hello\"")
         "string literal should produce 0 diagnostics")
@@ -305,7 +305,7 @@
 
   ; --- With symdb ---
 
-  (test "symdb-known-symbols"
+  (test/case "symdb-known-symbols"
     {do
       (= {db} (sqlite/open ":memory:"))
       (= {_} (sqlite/exec-script db symdb/schema-sql))
@@ -319,7 +319,7 @@
       true
     })
 
-  (test "symdb-unknown-still-flagged"
+  (test/case "symdb-unknown-still-flagged"
     {do
       (= {db} (sqlite/open ":memory:"))
       (= {_} (sqlite/exec-script db symdb/schema-sql))
@@ -332,7 +332,7 @@
 
   ; --- Regression: real code with seeded symdb ---
 
-  (test "builtins-seeded-no-false-positives"
+  (test/case "builtins-seeded-no-false-positives"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -347,7 +347,7 @@
       true
     })
 
-  (test "nonexistent-path-still-seeds"
+  (test/case "nonexistent-path-still-seeds"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {text} "(sig '+ {-> & Num Num})\n(sig 'head {-> (List A) A})\n(sig 'list {-> & Any (List Any)})")
@@ -361,7 +361,7 @@
 
   ; --- Param annotation skipping ---
 
-  (test "skip-type-annotations"
+  (test/case "skip-type-annotations"
     {do
       (test/assert-eq 0
         (diag-count "(fun {f x :: Num -> Num} {x})")
@@ -369,7 +369,7 @@
       true
     })
 
-  (test "varargs-ampersand"
+  (test/case "varargs-ampersand"
     {do
       (test/assert-eq 0
         (diag-count "(fun {f x & rest} {rest})")
@@ -379,7 +379,7 @@
 
   ; --- sig type validation ---
 
-  (test "sig-valid-builtin-types"
+  (test/case "sig-valid-builtin-types"
     {do
       (test/assert-eq 0
         (diag-count "(sig 'add {-> Num Num Num})")
@@ -387,7 +387,7 @@
       true
     })
 
-  (test "sig-all-builtins-valid"
+  (test/case "sig-all-builtins-valid"
     {do
       (test/assert-eq 0
         (diag-count "(sig 'f {-> Num Str Nil Bool Err QExpr Fun Sym Ref Handle List Dict Never Any Num})")
@@ -395,7 +395,7 @@
       true
     })
 
-  (test "sig-unknown-type-flagged"
+  (test/case "sig-unknown-type-flagged"
     {do
       (= {msgs} (diag-messages "(sig 'add {-> Nmu Num Num})"))
       (test/assert-eq 1 (len msgs)
@@ -405,7 +405,7 @@
       true
     })
 
-  (test "sig-multiple-unknown-types"
+  (test/case "sig-multiple-unknown-types"
     {do
       (= {msgs} (diag-messages "(sig 'bad {-> Nmu Strig Boo})"))
       (test/assert-eq 3 (len msgs)
@@ -413,7 +413,7 @@
       true
     })
 
-  (test "sig-type-vars-not-flagged"
+  (test/case "sig-type-vars-not-flagged"
     {do
       (test/assert-eq 0
         (diag-count "(sig 'id {-> A A})")
@@ -421,7 +421,7 @@
       true
     })
 
-  (test "sig-compound-types-validated"
+  (test/case "sig-compound-types-validated"
     {do
       (test/assert-eq 0
         (diag-count "(sig 'map {-> (-> A B) (List A) (List B)})")
@@ -429,7 +429,7 @@
       true
     })
 
-  (test "sig-unknown-compound-type"
+  (test/case "sig-unknown-compound-type"
     {do
       (= {msgs} (diag-messages "(sig 'foo {-> (Lst A) A})"))
       (test/assert-eq 1 (len msgs)
@@ -439,7 +439,7 @@
       true
     })
 
-  (test "sig-keywords-in-union-valid"
+  (test/case "sig-keywords-in-union-valid"
     {do
       (test/assert-eq 0
         (diag-count "(sig 'status {-> Num (| :pending :running :done)})")
@@ -447,7 +447,7 @@
       true
     })
 
-  (test "sig-user-type-from-ast"
+  (test/case "sig-user-type-from-ast"
     {do
       (test/assert-eq 0
         (diag-count "(type {Color} {Red} {Green} {Blue})\n(sig 'paint {-> Color Nil})")
@@ -455,7 +455,7 @@
       true
     })
 
-  (test "sig-user-type-from-symdb"
+  (test/case "sig-user-type-from-symdb"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {type-text} "(type {Velocity} {Velocity :x :y :z})")
@@ -467,7 +467,7 @@
       true
     })
 
-  (test "sig-lowercase-not-validated"
+  (test/case "sig-lowercase-not-validated"
     {do
       (test/assert-eq 0
         (diag-count "(sig 'server {-> (Ref http_server) Nil})")
@@ -475,7 +475,7 @@
       true
     })
 
-  (test "sig-wildcard-and-varargs"
+  (test/case "sig-wildcard-and-varargs"
     {do
       (test/assert-eq 0
         (diag-count "(sig 'do {-> & _ A})")
@@ -485,7 +485,7 @@
 
   ; --- Type resolution diagnostics ---
 
-  (test "type-fun-with-sig-no-diag"
+  (test/case "type-fun-with-sig-no-diag"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -498,7 +498,7 @@
       true
     })
 
-  (test "type-fun-without-sig-flags-params"
+  (test/case "type-fun-without-sig-flags-params"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -513,7 +513,7 @@
       true
     })
 
-  (test "type-param-with-annotation-not-flagged"
+  (test/case "type-param-with-annotation-not-flagged"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -528,7 +528,7 @@
       true
     })
 
-  (test "type-binding-literal-no-diag"
+  (test/case "type-binding-literal-no-diag"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -541,7 +541,7 @@
       true
     })
 
-  (test "type-binding-sig-call-no-diag"
+  (test/case "type-binding-sig-call-no-diag"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -554,7 +554,7 @@
       true
     })
 
-  (test "type-binding-call-without-sig"
+  (test/case "type-binding-call-without-sig"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -569,7 +569,7 @@
       true
     })
 
-  (test "type-binding-special-form-no-diag"
+  (test/case "type-binding-special-form-no-diag"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -582,7 +582,7 @@
       true
     })
 
-  (test "type-binding-underscore-not-flagged"
+  (test/case "type-binding-underscore-not-flagged"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -597,7 +597,7 @@
       true
     })
 
-  (test "type-no-db-no-diags"
+  (test/case "type-no-db-no-diags"
     {do
       (test/assert-eq 0
         (diag-count "(fun {f x y} {+ x y})")
@@ -605,7 +605,7 @@
       true
     })
 
-  (test "type-callable-param-no-diag"
+  (test/case "type-callable-param-no-diag"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -618,7 +618,7 @@
       true
     })
 
-  (test "type-non-callable-param-flagged"
+  (test/case "type-non-callable-param-flagged"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -633,7 +633,7 @@
       true
     })
 
-  (test "type-callable-param-third-position"
+  (test/case "type-callable-param-third-position"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -646,7 +646,7 @@
       true
     })
 
-  (test "type-no-sig-params-untyped"
+  (test/case "type-no-sig-params-untyped"
     {do
       (= {db} (symdb/init ":memory:"))
       (= {bt} (read-file "stdlib/builtins.valk"))
@@ -664,7 +664,7 @@
 
   ; === Arity checking tests ===
 
-  (test "arity-too-many-args"
+  (test/case "arity-too-many-args"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -676,7 +676,7 @@
       true
     })
 
-  (test "arity-too-few-args"
+  (test/case "arity-too-few-args"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -688,7 +688,7 @@
       true
     })
 
-  (test "arity-correct-no-diag"
+  (test/case "arity-correct-no-diag"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -700,7 +700,7 @@
       true
     })
 
-  (test "arity-varargs-ok"
+  (test/case "arity-varargs-ok"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -712,7 +712,7 @@
       true
     })
 
-  (test "arity-message-format"
+  (test/case "arity-message-format"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -729,7 +729,7 @@
 
   ; === Special form arity tests ===
 
-  (test "special-form-if-too-few"
+  (test/case "special-form-if-too-few"
     {do
       (= {d} (first-diag "(if true)"))
       (test/assert (not (nil? d)) "if with 1 arg should produce diagnostic")
@@ -737,42 +737,42 @@
       true
     })
 
-  (test "special-form-if-too-many"
+  (test/case "special-form-if-too-many"
     {do
       (= {d} (first-diag "(if true 1 2 3)"))
       (test/assert (not (nil? d)) "if with 4 args should produce diagnostic")
       true
     })
 
-  (test "special-form-if-correct"
+  (test/case "special-form-if-correct"
     {do
       (= {n} (diag-count "(if true 1 2)"))
       (test/assert-eq 0 n "if with 3 args is correct")
       true
     })
 
-  (test "special-form-fun-no-body"
+  (test/case "special-form-fun-no-body"
     {do
       (= {d} (first-diag "(fun {x})"))
       (test/assert (not (nil? d)) "fun with no body should produce diagnostic")
       true
     })
 
-  (test "special-form-def-no-value"
+  (test/case "special-form-def-no-value"
     {do
       (= {d} (first-diag "(def {x})"))
       (test/assert (not (nil? d)) "def with no value should produce diagnostic")
       true
     })
 
-  (test "special-form-match-no-clauses"
+  (test/case "special-form-match-no-clauses"
     {do
       (= {d} (first-diag "(match x)"))
       (test/assert (not (nil? d)) "match with no clauses should produce diagnostic")
       true
     })
 
-  (test "special-form-load-no-args"
+  (test/case "special-form-load-no-args"
     {do
       (= {d} (first-diag "(load)"))
       (test/assert (not (nil? d)) "load with no args should produce diagnostic")
@@ -781,7 +781,7 @@
 
   ; === Constructor arity tests ===
 
-  (test "ctor-arity-mismatch"
+  (test/case "ctor-arity-mismatch"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -793,7 +793,7 @@
       true
     })
 
-  (test "ctor-arity-correct"
+  (test/case "ctor-arity-correct"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -807,7 +807,7 @@
 
   ; === Division by zero tests ===
 
-  (test "div-zero-literal"
+  (test/case "div-zero-literal"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -820,7 +820,7 @@
       true
     })
 
-  (test "div-zero-non-literal-ok"
+  (test/case "div-zero-non-literal-ok"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -833,7 +833,7 @@
       true
     })
 
-  (test "mod-zero-literal"
+  (test/case "mod-zero-literal"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -849,7 +849,7 @@
 
   ; === Argument type checking tests ===
 
-  (test "type-check-str-to-num-fn"
+  (test/case "type-check-str-to-num-fn"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -862,7 +862,7 @@
       true
     })
 
-  (test "type-check-num-to-str-fn"
+  (test/case "type-check-num-to-str-fn"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -875,7 +875,7 @@
       true
     })
 
-  (test "type-check-correct-no-diag"
+  (test/case "type-check-correct-no-diag"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -887,7 +887,7 @@
       true
     })
 
-  (test "type-check-generic-accepts-anything"
+  (test/case "type-check-generic-accepts-anything"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -899,7 +899,7 @@
       true
     })
 
-  (test "type-check-message-format"
+  (test/case "type-check-message-format"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -916,7 +916,7 @@
 
   ; --- Constructor keyword tests ---
 
-  (test "ctor-keyword-correct"
+  (test/case "ctor-keyword-correct"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -928,7 +928,7 @@
       true
     })
 
-  (test "ctor-keyword-wrong-field"
+  (test/case "ctor-keyword-wrong-field"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)
@@ -942,7 +942,7 @@
       true
     })
 
-  (test "ctor-keyword-wrong-count"
+  (test/case "ctor-keyword-wrong-count"
     {do
       (= {db} (sqlite/open ":memory:"))
       (sqlite/exec-script db symdb/schema-sql)

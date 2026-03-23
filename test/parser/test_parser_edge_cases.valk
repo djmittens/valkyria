@@ -5,14 +5,14 @@
 (load "stdlib/test/test.valk")
 
 (test/run (list
-  (test "partial-application-basic"
+  (test/case "partial-application-basic"
     {do
     (= {add} (\ {x y} {+ x y}))
     (= {add5} (add 5))
     (test/assert-eq 8 (add5 3) "partial application should work")
     true
   })
-  (test "partial-application-multiple"
+  (test/case "partial-application-multiple"
     {do
     (= {add3} (\ {a b c} {+ (+ a b) c}))
     (= {add3-first} (add3 1))
@@ -20,52 +20,52 @@
     (test/assert-eq 6 (add3-second 3) "multiple partial applications")
     true
   })
-  (test "varargs-with-no-extra-args"
+  (test/case "varargs-with-no-extra-args"
     {do
     (= {f} (\ {x & rest} {x}))
     (test/assert-eq 1 (f 1) "varargs with no extra args")
     true
   })
-  (test "varargs-collect-all"
+  (test/case "varargs-collect-all"
     {do
     (= {collect} (\ {& args} {args}))
     (= {result} (collect 1 2 3))
     (test/assert-eq 3 (len result) "varargs collect all")
     true
   })
-  (test "varargs-empty-call"
+  (test/case "varargs-empty-call"
     {do
     (= {no-args} (\ {& args} {len args}))
     (test/assert-eq 0 (no-args) "varargs with empty call")
     true
   })
-  (test "too-many-args-error"
+  (test/case "too-many-args-error"
     {do
     (= {f} (\ {x} {x}))
     (= {result} (f 1 2))
     (test/assert (error? result) "too many args should error")
     true
   })
-  (test "too-few-args-returns-partial"
+  (test/case "too-few-args-returns-partial"
     {do
     (= {f} (\ {x y} {+ x y}))
     (= {partial} (f 1))
     (test/assert-eq 3 (partial 2) "too few args returns partial")
     true
   })
-  (test "range-empty"
+  (test/case "range-empty"
     {do
     (= {result} (range 5 5))
     (test/assert-eq 0 (len result) "range with equal start/end is empty")
     true
   })
-  (test "range-negative"
+  (test/case "range-negative"
     {do
     (= {result} (range 10 5))
     (test/assert-eq 0 (len result) "range with start > end is empty")
     true
   })
-  (test "range-negative-numbers"
+  (test/case "range-negative-numbers"
     {do
     (= {result} (range -5 -2))
     (test/assert-eq 3 (len result) "range with negative numbers")
@@ -73,21 +73,21 @@
     (test/assert-eq -3 (nth 3 result) "last elem is -3")
     true
   })
-  (test "ord-basic"
+  (test/case "ord-basic"
     {do
     (test/assert (< (ord 1 2) 0) "ord 1 2 < 0")
     (test/assert (> (ord 2 1) 0) "ord 2 1 > 0")
     (test/assert-eq 0 (ord 1 1) "ord 1 1 == 0")
     true
   })
-  (test "ord-strings"
+  (test/case "ord-strings"
     {do
     (test/assert (< (ord "a" "b") 0) "ord a b < 0")
     (test/assert (> (ord "b" "a") 0) "ord b a > 0")
     (test/assert-eq 0 (ord "x" "x") "ord x x == 0")
     true
   })
-  (test "select-first-match"
+  (test/case "select-first-match"
     {do
     (= {result} (select
       {(== 1 2) "wrong"}
@@ -96,7 +96,7 @@
     (test/assert-eq "correct" result "select picks first true")
     true
   })
-  (test "select-default"
+  (test/case "select-default"
     {do
     (= {result} (select
       {false "wrong1"}
@@ -105,7 +105,7 @@
     (test/assert-eq "default" result "select falls to default")
     true
   })
-  (test "quasiquote-nested-unquote"
+  (test/case "quasiquote-nested-unquote"
     {do
     (= {x} 10)
     (= {y} 20)
@@ -113,7 +113,7 @@
     (test/assert-eq 3 (len result) "nested quasiquote structure")
     true
   })
-  (test "quasiquote-in-function"
+  (test/case "quasiquote-in-function"
     {do
     (= {make-pair} (\ {a b} {`{,a ,b}}))
     (= {result} (make-pair 1 2))
@@ -122,7 +122,7 @@
     (test/assert-eq 2 (nth 2 result) "second is b")
     true
   })
-  (test "unquote-splicing-multiple"
+  (test/case "unquote-splicing-multiple"
     {do
     (= {a} {1 2})
     (= {b} {3 4})
@@ -130,26 +130,26 @@
     (test/assert-eq 4 (len result) "multiple splices")
     true
   })
-  (test "unquote-splicing-growth"
+  (test/case "unquote-splicing-growth"
     {do
     (= {big} (range 0 50))
     (= {result} `{start ,@big end})
     (test/assert-eq 52 (len result) "splice large list causes growth")
     true
   })
-  (test "str-join-basic"
+  (test/case "str-join-basic"
     {do
     (= {result} (str "a" "b" "c"))
     (test/assert-eq "abc" result "str joins strings")
     true
   })
-  (test "str-join-with-numbers"
+  (test/case "str-join-with-numbers"
     {do
     (= {result} (str "count: " 42))
     (test/assert-eq "count: 42" result "str with numbers")
     true
   })
-  (test "plist-get-in-nested"
+  (test/case "plist-get-in-nested"
     {do
     (= {data} {:outer {:inner 42}})
     (= {inner} data:outer)
@@ -157,21 +157,21 @@
     (test/assert-eq 42 result "nested plist access")
     true
   })
-  (test "eval-quoted-list"
+  (test/case "eval-quoted-list"
     {do
     (= {code} {+ 1 2})
     (= {result} (eval code))
     (test/assert-eq 3 result "eval quoted list")
     true
   })
-  (test "eval-nested"
+  (test/case "eval-nested"
     {do
     (= {code} {eval {+ 2 3}})
     (= {result} (eval code))
     (test/assert-eq 5 result "eval nested eval")
     true
   })
-  (test "list-from-quoted"
+  (test/case "list-from-quoted"
     {do
     (= {q} {1 2 3})
     (= {l} (list 1 2 3))
@@ -179,7 +179,7 @@
     (test/assert-eq 3 (len l) "list len")
     true
   })
-  (test "def-vs-put"
+  (test/case "def-vs-put"
     {do
     (= {x} 1)
     (def {y} 2)

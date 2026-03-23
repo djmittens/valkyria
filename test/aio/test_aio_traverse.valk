@@ -7,17 +7,17 @@
 (def {aio} (aio/await (aio/start)))
 
 (test/run-async aio (list
-  (test-async "aio/traverse returns handle" (\ {} {
+  (test/case-async "aio/traverse returns handle" (\ {} {
     (= {result} (aio/traverse '(1 2 3) (\ {x} {(aio/pure x)})))
     (aio/pure (not (== result ())))
   }))
 
-  (test-async "aio/traverse with transformation" (\ {} {
+  (test/case-async "aio/traverse with transformation" (\ {} {
     (= {result} (aio/traverse '(1 2 3) (\ {x} {(aio/pure (+ x 1))})))
     (aio/pure (not (== result ())))
   }))
 
-  (test-async "aio/traverse with empty list" (\ {} {
+  (test/case-async "aio/traverse with empty list" (\ {} {
     (= {result} (aio/traverse () (\ {x} {(aio/pure x)})))
     (aio/pure (not (== result ())))
   })))

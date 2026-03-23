@@ -54,7 +54,7 @@
 (println "Running 10 batches of 5 concurrent connections...")
 
 (test/run-async aio (list
-  (test-async "50 SSE connections across 10 batches" (\ {} {
+  (test/case-async "50 SSE connections across 10 batches" (\ {} {
     (aio/then (run-batches 10 5)
       (\ {results}
         {(= {total} (len results))

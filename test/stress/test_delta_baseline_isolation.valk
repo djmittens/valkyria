@@ -15,7 +15,7 @@
 (def {isolation-counter} (metrics/counter "isolation_test_counter" "Test counter for isolation"))
 
 (test/run-async aio (list
-  (test-async "Sequential deltas: each should see changes since last collect" (\ {} {
+  (test/case-async "Sequential deltas: each should see changes since last collect" (\ {} {
     (= {seq-counter} (metrics/counter "seq_test_counter" "Sequential test counter"))
     (= {d-baseline} (metrics/collect-delta))
     (metrics/counter-inc seq-counter 10)
@@ -31,7 +31,7 @@
     (println "  Delta 2 saw counter:" (yes-no d2-has))
     (aio/pure (and d1-has d2-has))}))
 
-  (test-async "Two deltas: second should see increment from first" (\ {} {
+  (test/case-async "Two deltas: second should see increment from first" (\ {} {
     (= {d1} (metrics/collect-delta))
     (= {d2} (metrics/collect-delta))
     (metrics/counter-inc isolation-counter 5)

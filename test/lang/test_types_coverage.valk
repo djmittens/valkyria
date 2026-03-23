@@ -20,7 +20,7 @@
 
 (test/run (list
 
-  (test "match-literal-string"
+  (test/case "match-literal-string"
     {do
       (= {greet} (\ {name} {
         match name
@@ -34,7 +34,7 @@
       true
     })
 
-  (test "match-literal-number"
+  (test/case "match-literal-number"
     {do
       (= {describe} (\ {n} {
         match n
@@ -48,7 +48,7 @@
       true
     })
 
-  (test "match-multi-expr-body"
+  (test/case "match-multi-expr-body"
     {do
       (= {process} (\ {a} {
         match a
@@ -67,7 +67,7 @@
       true
     })
 
-  (test "match-positional-with-wildcard-field"
+  (test/case "match-positional-with-wildcard-field"
     {do
       (= {get-breed} (\ {a} {
         match a
@@ -79,7 +79,7 @@
       true
     })
 
-  (test "match-enum-no-bindings"
+  (test/case "match-enum-no-bindings"
     {do
       (= {is-fish} (\ {a} {
         match a
@@ -91,19 +91,19 @@
       true
     })
 
-  (test "constructor-wrong-positional-count"
+  (test/case "constructor-wrong-positional-count"
     {do
       (= {result} (error? (eval (list Dog "name-only"))))
       true
     })
 
-  (test "constructor-missing-keyword-field"
+  (test/case "constructor-missing-keyword-field"
     {do
       (= {result} (error? (eval (list Dog :name "rex"))))
       true
     })
 
-  (test "product-type-accessor"
+  (test/case "product-type-accessor"
     {do
       (= {c} (Coord :x 10 :y 20))
       (test/assert-eq 10 (Coord:x c) "Coord:x")
@@ -111,7 +111,7 @@
       true
     })
 
-  (test "product-type-positional"
+  (test/case "product-type-positional"
     {do
       (= {c} (Coord 5 15))
       (test/assert-eq 5 (Coord:x c) "positional Coord:x")
@@ -119,7 +119,7 @@
       true
     })
 
-  (test "sum-match-qualified-names"
+  (test/case "sum-match-qualified-names"
     {do
       (= {which} (\ {a} {
         match a
@@ -133,7 +133,7 @@
       true
     })
 
-  (test "nested-type-in-match"
+  (test/case "nested-type-in-match"
     {do
       (= {unwrap-wrap} (\ {w} {
         match w
@@ -144,7 +144,7 @@
       true
     })
 
-  (test "parameterized-product-type"
+  (test/case "parameterized-product-type"
     {do
       (= {p} (Pair :fst 1 :snd "hello"))
       (test/assert-eq 1 (Pair:fst p) "Pair:fst")
@@ -152,7 +152,7 @@
       true
     })
 
-  (test "match-with-constructor-in-body"
+  (test/case "match-with-constructor-in-body"
     {do
       (= {swap-animal} (\ {a} {
         match a
@@ -166,13 +166,13 @@
       true
     })
 
-  (test "sig-declaration-no-error"
+  (test/case "sig-declaration-no-error"
     {do
       (test/assert-eq 5 (add 2 3) "sig-annotated function works")
       true
     })
 
-  (test "match-inside-lambda-qexpr"
+  (test/case "match-inside-lambda-qexpr"
     {do
       (= {f} (\ {x} {
         match x
@@ -184,7 +184,7 @@
       true
     })
 
-  (test "nested-match-values"
+  (test/case "nested-match-values"
     {do
       (= {deep} (\ {w} {
         match w
@@ -198,7 +198,7 @@
       true
     })
 
-  (test "match-positional-multiple-bindings"
+  (test/case "match-positional-multiple-bindings"
     {do
       (= {describe-dog} (\ {a} {
         match a
@@ -209,14 +209,14 @@
       true
     })
 
-  (test "accessor-on-second-field"
+  (test/case "accessor-on-second-field"
     {do
       (= {d} (Dog :name "fido" :breed "beagle"))
       (test/assert-eq "beagle" (Dog:breed d) "accessor second field")
       true
     })
 
-  (test "constructor-call-in-list-context"
+  (test/case "constructor-call-in-list-context"
     {do
       (= {animals} (list (Cat :name "a") (Dog :name "b" :breed "c") (Fish)))
       (test/assert-eq 3 (len animals) "list of constructors")
@@ -224,7 +224,7 @@
       true
     })
 
-  (test "match-with-do-in-wildcard"
+  (test/case "match-with-do-in-wildcard"
     {do
       (= {f} (\ {x} {
         match x
@@ -235,7 +235,7 @@
       true
     })
 
-  (test "redeclare-existing-type-is-noop"
+  (test/case "redeclare-existing-type-is-noop"
     {do
       (type {Color} {Red} {Green} {Blue})
       (= {c1} (Red))

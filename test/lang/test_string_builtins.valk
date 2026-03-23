@@ -18,7 +18,7 @@
 
 ; Run all tests
 (test/run (list
-  (test "str-split-basic"
+  (test/case "str-split-basic"
     {do
     (= {parts} (str/split "a,b,c" ","))
     (test/assert-eq 3 (len parts) "should split into 3 parts")
@@ -27,21 +27,21 @@
     (test/assert-eq "c" (nth 3 parts) "third part should be 'c'")
     true
   })
-  (test "str-split-no-delimiter"
+  (test/case "str-split-no-delimiter"
     {do
     (= {parts} (str/split "hello" ","))
     (test/assert-eq 1 (len parts) "no delimiter should return 1 part")
     (test/assert-eq "hello" (nth 1 parts) "part should be original string")
     true
   })
-  (test "str-split-empty-string"
+  (test/case "str-split-empty-string"
     {do
     (= {parts} (str/split "" ","))
     (test/assert-eq 1 (len parts) "empty string should return 1 part")
     (test/assert-eq "" (nth 1 parts) "part should be empty string")
     true
   })
-  (test "str-split-consecutive-delimiters"
+  (test/case "str-split-consecutive-delimiters"
     {do
     (= {parts} (str/split "a,,b" ","))
     (test/assert-eq 3 (len parts) "consecutive delimiters should create empty part")
@@ -50,7 +50,7 @@
     (test/assert-eq "b" (nth 3 parts) "third part should be 'b'")
     true
   })
-  (test "str-split-delimiter-at-ends"
+  (test/case "str-split-delimiter-at-ends"
     {do
     (= {parts} (str/split ",a,b," ","))
     (test/assert-eq 4 (len parts) "delimiter at ends should create empty parts")
@@ -60,7 +60,7 @@
     (test/assert-eq "" (nth 4 parts) "last part should be empty")
     true
   })
-  (test "str-split-multi-char-delimiter"
+  (test/case "str-split-multi-char-delimiter"
     {do
     (= {parts} (str/split "a::b::c" "::"))
     (test/assert-eq 3 (len parts) "multi-char delimiter should work")
@@ -69,116 +69,116 @@
     (test/assert-eq "c" (nth 3 parts) "third part correct")
     true
   })
-  (test "str-replace-basic"
+  (test/case "str-replace-basic"
     {do
     (= {result} (str/replace "hello world" "world" "valk"))
     (test/assert-eq "hello valk" result "should replace substring")
     true
   })
-  (test "str-replace-no-match"
+  (test/case "str-replace-no-match"
     {do
     (= {result} (str/replace "hello world" "xyz" "abc"))
     (test/assert-eq "hello world" result "no match should return original")
     true
   })
-  (test "str-replace-multiple-occurrences"
+  (test/case "str-replace-multiple-occurrences"
     {do
     (= {result} (str/replace "a b a b a" "a" "x"))
     (test/assert-eq "x b x b x" result "should replace all occurrences")
     true
   })
-  (test "str-replace-to-empty"
+  (test/case "str-replace-to-empty"
     {do
     (= {result} (str/replace "a-b-c" "-" ""))
     (test/assert-eq "abc" result "should remove all occurrences")
     true
   })
-  (test "str-replace-from-shorter-to-longer"
+  (test/case "str-replace-from-shorter-to-longer"
     {do
     (= {result} (str/replace "ab" "a" "xxx"))
     (test/assert-eq "xxxb" result "replacement can be longer")
     true
   })
-  (test "str-replace-from-longer-to-shorter"
+  (test/case "str-replace-from-longer-to-shorter"
     {do
     (= {result} (str/replace "xxxb" "xxx" "a"))
     (test/assert-eq "ab" result "replacement can be shorter")
     true
   })
-  (test "str-replace-empty-search-error"
+  (test/case "str-replace-empty-search-error"
     {do
     (= {result} (error? (str/replace "hello" "" "x")))
     (test/assert result "empty search string should error")
     true
   })
-  (test "str-to-num-basic"
+  (test/case "str-to-num-basic"
     {do
     (test/assert-eq 42 (str->num "42") "should convert positive integer")
     (test/assert-eq 0 (str->num "0") "should convert zero")
     (test/assert-eq 123456 (str->num "123456") "should convert larger numbers")
     true
   })
-  (test "str-to-num-negative"
+  (test/case "str-to-num-negative"
     {do
     (test/assert-eq -42 (str->num "-42") "should convert negative integer")
     (test/assert-eq -1 (str->num "-1") "should convert negative one")
     true
   })
-  (test "str-to-num-invalid"
+  (test/case "str-to-num-invalid"
     {do
     (= {result} (error? (str->num "abc")))
     (test/assert result "non-numeric string should error")
     true
   })
 
-  (test "str-contains-found"
+  (test/case "str-contains-found"
     {do
     (test/assert (str/contains? "hello world" "world") "should find substring")
     (test/assert (str/contains? "hello world" "hello") "should find at start")
     (test/assert (str/contains? "hello" "hello") "should find exact match")
     true
   })
-  (test "str-contains-not-found"
+  (test/case "str-contains-not-found"
     {do
     (test/assert (not (str/contains? "hello world" "xyz")) "should not find missing")
     (test/assert (not (str/contains? "" "a")) "empty string contains nothing")
     true
   })
-  (test "str-contains-empty-needle"
+  (test/case "str-contains-empty-needle"
     {do
     (test/assert (str/contains? "hello" "") "empty needle always found")
     true
   })
 
-  (test "str-starts-with-true"
+  (test/case "str-starts-with-true"
     {do
     (test/assert (str/starts-with? "hello world" "hello") "starts with hello")
     (test/assert (str/starts-with? "hello" "hello") "exact match")
     (test/assert (str/starts-with? "hello" "") "empty prefix always matches")
     true
   })
-  (test "str-starts-with-false"
+  (test/case "str-starts-with-false"
     {do
     (test/assert (not (str/starts-with? "hello" "world")) "does not start with world")
     (test/assert (not (str/starts-with? "hi" "hello")) "prefix longer than string")
     true
   })
 
-  (test "str-ends-with-true"
+  (test/case "str-ends-with-true"
     {do
     (test/assert (str/ends-with? "hello world" "world") "ends with world")
     (test/assert (str/ends-with? "hello" "hello") "exact match")
     (test/assert (str/ends-with? "hello" "") "empty suffix always matches")
     true
   })
-  (test "str-ends-with-false"
+  (test/case "str-ends-with-false"
     {do
     (test/assert (not (str/ends-with? "hello" "world")) "does not end with world")
     (test/assert (not (str/ends-with? "hi" "hello")) "suffix longer than string")
     true
   })
 
-  (test "str-join-basic"
+  (test/case "str-join-basic"
     {do
     (test/assert-eq "a, b, c" (str/join {"a" "b" "c"} ", ") "join with comma-space")
     (test/assert-eq "abc" (str/join {"a" "b" "c"} "") "join with empty sep")
@@ -186,28 +186,28 @@
     (test/assert-eq "" (str/join {} ", ") "empty list")
     true
   })
-  (test "str-join-wrong-type"
+  (test/case "str-join-wrong-type"
     {do
     (test/assert (error? (str/join 42 ",")) "number as list should error")
     (test/assert (error? (str/join {"a" "b"} 42)) "number as sep should error")
     true
   })
 
-  (test "str-index-of-found"
+  (test/case "str-index-of-found"
     {do
     (test/assert-eq 6 (str/index-of "hello world" "world") "found at index 6")
     (test/assert-eq 0 (str/index-of "hello" "hello") "found at start")
     (test/assert-eq 0 (str/index-of "hello" "") "empty needle at 0")
     true
   })
-  (test "str-index-of-not-found"
+  (test/case "str-index-of-not-found"
     {do
     (test/assert-eq -1 (str/index-of "hello" "xyz") "not found returns -1")
     (test/assert-eq -1 (str/index-of "" "a") "empty haystack returns -1")
     true
   })
 
-  (test "str-lower"
+  (test/case "str-lower"
     {do
     (test/assert-eq "hello world" (str/lower "Hello WORLD") "mixed case to lower")
     (test/assert-eq "hello" (str/lower "hello") "already lower")
@@ -215,7 +215,7 @@
     (test/assert-eq "abc123" (str/lower "ABC123") "letters only, numbers unchanged")
     true
   })
-  (test "str-upper"
+  (test/case "str-upper"
     {do
     (test/assert-eq "HELLO WORLD" (str/upper "Hello World") "mixed case to upper")
     (test/assert-eq "HELLO" (str/upper "HELLO") "already upper")
@@ -223,7 +223,7 @@
     true
   })
 
-  (test "str-trim"
+  (test/case "str-trim"
     {do
     (test/assert-eq "hello" (str/trim "  hello  ") "trim both sides")
     (test/assert-eq "hello" (str/trim "hello") "nothing to trim")
@@ -231,13 +231,13 @@
     (test/assert-eq "" (str/trim "") "empty string")
     true
   })
-  (test "str-trim-left"
+  (test/case "str-trim-left"
     {do
     (test/assert-eq "hello  " (str/trim-left "  hello  ") "trim left only")
     (test/assert-eq "hello" (str/trim-left "hello") "nothing to trim")
     true
   })
-  (test "str-trim-right"
+  (test/case "str-trim-right"
     {do
     (test/assert-eq "  hello" (str/trim-right "  hello  ") "trim right only")
     (test/assert-eq "hello" (str/trim-right "hello") "nothing to trim")

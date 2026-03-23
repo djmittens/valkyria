@@ -23,7 +23,7 @@
 (printf "Test data size: %d bytes\n" RESPONSE_SIZE)
 
 (test/run-async aio (list
-  (test-async "100KB response is received intact" (\ {} {
+  (test/case-async "100KB response is received intact" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/")
       (\ {resp} {
         (= {body-len} (len (http2/response-body resp)))

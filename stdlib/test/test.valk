@@ -44,12 +44,12 @@
   (plist/set ctx :suite-timeout-ms ms)
 })
 
-(fun {test name body} {
+(fun {test/case name body} {
   (list name body)
 })
 
 (fun {test/add tests name body} {
-  (join tests (list (test name body)))
+  (join tests (list (test/case name body)))
 })
 
 (fun {test/assert cond msg} {
@@ -438,12 +438,12 @@
 
 
 
-(fun {test-async name body} {
+(fun {test/case-async name body} {
   (list name body)
 })
 
 (fun {test/async-add tests name body} {
-  (join tests (list (test-async name body)))
+  (join tests (list (test/case-async name body)))
 })
 
 

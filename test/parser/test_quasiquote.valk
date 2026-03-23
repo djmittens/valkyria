@@ -46,7 +46,7 @@
 
 ; Run all tests
 (test/run (list
-  (test "quasiquote-basic-no-unquote"
+  (test/case "quasiquote-basic-no-unquote"
     {do
     ; Quasiquoting atoms returns them as-is (they're self-quoting)
     ; Quasiquoting a number should return the number
@@ -55,14 +55,14 @@
     (test/assert-eq "hello" `"hello" "quasiquote string should return string")
     true
   })
-  (test "quasiquote-list-no-unquote"
+  (test/case "quasiquote-list-no-unquote"
     {do
     ; Quasiquote preserves the list type (CONS vs QEXPR)
     ; `{a b c} should return {a b c}
     (test/assert (== `{a b c} {a b c}) "quasiquote qexpr should return qexpr")
     true
   })
-  (test "quasiquote-unquote-simple"
+  (test/case "quasiquote-unquote-simple"
     {do
     (= {x} 42)
     ; Unquote should evaluate the expression
@@ -71,7 +71,7 @@
     (test/assert (== `{a ,x c} {a 42 c}) "unquote in qexpr should substitute value")
     true
   })
-  (test "quasiquote-multiple-unquotes"
+  (test/case "quasiquote-multiple-unquotes"
     {do
     (= {a} 1)
     (= {b} 2)
@@ -80,21 +80,21 @@
     (test/assert (== `{x ,a y ,b z ,c} {x 1 y 2 z 3}) "mixed quoted and unquoted")
     true
   })
-  (test "quasiquote-unquote-expressions"
+  (test/case "quasiquote-unquote-expressions"
     {do
     (= {x} 5)
     (test/assert (== `{result ,(+ x 10)} {result 15}) "unquote with arithmetic expression")
     (test/assert (== `{doubled ,(* x 2)} {doubled 10}) "unquote with multiplication")
     true
   })
-  (test "quasiquote-unquote-splicing"
+  (test/case "quasiquote-unquote-splicing"
     {do
     (= {lst} {1 2 3})
     ; Unquote-splicing should splice list elements
     (test/assert (== `{a ,@lst b} {a 1 2 3 b}) "unquote-splicing should splice elements")
     true
   })
-  (test "quasiquote-unquote-splicing-positions"
+  (test/case "quasiquote-unquote-splicing-positions"
     {do
     (= {lst} {x y})
     ; At start
@@ -106,27 +106,27 @@
     (test/assert (== `{,@lst ,@lst2} {x y 1 2}) "multiple splices")
     true
   })
-  (test "quasiquote-empty-splice"
+  (test/case "quasiquote-empty-splice"
     {do
     (= {empty} {})
     (test/assert (== `{a ,@empty b} {a b}) "splicing empty list should add nothing")
     true
   })
-  (test "quasiquote-mixed-operations"
+  (test/case "quasiquote-mixed-operations"
     {do
     (= {x} 100)
     (= {lst} {a b})
     (test/assert (== `{start ,x ,@lst end} {start 100 a b end}) "mixed unquote and splice")
     true
   })
-  (test "quasiquote-nested-lists"
+  (test/case "quasiquote-nested-lists"
     {do
     (= {inner} {1 2})
     ; Nested quasiquote should work on inner lists
     (test/assert (== `{outer {,@inner} more} {outer {1 2} more}) "nested list with splice")
     true
   })
-  (test "quasiquote-response-map"
+  (test/case "quasiquote-response-map"
     {do
     (= {status} "200")
     (= {body} "<h1>Hello</h1>")
@@ -136,7 +136,7 @@
       "building response map with quasiquote")
     true
   })
-  (test "quasiquote-full-response"
+  (test/case "quasiquote-full-response"
     {do
     (= {html-body} "<h1>Test</h1>")
     (= {response} `{:status "200" :content-type "text/html; charset=utf-8" :body ,html-body})
@@ -145,21 +145,21 @@
     (test/assert-eq "<h1>Test</h1>" (nth 6 response) "body should be substituted")
     true
   })
-  (test "quasiquote-in-lambda"
+  (test/case "quasiquote-in-lambda"
     {do
     (= {make-response} (\ {status body} {`{:status ,status :body ,body}}))
     (= {resp} (make-response "404" "Not Found"))
     (test/assert (== resp {:status "404" :body "Not Found"}) "lambda should build correct response")
     true
   })
-  (test "quasiquote-function-results"
+  (test/case "quasiquote-function-results"
     {do
     (fun {double x} {* x 2})
     (= {result} `{answer ,(double 21)})
     (test/assert (== result {answer 42}) "unquote should use function result")
     true
   })
-  (test "join-builtin"
+  (test/case "join-builtin"
     {do
     (test/assert (== (join {1 2} {3 4}) {1 2 3 4}) "join should combine lists")
     (test/assert (== (join {a} {b c} {d}) {a b c d}) "join should combine multiple lists")
@@ -168,34 +168,34 @@
     (test/assert-eq 2 (len (join {1 2} {})) "join with empty second should have right length")
     true
   })
-  (test "unquote-no-args-error"
+  (test/case "unquote-no-args-error"
     {do
     (= {result} (error? (eval (read "`{a , b}"))))
     (test/assert result "unquote with nothing should error")
     true
   })
-  (test "unquote-splicing-non-list-error"
+  (test/case "unquote-splicing-non-list-error"
     {do
     (= {x} 42)
     (= {result} (error? (eval (read "`{a ,@x b}"))))
     (test/assert result "unquote-splicing non-list should error")
     true
   })
-  (test "plist-get-basic"
+  (test/case "plist-get-basic"
     {do
     (= {data} {:name "Alice" :age 30})
     (test/assert-eq "Alice" data:name "should get name")
     (test/assert-eq 30 data:age "should get age")
     true
   })
-  (test "plist-get-missing-key"
+  (test/case "plist-get-missing-key"
     {do
     (= {data} {:a 1 :b 2})
     (= {result} data:missing)
     (test/assert (== result nil) "missing key should return nil")
     true
   })
-  (test "plist-get-empty"
+  (test/case "plist-get-empty"
     {do
     (= {data} {})
     (= {result} data:key)

@@ -23,17 +23,17 @@
     {(== (http2/response-status resp) "200")})})
 
 (test/run-async aio (list
-  (test-async "first SSE request completes with 200" (\ {} {
+  (test/case-async "first SSE request completes with 200" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse")
       (\ {resp} {(check-response resp)}))}))
 
-  (test-async "second SSE request after delay completes" (\ {} {
+  (test/case-async "second SSE request after delay completes" (\ {} {
     (aio/then (aio/sleep aio 50) 
       (\ {_} {
         (aio/then (http2/client-request aio "127.0.0.1" port "/sse")
           (\ {resp} {(check-response resp)}))}))}))
 
-  (test-async "SSE response contains expected data" (\ {} {
+  (test/case-async "SSE response contains expected data" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse")
       (\ {resp} {
         (if (error? resp)

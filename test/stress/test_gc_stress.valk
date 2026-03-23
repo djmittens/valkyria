@@ -18,7 +18,7 @@
 
 ; Run all GC stress tests
 (test/run (list
-  (test "gc-stress-allocate-100-lists"
+  (test/case "gc-stress-allocate-100-lists"
     {do
     (def {allocate} (\ {n} {
       (if (<= n 0)
@@ -30,7 +30,7 @@
     (def {result} (allocate 100))
     (== result 0)
   })
-  (test "gc-stress-allocate-1000-lists"
+  (test/case "gc-stress-allocate-1000-lists"
     {do
     (def {allocate} (\ {n} {
       (if (<= n 0)
@@ -42,7 +42,7 @@
     (def {result} (allocate 1000))
     (== result 0)
   })
-  (test "gc-stress-nested-structures-depth-50"
+  (test/case "gc-stress-nested-structures-depth-50"
     {do
     (def {make-nested} (\ {depth} {
       (if (<= depth 0)
@@ -52,7 +52,7 @@
     (def {nested} (make-nested 50))
     (!= nested ())
   })
-  (test "gc-stress-nested-structures-depth-100"
+  (test/case "gc-stress-nested-structures-depth-100"
     {do
     (def {make-nested} (\ {depth} {
       (if (<= depth 0)
@@ -62,7 +62,7 @@
     (def {nested} (make-nested 100))
     (!= nested ())
   })
-  (test "gc-stress-preserve-large-list"
+  (test/case "gc-stress-preserve-large-list"
     {do
     ; Create a large list that should survive garbage collection
     (def {large-list} (list 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20))
@@ -78,7 +78,7 @@
     ; Verify original list is still intact
     (== (len large-list) 20)
   })
-  (test "gc-stress-interleaved-allocation"
+  (test/case "gc-stress-interleaved-allocation"
     {do
     (def {data1} (list 1 2 3))
     (def {garbage1} (list 9 9 9 9 9))
@@ -92,7 +92,7 @@
         {0})}
       {0})
   })
-  (test "gc-stress-repeated-allocation-cycles"
+  (test/case "gc-stress-repeated-allocation-cycles"
     {do
     (def {cycle} (\ {n} {
       (if (<= n 0)
@@ -106,7 +106,7 @@
     (def {result} (cycle 100))
     (== result 0)
   })
-  (test "gc-stress-large-list-operations"
+  (test/case "gc-stress-large-list-operations"
     {do
     (def {make-range} (\ {n acc} {
       (if (<= n 0)

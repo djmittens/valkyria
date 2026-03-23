@@ -12,6 +12,6 @@
 
 ; Run tests - expect 1 failure, but suite exits 0 due to expect-exit
 (test/run (list
-  (test "intentional-fail-test"
+  (test/case "intentional-fail-test"
     {error "This test intentionally fails"}))
   {:suite-name "Intentional Fail Test" :debug 1 :expected-exit 1})

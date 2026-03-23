@@ -15,7 +15,7 @@
 
   ; --- Schema / lifecycle ---
 
-  (test "symdb-init-close"
+  (test/case "symdb-init-close"
     {do
       (= {db} (symdb/init ":memory:"))
       (test/assert (ref? db) "init should return a ref")
@@ -25,7 +25,7 @@
 
   ; --- Symbol extraction ---
 
-  (test "extract-fun-symbol"
+  (test/case "extract-fun-symbol"
     {do
       (= {syms} (symdb/extract-symbols "(fun {add x y} {+ x y})"))
       (test/assert-eq 1 (len syms) "should extract 1 symbol")
@@ -36,7 +36,7 @@
       true
     })
 
-  (test "extract-def-symbol"
+  (test/case "extract-def-symbol"
     {do
       (= {syms} (symdb/extract-symbols "(def {MY_CONST} 42)"))
       (test/assert-eq 1 (len syms) "should extract 1 symbol")
@@ -46,7 +46,7 @@
       true
     })
 
-  (test "extract-type-and-ctors"
+  (test/case "extract-type-and-ctors"
     {do
       (= {syms} (symdb/extract-symbols "(type {Color} {Red} {Green} {Blue})"))
       (test/assert-eq 4 (len syms) "type + 3 constructors = 4 symbols")
@@ -58,7 +58,7 @@
       true
     })
 
-  (test "extract-type-ctor-arity"
+  (test/case "extract-type-ctor-arity"
     {do
       (= {syms} (symdb/extract-symbols "(type {Point} {Point :x :y})"))
       (= {ctor} (head (filter (\{s} {== s:kind SYMKIND_CONSTRUCTOR}) syms)))
@@ -67,7 +67,7 @@
       true
     })
 
-  (test "extract-sig"
+  (test/case "extract-sig"
     {do
       (= {syms} (symdb/extract-symbols "(sig 'my-fn {-> Num Num Num})"))
       (test/assert-eq 1 (len syms) "should extract 1 sig symbol")
@@ -77,21 +77,21 @@
       true
     })
 
-  (test "extract-empty-input"
+  (test/case "extract-empty-input"
     {do
       (= {syms} (symdb/extract-symbols ""))
       (test/assert-eq 0 (len syms) "empty input should produce 0 symbols")
       true
     })
 
-  (test "extract-only-numbers"
+  (test/case "extract-only-numbers"
     {do
       (= {syms} (symdb/extract-symbols "42"))
       (test/assert-eq 0 (len syms) "number literal should produce 0 symbols")
       true
     })
 
-  (test "extract-fun-with-varargs"
+  (test/case "extract-fun-with-varargs"
     {do
       (= {syms} (symdb/extract-symbols "(fun {f x & rest} {rest})"))
       (= {s} (head syms))
@@ -99,7 +99,7 @@
       true
     })
 
-  (test "extract-fun-with-type-ann"
+  (test/case "extract-fun-with-type-ann"
     {do
       (= {syms} (symdb/extract-symbols "(fun {f x :: Num -> Num} {x})"))
       (= {s} (head syms))
@@ -109,7 +109,7 @@
 
   ; --- Reference extraction ---
 
-  (test "extract-refs"
+  (test/case "extract-refs"
     {do
       (= {refs} (symdb/extract-refs "(+ foo bar)"))
       (test/assert (>= (len refs) 3) "should extract refs for +, foo, bar")
@@ -120,14 +120,14 @@
       true
     })
 
-  (test "extract-refs-skips-keywords"
+  (test/case "extract-refs-skips-keywords"
     {do
       (= {refs} (symdb/extract-refs ":foo"))
       (test/assert-eq 0 (len refs) "keyword :foo should not produce refs")
       true
     })
 
-  (test "extract-refs-skips-constants"
+  (test/case "extract-refs-skips-constants"
     {do
       (= {refs} (symdb/extract-refs "true"))
       (test/assert-eq 0 (len refs) "true should not produce refs")
@@ -136,7 +136,7 @@
 
   ; --- Database sync and query ---
 
-  (test "sync-and-find-definition"
+  (test/case "sync-and-find-definition"
     {do
       (= {db} (make-test-db))
       (= {text} "(fun {greet name} {str \"Hello \" name})")
@@ -149,7 +149,7 @@
       true
     })
 
-  (test "sync-and-find-refs"
+  (test/case "sync-and-find-refs"
     {do
       (= {db} (make-test-db))
       (= {text} "(fun {f x} {+ x x})")
@@ -160,7 +160,7 @@
       true
     })
 
-  (test "sync-and-search"
+  (test/case "sync-and-search"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "(fun {my-func x} {x})")
@@ -172,7 +172,7 @@
       true
     })
 
-  (test "sync-and-completion"
+  (test/case "sync-and-completion"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "(fun {hello-world} {42})")
@@ -182,7 +182,7 @@
       true
     })
 
-  (test "sync-and-file-symbols"
+  (test/case "sync-and-file-symbols"
     {do
       (= {db} (make-test-db))
       (= {text} "(fun {a} {1})\n(fun {b} {2})\n(def {c} 3)")
@@ -193,7 +193,7 @@
       true
     })
 
-  (test "sync-updates-on-change"
+  (test/case "sync-updates-on-change"
     {do
       (= {db} (make-test-db))
       (= {_} (symdb/sync-document db "file:///t.valk" "(fun {old-fn} {1})"))
@@ -206,7 +206,7 @@
       true
     })
 
-  (test "all-symbol-names"
+  (test/case "all-symbol-names"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "(fun {alpha} {1})\n(def {beta} 2)")
@@ -218,7 +218,7 @@
 
   ; --- sig merges with existing fun ---
 
-  (test "sig-merge-with-fun"
+  (test/case "sig-merge-with-fun"
     {do
       (= {db} (make-test-db))
       (= {text} "(fun {add x y} {+ x y})\n(sig 'add {-> Num Num Num})")
@@ -233,7 +233,7 @@
 
   ; --- Doc comment extraction ---
 
-  (test "doc-comment-extracted"
+  (test/case "doc-comment-extracted"
     {do
       (= {text} "; Add two numbers\n(fun {add x y} {+ x y})")
       (= {syms} (symdb/extract-symbols text))
@@ -244,7 +244,7 @@
       true
     })
 
-  (test "no-doc-when-no-comment"
+  (test/case "no-doc-when-no-comment"
     {do
       (= {syms} (symdb/extract-symbols "(fun {f} {1})"))
       (= {s} (head syms))
@@ -254,7 +254,7 @@
 
   ; --- Hover ---
 
-  (test "hover-with-definition"
+  (test/case "hover-with-definition"
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "; Add nums\n(fun {add x y} {+ x y})")
@@ -266,7 +266,7 @@
       true
     })
 
-  (test "hover-missing-symbol"
+  (test/case "hover-missing-symbol"
     {do
       (= {db} (make-test-db))
       (= {h} (symdb/symbol-hover db "nonexistent"))
@@ -277,7 +277,7 @@
 
   ; --- Regression: sync-document with non-existent file path ---
 
-  (test "sync-nonexistent-path-still-inserts"
+  (test/case "sync-nonexistent-path-still-inserts"
     {do
       (= {db} (make-test-db))
       (= {text} "(sig '+ {-> & Num Num})\n(sig '== {-> A B Num})\n(fun {f x} {x})")
@@ -290,7 +290,7 @@
       true
     })
 
-  (test "sync-builtins-real-file"
+  (test/case "sync-builtins-real-file"
     {do
       (= {db} (make-test-db))
       (= {text} (read-file "stdlib/builtins.valk"))
@@ -307,7 +307,7 @@
       true
     })
 
-  (test "sync-multiple-sigs-all-inserted"
+  (test/case "sync-multiple-sigs-all-inserted"
     {do
       (= {db} (make-test-db))
       (= {text} "(sig '+ {-> & Num Num})\n(sig '- {-> Num Num Num})\n(sig '* {-> & Num Num})\n(sig '/ {-> Num Num Num})\n(sig '< {-> Num Num Num})")
@@ -320,14 +320,14 @@
 
   ; --- Utility: uri->path ---
 
-  (test "uri-to-path"
+  (test/case "uri-to-path"
     {do
       (test/assert-eq "/home/user/file.valk" (uri->path "file:///home/user/file.valk")
         "should strip file:// prefix")
       true
     })
 
-  (test "uri-to-path-short"
+  (test/case "uri-to-path-short"
     {do
       (test/assert-eq "short" (uri->path "short")
         "short string returned as-is")
@@ -336,7 +336,7 @@
 
   ; --- Utility: symkind->lsp-kind ---
 
-  (test "symkind-to-lsp-kind"
+  (test/case "symkind-to-lsp-kind"
     {do
       (test/assert-eq LSP_SK_FUNCTION (symkind->lsp-kind SYMKIND_FUNCTION) "function")
       (test/assert-eq LSP_SK_VARIABLE (symkind->lsp-kind SYMKIND_VARIABLE) "variable")

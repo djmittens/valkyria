@@ -24,7 +24,7 @@
 (def {TEST_PORT} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "out-of-order arena removal works" (\ {} {
+  (test/case-async "out-of-order arena removal works" (\ {} {
     (aio/then
       (aio/all (list
         (http2/client-request aio "127.0.0.1" TEST_PORT "/slow")

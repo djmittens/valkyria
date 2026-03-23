@@ -12,11 +12,11 @@
   }))
 
 (test/run-async aio (list
-  (test-async "server-stop completes successfully" (\ {} {
+  (test/case-async "server-stop completes successfully" (\ {} {
     (= {server} (http2/server-listen aio 0 simple-handler))
     (aio/then (http2/server-stop server) (\ {result} {(nil? result)}))
   }))
-  (test-async "stopped server rejects new connections" (\ {} {
+  (test/case-async "stopped server rejects new connections" (\ {} {
     (= {server} (http2/server-listen aio 0 simple-handler))
     (= {port} (http2/server-port server))
     (aio/then (http2/server-stop server) (\ {_} {
@@ -24,7 +24,7 @@
         (\ {err} {(error? err)}))
     }))
   }))
-  (test-async "double stop is idempotent" (\ {} {
+  (test/case-async "double stop is idempotent" (\ {} {
     (= {server} (http2/server-listen aio 0 simple-handler))
     (aio/then (http2/server-stop server) (\ {_} {
       (aio/then (http2/server-stop server) (\ {result2} {(nil? result2)}))

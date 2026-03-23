@@ -22,7 +22,7 @@
 
 ; Run all recursion stress tests
 (test/run (list
-  (test "recursion-stress-depth-1000"
+  (test/case "recursion-stress-depth-1000"
     {do
     (def {countdown} (\ {n} {
       (if (<= n 0)
@@ -32,7 +32,7 @@
     (def {result} (countdown 1000))
     (== result 0)
   })
-  (test "recursion-stress-depth-5000"
+  (test/case "recursion-stress-depth-5000"
     {do
     (def {countdown} (\ {n} {
       (if (<= n 0)
@@ -42,7 +42,7 @@
     (def {result} (countdown 5000))
     (== result 0)
   })
-  (test "recursion-stress-depth-10000"
+  (test/case "recursion-stress-depth-10000"
     {do
     (def {countdown} (\ {n} {
       (if (<= n 0)
@@ -52,7 +52,7 @@
     (def {result} (countdown 10000))
     (== result 0)
   })
-  (test "recursion-stress-sum-1000"
+  (test/case "recursion-stress-sum-1000"
     {do
     (def {sum} (\ {n acc} {
       (if (<= n 0)
@@ -62,7 +62,7 @@
     (def {result} (sum 1000 0))
     (== result 500500)
   })
-  (test "recursion-stress-factorial-50"
+  (test/case "recursion-stress-factorial-50"
     {do
     (def {factorial} (\ {n acc} {
       (if (<= n 1)
@@ -73,7 +73,7 @@
     ; Just verify it completes without stack overflow
     (!= result 0)
   })
-  (test "recursion-stress-list-length-50"
+  (test/case "recursion-stress-list-length-50"
     {do
     (def {build} (\ {n acc} {
       (if (<= n 0)
@@ -83,7 +83,7 @@
     (def {result} (build 50 ()))
     (== (len result) 50)
   })
-  (test "recursion-stress-fibonacci-15"
+  (test/case "recursion-stress-fibonacci-15"
     {do
     (def {fib} (\ {n} {
       (if (<= n 1)
@@ -93,7 +93,7 @@
     (def {result} (fib 15))
     (== result 610)
   })
-  (test "recursion-stress-tree-depth-8"
+  (test/case "recursion-stress-tree-depth-8"
     {do
     (def {make-tree} (\ {depth} {
       (if (<= depth 0)

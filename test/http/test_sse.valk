@@ -61,42 +61,42 @@
 
 ; Run all tests
 (test/run (list
-  (test "sse/message-exists"
+  (test/case "sse/message-exists"
     {do
     (test/assert (!= sse/message nil) "sse/message should be defined")
     (test/assert (not (error? sse/message)) "sse/message should not be an error")
     true
   })
-  (test "sse/event-exists"
+  (test/case "sse/event-exists"
     {do
     (test/assert (!= sse/event nil) "sse/event should be defined")
     (test/assert (not (error? sse/event)) "sse/event should not be an error")
     true
   })
-  (test "sse/json-exists"
+  (test/case "sse/json-exists"
     {do
     (test/assert (!= sse/json nil) "sse/json should be defined")
     (test/assert (not (error? sse/json)) "sse/json should not be an error")
     true
   })
-  (test "sse/json-event-exists"
+  (test/case "sse/json-event-exists"
     {do
     (test/assert (!= sse/json-event nil) "sse/json-event should be defined")
     (test/assert (not (error? sse/json-event)) "sse/json-event should not be an error")
     true
   })
-  (test "sse/handler-exists"
+  (test/case "sse/handler-exists"
     {do
     (test/assert (!= sse/handler nil) "sse/handler should be defined")
     (test/assert (not (error? sse/handler)) "sse/handler should not be an error")
     true
   })
-  (test "sse/create-alias"
+  (test/case "sse/create-alias"
     {do
     (test/assert (== sse/create sse/open) "sse/create should equal sse/open")
     true
   })
-  (test "sse/handler-returns-function"
+  (test/case "sse/handler-returns-function"
     {do
     (= {handler} (sse/handler (\ {stream req} {true})))
     (test/assert (!= handler {}) "sse/handler should return a function")

@@ -8,42 +8,42 @@
 
 (test/run (list
 
-  (test "aio/pmap with empty list"
+  (test/case "aio/pmap with empty list"
     {do
     (= {h} (aio/pmap aio (\ {x} {(+ x 1)}) ()))
     (= {result} (aio/await h))
     (== result ())
   })
 
-  (test "aio/pmap with single element"
+  (test/case "aio/pmap with single element"
     {do
     (= {h} (aio/pmap aio (\ {x} {(* x 2)}) (list 5)))
     (= {result} (aio/await h))
     (== result (list 10))
   })
 
-  (test "aio/pmap with multiple elements"
+  (test/case "aio/pmap with multiple elements"
     {do
     (= {h} (aio/pmap aio (\ {x} {(+ x 10)}) (list 1 2 3 4 5)))
     (= {result} (aio/await h))
     (== result (list 11 12 13 14 15))
   })
 
-  (test "aio/pmap preserves order"
+  (test/case "aio/pmap preserves order"
     {do
     (= {h} (aio/pmap aio (\ {x} {(* x x)}) (list 1 2 3 4)))
     (= {result} (aio/await h))
     (== result (list 1 4 9 16))
   })
 
-  (test "aio/pmap with string transformation"
+  (test/case "aio/pmap with string transformation"
     {do
     (= {h} (aio/pmap aio (\ {x} {(str/upper x)}) (list "hello" "world" "test")))
     (= {result} (aio/await h))
     (== result (list "HELLO" "WORLD" "TEST"))
   })
 
-  (test "aio/pmap with larger list across threads"
+  (test/case "aio/pmap with larger list across threads"
     {do
     (= {items} (range 1 51))
     (= {h} (aio/pmap aio (\ {x} {(* x x)}) items))
@@ -52,21 +52,21 @@
     (== result expected)
   })
 
-  (test "aio/pmap propagates error from lambda"
+  (test/case "aio/pmap propagates error from lambda"
     {do
     (= {h} (aio/pmap aio (\ {x} {(if (== x 3) (error "bad value") (* x x))}) (list 1 2 3 4 5)))
     (= {result} (aio/await h))
     (error? result)
   })
 
-  (test "aio/pmap error on single element"
+  (test/case "aio/pmap error on single element"
     {do
     (= {h} (aio/pmap aio (\ {x} {(error "always fail")}) (list 42)))
     (= {result} (aio/await h))
     (error? result)
   })
 
-  (test "aio/pmap as child of aio/all"
+  (test/case "aio/pmap as child of aio/all"
     {do
     (= {h1} (aio/pmap aio (\ {x} {(+ x 1)}) (list 1 2 3)))
     (= {h2} (aio/pmap aio (\ {x} {(* x 2)}) (list 10 20 30)))

@@ -5,7 +5,7 @@
 (load "stdlib/test/test.valk")
 
 (test/run (list
-  (test "aio/never creates running handle that never completes"
+  (test/case "aio/never creates running handle that never completes"
   {do
   (= {sys} (aio/await (aio/start)))
   (def {h} (aio/never sys))
@@ -14,7 +14,7 @@
   (== status :running)
 })
 
-  (test "aio/race with aio/never vs immediate value - immediate wins"
+  (test/case "aio/race with aio/never vs immediate value - immediate wins"
     {do
     (= {sys} (aio/await (aio/start)))
     (def {never-handle} (aio/never sys))
@@ -24,7 +24,7 @@
     (== (aio/status race-result) :completed)
   })
 
-  (test "aio/cancel on aio/never returns true"
+  (test/case "aio/cancel on aio/never returns true"
     {do
     (= {sys} (aio/await (aio/start)))
     (def {h} (aio/never sys))

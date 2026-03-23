@@ -13,13 +13,13 @@
 ; Test: global metrics functions work
 
 (test/run (list
-  (test "aio/start creates system"
+  (test/case "aio/start creates system"
     {do
     (= {aio} (aio/await (aio/start)))
     (test/assert (!= aio nil) "aio/start should return a system")
     true
   })
-  (test "multiple aio systems can be created"
+  (test/case "multiple aio systems can be created"
     {do
     (= {aio1} (aio/await (aio/start)))
     (= {aio2} (aio/await (aio/start)))
@@ -27,7 +27,7 @@
     (test/assert (!= aio2 nil) "second aio/start should return a system")
     true
   })
-  (test "metrics available after aio/start"
+  (test/case "metrics available after aio/start"
     {do
     (= {json} (metrics/json))
     (= {prom} (metrics/prometheus))
@@ -35,7 +35,7 @@
     (test/assert (str? prom) "metrics/prometheus should return string")
     true
   })
-  (test "global metrics functions work"
+  (test/case "global metrics functions work"
     {do
     (= {json} (metrics/json))
     (= {prom} (metrics/prometheus))

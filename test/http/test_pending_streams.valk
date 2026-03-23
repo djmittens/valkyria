@@ -28,7 +28,7 @@
 })
 
 (test/run-async aio (list
-  (test-async "concurrent requests batch 1" (\ {} {
+  (test/case-async "concurrent requests batch 1" (\ {} {
     (= {requests} (list
       (send-request "/stream1")
       (send-request "/stream2")
@@ -41,7 +41,7 @@
       (>= completed 2)
     }))
   }))
-  (test-async "concurrent requests batch 2" (\ {} {
+  (test/case-async "concurrent requests batch 2" (\ {} {
     (aio/then (aio/sleep aio 200) (\ {_} {
       (= {requests} (list
         (send-request "/stream5")

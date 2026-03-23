@@ -27,12 +27,12 @@
 
 ; Run all networking stress tests
 (test/run (list
-  (test "networking-stress-create-single-request"
+  (test/case "networking-stress-create-single-request"
     {do
     (def {req} (http2/request "GET" "https" "www.example.com" "/"))
     (!= req ())
   })
-  (test "networking-stress-create-multiple-requests"
+  (test/case "networking-stress-create-multiple-requests"
     {do
     (def {req1} (http2/request "GET" "https" "www.example.com" "/"))
     (def {req2} (http2/request "POST" "https" "api.example.com" "/data"))
@@ -43,7 +43,7 @@
         {0})}
       {0})
   })
-  (test "networking-stress-add-headers"
+  (test/case "networking-stress-add-headers"
     {do
     (def {req} (http2/request "GET" "https" "www.example.com" "/"))
     (http2/request-add-header req ":method" "GET")
@@ -53,7 +53,7 @@
     (http2/request-add-header req "connection" "keep-alive")
     (!= req ())
   })
-  (test "networking-stress-requests-with-headers"
+  (test/case "networking-stress-requests-with-headers"
     {do
     (def {req1} (http2/request "GET" "https" "www.example.com" "/"))
     (http2/request-add-header req1 ":method" "GET")
@@ -73,7 +73,7 @@
         {0})}
       {0})
   })
-  (test "networking-stress-different-methods"
+  (test/case "networking-stress-different-methods"
     {do
     (def {get-req} (http2/request "GET" "https" "api.example.com" "/users"))
     (def {post-req} (http2/request "POST" "https" "api.example.com" "/users"))
@@ -91,7 +91,7 @@
         {0})}
       {0})
   })
-  (test "networking-stress-different-hosts"
+  (test/case "networking-stress-different-hosts"
     {do
     (def {req1} (http2/request "GET" "https" "www.example.com" "/"))
     (def {req2} (http2/request "GET" "https" "api.example.com" "/v1/data"))

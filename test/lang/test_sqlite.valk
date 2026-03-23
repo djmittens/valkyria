@@ -2,14 +2,14 @@
 (load "stdlib/test/test.valk")
 
 (test/run (list
-  (test "sqlite-open-close"
+  (test/case "sqlite-open-close"
     {do
     (= {db} (sqlite/open ":memory:"))
     (test/assert (ref? db) "sqlite/open should return a ref")
     (sqlite/close db)
     true
   })
-  (test "sqlite-create-table-and-insert"
+  (test/case "sqlite-create-table-and-insert"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
@@ -20,7 +20,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-returns-plists"
+  (test/case "sqlite-query-returns-plists"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
@@ -37,7 +37,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-with-params"
+  (test/case "sqlite-query-with-params"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
@@ -49,7 +49,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-empty-result"
+  (test/case "sqlite-query-empty-result"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -58,7 +58,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-null-values"
+  (test/case "sqlite-null-values"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
@@ -69,7 +69,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-prepared-statements"
+  (test/case "sqlite-prepared-statements"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
@@ -90,7 +90,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-prepared-select"
+  (test/case "sqlite-prepared-select"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
@@ -107,7 +107,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-exec-multiple-changes"
+  (test/case "sqlite-exec-multiple-changes"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
@@ -119,7 +119,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-transaction-pattern"
+  (test/case "sqlite-transaction-pattern"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
@@ -139,7 +139,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-error-bad-sql"
+  (test/case "sqlite-error-bad-sql"
     {do
     (= {db} (sqlite/open ":memory:"))
     (= {result} (sqlite/exec db "NOT VALID SQL"))
@@ -150,7 +150,7 @@
 
   ; --- New convenience query tests ---
 
-  (test "sqlite-query-row"
+  (test/case "sqlite-query-row"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
@@ -160,7 +160,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-row-errors-on-zero"
+  (test/case "sqlite-query-row-errors-on-zero"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -169,7 +169,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-row-errors-on-multiple"
+  (test/case "sqlite-query-row-errors-on-multiple"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -181,7 +181,7 @@
     true
   })
 
-  (test "sqlite-query-value"
+  (test/case "sqlite-query-value"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
@@ -194,7 +194,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-value-errors-on-zero-rows"
+  (test/case "sqlite-query-value-errors-on-zero-rows"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -203,7 +203,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-value-errors-on-multi-col"
+  (test/case "sqlite-query-value-errors-on-multi-col"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (a INTEGER, b INTEGER)")
@@ -214,7 +214,7 @@
     true
   })
 
-  (test "sqlite-query-maybe-returns-row"
+  (test/case "sqlite-query-maybe-returns-row"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
@@ -224,7 +224,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-maybe-returns-nil"
+  (test/case "sqlite-query-maybe-returns-nil"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -233,7 +233,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-maybe-errors-on-multiple"
+  (test/case "sqlite-query-maybe-errors-on-multiple"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -245,7 +245,7 @@
     true
   })
 
-  (test "sqlite-exec-script"
+  (test/case "sqlite-exec-script"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec-script db "
@@ -261,7 +261,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-exec-script-error"
+  (test/case "sqlite-exec-script-error"
     {do
     (= {db} (sqlite/open ":memory:"))
     (= {result} (sqlite/exec-script db "CREATE TABLE t (id INTEGER); GARBAGE;"))
@@ -270,7 +270,7 @@
     true
   })
 
-  (test "sqlite-changes"
+  (test/case "sqlite-changes"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)")
@@ -284,7 +284,7 @@
     true
   })
 
-  (test "sqlite-busy-timeout"
+  (test/case "sqlite-busy-timeout"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/busy-timeout db 10000)
@@ -296,7 +296,7 @@
     true
   })
 
-  (test "sqlite-null-binding"
+  (test/case "sqlite-null-binding"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
@@ -307,7 +307,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-float-column"
+  (test/case "sqlite-float-column"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val REAL)")
@@ -318,7 +318,7 @@
     (test/assert (num? v) "float column returns a number")
     true
   })
-  (test "sqlite-null-column-via-query"
+  (test/case "sqlite-null-column-via-query"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
@@ -328,7 +328,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-exec-on-closed-db"
+  (test/case "sqlite-exec-on-closed-db"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -336,7 +336,7 @@
     (test/assert (error? result) "exec on closed db errors")
     true
   })
-  (test "sqlite-query-on-closed-db"
+  (test/case "sqlite-query-on-closed-db"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -344,7 +344,7 @@
     (test/assert (error? result) "query on closed db errors")
     true
   })
-  (test "sqlite-query-value-null"
+  (test/case "sqlite-query-value-null"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
@@ -354,7 +354,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-value-errors-on-multiple-rows"
+  (test/case "sqlite-query-value-errors-on-multiple-rows"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -365,7 +365,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-prepare-on-closed-db"
+  (test/case "sqlite-prepare-on-closed-db"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -373,7 +373,7 @@
     (test/assert (error? result) "prepare on closed db errors")
     true
   })
-  (test "sqlite-prepare-bad-sql"
+  (test/case "sqlite-prepare-bad-sql"
     {do
     (= {db} (sqlite/open ":memory:"))
     (= {result} (sqlite/prepare db "NOT VALID SQL"))
@@ -381,7 +381,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-bind-after-finalize"
+  (test/case "sqlite-bind-after-finalize"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -392,7 +392,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-step-after-finalize"
+  (test/case "sqlite-step-after-finalize"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -403,7 +403,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-last-insert-id-on-closed"
+  (test/case "sqlite-last-insert-id-on-closed"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -411,7 +411,7 @@
     (test/assert (error? result) "last-insert-id on closed db errors")
     true
   })
-  (test "sqlite-changes-on-closed"
+  (test/case "sqlite-changes-on-closed"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -419,7 +419,7 @@
     (test/assert (error? result) "changes on closed db errors")
     true
   })
-  (test "sqlite-busy-timeout-on-closed"
+  (test/case "sqlite-busy-timeout-on-closed"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -427,7 +427,7 @@
     (test/assert (error? result) "busy-timeout on closed db errors")
     true
   })
-  (test "sqlite-exec-script-on-closed"
+  (test/case "sqlite-exec-script-on-closed"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -435,14 +435,14 @@
     (test/assert (error? result) "exec-script on closed db errors")
     true
   })
-  (test "sqlite-double-close"
+  (test/case "sqlite-double-close"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
     (sqlite/close db)
     true
   })
-  (test "sqlite-double-finalize"
+  (test/case "sqlite-double-finalize"
     {do
     (= {db} (sqlite/open ":memory:"))
     (= {stmt} (sqlite/prepare db "SELECT 1"))
@@ -451,7 +451,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-row-on-closed"
+  (test/case "sqlite-query-row-on-closed"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -459,7 +459,7 @@
     (test/assert (error? result) "query-row on closed db errors")
     true
   })
-  (test "sqlite-query-maybe-on-closed"
+  (test/case "sqlite-query-maybe-on-closed"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -467,7 +467,7 @@
     (test/assert (error? result) "query-maybe on closed db errors")
     true
   })
-  (test "sqlite-query-value-on-closed"
+  (test/case "sqlite-query-value-on-closed"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/close db)
@@ -475,7 +475,7 @@
     (test/assert (error? result) "query-value on closed db errors")
     true
   })
-  (test "sqlite-type-assertions"
+  (test/case "sqlite-type-assertions"
     {do
     (= {r1} (sqlite/exec 42 "SELECT 1"))
     (test/assert (error? r1) "exec with non-ref first arg errors")
@@ -501,7 +501,7 @@
     (test/assert (error? r11) "exec-script with non-ref errors")
     true
   })
-  (test "sqlite-bind-with-null"
+  (test/case "sqlite-bind-with-null"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, b INTEGER)")
@@ -515,25 +515,25 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-bind-type-assertion"
+  (test/case "sqlite-bind-type-assertion"
     {do
     (= {r1} (sqlite/bind 42 1))
     (test/assert (error? r1) "bind with non-stmt errors")
     true
   })
-  (test "sqlite-step-type-assertion"
+  (test/case "sqlite-step-type-assertion"
     {do
     (= {r1} (sqlite/step 42))
     (test/assert (error? r1) "step with non-stmt errors")
     true
   })
-  (test "sqlite-finalize-type-assertion"
+  (test/case "sqlite-finalize-type-assertion"
     {do
     (= {r1} (sqlite/finalize 42))
     (test/assert (error? r1) "finalize with non-stmt errors")
     true
   })
-  (test "sqlite-exec-unsupported-bind-type"
+  (test/case "sqlite-exec-unsupported-bind-type"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -542,7 +542,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-unsupported-bind-type"
+  (test/case "sqlite-query-unsupported-bind-type"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
@@ -551,7 +551,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-exec-step-error"
+  (test/case "sqlite-exec-step-error"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY UNIQUE)")
@@ -561,7 +561,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-query-bad-sql"
+  (test/case "sqlite-query-bad-sql"
     {do
     (= {db} (sqlite/open ":memory:"))
     (= {result} (sqlite/query db "NOT VALID SQL"))
@@ -569,7 +569,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-exec-returning-rows"
+  (test/case "sqlite-exec-returning-rows"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
@@ -580,7 +580,7 @@
     (sqlite/close db)
     true
   })
-  (test "sqlite-bind-unsupported-type"
+  (test/case "sqlite-bind-unsupported-type"
     {do
     (= {db} (sqlite/open ":memory:"))
     (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")

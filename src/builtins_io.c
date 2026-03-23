@@ -44,23 +44,6 @@ static module_entry_t *module_cache_find(const char *path) {
 
 
 
-static bool env_has_name(const char *name, void *ctx) {
-  valk_lenv_t *env = ctx;
-  while (env) {
-    for (u64 i = 0; i < env->symbols.count; i++)
-      if (strcmp(env->symbols.items[i], name) == 0) return true;
-    env = env->parent;
-  }
-  valk_type_env_t *tenv = valk_type_env_global();
-  if (valk_type_env_find_constructor(tenv, name)) return true;
-  for (u64 i = 0; i < tenv->constructor_count; i++) {
-    const char *full = tenv->constructors[i]->name;
-    const char *sep = strstr(full, "::");
-    if (sep && strcmp(sep + 2, name) == 0) return true;
-  }
-  if (valk_type_env_find_type(tenv, name)) return true;
-  return false;
-}
 
 static char *read_file_text(const char *filename) {
   FILE *f = fopen(filename, "rb");
@@ -92,7 +75,8 @@ static bool is_prelude_path(const char *path) {
 }
 
 static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
-                                   const char *filename, char *text,
+                                   const char *filename __attribute__((unused)),
+                                   char *text,
                                    const char *module_prefix) {
   valk_lval_t *ast = valk_parse_text(text);
   if (LVAL_TYPE(ast) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
@@ -100,14 +84,7 @@ static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
     return ast; // LCOV_EXCL_LINE
   }
 
-  valk_name_resolver_t resolver = {.is_known = env_has_name, .ctx = target_env};
-  valk_diag_list_t diags = valk_validate_ast(ast, text, resolver);
-  if (valk_diag_error_count(&diags) > 0) {
-    valk_diag_fprint(&diags, filename, text, stderr);
-    valk_diag_free(&diags);
-    return valk_lval_err("Diagnostics found errors in %s", filename);
-  }
-  valk_diag_free(&diags);
+
 
   valk_lenv_t *menv = valk_macro_env();
 

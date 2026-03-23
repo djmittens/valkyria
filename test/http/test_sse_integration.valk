@@ -110,89 +110,89 @@
 })
 
 (test/run-async aio (list
-  (test-async "sse/open creates stream and sse/send works" (\ {} {
+  (test/case-async "sse/open creates stream and sse/send works" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-basic")
       (\ {resp} {(check-body resp "data: hello world\n\n")}))
   }))
 
-  (test-async "Multiple sse/send calls produce multiple data blocks" (\ {} {
+  (test/case-async "Multiple sse/send calls produce multiple data blocks" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-multi")
       (\ {resp} {(check-body resp "data: event 1\n\ndata: event 2\n\ndata: event 3\n\n")}))
   }))
 
-  (test-async "sse/event sends typed event" (\ {} {
+  (test/case-async "sse/event sends typed event" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-typed")
       (\ {resp} {(check-body resp "event: message\ndata: typed data\n\n")}))
   }))
 
-  (test-async "sse/on-drain callback registration works" (\ {} {
+  (test/case-async "sse/on-drain callback registration works" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-on-drain")
       (\ {resp} {(check-body resp "data: drain test\n\n")}))
   }))
 
-  (test-async "sse/id sends event with ID field" (\ {} {
+  (test/case-async "sse/id sends event with ID field" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-id")
       (\ {resp} {(check-body resp "id: evt-123\ndata: event with id\n\n")}))
   }))
 
-  (test-async "sse/retry sends retry directive" (\ {} {
+  (test/case-async "sse/retry sends retry directive" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-retry")
       (\ {resp} {(check-body resp "retry: 5000\n\ndata: retry test\n\n")}))
   }))
 
-  (test-async "sse/json sends data as string" (\ {} {
+  (test/case-async "sse/json sends data as string" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-json")
       (\ {resp} {(check-body resp "data: {:key value :num 42}\n\n")}))
   }))
 
-  (test-async "sse/json-event sends typed event with data" (\ {} {
+  (test/case-async "sse/json-event sends typed event with data" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-json-event")
       (\ {resp} {(check-body resp "event: update\ndata: {:status ok}\n\n")}))
   }))
 
-  (test-async "sse/full sends event with id, type, and data" (\ {} {
+  (test/case-async "sse/full sends event with id, type, and data" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-full")
       (\ {resp} {(check-body resp "id: id-001\nevent: update\ndata: full event data\n\n")}))
   }))
 
-  (test-async "sse/full rejects newlines in event-type" (\ {} {
+  (test/case-async "sse/full rejects newlines in event-type" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-full-invalid")
       (\ {resp} {(check-body resp "data: error:1\n\n")}))
   }))
 
-  (test-async "sse/comment sends comment line" (\ {} {
+  (test/case-async "sse/comment sends comment line" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-comment")
       (\ {resp} {(check-body resp ": keep-alive comment\n")}))
   }))
 
-  (test-async "sse/heartbeat sends empty comment" (\ {} {
+  (test/case-async "sse/heartbeat sends empty comment" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-heartbeat")
       (\ {resp} {(check-body resp ":\n")}))
   }))
 
-  (test-async "sse/writable? returns stream writable status" (\ {} {
+  (test/case-async "sse/writable? returns stream writable status" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-writable")
       (\ {resp} {(check-body resp "data: writable:1\n\n")}))
   }))
 
-  (test-async "sse/cancel cancels stream" (\ {} {
+  (test/case-async "sse/cancel cancels stream" (\ {} {
     (aio/catch
       (aio/then (http2/client-request aio "127.0.0.1" port "/sse-cancel")
         (\ {resp} {false}))
       (\ {err} {true}))
   }))
 
-  (test-async "sse/message alias works" (\ {} {
+  (test/case-async "sse/message alias works" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-message")
       (\ {resp} {(check-body resp "data: message alias test\n\n")}))
   }))
 
-  (test-async "sse/event rejects newlines in event-type" (\ {} {
+  (test/case-async "sse/event rejects newlines in event-type" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-event-invalid")
       (\ {resp} {(check-body resp "data: error:1\n\n")}))
   }))
 
-  (test-async "sse/handler wrapper works" (\ {} {
+  (test/case-async "sse/handler wrapper works" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/sse-wrapped")
       (\ {resp} {(check-body resp "data: wrapped handler test\n\n")}))
   })))

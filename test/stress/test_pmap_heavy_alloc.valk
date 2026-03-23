@@ -59,7 +59,7 @@
 
 (test/run (list
 
-  (test "pmap heavy string work 200 iterations x 8 items"
+  (test/case "pmap heavy string work 200 iterations x 8 items"
     {do
     (= {items} (range 1 9))
     (= {h} (aio/pmap aio (\ {x} {(*heavy-string-work* 200 0)}) items))
@@ -67,7 +67,7 @@
     (== result (list 200 200 200 200 200 200 200 200))
   })
 
-  (test "pmap heavy string work 500 iterations x 16 items"
+  (test/case "pmap heavy string work 500 iterations x 16 items"
     {do
     (= {items} (range 1 17))
     (= {h} (aio/pmap aio (\ {x} {(*heavy-string-work* 500 0)}) items))
@@ -75,7 +75,7 @@
     (== (len result) 16)
   })
 
-  (test "pmap heavy dict work 500 iterations x 8 items"
+  (test/case "pmap heavy dict work 500 iterations x 8 items"
     {do
     (fun {*fill-dict* d x n} {
       (if (<= n 0) {(dict/count d)}
@@ -91,7 +91,7 @@
     (== result (list 500 500 500 500 500 500 500 500))
   })
 
-  (test "pmap gcov-like parsing 500 lines x 8 workers"
+  (test/case "pmap gcov-like parsing 500 lines x 8 workers"
     {do
     (= {items} (range 1 9))
     (= {h} (aio/pmap aio (\ {x} {
@@ -101,7 +101,7 @@
     (== (len result) 8)
   })
 
-  (test "pmap gcov-like parsing 1000 lines x 16 workers"
+  (test/case "pmap gcov-like parsing 1000 lines x 16 workers"
     {do
     (= {items} (range 1 17))
     (= {h} (aio/pmap aio (\ {x} {

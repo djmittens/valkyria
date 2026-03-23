@@ -12,17 +12,17 @@
 
 ; Run all GC tests
 (test/run (list
-  (test "gc-basic-allocation"
+  (test/case "gc-basic-allocation"
     {do
     (def {x} 42)
     (== x 42)
   })
-  (test "gc-list-allocation"
+  (test/case "gc-list-allocation"
     {do
     (def {lst} (list 1 2 3))
     (== (len lst) 3)
   })
-  (test "gc-preserves-values"
+  (test/case "gc-preserves-values"
     {do
     (def {a} 10)
     (def {b} 20)

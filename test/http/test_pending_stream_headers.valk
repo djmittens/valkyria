@@ -25,14 +25,14 @@
 (def {test-port} (http2/server-port server))
 
 (test/run-async aio (list
-  (test-async "single request returns correct body" (\ {} {
+  (test/case-async "single request returns correct body" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" test-port "/r1")
       (\ {resp} {
         (== (http2/response-body resp) "/r1")
       }))
   }))
   
-  (test-async "four concurrent requests return correct bodies" (\ {} {
+  (test/case-async "four concurrent requests return correct bodies" (\ {} {
     (aio/then 
       (aio/all (list
         (http2/client-request aio "127.0.0.1" test-port "/a")

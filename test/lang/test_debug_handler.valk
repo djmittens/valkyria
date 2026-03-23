@@ -22,61 +22,61 @@
 })
 
 (test/run-async aio (list
-  (test-async "/debug returns HTML dashboard" (\ {} {
+  (test/case-async "/debug returns HTML dashboard" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/debug")
       (\ {r} {(and (== (http2/response-status r) "200") (str-contains? (http2/response-body r) "<!DOCTYPE"))}))}))
 
-  (test-async "/debug/ returns HTML dashboard" (\ {} {
+  (test/case-async "/debug/ returns HTML dashboard" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/debug/")
       (\ {r} {(and (== (http2/response-status r) "200") (str-contains? (http2/response-body r) "<!DOCTYPE"))}))}))
 
-  (test-async "/debug/metrics returns JSON with aio_metrics" (\ {} {
+  (test/case-async "/debug/metrics returns JSON with aio_metrics" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics")
       (\ {r} {(str-contains? (http2/response-body r) "aio_metrics")}))}))
 
-  (test-async "/debug/metrics/state returns diagnostics JSON" (\ {} {
+  (test/case-async "/debug/metrics/state returns diagnostics JSON" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics/state")
       (\ {r} {(str-contains? (http2/response-body r) "\"metrics\"")}))}))
 
-  (test-async "/debug/metrics/state has metrics.aio structure" (\ {} {
+  (test/case-async "/debug/metrics/state has metrics.aio structure" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics/state")
       (\ {r} {(str-contains? (http2/response-body r) "\"aio\":")}))}))
 
-  (test-async "/debug/metrics/state has memory structure" (\ {} {
+  (test/case-async "/debug/metrics/state has memory structure" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics/state")
       (\ {r} {(str-contains? (http2/response-body r) "\"memory\":")}))}))
 
-  (test-async "/debug/metrics/state returns Content-Type: application/json" (\ {} {
+  (test/case-async "/debug/metrics/state returns Content-Type: application/json" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/debug/metrics/state")
       (\ {r} {(== (get-header (http2/response-headers r) "content-type") "application/json")}))}))
 
-  (test-async "/metrics returns Prometheus format with 200" (\ {} {
+  (test/case-async "/metrics returns Prometheus format with 200" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/metrics")
       (\ {r} {(== (http2/response-status r) "200")}))}))
 
-  (test-async "/metrics contains valk_gc_ metrics" (\ {} {
+  (test/case-async "/metrics contains valk_gc_ metrics" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/metrics")
       (\ {r} {(and (str-contains? (http2/response-body r) "valk_gc_cycles_total")
                    (str-contains? (http2/response-body r) "valk_gc_heap_used_bytes"))}))}))
 
-  (test-async "/metrics has HELP and TYPE lines" (\ {} {
+  (test/case-async "/metrics has HELP and TYPE lines" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/metrics")
       (\ {r} {(and (str-contains? (http2/response-body r) "# HELP")
                    (str-contains? (http2/response-body r) "# TYPE"))}))}))
 
-  (test-async "/debug/slab/buckets returns JSON" (\ {} {
+  (test/case-async "/debug/slab/buckets returns JSON" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/debug/slab/buckets")
       (\ {r} {(and (== (http2/response-status r) "200") (str-contains? (http2/response-body r) "{"))}))}))
 
-  (test-async "/unknown routes redirect to /debug/" (\ {} {
+  (test/case-async "/unknown routes redirect to /debug/" (\ {} {
     (aio/then (http2/client-request aio "127.0.0.1" port "/debug/unknown/route")
       (\ {r} {(str-contains? (http2/response-body r) "url=/debug/")}))}))
 
-  (test-async "debug/reset-state returns success" (\ {} {
+  (test/case-async "debug/reset-state returns success" (\ {} {
     (= {result} (debug/reset-state))
     (aio/pure (== result :reset))}))
 
-  (test-async "debug/get-subscriber-count returns zero after reset" (\ {} {
+  (test/case-async "debug/get-subscriber-count returns zero after reset" (\ {} {
     (do (debug/reset-state)
         (aio/pure (== (debug/get-subscriber-count) 0)))}))
 ) {:suite-name "Debug Handler Route Matching Tests" :timeout-ms 10000 :suite-timeout-ms 60000})

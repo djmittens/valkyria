@@ -35,14 +35,14 @@
           (str-contains? (http2/response-body resp) "event:"))}))})
 
 (test/run-async aio (list
-  (test-async "Single SSE connection receives events" (\ {} {
+  (test/case-async "Single SSE connection receives events" (\ {} {
     (test-sse-connection)}))
 
-  (test-async "Two concurrent SSE connections" (\ {} {
+  (test/case-async "Two concurrent SSE connections" (\ {} {
     (aio/then (aio/all (list (test-sse-connection) (test-sse-connection)))
       (\ {results} {(and (head results) (head (tail results)))}))}))
 
-  (test-async "Three concurrent SSE connections" (\ {} {
+  (test/case-async "Three concurrent SSE connections" (\ {} {
     (aio/then (aio/all (list (test-sse-connection) (test-sse-connection) (test-sse-connection)))
       (\ {results} {(foldl (\ {acc r} {(and acc r)}) true results)}))}))
 ) {:suite-name "SSE Concurrency Stress Test" :timeout-ms 15000 :suite-timeout-ms 60000})

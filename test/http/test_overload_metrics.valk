@@ -15,32 +15,32 @@
 ; Test: aio/metrics-json works with aio system
 
 (test/run (list
-  (test "metrics/prometheus returns valid output"
+  (test/case "metrics/prometheus returns valid output"
     {do
     (= {result} (metrics/prometheus))
     (test/assert (str? result) "metrics/prometheus should return a string")
     true
   })
-  (test "metrics/json returns valid output"
+  (test/case "metrics/json returns valid output"
     {do
     (= {result} (metrics/json))
     (test/assert (str? result) "metrics/json should return a string")
     (test/assert (> (len result) 0) "metrics/json should return non-empty string")
     true
   })
-  (test "aio/start creates valid system"
+  (test/case "aio/start creates valid system"
     {do
     (= {aio} (aio/await (aio/start)))
     (test/assert (!= aio nil) "aio/start should return a system")
     true
   })
-  (test "aio/metrics-prometheus returns valid output"
+  (test/case "aio/metrics-prometheus returns valid output"
     {do
     (= {result} (metrics/prometheus))
     (test/assert (str? result) "metrics/prometheus should return a string")
     true
   })
-  (test "aio/metrics-json returns valid output"
+  (test/case "aio/metrics-json returns valid output"
     {do
     (= {result} (metrics/json))
     (test/assert (str? result) "metrics/json should return a string")

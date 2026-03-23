@@ -5,5 +5,5 @@
 ; NOTE: Async test framework has a bug in aio/within that causes hangs,
 ; so this test uses the sync test runner instead.
 (test/run (list
-  (test "intentional failure" {false}))
+  (test/case "intentional failure" {false}))
   {:suite-name "Test Framework Async Fail" :expected-exit 1})

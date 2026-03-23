@@ -7,21 +7,21 @@
 (def {aio} (aio/await (aio/start)))
 
 (test/run-async aio (list
-  (test-async "aio/interval returns a handle" (\ {} {
+  (test/case-async "aio/interval returns a handle" (\ {} {
     (= {h} (aio/interval aio 100 (\ {} {nil})))
     (= {is-handle} (handle? h))
     (aio/cancel h)
     (aio/pure is-handle)
   }))
 
-  (test-async "aio/cancel on interval returns :true" (\ {} {
+  (test/case-async "aio/cancel on interval returns :true" (\ {} {
     (= {h} (aio/interval aio 100 (\ {} {nil})))
     (aio/then (aio/sleep aio 50) (\ {_} {
       (== (aio/cancel h) :true)
     }))
   }))
 
-  (test-async "aio/cancelled? returns :true after cancel" (\ {} {
+  (test/case-async "aio/cancelled? returns :true after cancel" (\ {} {
     (= {h} (aio/interval aio 100 (\ {} {nil})))
     (aio/then (aio/sleep aio 50) (\ {_} {(do
       (aio/cancel h)
@@ -29,7 +29,7 @@
     }))
   }))
 
-  (test-async "aio/status after cancel shows :cancelled" (\ {} {
+  (test/case-async "aio/status after cancel shows :cancelled" (\ {} {
     (= {h} (aio/interval aio 100 (\ {} {nil})))
     (aio/then (aio/sleep aio 50) (\ {_} {(do
       (aio/cancel h)

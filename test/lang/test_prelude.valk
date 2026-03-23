@@ -96,7 +96,7 @@
 
 ; Run all tests
 (test/run (list
-  (test "prelude-fun-definition"
+  (test/case "prelude-fun-definition"
     {do
     (fun {add a b} {+ a b})
     (test/assert-eq 110 (add 10 100) "defined function should be callable")
@@ -106,17 +106,17 @@
     ; Note: We can't easily test error cases yet without try/catch
     true
   })
-  (test "prelude-curry"
+  (test/case "prelude-curry"
     {test/assert-eq 6 ((curry +) {1 2 3}) "curry should unpack list to args"})
-  (test "prelude-uncurry"
+  (test/case "prelude-uncurry"
     {test/assert-eq 6 ((uncurry (curry +)) 1 2 3)
     "uncurry should pack varargs to list"})
-  (test "prelude-do"
+  (test/case "prelude-do"
     {do
     (= {a} 2)
     (test/assert-eq 3 (do (= {a} 2) (+ 1 2 3) (+ 1 a))
       "do should return last expression")})
-  (test "prelude-let"
+  (test/case "prelude-let"
     {do
     ; do leaks scope
     (do (= {a} 2) (+ 1 2 3) (+ 1 a))
@@ -128,14 +128,14 @@
     ; Note: Can't test error cases easily yet
     true
   })
-  (test "prelude-nth"
+  (test/case "prelude-nth"
     {do
     (test/assert-eq 1 (nth 1 {1 2 3}) "nth 1 should return first element")
     (test/assert-eq 40 (nth 4 {99 2 3 40 5 6}) "nth 4 should return 4th element")
     ; nth 0 should error - can't test yet
     true
   })
-  (test "prelude-split"
+  (test/case "prelude-split"
     {do
     (= {result} (split 3 {1 2 3 4 5 6 7 8}))
     (test/assert-eq 2 (len result) "split should return 2 lists")
@@ -145,51 +145,51 @@
     ; Edge case: split at 0
     (= {result2} (split 0 {1 2 3 4 5 6 7 8}))
     (test/assert-eq 2 (len result2) "split 0 should still return 2 lists")})
-  (test "prelude-map"
+  (test/case "prelude-map"
     {test/assert
     (== (map (\ {x} {* 2 x}) {1 2 3}) {2 4 6})
     "map should double each element"})
-  (test "prelude-not"
+  (test/case "prelude-not"
     {do
     (test/assert-eq 0 (not true) "not true should be false (0)")
     (test/assert-eq 1 (not false) "not false should be true (1)")})
-  (test "prelude-list-accessors"
+  (test/case "prelude-list-accessors"
     {do
     (test/assert-eq 1 (fst {1 2 3}) "fst should return first element")
     (test/assert-eq 2 (snd {1 2 3}) "snd should return second element")
     (test/assert-eq 3 (trd {1 2 3}) "trd should return third element")})
-  (test "prelude-last"
+  (test/case "prelude-last"
     {test/assert-eq 5 (last {1 2 3 4 5}) "last should return final element"})
-  (test "prelude-take"
+  (test/case "prelude-take"
     {do
     (= {result} (take 3 {1 2 3 4 5}))
     (test/assert-eq 3 (len result) "take 3 should return 3 elements")
     (test/assert-eq 1 (nth 1 result) "first element should be 1")
     (test/assert-eq 3 (nth 3 result) "third element should be 3")})
-  (test "prelude-drop"
+  (test/case "prelude-drop"
     {do
     (= {result} (drop 2 {1 2 3 4 5}))
     (test/assert-eq 3 (len result) "drop 2 should leave 3 elements")
     (test/assert-eq 3 (nth 1 result) "first element should now be 3")})
-  (test "prelude-exists"
+  (test/case "prelude-exists"
     {do
     (test/assert-eq 1 (exists 3 {1 2 3 4 5}) "3 should exist in list")
     (test/assert-eq 0 (exists 99 {1 2 3 4 5}) "99 should not exist in list")
     (test/assert-eq 0 (exists 1 {}) "nothing exists in empty list")})
-  (test "prelude-filter"
+  (test/case "prelude-filter"
     {do
     (= {result} (filter (\ {x} {> x 2}) {1 2 3 4 5}))
     (test/assert-eq 3 (len result) "should keep 3 elements > 2")
     (test/assert-eq 3 (nth 1 result) "first filtered element should be 3")})
-  (test "prelude-foldl"
+  (test/case "prelude-foldl"
     {do
     (test/assert-eq 15 (foldl + 0 {1 2 3 4 5}) "foldl + should sum to 15")
     (test/assert-eq 120 (foldl * 1 {1 2 3 4 5}) "foldl * should multiply to 120")})
-  (test "prelude-sum-product"
+  (test/case "prelude-sum-product"
     {do
     (test/assert-eq 15 (sum {1 2 3 4 5}) "sum should add all elements")
     (test/assert-eq 120 (product {1 2 3 4 5}) "product should multiply all")})
-  (test "prelude-logic"
+  (test/case "prelude-logic"
     {do
     (test/assert-eq 1 (and 1 1) "and 1 1 should be 1")
     (test/assert-eq 0 (and 1 0) "and 1 0 should be 0")
@@ -198,31 +198,31 @@
     (test/assert-eq 1 (or 1 0) "or 1 0 should be 1")
     (test/assert-eq 1 (or 0 1) "or 0 1 should be 1")
     (test/assert-eq 0 (or 0 0) "or 0 0 should be 0")})
-  (test "prelude-flip"
+  (test/case "prelude-flip"
     {do
     (fun {div a b} {/ a b})
     (test/assert-eq 2 (div 10 5) "10 / 5 should be 2")
     (test/assert-eq 0 (flip div 10 2) "flip should swap: (div 2 10) = 2 / 10 = 0")})
-  (test "prelude-select"
+  (test/case "prelude-select"
     {do
     (= {result} (select
       {(== 1 2) "bad"}
       {(== 2 3) "also bad"}
       {otherwise "good"}))
     (test/assert-eq "good" result "select should match otherwise clause")})
-  (test "prelude-case"
+  (test/case "prelude-case"
     {do
     (= {result} (case 2
       {{1} "one"}
       {{2} "two"}
       {{3} "three"}))
     (test/assert-eq "two" result "case should match value 2")})
-  (test "select-dynamic-scoping"
+  (test/case "select-dynamic-scoping"
     {do
     (fun {my-test n} {select {(== n 1) 100} {otherwise 999}})
     (test/assert-eq 100 (my-test 1) "select should access lambda parameter n")
     (test/assert-eq 999 (my-test 2) "select otherwise should work")})
-  (test "varargs-with-required"
+  (test/case "varargs-with-required"
     {do
     (fun {test-fn a & as} {list a as})
     (= {result} (test-fn 42))
@@ -233,7 +233,7 @@
     ; Test with actual varargs
     (= {result2} (test-fn 1 2 3))
     (test/assert-eq 2 (len (nth 2 result2)) "varargs should have 2 elements")})
-  (test "builtin-eval"
+  (test/case "builtin-eval"
     {do
     (test/assert-eq 6 (eval {+ 1 2 3}) "eval should evaluate arithmetic")
     (test/assert-eq 42 (eval {* 6 7}) "eval should evaluate multiplication")
@@ -246,21 +246,21 @@
     (test/assert-eq 100 (eval {eval {* 10 10}}) "nested eval should work")
     true
   })
-  (test "builtin-head"
+  (test/case "builtin-head"
     {do
     (test/assert-eq 1 (head {1 2 3}) "head extracts first element")
     (test/assert-eq 42 (head {42}) "head of single element")
     (test/assert-eq 1 (fst {1 2 3}) "fst also extracts first element")
     true
   })
-  (test "builtin-tail"
+  (test/case "builtin-tail"
     {do
     (test/assert-eq 2 (len (tail {1 2 3})) "tail of 3 elements has 2")
     (test/assert-eq 0 (len (tail {1})) "tail of single element is empty")
     (test/assert-eq 2 (fst (tail {1 2 3})) "first of tail is second element")
     true
   })
-  (test "builtin-head-tail-composition"
+  (test/case "builtin-head-tail-composition"
     {do
     (= {lst} {1 2 3 4 5})
     (test/assert-eq 2 (head (tail lst)) "head of tail gives second element")
@@ -268,7 +268,7 @@
     (test/assert-eq 2 (len (tail (tail (tail lst)))) "triple tail leaves 2 elements")
     true
   })
-  (test "builtin-join"
+  (test/case "builtin-join"
     {do
     (test/assert-eq 4 (len (join {1 2} {3 4})) "join two lists has 4 elements")
     (test/assert-eq 2 (len (join {} {1 2})) "join empty with list")
@@ -276,7 +276,7 @@
     (test/assert-eq 4 (fst (tail (tail (tail (join {1 2} {3 4}))))) "fourth element is 4")
     true
   })
-  (test "builtin-list"
+  (test/case "builtin-list"
     {do
     (test/assert-eq 3 (len (list 1 2 3)) "list creates 3-element qexpr")
     (test/assert-eq 0 (len (list)) "empty list")
@@ -284,21 +284,21 @@
     (test/assert-eq 42 (fst (list 42)) "list element accessible")
     true
   })
-  (test "builtin-len"
+  (test/case "builtin-len"
     {do
     (test/assert-eq 0 (len {}) "empty list has length 0")
     (test/assert-eq 1 (len {a}) "single element has length 1")
     (test/assert-eq 5 (len {1 2 3 4 5}) "five elements has length 5")
     true
   })
-  (test "string-comparison"
+  (test/case "string-comparison"
     {do
     (test/assert (== "hello" "hello") "equal strings")
     (test/assert (not (== "hello" "world")) "unequal strings")
     (test/assert (== "" "") "empty strings equal")
     true
   })
-  (test "strings-in-lists"
+  (test/case "strings-in-lists"
     {do
     (= {strs} {"apple" "banana" "cherry"})
     (test/assert-eq 3 (len strs) "list of strings has correct length")
@@ -306,7 +306,7 @@
     (test/assert-eq "banana" (snd strs) "snd returns second string")
     true
   })
-  (test "prelude-reverse"
+  (test/case "prelude-reverse"
     {do
     (test/assert (== (reverse {1 2 3}) {3 2 1}) "reverse should reverse 3 elements")
     (test/assert (== (reverse {1}) {1}) "reverse single element")
@@ -314,7 +314,7 @@
     (test/assert (== (reverse {5 4 3 2 1}) {1 2 3 4 5}) "reverse 5 elements")
     true
   })
-  (test "prelude-plist-get"
+  (test/case "prelude-plist-get"
     {do
     (= {pl} {:name "Alice" :age 30 :city "NYC"})
     (test/assert-eq "Alice" pl:name "plist/get should find name")
@@ -324,7 +324,7 @@
     (test/assert-eq nil (plist/get {} :any) "plist/get on empty returns nil")
     true
   })
-  (test "prelude-plist-set"
+  (test/case "prelude-plist-set"
     {do
     (= {pl} {:name "Alice"})
     (= {pl2} (plist/set pl :age 25))
@@ -341,7 +341,7 @@
     (test/assert-eq "val" pl4:key "plist/set on empty creates plist")
     true
   })
-  (test "prelude-plist-has"
+  (test/case "prelude-plist-has"
     {do
     (= {pl} {:name "Alice" :age 30})
     (test/assert-eq true (plist/has? pl :name) "plist/has? finds existing key")
@@ -350,7 +350,7 @@
     (test/assert-eq false (plist/has? {} :any) "plist/has? on empty is false")
     true
   })
-  (test "prelude-plist-keys"
+  (test/case "prelude-plist-keys"
     {do
     (= {pl} {:a 1 :b 2 :c 3})
     (= {keys} (plist/keys pl))
@@ -361,7 +361,7 @@
     (test/assert (== (plist/keys {}) nil) "plist/keys of empty is nil")
     true
   })
-  (test "prelude-plist-vals"
+  (test/case "prelude-plist-vals"
     {do
     (= {pl} {:a 1 :b 2 :c 3})
     (= {vals} (plist/vals pl))

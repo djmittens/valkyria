@@ -12,23 +12,23 @@
 
 ; Run all tests
 (test/run (list
-  (test "test-assert-passes"
+  (test/case "test-assert-passes"
     {test/assert true "this should pass"})
-  (test "test-assert-eq-passes"
+  (test/case "test-assert-eq-passes"
     {test/assert-eq 42 42 "42 should equal 42"})
-  (test "test-assert-fails-returns-error"
+  (test/case "test-assert-fails-returns-error"
     {do
     (= {result} (test/assert false "expected failure"))
     (test/assert (error? result) "assert should return error on false")
     true
   })
-  (test "test-assert-eq-fails-returns-error"
+  (test/case "test-assert-eq-fails-returns-error"
     {do
     (= {result} (test/assert-eq 1 2 "expected mismatch"))
     (test/assert (error? result) "assert-eq should return error on mismatch")
     true
   })
-  (test "test-context-new-works"
+  (test/case "test-context-new-works"
     {do
     (= {ctx} (test/context-new))
     (test/assert-eq 0 ctx:passed "passed should start at 0")
@@ -37,7 +37,7 @@
     (test/assert-eq "Valkyria Test Suite" ctx:suite-name "default suite name")
     true
   })
-  (test "test-builder-pattern"
+  (test/case "test-builder-pattern"
     {do
     (= {tests} {})
     (= {tests} (test/add tests "test1" {true}))
