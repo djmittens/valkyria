@@ -520,53 +520,47 @@
       (lsp/progress-end tok "up to date")
       (stderr/write "[valk-lsp] scan complete: 0 indexed\n")
       (lsp/cleanup-stale-files)}
-    {do
-      (= {dep-map} (lsp/build-dep-map changed lsp/root-path))
-      (= {sorted} (lsp/topo-sort changed dep-map))
-      (= {total} (len sorted))
+     {do
+      (= {total} (len changed))
       (= {state} (dict/new))
-      (dict/set! state :remaining sorted)
       (dict/set! state :indexed 0)
-      (dict/set! state :begun 0)
+      (dict/set! state :done 0)
       (dict/set! state :total total)
-      (lsp/scan-next db state tok)})
+      (sqlite/exec db "BEGIN")
+      (lsp/dispatch-all db changed state tok)})
 })
 
-; Dispatch one file at a time in dependency order.
-; Worker does all heavy work (prepare + commit) in scratch arena.
-; Only a number (0 or 1) crosses back to the callback via evacuate.
-(sig 'lsp/scan-next {-> Ref Dict Num Nil})
-(fun {lsp/scan-next db state tok} {do
-  (= {remaining} (dict/get state :remaining))
-  (if (nil? remaining)
-    {do
-      (if (== (dict/get state :begun) 1) {sqlite/exec db "COMMIT"} {})
-      (lsp/invalidate-known-set)
-      (= {indexed} (dict/get state :indexed))
-      (lsp/progress-end tok (if (== indexed 0) {"up to date"} {str "indexed " indexed " files"}))
-      (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
-      (lsp/cleanup-stale-files)}
-    {do
-      (= {path} (head remaining))
-      (dict/set! state :remaining (tail remaining))
-      (aio/dispatch lsp/sys
-        (\ {_} {do
-          (if (== (dict/get state :begun) 0)
-            {do (sqlite/exec db "BEGIN") (dict/set! state :begun 1)} {})
-          (= {prep} (lsp/prepare-file path))
-          (= {did} (lsp/commit-prepared db prep))
-          (if (num? did) {did} {0})})
-        nil
-        (\ {did} {do
-          (dict/set! state :indexed (+ (dict/get state :indexed) did))
-          (= {total} (dict/get state :total))
-          (= {left} (len (dict/get state :remaining)))
-          (= {processed} (- total left))
-          (= {pct} (/ (* processed 100) total))
-          (if (or (== (mod processed 10) 0) (== left 0))
-            {lsp/progress-report tok (str processed " / " total " files") pct}
-            {})
-          (lsp/scan-next db state tok)}))})
+; Dispatch ALL files at once across worker threads.
+; Workers do read+parse, callbacks do commit sequentially on loop 0.
+(sig 'lsp/dispatch-all {-> Ref List Dict Num Nil})
+(fun {lsp/dispatch-all db files state tok} {
+  if (nil? files) {}
+  {do
+    (= {path} (head files))
+    (aio/dispatch lsp/sys
+      (\ {_} {lsp/prepare-file path})
+      nil
+      (\ {result} {do
+        (= {did-raw} (lsp/commit-prepared db result))
+        (= {did} (if (num? did-raw) {did-raw} {0}))
+        (dict/set! state :indexed (+ (dict/get state :indexed) did))
+        (dict/set! state :done (+ (dict/get state :done) 1))
+        (= {done-count} (dict/get state :done))
+        (= {total} (dict/get state :total))
+        (if (or (== (mod done-count 10) 0) (== done-count total))
+          {lsp/progress-report tok (str done-count " / " total " files")
+            (/ (* done-count 100) total)}
+          {})
+        (if (== done-count total)
+          {do
+            (sqlite/exec db "COMMIT")
+            (lsp/invalidate-known-set)
+            (= {indexed} (dict/get state :indexed))
+            (lsp/progress-end tok (if (== indexed 0) {"up to date"} {str "indexed " indexed " files"}))
+            (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
+            (lsp/cleanup-stale-files)}
+          {})}))
+    (lsp/dispatch-all db (tail files) state tok)}
 })
 
 ; ---------------------------------------------------------------------------
