@@ -206,12 +206,19 @@ static void rewrite_node(valk_lval_t *cell, valk_module_t *mod,
   if (LVAL_TYPE(expr) != LVAL_CONS) return;
 
   valk_lval_t *head = expr->cons.head;
-  if (!head || LVAL_TYPE(head) != LVAL_SYM) {
+  bool is_lambda = false;
+  if (LVAL_TYPE(head) == LVAL_SYM && strcmp(head->str, "\\") == 0)
+    is_lambda = true;
+  if (LVAL_TYPE(head) == LVAL_FUN && head->fun.name &&
+      strcmp(head->fun.name, "\\") == 0)
+    is_lambda = true;
+
+  if (!is_lambda && LVAL_TYPE(head) != LVAL_SYM) {
     rewrite_list(expr, mod, fqn, root_env, shadows);
     return;
   }
 
-  if (strcmp(head->str, "\\") == 0) {
+  if (is_lambda) {
     valk_lval_t *rest = expr->cons.tail;
     if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
       shadow_set_t inner = {0};
@@ -241,17 +248,27 @@ static void rewrite_node(valk_lval_t *cell, valk_module_t *mod,
     valk_lval_t *rest = expr->cons.tail;
     if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
       valk_lval_t *sym_arg = rest->cons.head;
-      if (LVAL_TYPE(sym_arg) == LVAL_SYM && !strchr(sym_arg->str, '/') &&
-          sym_arg->str[0] != ':' && valk_mod_get(mod, sym_arg->str)) {
-        rest->cons.head = qualify_sym(fqn, sym_arg->str);
-      } else if (LVAL_TYPE(sym_arg) == LVAL_CONS) {
-        valk_lval_t *first = sym_arg->cons.head;
-        if (first && LVAL_TYPE(first) == LVAL_SYM &&
-            !strchr(first->str, '/') && first->str[0] != ':' &&
-            valk_mod_get(mod, first->str)) {
-          sym_arg->cons.head = qualify_sym(fqn, first->str);
+      const char *def_name = NULL;
+      valk_lval_t **def_cell = NULL;
+
+      if (LVAL_TYPE(sym_arg) == LVAL_SYM) {
+        def_name = sym_arg->str;
+        def_cell = &rest->cons.head;
+      } else if (LVAL_TYPE(sym_arg) == LVAL_CONS && sym_arg->cons.head &&
+                 LVAL_TYPE(sym_arg->cons.head) == LVAL_SYM) {
+        def_name = sym_arg->cons.head->str;
+        def_cell = &sym_arg->cons.head;
+      }
+
+      if (def_name && def_name[0] != ':') {
+        if (!strchr(def_name, '/') && valk_mod_get(mod, def_name)) {
+          *def_cell = qualify_sym(fqn, def_name);
+        } else if (strchr(def_name, '/')) {
+          valk_lval_t *resolved = resolve_qualified(mod, def_name);
+          if (resolved) *def_cell = resolved;
         }
       }
+
       if (rest->cons.tail && LVAL_TYPE(rest->cons.tail) == LVAL_CONS)
         rewrite_list(rest->cons.tail, mod, fqn, root_env, shadows);
     }
