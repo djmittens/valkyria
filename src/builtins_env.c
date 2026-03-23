@@ -205,11 +205,36 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
 
 
 
+static valk_lval_t *valk_builtin_macro(valk_lenv_t *e, valk_lval_t *a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  valk_lval_t *sig = valk_lval_list_nth(a, 0);
+  valk_lval_t *body = valk_lval_list_nth(a, 1);
+
+  LVAL_ASSERT_TYPE(a, sig, LVAL_CONS, LVAL_QEXPR);
+  LVAL_ASSERT_TYPE(a, body, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
+  LVAL_ASSERT(a, valk_lval_list_count(sig) >= 1,
+              "macro: signature must have at least a name");
+
+  valk_lval_t *name_sym = valk_lval_list_nth(sig, 0);
+  LVAL_ASSERT_TYPE(a, name_sym, LVAL_SYM);
+
+  valk_lval_t *formals = valk_lval_nil();
+  for (i64 i = (i64)valk_lval_list_count(sig) - 1; i >= 1; i--)
+    formals = valk_lval_qcons(valk_lval_list_nth(sig, i), formals);
+
+  valk_lval_t *func = valk_lval_lambda(e, formals, body);
+  func->flags |= LVAL_FLAG_MACRO;
+
+  valk_lenv_def(e, name_sym, func);
+  return valk_lval_nil();
+}
+
 void valk_register_env_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "def", valk_builtin_def);
   valk_lenv_put_builtin(env, "=", valk_builtin_put);
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
+  valk_lenv_put_builtin(env, "macro", valk_builtin_macro);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
   valk_lenv_put_builtin(env, "select", valk_builtin_select);
-
 }

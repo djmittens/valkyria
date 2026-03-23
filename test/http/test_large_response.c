@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include "macro.h"
 #include <unistd.h>
 
 #include "aio/aio.h"
@@ -62,51 +63,15 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   printf("[test] Runtime initialized, heap=%p\n", valk_thread_ctx.heap);
   fflush(stdout);
 
-  // Load prelude
-  printf("[test] Loading prelude...\n");
-  fflush(stdout);
-  valk_lval_t *prelude_ast = valk_parse_file("stdlib/prelude.valk");
-  if (!prelude_ast || LVAL_TYPE(prelude_ast) == LVAL_ERR) {
-    VALK_FAIL("Failed to parse prelude: %s",
-              prelude_ast ? prelude_ast->str : "nullptr");
-    return false;
-  }
   ctx->env = valk_lenv_empty();
   valk_lenv_builtins(ctx->env);
   valk_thread_ctx.root_env = ctx->env;
   valk_gc_set_root(valk_thread_ctx.heap, ctx->env);
 
-  while (valk_lval_list_count(prelude_ast)) {
-    valk_lval_t *x = valk_type_transform_expr(valk_lval_pop(prelude_ast, 0));
-    if (LVAL_TYPE(x) == LVAL_NIL) continue;
-    x = valk_lval_eval(ctx->env, x);
-    if (LVAL_TYPE(x) == LVAL_ERR) {
-      VALK_FAIL("Prelude evaluation failed: %s", x->str);
-      return false;
-    }
-  }
+  valk_load_file(ctx->env, "stdlib/prelude.valk");
+  valk_load_file(ctx->env, "test/http/test_large_response_handler.valk");
 
-  // Load the large response handler
-  printf("[test] Loading handler...\n");
-  fflush(stdout);
-  valk_lval_t *handler_ast = valk_parse_file("test/http/test_large_response_handler.valk");
-  if (!handler_ast || LVAL_TYPE(handler_ast) == LVAL_ERR) {
-    VALK_FAIL("Failed to parse handler: %s",
-              handler_ast ? handler_ast->str : "nullptr");
-    return false;
-  }
-
-  ctx->handler_fn = nullptr;
-  while (valk_lval_list_count(handler_ast)) {
-    ctx->handler_fn = valk_type_transform_expr(valk_lval_pop(handler_ast, 0));
-    if (LVAL_TYPE(ctx->handler_fn) == LVAL_NIL) continue;
-    ctx->handler_fn = valk_lval_eval(ctx->env, ctx->handler_fn);
-    if (LVAL_TYPE(ctx->handler_fn) == LVAL_ERR) {
-      VALK_FAIL("Handler evaluation failed: %s", ctx->handler_fn->str);
-      return false;
-    }
-  }
-
+  ctx->handler_fn = valk_lenv_get(ctx->env, valk_lval_sym("handler"));
   if (!ctx->handler_fn || LVAL_TYPE(ctx->handler_fn) != LVAL_FUN) {
     VALK_FAIL("Handler is not a function, got type: %s",
               ctx->handler_fn ? valk_ltype_name(LVAL_TYPE(ctx->handler_fn)) : "nullptr");

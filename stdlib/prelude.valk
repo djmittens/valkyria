@@ -3,9 +3,8 @@
 ; Valkyria Standard Prelude
 
 ; Function Definitions
-(def {fun} (\ {_fn _body}  {
-   def (head _fn) (\ (tail _fn) _body)
-}))
+(macro {fun _fn _body}
+  {`(def {,(head _fn)} (\ ,(tail _fn) ,_body))})
 
 ;(error "And this is an error n stuff")
 ; Atoms

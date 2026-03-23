@@ -11,6 +11,7 @@
 #include "coverage.h"
 #include "gc.h"
 #include "log.h"
+#include "macro.h"
 #include "memory.h"
 #include "parser.h"
 #include "type_env.h"
@@ -175,7 +176,13 @@ int main(int argc, char* argv[]) {
         while (valk_lval_list_count(res) > 0) {
           valk_lval_t* x;
           VALK_WITH_ALLOC((void*)gc_heap) {
-            x = valk_type_transform_expr(valk_lval_pop(res, 0));
+            x = valk_lval_pop(res, 0);
+            if (valk_macro_is_def(x)) {
+              x = valk_lval_eval(valk_macro_env(), x);
+              continue;
+            }
+            x = valk_macro_expand_one(valk_macro_env(), x);
+            x = valk_type_transform_expr(x);
           }
           if (LVAL_TYPE(x) == LVAL_NIL) continue;
           if (LVAL_TYPE(x) == LVAL_ERR) {

@@ -6,6 +6,7 @@
 
 #include "aio/aio.h"
 #include "aio/aio_async.h"
+#include "macro.h"
 #include "collections.h"
 #include "common.h"
 #include "gc.h"
@@ -129,61 +130,15 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   printf("[test] Runtime initialized, heap=%p\n", valk_thread_ctx.heap);
   fflush(stdout);
 
-  printf("[test] Loading prelude...\n");
-  fflush(stdout);
-  valk_lval_t *prelude_ast = valk_parse_file("stdlib/prelude.valk");
-  printf("[test] Parsed prelude: %p\n", (void*)prelude_ast);
-  fflush(stdout);
-  if (!prelude_ast || LVAL_TYPE(prelude_ast) == LVAL_ERR) {
-    VALK_FAIL("Failed to parse prelude: %s",
-              prelude_ast ? prelude_ast->str : "nullptr");
-    return;
-  }
-  printf("[test] Creating env...\n");
-  fflush(stdout);
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
   valk_thread_ctx.root_env = env;
   valk_gc_set_root(valk_thread_ctx.heap, env);
-  printf("[test] Env created, evaluating prelude...\n");
-  fflush(stdout);
 
-  int expr_count = 0;
-  while (valk_lval_list_count(prelude_ast)) {
-    valk_lval_t *x = valk_type_transform_expr(valk_lval_pop(prelude_ast, 0));
-    if (LVAL_TYPE(x) == LVAL_NIL) continue;
-    x = valk_lval_eval(env, x);
-    expr_count++;
-    if (expr_count % 50 == 0) {
-      printf("[test] Evaluated %d expressions...\n", expr_count);
-      fflush(stdout);
-    }
-    if (LVAL_TYPE(x) == LVAL_ERR) {
-      VALK_FAIL("Prelude evaluation failed: %s", x->str);
-      return;
-    }
-  }
-  printf("[test] Prelude loaded (%d expressions)\n", expr_count);
+  valk_load_file(env, "stdlib/prelude.valk");
+  valk_load_file(env, "test/http/test_lisp_50mb_handler.valk");
 
-  printf("[test] Loading 50MB handler...\n");
-  valk_lval_t *handler_ast = valk_parse_file("test/http/test_lisp_50mb_handler.valk");
-  if (!handler_ast || LVAL_TYPE(handler_ast) == LVAL_ERR) {
-    VALK_FAIL("Failed to parse handler: %s",
-              handler_ast ? handler_ast->str : "nullptr");
-    return;
-  }
-
-  valk_lval_t *handler_fn = nullptr;
-  while (valk_lval_list_count(handler_ast)) {
-    handler_fn = valk_type_transform_expr(valk_lval_pop(handler_ast, 0));
-    if (LVAL_TYPE(handler_fn) == LVAL_NIL) continue;
-    handler_fn = valk_lval_eval(env, handler_fn);
-    if (LVAL_TYPE(handler_fn) == LVAL_ERR) {
-      VALK_FAIL("Handler evaluation failed: %s", handler_fn->str);
-      return;
-    }
-  }
-
+  valk_lval_t *handler_fn = valk_lenv_get(env, valk_lval_sym("handler"));
   if (!handler_fn || LVAL_TYPE(handler_fn) != LVAL_FUN) {
     VALK_FAIL("Handler is not a function, got type: %s",
               handler_fn ? valk_ltype_name(LVAL_TYPE(handler_fn)) : "nullptr");

@@ -111,7 +111,7 @@ static int find_sym_offset(const char *text, const char *sym,
 }
 
 static const char *SPECIAL_FORMS[] = {
-  "=", "\\", "def", "fun", "if", "do", "select", "case", "quote",
+  "=", "\\", "def", "fun", "macro", "if", "do", "select", "case", "quote",
   "load", "load-raw", "eval", "read", "let", "aio/let", "aio/do", "<-",
   "type", "match", "sig", "ctx/with", "ctx/with-deadline", "with",
   nullptr
@@ -125,7 +125,8 @@ static bool is_special_form(const char *name) {
 
 static void extract_def_or_fun(valk_lval_t *head, valk_lval_t *tail,
                                symset_t *globals) {
-  if (strcmp(head->str, "def") != 0 && strcmp(head->str, "fun") != 0) return;
+  if (strcmp(head->str, "def") != 0 && strcmp(head->str, "fun") != 0 &&
+      strcmp(head->str, "macro") != 0) return;
   if (LVAL_TYPE(tail) != LVAL_CONS) return;
   valk_lval_t *binding = valk_lval_head(tail);
   if (!binding) return;
@@ -658,6 +659,7 @@ static void walk_expr(walk_ctx_t *w, valk_lval_t *expr) {
 
   if (strcmp(name, "\\") == 0)       { walk_lambda(w, rest); return; }
   if (strcmp(name, "fun") == 0)      { walk_fun(w, rest); return; }
+  if (strcmp(name, "macro") == 0)   { return; }
   if (strcmp(name, "def") == 0)      { walk_binding(w, "def", rest); return; }
   if (strcmp(name, "=") == 0)        { walk_binding(w, "=", rest); return; }
   if (strcmp(name, "type") == 0)     { walk_type(w, rest); return; }

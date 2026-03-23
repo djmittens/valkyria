@@ -17,6 +17,7 @@ extern valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a);
 #include "coverage.h"
 #include "diag.h"
 #include "gc.h"
+#include "macro.h"
 #include "type_env.h"
 
 #define MODULE_CACHE_MAX 512
@@ -73,13 +74,33 @@ static char *read_file_text(const char *filename) {
   return text;
 }
 
+static void extract_module_prefix(const char *path, char *out, size_t out_sz) {
+  const char *base = strrchr(path, '/');
+  base = base ? base + 1 : path;
+  const char *dot = strrchr(base, '.');
+  size_t len = dot ? (size_t)(dot - base) : strlen(base);
+  if (len >= out_sz) len = out_sz - 1;
+  memcpy(out, base, len);
+  out[len] = '\0';
+}
+
+static bool is_prelude_path(const char *path) {
+  const char *base = strrchr(path, '/');
+  base = base ? base + 1 : path;
+  return strcmp(base, "prelude.valk") == 0;
+}
+
 static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
-                                   const char *filename, char *text) {
+                                   const char *filename, char *text,
+                                   const char *module_prefix) {
   valk_lval_t *ast = valk_parse_text(text);
   if (LVAL_TYPE(ast) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
     valk_lval_println(ast); // LCOV_EXCL_LINE
     return ast; // LCOV_EXCL_LINE
   }
+
+  if (module_prefix)
+    valk_module_rewrite(ast, module_prefix);
 
   valk_name_resolver_t resolver = {.is_known = env_has_name, .ctx = target_env};
   valk_diag_list_t diags = valk_validate_ast(ast, text, resolver);
@@ -90,9 +111,21 @@ static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
   }
   valk_diag_free(&diags);
 
+  valk_lenv_t *menv = valk_macro_env();
+
   valk_lval_t *last = nullptr;
   while (valk_lval_list_count(ast)) {
-    valk_lval_t *x = valk_type_transform_expr(valk_lval_pop(ast, 0));
+    valk_lval_t *x = valk_lval_pop(ast, 0);
+
+    if (valk_macro_is_def(x)) {
+      x = valk_lval_eval(menv, x);
+      if (LVAL_TYPE(x) == LVAL_ERR) valk_lval_println(x);
+      continue;
+    }
+
+    x = valk_macro_expand_one(menv, x);
+
+    x = valk_type_transform_expr(x);
     if (LVAL_TYPE(x) == LVAL_NIL) continue;
     if (LVAL_TYPE(x) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
       valk_lval_println(x); // LCOV_EXCL_LINE
@@ -149,8 +182,16 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
     return valk_lval_err("Module cache full"); // LCOV_EXCL_LINE
   }
   module_entry_t *entry = &module_cache[module_cache_count++];
+  char auto_prefix[256];
+  extract_module_prefix(resolved, auto_prefix, sizeof(auto_prefix));
+  const char *prefix = auto_prefix;
+  if (argc > 1)
+    prefix = valk_lval_list_nth(a, 1)->str;
+
+  (void)is_prelude_path(resolved);
+
   entry->resolved_path = strdup(resolved);
-  entry->prefix = strdup("");
+  entry->prefix = strdup(prefix);
   entry->state = MODULE_STATE_LOADING;
   pthread_mutex_unlock(&module_cache_lock);
 
@@ -160,7 +201,8 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
     return valk_lval_err("Could not open file (%s)", filename);
   }
 
-  valk_lval_t *result = load_eval_file(e, filename, text);
+  valk_lval_t *result = load_eval_file(e, filename, text,
+                                       NULL); // TODO: hierarchical module rewrite
   free(text);
 
   if (LVAL_TYPE(result) == LVAL_ERR) {
@@ -185,6 +227,11 @@ static valk_lval_t* valk_builtin_read(valk_lenv_t* e, valk_lval_t* a) {
   const char* input = valk_lval_list_nth(a, 0)->str;
   int pos = 0;
   return valk_lval_read(&pos, input);
+}
+
+valk_lval_t *valk_load_file(valk_lenv_t *env, const char *path) {
+  valk_lval_t *args = valk_lval_qcons(valk_lval_str(path), valk_lval_nil());
+  return valk_builtin_load(env, args);
 }
 
 static valk_lval_t* valk_builtin_parse(valk_lenv_t* e, valk_lval_t* a) {

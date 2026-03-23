@@ -3,6 +3,7 @@
 #include "collections.h"
 #include "common.h"
 #include "gc.h"
+#include "macro.h"
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
@@ -21,16 +22,13 @@ void test_prelude_definitions(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_lenv_t *env = VALK_FIXTURE("env");
 
-  // Test 'fun' - should be a user-defined lambda, not builtin
-  valk_lval_t *fun = valk_lenv_get(env, valk_lval_sym("fun"));
+  // Test 'fun' - should be a macro in the macro env
+  valk_lval_t *fun = valk_lenv_get(valk_macro_env(), valk_lval_sym("fun"));
   VALK_TEST_ASSERT(LVAL_TYPE(fun) == LVAL_FUN,
                    "fun should be a function, got %s",
                    valk_ltype_name(LVAL_TYPE(fun)));
-  VALK_TEST_ASSERT(fun->fun.builtin == nullptr,
-                   "fun should be a lambda, not a builtin");
-  VALK_TEST_ASSERT(valk_lval_list_count(fun->fun.formals) == 2,
-                   "fun should take 2 args (f b), got %zu",
-                   valk_lval_list_count(fun->fun.formals));
+  VALK_TEST_ASSERT(fun->flags & LVAL_FLAG_MACRO,
+                   "fun should be a macro");
 
   // Test 'map' - should be a user-defined lambda
   valk_lval_t *map = valk_lenv_get(env, valk_lval_sym("map"));
@@ -214,26 +212,11 @@ int main(int argc, const char **argv) {
   // to avoid duplication and use the proper Lisp test framework
 
   // load fixtures
-  valk_lval_t *ast = valk_parse_file("stdlib/prelude.valk");
   valk_lenv_t *env = valk_lenv_empty();
-  valk_lenv_builtins(env);  // load the builtins
+  valk_lenv_builtins(env);
+  valk_load_file(env, "stdlib/prelude.valk");
 
-  // Evaluate prelude sequentially (program semantics)
-  size_t expr_count = 0;
-  while (valk_lval_list_count(ast)) {
-    valk_lval_t *x = valk_type_transform_expr(valk_lval_pop(ast, 0));
-    if (LVAL_TYPE(x) == LVAL_NIL) continue;
-    x = valk_lval_eval(env, x);
-    expr_count++;
-    if (LVAL_TYPE(x) == LVAL_ERR) {
-      // Stop early if prelude fails; tests will surface the error
-      fprintf(stderr, "Prelude failed at expression %zu: ", expr_count);
-      valk_lval_println(x);
-      break;
-    }
-  }
-  fprintf(stderr, "Prelude loaded %zu expressions successfully\n", expr_count);
-
+  valk_lval_t *ast = valk_lval_nil();
   valk_testsuite_fixture_add(suite, "prelude", ast, __lval_retain,
                              __lval_release);
   valk_testsuite_fixture_add(suite, "env", env, __lenv_retain, __lenv_release);

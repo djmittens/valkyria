@@ -1,6 +1,7 @@
 #include "test_std.h"
 
 #include "gc.h"
+#include "macro.h"
 #include "memory.h"
 #include "parser.h"
 #include "testing.h"
@@ -401,25 +402,11 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_stress_recursive_with_closures",
                           test_stress_recursive_with_closures);
 
-  valk_lval_t *ast = valk_parse_file("stdlib/prelude.valk");
   valk_lenv_t *env = valk_lenv_empty();
   valk_lenv_builtins(env);
+  valk_load_file(env, "stdlib/prelude.valk");
 
-  size_t expr_count = 0;
-  while (valk_lval_list_count(ast)) {
-    valk_lval_t *x = valk_type_transform_expr(valk_lval_pop(ast, 0));
-    if (LVAL_TYPE(x) == LVAL_NIL) continue;
-    x = valk_lval_eval(env, x);
-    expr_count++;
-    if (LVAL_TYPE(x) == LVAL_ERR) {
-      fprintf(stderr, "Prelude failed at expression %zu: ", expr_count);
-      valk_lval_println(x);
-      break;
-    }
-  }
-  fprintf(stderr, "Prelude loaded %zu expressions successfully\n", expr_count);
-
-  valk_testsuite_fixture_add(suite, "prelude", ast, __lval_retain,
+  valk_testsuite_fixture_add(suite, "prelude", valk_lval_nil(), __lval_retain,
                              __lval_release);
   valk_testsuite_fixture_add(suite, "env", env, __lenv_retain, __lenv_release);
 

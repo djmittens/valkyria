@@ -8,6 +8,7 @@
 #include "common.h"
 #include "coverage.h"
 #include "gc.h"
+#include "macro.h"
 #include "memory.h"
 #include "aio/aio_request_ctx.h"
 
@@ -522,6 +523,24 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
           }
         }
         
+        if (LVAL_TYPE(first) == LVAL_SYM) {
+          valk_lval_t *maybe_macro = valk_lenv_get(valk_macro_env(), first);
+          if (LVAL_TYPE(maybe_macro) == LVAL_FUN &&
+              (maybe_macro->flags & LVAL_FLAG_MACRO)) {
+            valk_lval_t *args = expr->cons.tail;
+            if (args && LVAL_TYPE(args) == LVAL_CONS)
+              args->flags |= LVAL_FLAG_QUOTED;
+            valk_lval_t *expanded = valk_lval_eval_call(valk_macro_env(), maybe_macro, args);
+            if (LVAL_TYPE(expanded) == LVAL_ERR) {
+              value = expanded;
+              expr = NULL;
+              goto apply_cont;
+            }
+            expr = expanded;
+            continue;
+          }
+        }
+
         valk_eval_stack_push(&stack, (valk_cont_frame_t){
           .kind = CONT_EVAL_ARGS,
           .env = cur_env,

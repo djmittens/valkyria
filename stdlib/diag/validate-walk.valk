@@ -146,6 +146,7 @@
 (fun {vd/dispatch-call expr hd name tl ctx} {
   if (if (> (len name) 0) {== (str/slice name 0 1) ":"} {0}) {vd/walk-body tl ctx}
   {if (== name "fun")     {vd/walk-fun tl (vd/check-special-arity name tl ctx hd)}
+  {if (== name "macro")  {vd/walk-fun tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "\\")     {vd/walk-lambda tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "def")    {vd/walk-binding "def" tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "=")      {vd/walk-binding "=" tl (vd/check-special-arity name tl ctx hd)}
@@ -157,7 +158,7 @@
   {if (== name "aio/let") {vd/walk-aio-let tl ctx}
   {if (dict/has? VALIDATE_SPECIAL_FORMS name)
     {vd/walk-body tl (vd/check-special-arity name tl ctx hd)}
-  {vd/walk-call expr hd name tl ctx}}}}}}}}}}}}
+  {vd/walk-call expr hd name tl ctx}}}}}}}}}}}}}
 })
 
 ; ---------------------------------------------------------------------------
