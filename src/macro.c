@@ -1,4 +1,5 @@
 #include "macro.h"
+#include "memory.h"
 #include "module.h"
 
 #include <stdio.h>

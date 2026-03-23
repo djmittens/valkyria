@@ -444,6 +444,10 @@ void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, v
 void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
   valk_handle_table_visit(&valk_sys->handle_table, visitor, ctx);
 
+  extern valk_lenv_t *valk_macro_env(void);
+  valk_lenv_t *menv = valk_macro_env();
+  if (menv) valk_gc_visit_env_roots(menv, visitor, ctx);
+
   for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
     if (valk_sys->threads[i].active && valk_sys->threads[i].ctx != nullptr) {
       valk_thread_context_t *tc = valk_sys->threads[i].ctx;
