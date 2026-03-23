@@ -1,7 +1,6 @@
 ; test_delay_continuation_error.valk
 ; Tests that errors in aio/delay continuations are handled properly (return 500)
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

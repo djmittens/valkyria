@@ -2,7 +2,6 @@
 ; Phase 1: exhaust buffers with concurrent requests, all settle (success or fail)
 ; Phase 2: after timeouts free buffers, a new request succeeds
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start {

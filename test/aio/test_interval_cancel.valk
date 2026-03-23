@@ -1,7 +1,6 @@
 ; Test aio/interval cancellation functionality
 ; Verifies that aio/interval returns a handle and aio/cancel works
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

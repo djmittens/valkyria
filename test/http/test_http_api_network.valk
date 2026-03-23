@@ -2,7 +2,6 @@
 ; Tests http_api.valk functions that require real network connections
 ; Starts a local server and tests the high-level fetch functions
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (fun {reverse l} {

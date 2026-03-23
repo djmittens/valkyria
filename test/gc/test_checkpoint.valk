@@ -5,7 +5,6 @@
 ; at safe points (between top-level expressions) in the REPL. These tests
 ; verify the read-only introspection APIs work correctly.
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Test arena-capacity returns a positive number

@@ -1,7 +1,6 @@
 ; test_error_handler_edge_cases.valk
 ; Tests error handler edge cases: when handler returns error or wrong type
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

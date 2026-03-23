@@ -1,4 +1,3 @@
-(load "stdlib/prelude.valk")
 (load "stdlib/diag/symdb.valk")
 (load "scripts/lsp/analysis.valk")
 (load "stdlib/diag/validate.valk")

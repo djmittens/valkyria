@@ -1,7 +1,6 @@
 ; Delta Baseline Isolation Test
 ; Tests whether metrics/collect-delta uses per-connection or shared state
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/debug.valk")
 

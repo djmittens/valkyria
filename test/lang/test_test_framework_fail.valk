@@ -1,7 +1,6 @@
 ; Test the test framework with a failing test (to cover fail branches)
 ; This file intentionally has a failing test to cover the FAIL code path
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Enable debug to cover error debug branch

@@ -1,7 +1,6 @@
 ; SSE Concurrency Stress Test (Long Version)
 ; Tests concurrent SSE connections over a longer duration
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/debug.valk")
 

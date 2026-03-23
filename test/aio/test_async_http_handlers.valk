@@ -2,7 +2,6 @@
 ; Tests aio/sleep, aio/delay, and aio/then chains in real HTTP handlers
 ; to exercise async completion paths in aio_uv.c
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/handles.valk")
 

@@ -2,7 +2,6 @@
 ; Targets: aio_comb_resource.c, aio_comb_timeout.c, aio_comb_timers.c,
 ;          aio_comb_chain.c, aio_comb_all.c, aio_comb_race.c, aio_comb_any.c
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; ============================================================================

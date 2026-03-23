@@ -1,7 +1,6 @@
 ; Parser Edge Cases Tests
 ; Run with: ./build/valk test/test_parser_edge_cases.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (test/run (list

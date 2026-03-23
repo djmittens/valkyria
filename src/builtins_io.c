@@ -68,11 +68,7 @@ static void extract_module_prefix(const char *path, char *out, size_t out_sz) {
   out[len] = '\0';
 }
 
-static bool is_prelude_path(const char *path) {
-  const char *base = strrchr(path, '/');
-  base = base ? base + 1 : path;
-  return strcmp(base, "prelude.valk") == 0;
-}
+
 
 static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
                                    const char *filename __attribute__((unused)),
@@ -122,8 +118,7 @@ static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
                 char child_prefix[256];
                 extract_module_prefix(path_arg->str, child_prefix,
                                       sizeof(child_prefix));
-                if (!is_prelude_path(path_arg->str))
-                  valk_mod_find_or_create_child(cur_mod, child_prefix);
+                valk_mod_find_or_create_child(cur_mod, child_prefix);
               }
             }
           }
@@ -205,8 +200,6 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
   if (argc > 1)
     prefix = valk_lval_list_nth(a, 1)->str;
 
-  bool prelude = is_prelude_path(resolved);
-
   entry->resolved_path = strdup(resolved);
   entry->prefix = strdup(prefix);
   entry->state = MODULE_STATE_LOADING;
@@ -219,19 +212,15 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
   }
 
   valk_module_t *prev_mod = valk_mod_current();
-  valk_module_t *child_mod = NULL;
+  valk_module_t *parent = prev_mod ? prev_mod : valk_mod_root();
+  valk_module_t *child_mod = valk_mod_find_or_create_child(parent, prefix);
+  child_mod->resolved_path = strdup(resolved);
+  valk_mod_set_current(child_mod);
 
-  char fqn[VALK_MOD_PATH_MAX] = {0};
-  bool do_rewrite = !prelude && prev_mod != NULL;
-  if (do_rewrite) {
-    child_mod = valk_mod_find_or_create_child(prev_mod, prefix);
-    child_mod->resolved_path = strdup(resolved);
-    valk_mod_set_current(child_mod);
-    valk_mod_qualified_path(child_mod, fqn, sizeof(fqn));
-  }
+  char fqn[VALK_MOD_PATH_MAX];
+  valk_mod_qualified_path(child_mod, fqn, sizeof(fqn));
 
-  valk_lval_t *result = load_eval_file(e, filename, text,
-                                       do_rewrite ? fqn : NULL);
+  valk_lval_t *result = load_eval_file(e, filename, text, fqn);
   free(text);
 
   valk_mod_set_current(prev_mod);
@@ -261,8 +250,11 @@ static valk_lval_t* valk_builtin_read(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 valk_lval_t *valk_load_file(valk_lenv_t *env, const char *path) {
-  valk_lval_t *args = valk_lval_qcons(valk_lval_str(path), valk_lval_nil());
-  return valk_builtin_load(env, args);
+  char *text = read_file_text(path);
+  if (!text) return valk_lval_err("Could not open file (%s)", path);
+  valk_lval_t *result = load_eval_file(env, path, text, NULL);
+  free(text);
+  return result;
 }
 
 static valk_lval_t* valk_builtin_parse(valk_lenv_t* e, valk_lval_t* a) {

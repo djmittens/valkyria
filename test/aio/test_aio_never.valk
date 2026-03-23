@@ -1,7 +1,6 @@
 ; Test suite for aio/never combinator
 ; Tests: aio/never creates handle that never completes, race behavior, cancellation
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (test/run (list

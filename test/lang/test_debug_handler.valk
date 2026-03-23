@@ -1,7 +1,6 @@
 ; Debug Handler Route Matching Tests
 ; Tests that aio/debug-handle-request routes requests correctly
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/debug.valk")
 

@@ -2,7 +2,6 @@
 ; Makes many concurrent requests to exercise request handling paths
 ; Exercises: pending streams, arena allocation, response sending
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

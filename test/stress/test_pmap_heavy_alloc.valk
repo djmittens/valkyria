@@ -1,7 +1,6 @@
 ; Stress test: pmap with heavy string allocation per worker
 ; Mimics what coverage parsing does - lots of str/split, str/index-of, dict ops
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start {:num-threads 4})))

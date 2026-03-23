@@ -1,7 +1,6 @@
 ; SSE Reconnect/Sequential Request Test
 ; Tests that multiple sequential SSE requests work correctly
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/sse.valk")
 

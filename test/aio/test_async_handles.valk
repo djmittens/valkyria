@@ -1,7 +1,6 @@
 ; Test suite for src/async_handles.valk
 ; Tests the higher-level async utilities built on top of aio/* builtins
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/handles.valk")
 

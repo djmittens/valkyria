@@ -1,7 +1,6 @@
 ; GC Stress Test Suite
 ; Heavy allocation and garbage collection tests
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; ============================================================================

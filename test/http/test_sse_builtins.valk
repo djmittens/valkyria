@@ -1,7 +1,6 @@
 ; SSE Builtins Error Handling Tests
 ; Tests error conditions for SSE functions with invalid inputs
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/sse.valk")
 

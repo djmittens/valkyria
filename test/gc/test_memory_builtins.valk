@@ -1,7 +1,6 @@
 ; Memory and GC Builtin Tests
 ; Run with: ./build/valk test/test_memory_builtins.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; ============================================================================

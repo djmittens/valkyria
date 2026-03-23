@@ -1,7 +1,6 @@
 ; Pending Streams Coverage Test  
 ; Tests that the server can handle multiple concurrent requests with limited arena pool.
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start {

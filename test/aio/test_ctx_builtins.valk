@@ -1,7 +1,6 @@
 ; Context and Request Context Builtins Tests
 ; Run with: ./build/valk test/test_ctx_builtins.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (test/run (list

@@ -1,4 +1,3 @@
-(load "stdlib/prelude.valk")
 
 ; Allowed globals: file + var-name pairs that are permitted
 (fun {is-allowed? rel var} {

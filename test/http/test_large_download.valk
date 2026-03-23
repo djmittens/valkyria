@@ -1,7 +1,6 @@
 ; test_large_download.valk
 ; Tests for downloading larger responses via HTTP/2
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {pattern} "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz./")

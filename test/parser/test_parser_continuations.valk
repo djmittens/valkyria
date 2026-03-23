@@ -2,7 +2,6 @@
 ; Tests continuation paths in parser.c evaluator
 ; Run with: ./build/valk test/test_parser_continuations.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; === CONT_DO_NEXT path ===

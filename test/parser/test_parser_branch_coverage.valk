@@ -2,7 +2,6 @@
 ; These tests specifically target uncovered branches in parser.c
 ; Run with: ./build/valk test/test_parser_branch_coverage.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; === Select builtin edge cases ===

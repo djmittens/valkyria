@@ -138,7 +138,7 @@ void test_lisp_50mb_response(VALK_TEST_ARGS()) {
   valk_load_file(env, "stdlib/prelude.valk");
   valk_load_file(env, "test/http/test_lisp_50mb_handler.valk");
 
-  valk_lval_t *handler_fn = valk_lenv_get(env, valk_lval_sym("handler"));
+  valk_lval_t *handler_fn = valk_lenv_get(env, valk_lval_sym("test_lisp_50mb_handler/handler"));
   if (!handler_fn || LVAL_TYPE(handler_fn) != LVAL_FUN) {
     VALK_FAIL("Handler is not a function, got type: %s",
               handler_fn ? valk_ltype_name(LVAL_TYPE(handler_fn)) : "nullptr");

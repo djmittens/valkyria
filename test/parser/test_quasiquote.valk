@@ -1,7 +1,6 @@
 ; Quasiquote Tests
 ; Run with: ./build/valk test/test_quasiquote.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Test: Basic quasiquote without any unquoting

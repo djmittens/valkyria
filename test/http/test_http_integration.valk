@@ -2,7 +2,6 @@
 ; Tests http_api.valk functions that require real HTTP response objects
 ; Uses http2/mock-response builtin to create test responses
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Define reverse - required by async_monadic.valk but not in prelude

@@ -2,7 +2,6 @@
 ; Tests SSE functionality with real HTTP/2 server
 ; Verifies that all SSE builtins work correctly in an actual request/response cycle
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/sse.valk")
 

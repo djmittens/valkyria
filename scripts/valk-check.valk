@@ -15,7 +15,6 @@
 ;   - Division by literal zero
 ;   - Unresolvable types
 
-(load "stdlib/prelude.valk")
 (load "stdlib/diag/symdb.valk")
 (load "stdlib/diag/validate.valk")
 

@@ -3,7 +3,6 @@
 ; Exercises: __http_remove_from_active_arenas traversal path
 ; Note: Due to Lisp scoping, verifies via successful completion without crash
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

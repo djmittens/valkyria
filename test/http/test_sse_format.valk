@@ -1,7 +1,6 @@
 ; SSE Wire Format Tests
 ; Verifies that SSE functions produce correct SSE-spec-compliant wire format
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/sse.valk")
 

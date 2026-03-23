@@ -2,7 +2,6 @@
 ; Tests 10 concurrent SSE connections
 ; Suitable for regular CI runs
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/debug.valk")
 

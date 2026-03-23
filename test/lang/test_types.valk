@@ -1,6 +1,5 @@
 ; ADT type system integration tests
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; === Type declarations ===

@@ -2,7 +2,6 @@
 ; Stress tests for large file downloads (1MB, 2MB, 5MB)
 ; These are slower and memory intensive - excluded from normal test runs
 
-(load "stdlib/prelude.valk")
 
 (println "=== Large Download Stress Tests ===")
 (println "")

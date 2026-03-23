@@ -1,5 +1,4 @@
 ; Test make-string builtin
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (test/run (list

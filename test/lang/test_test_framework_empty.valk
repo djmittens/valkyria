@@ -1,7 +1,6 @@
 ; Test the test framework when no tests are registered
 ; This tests the empty registry error path
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Run with empty list - would normally exit 1, but expected-exit makes suite pass

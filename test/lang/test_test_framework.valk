@@ -5,7 +5,6 @@
 ; to improve code coverage.
 
 ; Load prelude first (has all the standard functions)
-(load "stdlib/prelude.valk")
 
 ; Load test framework
 (load "stdlib/test/test.valk")

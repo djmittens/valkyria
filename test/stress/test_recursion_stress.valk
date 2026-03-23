@@ -1,7 +1,6 @@
 ; Recursion Stress Test Suite
 ; Deep recursion and tail-call optimization tests
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; ============================================================================

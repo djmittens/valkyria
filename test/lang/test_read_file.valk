@@ -1,7 +1,6 @@
 ; Tests for read-file builtin and debug assets loading
 ; Run with: ./build/valk test/test_read_file.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Test: read-file content is not empty

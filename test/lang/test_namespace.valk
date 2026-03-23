@@ -1,6 +1,5 @@
 ; Regression test: namespaced symbols (/ in symbol names)
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Test that / works in symbol names (module namespacing)

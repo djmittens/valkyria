@@ -5,7 +5,6 @@
 ;
 ; Edit cfg-* values below to configure
 
-(load "stdlib/prelude.valk")
 
 ; ============================================================================
 ; Configuration - Edit these values

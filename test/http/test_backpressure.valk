@@ -1,7 +1,6 @@
 ; Backpressure Resume Test  
 ; Tests batched HTTP requests under load
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {server-aio} (aio/await (aio/start {:max-connections 8 :tcp-buffer-pool-size 48})))

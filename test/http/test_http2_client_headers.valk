@@ -1,6 +1,5 @@
 ; Tests for http2/client-request header edge cases (part 2)
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

@@ -1,7 +1,6 @@
 ; GC Test Suite
 ; Tests for garbage collection functionality
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Set the test suite name

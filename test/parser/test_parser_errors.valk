@@ -1,7 +1,6 @@
 ; Parser Error Path Tests
 ; Run with: ./build/valk test/test_parser_errors.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (test/run (list

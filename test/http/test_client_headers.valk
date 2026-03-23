@@ -1,7 +1,6 @@
 ; Custom Headers Test
 ; Tests sending custom headers with HTTP/2 client requests
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

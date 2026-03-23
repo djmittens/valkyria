@@ -3,7 +3,6 @@
 ; Enforces 90% line, 85% branch coverage for ALL runtime code in src/
 ; Exit code 0 = pass, 1 = fail (blocks CI)
 
-(load "stdlib/prelude.valk")
 (load "scripts/coverage_common.valk")
 
 

@@ -1,7 +1,6 @@
 ; Test aio/traverse combinator
 ; Traverses a list applying an async function to each element
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

@@ -2,7 +2,6 @@
 ; Tests for bugs that previously caused crashes
 ; These are CRITICAL regressions that must never return
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; ============================================================================

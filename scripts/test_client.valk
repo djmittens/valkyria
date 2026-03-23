@@ -1,5 +1,4 @@
 ; Simple client test
-(load "stdlib/prelude.valk")
 
 (def {aio} (aio/await (aio/start)))
 (println "AIO started")

@@ -7,7 +7,6 @@
 ; null at apply_cont". Root cause: Phase 2 of GC could visit environments
 ; that Phase 1 hadn't processed, leading to un-forwarded scratch pointers.
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

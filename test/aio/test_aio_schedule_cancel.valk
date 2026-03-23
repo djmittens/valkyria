@@ -1,7 +1,6 @@
 ; Test aio/schedule cancellation
 ; Verifies that cancelling a scheduled timer prevents the callback from running
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

@@ -2,7 +2,6 @@
 ; Targets specific uncovered paths in parser.c
 ; Run with: ./build/valk test/test_parser_coverage_supplement.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; === ctx/with-deadline multiple body expressions ===

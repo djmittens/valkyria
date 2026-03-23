@@ -1,4 +1,3 @@
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (test/run (list
   (test/case "exit-is-defined" {(not (error? exit))})

@@ -1,6 +1,5 @@
 ; Regression test: variadic and zero-argument functions
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Test variadic functions (& args)

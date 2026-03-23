@@ -3,7 +3,6 @@
 ;        aio/all, aio/race, aio/any, aio/cancel, aio/cancelled?, aio/status
 ;        aio/sleep, aio/let, aio/do, aio/bracket, aio/scope, aio/on-cancel
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; ============================================================================

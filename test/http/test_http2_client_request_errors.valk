@@ -1,7 +1,6 @@
 ; Tests for http2/client-request error paths and custom headers edge cases
 ; Split into smaller batches to avoid concurrency race conditions
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

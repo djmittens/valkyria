@@ -1,7 +1,6 @@
 ; Arena Pool Leak Detection Tests
 ; Verifies that arena pool counts return to baseline after HTTP request cycles
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

@@ -1,7 +1,6 @@
 ; AIO Configuration Tests
 ; Run with: ./build/valk test/test_aio_config.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (test/run (list

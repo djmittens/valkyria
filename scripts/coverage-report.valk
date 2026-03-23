@@ -4,7 +4,6 @@
 ; 1. C coverage data (gcov/llvm-cov format)
 ; 2. Valk coverage data (LCOV format)
 
-(load "stdlib/prelude.valk")
 (load "scripts/coverage_common.valk")
 
 

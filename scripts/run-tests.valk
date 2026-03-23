@@ -1,4 +1,3 @@
-(load "stdlib/prelude.valk")
 
 ; --- CLI argument parsing ---
 

@@ -1,7 +1,6 @@
 ; Test suite for aio/retry combinator
 ; Tests: aio/retry retries async operations with backoff
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (test/run (list

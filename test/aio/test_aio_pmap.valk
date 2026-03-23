@@ -1,6 +1,5 @@
 ; Test aio/pmap - parallel map across event loop threads
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Start with 4 event loop threads to test multi-threading

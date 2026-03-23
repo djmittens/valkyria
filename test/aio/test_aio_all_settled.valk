@@ -1,7 +1,6 @@
 ; Test suite for aio/all-settled combinator
 ; Tests: aio/all-settled returns results for all handles including failures
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (test/run (list

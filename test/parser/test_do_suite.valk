@@ -3,7 +3,6 @@
 ; CRITICAL: do was recently changed from builtin to compiler special form
 ; These tests ensure the change doesn't break existing functionality
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; ============================================================================

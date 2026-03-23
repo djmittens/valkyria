@@ -91,6 +91,10 @@ int main(int argc, char* argv[]) {
   valk_gc_set_root(gc_heap, env);
   valk_thread_ctx.root_env = env;
 
+  // Bootstrap: load prelude + core libs into root env (no module, no rewrite)
+  valk_load_file(env, "stdlib/prelude.valk");
+  valk_load_file(env, "stdlib/aio/handles.valk");
+
   // Set up SIGUSR1 handler for runtime memory stats (Phase 8: Telemetry)
   // Usage: kill -USR1 <pid> to print memory statistics
   g_scratch_for_signal = scratch;

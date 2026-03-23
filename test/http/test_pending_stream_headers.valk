@@ -1,7 +1,6 @@
 ; Test pending stream header buffering and copy paths
 ; Verifies that custom headers sent with requests are received by the handler
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Use default config - no artificial constraints

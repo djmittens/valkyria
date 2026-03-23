@@ -1,7 +1,6 @@
 ; test_custom_error_handler.valk
 ; Tests that the :error-handler config option works correctly
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {my-error-handler} (\ {status-code} {

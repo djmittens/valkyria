@@ -1,7 +1,6 @@
 ; Test: Basic Overload Handling
 ; Run with: ./build/valk test/test_overload.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Test: aio/start creates valid system

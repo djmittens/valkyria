@@ -9,7 +9,6 @@
 ; - GC collections occur only at safe checkpoints (and can be triggered)
 ; - When the slab is saturated, allocations safely fall back to malloc
 
-(load "stdlib/prelude.valk")
 
 ; Small helpers to keep numbers readable
 (fun {show-bytes label b}

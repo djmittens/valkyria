@@ -2,7 +2,6 @@
 ; Run with: ./build/valk test/test_metrics.valk
 
 ; Load prelude first
-(load "stdlib/prelude.valk")
 
 ; Load test framework
 (load "stdlib/test/test.valk")

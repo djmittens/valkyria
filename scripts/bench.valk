@@ -10,7 +10,6 @@
 ; Usage: ./build/valk tools/bench.valk
 ; First start: ./build/valk tools/test_server.valk
 
-(load "stdlib/prelude.valk")
 
 ; ============================================================================
 ; Configuration - Edit these values

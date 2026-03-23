@@ -2,7 +2,6 @@
 ; This tests the sequential-map function (lines 134-143) which applies
 ; an async function to each item in a list sequentially.
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/aio/handles.valk")
 

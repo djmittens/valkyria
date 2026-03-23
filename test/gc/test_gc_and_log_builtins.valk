@@ -2,7 +2,6 @@
 ; Targets uncovered branches in parser.c around lines 3806-3867
 ; Run with: ./build/valk test/test_gc_and_log_builtins.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Reset log level to warn at end of tests

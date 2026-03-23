@@ -11,7 +11,6 @@
 ; backpressure. As completed client connections close (idle timeout),
 ; their buffers are freed and try_resume_one fires on close.
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {server-aio} (aio/await (aio/start {:max-connections 8 :tcp-buffer-pool-size 64})))

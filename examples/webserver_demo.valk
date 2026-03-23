@@ -31,7 +31,6 @@
 ; Currently, the request map structure is being finalized, but will include:
 ;   {:method "GET" :path "/api/users" :headers {...} :body "..."}
 
-(load "stdlib/prelude.valk")
 (load "stdlib/aio/handles.valk")
 (load "stdlib/aio/debug.valk")
 

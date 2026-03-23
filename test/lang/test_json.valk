@@ -1,4 +1,3 @@
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (= {str-repeat} (\ {s n} {

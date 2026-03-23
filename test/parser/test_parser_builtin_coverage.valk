@@ -2,7 +2,6 @@
 ; Additional tests for parser.c coverage gaps
 ; Run with: ./build/valk test/test_parser_builtin_coverage.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; === Printf edge cases ===

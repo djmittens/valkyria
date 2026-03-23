@@ -1,7 +1,6 @@
 ; Test suite for aio/within combinator
 ; Tests: aio/within adds timeout to async operations
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (def {aio} (aio/await (aio/start)))

@@ -1,7 +1,6 @@
 ; HTTP Client-Server Integration Tests
 ; Tests real HTTP/2 communication between client and server using http2/client-request
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 (fun {http2/response-ok? resp} {

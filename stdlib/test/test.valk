@@ -11,12 +11,12 @@
 
 
 (fun {test/context-new} {
-  {:passed 0 :failed 0 :skipped 0 :timed-out 0
-   :suite-name "Valkyria Test Suite" 
-   :skip-suite 0 :skip-reason "" 
+  (list :passed 0 :failed 0 :skipped 0 :timed-out 0
+   :suite-name "Valkyria Test Suite"
+   :skip-suite 0 :skip-reason ""
    :debug 0 :expected-exit 0
    :timeout-ms *test-default-timeout-ms*
-   :suite-timeout-ms *test-default-suite-timeout-ms*}
+   :suite-timeout-ms *test-default-suite-timeout-ms*)
 })
 
 (fun {test/debug ctx enabled} {
@@ -547,9 +547,9 @@
 })
 
 (fun {*test-async-ctx-from-config* config} {
-  (= {ctx} {:suite-name "Valkyria Test Suite" :expected-exit 0 
-            :timeout-ms *test-default-timeout-ms* 
-            :suite-timeout-ms *test-default-suite-timeout-ms*})
+  (= {ctx} (list :suite-name "Valkyria Test Suite" :expected-exit 0
+            :timeout-ms *test-default-timeout-ms*
+            :suite-timeout-ms *test-default-suite-timeout-ms*))
   (if (plist/has? config :suite-name)
     {(= {ctx} (plist/set ctx :suite-name config:suite-name))}
     {true})

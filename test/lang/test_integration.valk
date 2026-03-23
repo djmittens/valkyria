@@ -1,7 +1,6 @@
 ; Phase 5 Integration Tests
 ; Tests that values survive across top-level expressions (checkpoint happens
 ; automatically between expressions in REPL mode)
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Test that many top-level defs work (checkpoint happens between each)

@@ -1,7 +1,6 @@
 ; Test the test/skip functionality
 ; This must be a separate file since it skips tests
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Enable skipping with a reason

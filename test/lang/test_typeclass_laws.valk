@@ -2,7 +2,6 @@
 ; Property-based verification of Functor, Applicative, Monad, and Semiring laws
 ; for Option, Result, and Num
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 (load "stdlib/test/property.valk")
 

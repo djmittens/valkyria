@@ -1,7 +1,6 @@
 ; Async Monadic API Test Suite
 ; Tests for all functions in src/async_monadic.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Define reverse - required by async_monadic but not in prelude

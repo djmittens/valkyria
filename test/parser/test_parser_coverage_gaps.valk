@@ -1,7 +1,6 @@
 ; Parser Coverage Gap Tests
 ; Run with: ./build/valk test/test_parser_coverage_gaps.valk
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; === Quasiquote coverage gaps ===

@@ -1,6 +1,5 @@
 ; Example: How to use the test framework
 
-(load "stdlib/prelude.valk")
 (load "stdlib/test/test.valk")
 
 ; Define tests using test/define

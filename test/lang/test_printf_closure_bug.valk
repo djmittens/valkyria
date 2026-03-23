@@ -1,4 +1,3 @@
-(load "stdlib/prelude.valk")
 
 ; Demonstration: inline lambda pattern for proper closure capture
 ;

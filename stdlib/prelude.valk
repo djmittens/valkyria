@@ -495,5 +495,4 @@
   (if (== val nil) {default} {val})
 })
 
-; Load async handles library (aio/delay, with-timeout, etc.)
-(load "stdlib/aio/handles.valk")
+

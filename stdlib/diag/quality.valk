@@ -3,7 +3,6 @@
 ;
 ; Usage: build/valk --quality-snapshot [dir]
 
-(load "stdlib/prelude.valk")
 (load "stdlib/diag/symdb.valk")
 
 ; === File discovery ===
