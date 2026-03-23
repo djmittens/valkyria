@@ -3,8 +3,7 @@
 (sig 'idx/make-op {-> Ref Num Str Ref List})
 (fun {idx/make-op db file-id text ref-stmt} {
   list
-    :on-fun (\ {name params pos} {do
-      (= {arity} (idx/count-params params 0))
+    :on-fun (\ {name arity pos} {do
       (= {lc} (offset->line-col text pos))
       (sqlite/exec db
         "INSERT INTO symbols (name, file_id, line, col, kind, arity) VALUES (?1,?2,?3,?4,?5,?6)"
@@ -17,54 +16,28 @@
           "INSERT INTO symbols (name, file_id, line, col, kind, arity) VALUES (?1,?2,?3,?4,?5,?6)"
           name file-id (head lc) (head (tail lc)) 2 -1)} {}})
 
-    :on-type (\ {tl pos} {
-      if (nil? tl) {}
-      {do
-        (= {name-node} (head tl))
-        (if (and (== (ast/type name-node) "qexpr")
-                 (not (nil? (ast/children name-node))))
-          {do
-            (= {fc} (head (ast/children name-node)))
-            (if (== (ast/type fc) "sym")
-              {do
-                (= {tname} (ast/name fc))
-                (= {lc} (offset->line-col text pos))
-                (= {line} (head lc))
-                (= {col} (head (tail lc)))
-                (sqlite/exec db
-                  "INSERT INTO symbols (name, file_id, line, col, kind, arity) VALUES (?1,?2,?3,?4,?5,?6)"
-                  tname file-id line col 3 -1)
-                (= {fields} (if (> (len tl) 1) {head (tail tl)} {nil}))
-                (= {arity} (if (and (not (nil? fields))
-                                    (== (ast/type fields) "qexpr"))
-                  {/ (len (ast/children fields)) 2} {0}))
-                (sqlite/exec db
-                  "INSERT INTO symbols (name, file_id, line, col, kind, arity) VALUES (?1,?2,?3,?4,?5,?6)"
-                  tname file-id line col 4 arity)}
-              {})} {})}})
+    :on-type (\ {tname arity pos} {do
+      (= {lc} (offset->line-col text pos))
+      (= {line} (head lc))
+      (= {col} (head (tail lc)))
+      (sqlite/exec db
+        "INSERT INTO symbols (name, file_id, line, col, kind, arity) VALUES (?1,?2,?3,?4,?5,?6)"
+        tname file-id line col 3 -1)
+      (sqlite/exec db
+        "INSERT INTO symbols (name, file_id, line, col, kind, arity) VALUES (?1,?2,?3,?4,?5,?6)"
+        tname file-id line col 4 arity)})
 
-    :on-sig (\ {tl pos} {
-      if (nil? tl) {}
-      {do
-        (= {name-node} (head tl))
-        (if (and (== (ast/type name-node) "qexpr")
-                 (not (nil? (ast/children name-node))))
-          {do
-            (= {fc} (head (ast/children name-node)))
-            (if (== (ast/type fc) "sym")
-              {do
-                (= {sname} (ast/name fc))
-                (= {existing} (sqlite/query-maybe db
-                  "SELECT id FROM symbols WHERE file_id=?1 AND name=?2"
-                  file-id sname))
-                (if (nil? existing) {do
-                  (= {lc} (offset->line-col text pos))
-                  (sqlite/exec db
-                    "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES (?1,?2,?3,?4,?5,?6,?7)"
-                    sname file-id (head lc) (head (tail lc)) 1 -1 "(sig)")}
-                  {sqlite/exec db "UPDATE symbols SET sig='(sig)' WHERE id=?1"
-                    existing:id})}
-              {})} {})}})
+    :on-sig (\ {sname sig-body pos} {do
+      (= {existing} (sqlite/query-maybe db
+        "SELECT id FROM symbols WHERE file_id=?1 AND name=?2"
+        file-id sname))
+      (if (nil? existing) {do
+        (= {lc} (offset->line-col text pos))
+        (sqlite/exec db
+          "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+          sname file-id (head lc) (head (tail lc)) 1 -1 "(sig)")}
+        {sqlite/exec db "UPDATE symbols SET sig='(sig)' WHERE id=?1"
+          existing:id})})
 
     :on-ref (\ {name pos slen scope-pos} {
       if (and (>= pos 0) (not (str/starts-with? name ":")))

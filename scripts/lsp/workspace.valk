@@ -53,12 +53,21 @@
 (sig 'lsp/seed-builtins {-> Ref Str Nil})
 (fun {lsp/seed-builtins db root} {do
   (= {builtins-path} (str root "/src/builtins.valk"))
-  (= {b} (lsp/seed-file db builtins-path))
   (= {prelude-path} (str root "/src/prelude.valk"))
-  (= {p} (lsp/seed-file db prelude-path))
+  (= {b} (lsp/seed-fast db builtins-path))
+  (= {p} (lsp/seed-fast db prelude-path))
   (if (== (+ b p) 0)
     {stderr/write "[valk-lsp] builtins + prelude cached\n"}
     {stderr/write "[valk-lsp] seeded builtins + prelude\n"})})
+
+(sig 'lsp/seed-fast {-> Ref Str Num})
+(fun {lsp/seed-fast db path} {do
+  (= {fp} (file/fingerprint path))
+  (if (error? fp) {0}
+    {do
+      (= {prep} (lsp/prepare-file-read path fp))
+      (if (nil? prep) {0}
+        {lsp/commit-prepared-fast db prep})})})
 
 (sig 'lsp/precompute-file-data {-> Ref Str List Str Nil})
 (fun {lsp/precompute-file-data db uri ast text} {do
@@ -602,7 +611,8 @@
       (= {result} (symdb/init db-path))
       (if (error? result)
         {stderr/write (str "[valk-lsp] symdb init failed: " result "\n")}
-        {def {lsp/db} result})}
+        {do (def {lsp/db} result)
+            (lsp/seed-builtins lsp/db lsp/root-path)})}
     {})
   (lsp/send-response id lsp/capabilities)})
 

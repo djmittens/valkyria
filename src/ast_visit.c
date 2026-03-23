@@ -126,7 +126,15 @@ static void visit_fun(visit_ctx_t *ctx, valk_lval_t *tl, bool is_lambda) {
     if (fname && LVAL_TYPE(fname) == LVAL_SYM) {
       int fp = (int)LVAL_SRC_POS(fname);
       int kp = (int)LVAL_SRC_POS(formals);
-      fire3(ctx->on_fun, valk_lval_str(fname->str), params, valk_lval_num(kp));
+      int arity = 0;
+      valk_lval_t *pc = params;
+      while (pc && LVAL_TYPE(pc) == LVAL_CONS) {
+        if (LVAL_TYPE(pc->cons.head) == LVAL_SYM &&
+            strcmp(pc->cons.head->str, "&") == 0) break;
+        arity++;
+        pc = pc->cons.tail;
+      }
+      fire3(ctx->on_fun, valk_lval_str(fname->str), valk_lval_num(arity), valk_lval_num(kp));
       fire3(ctx->on_def, valk_lval_str(fname->str), valk_lval_num(fp), valk_lval_num(1));
     }
   }
@@ -239,10 +247,21 @@ static void visit_head(visit_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd, val
     if (tl && LVAL_TYPE(tl) == LVAL_CONS) {
       valk_lval_t *name_q = tl->cons.head;
       if (name_q && is_qexpr(name_q) && LVAL_TYPE(name_q->cons.head) == LVAL_SYM) {
-        valk_lval_t *fields = valk_lval_list_nth(tl, 1);
         int pos = (int)LVAL_SRC_POS(hd);
-        fire3(ctx->on_type, valk_lval_str(name_q->cons.head->str),
-              fields ? fields : valk_lval_nil(), valk_lval_num(pos));
+        // Iterate variants: each remaining arg is {CtorName ...fields}
+        valk_lval_t *variants = tl->cons.tail;
+        while (variants && LVAL_TYPE(variants) == LVAL_CONS) {
+          valk_lval_t *variant = variants->cons.head;
+          if (variant && is_qexpr(variant) && LVAL_TYPE(variant->cons.head) == LVAL_SYM) {
+            const char *ctor_name = variant->cons.head->str;
+            int field_count = 0;
+            valk_lval_t *fc = variant->cons.tail;
+            while (fc && LVAL_TYPE(fc) == LVAL_CONS) { field_count++; fc = fc->cons.tail; }
+            fire3(ctx->on_type, valk_lval_str(ctor_name),
+                  valk_lval_num(field_count / 2), valk_lval_num(pos));
+          }
+          variants = variants->cons.tail;
+        }
       }
     }
     visit_each(ctx, tl); return;
