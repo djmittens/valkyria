@@ -293,15 +293,12 @@
   (= {text} (read-file path))
   (= {ast} (if (error? text) {nil} {parse text}))
   (if (or (error? text) (or (nil? ast) (error? ast))) {nil}
-    {do
-      (= {syms} (symdb/extract-symbols-from-ast ast text))
-      (= {refs} (symdb/extract-refs-from-ast ast text))
-      (= {nodes} (symdb/collect-nodes ast nil))
-      (list :path path :text text :fp fp :ast ast
-            :syms syms :refs refs :nodes nodes)})
+    {list :path path :text text :fp fp :ast ast})
 })
 
-; Commit pre-extracted data to SQLite (runs on main loop callback).
+; Commit file data to SQLite.
+; lsp/index-ast (C) does a single-pass walk producing:
+;   symbols, refs, nodes, semantic tokens, scoped refs, scopes, hints
 (sig 'lsp/commit-prepared {-> Ref List Num})
 (fun {lsp/commit-prepared db prep} {
   if (nil? prep) {0}
@@ -320,26 +317,7 @@
           "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
           fpath fp)
     (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" fpath))
-    (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
-    (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
-    (symdb/insert-symbols db file-id (plist/get prep :syms))
-    (symdb/insert-refs db file-id (plist/get prep :refs))
-    (sqlite/exec db "DELETE FROM nodes WHERE file_id=?1" file-id)
-    (symdb/insert-nodes db file-id (plist/get prep :nodes))
-    (sqlite/exec db "DELETE FROM semantic_tokens WHERE file_id=?1" file-id)
-    (sqlite/exec db "DELETE FROM inlay_hints WHERE file_id=?1" file-id)
-    (sqlite/exec db "DELETE FROM scoped_refs WHERE file_id=?1" file-id)
     (if (not (nil? file-id)) {lsp/index-ast db file-id ast text} {})
-    (if (not (nil? file-id))
-      {do
-        (= {local-params} (hint/collect-local-params ast))
-        (= {hctx} (HintCtx local-params db))
-        (= {raw-hints} (hint/walk-exprs ast hctx nil))
-        (= {type-hints} (hint/collect-type-hints ast db))
-        (= {field-hints} (hint/collect-field-hints ast db))
-        (symdb/insert-hint-batch db file-id
-          (join raw-hints (join type-hints field-hints)))}
-      {})
     1})}
 })
 

@@ -28,13 +28,17 @@ typedef struct {
   sqlite3 *db;
   int file_id;
   const char *text;
+  int text_len;
   const char *current_call;
+  bool is_top_level;
 
   sqlite3_stmt *stmt_node;
   sqlite3_stmt *stmt_semtok;
   sqlite3_stmt *stmt_ref;
   sqlite3_stmt *stmt_scope;
   sqlite3_stmt *stmt_hint;
+  sqlite3_stmt *stmt_symbol;
+  sqlite3_stmt *stmt_global_ref;
 
   scope_entry_t scopes[MAX_SCOPE_DEPTH];
   int scope_depth;
@@ -63,6 +67,78 @@ static int source_len(const char *name) {
   if (strcmp(name, "unquote") == 0) return 1;
   if (strcmp(name, "unquote-splicing") == 0) return 2;
   return (int)strlen(name);
+}
+
+// ---------------------------------------------------------------------------
+// Position helpers
+// ---------------------------------------------------------------------------
+
+static void offset_to_line_col(const char *text, int tlen, int offset,
+                                int *out_line, int *out_col) {
+  int line = 0, col = 0;
+  int limit = offset < tlen ? offset : tlen;
+  for (int i = 0; i < limit; i++) {
+    if (text[i] == '\n') { line++; col = 0; }
+    else { col++; }
+  }
+  *out_line = line;
+  *out_col = col;
+}
+
+static const char *extract_doc_comment(const char *text, int tlen, int offset) {
+  (void)tlen;
+  static char doc_buf[1024];
+  int line_start = offset;
+  while (line_start > 0 && text[line_start - 1] != '\n') line_start--;
+  int prev_end = line_start > 0 ? line_start - 1 : 0;
+  while (prev_end > 0 && text[prev_end - 1] != '\n') prev_end--;
+  if (prev_end >= line_start) return NULL;
+  while (prev_end < line_start && (text[prev_end] == ' ' || text[prev_end] == '\t'))
+    prev_end++;
+  if (prev_end >= line_start || text[prev_end] != ';') return NULL;
+  prev_end++;
+  while (prev_end < line_start && text[prev_end] == ' ') prev_end++;
+  int len = (line_start > 0 ? line_start - 1 : 0) - prev_end;
+  if (len <= 0 || len >= (int)sizeof(doc_buf)) return NULL;
+  memcpy(doc_buf, &text[prev_end], len);
+  doc_buf[len] = '\0';
+  return doc_buf;
+}
+
+// ---------------------------------------------------------------------------
+// Symbol & ref emission
+// ---------------------------------------------------------------------------
+
+enum { SYMKIND_FUNCTION = 1, SYMKIND_VARIABLE = 2, SYMKIND_TYPE = 3,
+       SYMKIND_CONSTRUCTOR = 4 };
+
+static void emit_symbol(index_ctx_t *ctx, const char *name, int pos,
+                        int kind, int arity, const char *doc, const char *sig) {
+  int line, col;
+  offset_to_line_col(ctx->text, ctx->text_len, pos, &line, &col);
+  sqlite3_reset(ctx->stmt_symbol);
+  sqlite3_bind_text(ctx->stmt_symbol, 1, name, -1, SQLITE_STATIC);
+  sqlite3_bind_int(ctx->stmt_symbol, 2, ctx->file_id);
+  sqlite3_bind_int(ctx->stmt_symbol, 3, line);
+  sqlite3_bind_int(ctx->stmt_symbol, 4, col);
+  sqlite3_bind_int(ctx->stmt_symbol, 5, kind);
+  sqlite3_bind_int(ctx->stmt_symbol, 6, arity);
+  if (doc) sqlite3_bind_text(ctx->stmt_symbol, 7, doc, -1, SQLITE_STATIC);
+  else sqlite3_bind_null(ctx->stmt_symbol, 7);
+  if (sig) sqlite3_bind_text(ctx->stmt_symbol, 8, sig, -1, SQLITE_STATIC);
+  else sqlite3_bind_null(ctx->stmt_symbol, 8);
+  sqlite3_step(ctx->stmt_symbol);
+}
+
+static void emit_global_ref(index_ctx_t *ctx, const char *name, int pos) {
+  int line, col;
+  offset_to_line_col(ctx->text, ctx->text_len, pos, &line, &col);
+  sqlite3_reset(ctx->stmt_global_ref);
+  sqlite3_bind_text(ctx->stmt_global_ref, 1, name, -1, SQLITE_STATIC);
+  sqlite3_bind_int(ctx->stmt_global_ref, 2, ctx->file_id);
+  sqlite3_bind_int(ctx->stmt_global_ref, 3, line);
+  sqlite3_bind_int(ctx->stmt_global_ref, 4, col);
+  sqlite3_step(ctx->stmt_global_ref);
 }
 
 // ---------------------------------------------------------------------------
@@ -348,9 +424,18 @@ static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is
   // For fun: first element of formals is the function name
   valk_lval_t *fname = NULL;
   valk_lval_t *params = formals;
+  int param_count = 0;
   if (!is_lambda && formals && LVAL_TYPE(formals) == LVAL_CONS) {
     fname = formals->cons.head;
     params = formals->cons.tail;
+    // Count params for arity
+    valk_lval_t *pc = params;
+    while (pc && LVAL_TYPE(pc) == LVAL_CONS) {
+      if (LVAL_TYPE(pc->cons.head) == LVAL_SYM &&
+          strcmp(pc->cons.head->str, "&") == 0) break;
+      param_count++;
+      pc = pc->cons.tail;
+    }
     if (fname && LVAL_TYPE(fname) == LVAL_SYM) {
       int fp = (int)LVAL_SRC_POS(fname);
       int fl = (int)strlen(fname->str);
@@ -359,14 +444,19 @@ static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is
         emit_ref(ctx, fname->str, fp, fl, -1, 1);
         emit_node(ctx, fp, fp + fl, "sym", fname->str);
       }
+      if (ctx->is_top_level && kw_pos >= 0) {
+        const char *doc = extract_doc_comment(ctx->text, ctx->text_len, kw_pos);
+        emit_symbol(ctx, fname->str, kw_pos, SYMKIND_FUNCTION, param_count, doc, NULL);
+      }
     }
   }
 
   // Create scope at the position of the full expression
-  // We need the position of the enclosing list — use kw_pos - 1 for the '('
   int scope_pos = kw_pos > 0 ? kw_pos - 1 : kw_pos;
   push_scope(ctx, scope_pos);
   collect_param_names(ctx, params, scope_pos);
+  bool was_top = ctx->is_top_level;
+  ctx->is_top_level = false;
 
   // Body is a qexpr {do ...} — unwrap and walk contents as code
   if (body && LVAL_TYPE(body) == LVAL_CONS && (body->flags & LVAL_FLAG_QUOTED)) {
@@ -383,6 +473,7 @@ static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is
   } else {
     walk_expr(ctx, body);
   }
+  ctx->is_top_level = was_top;
   pop_scope(ctx);
 }
 
@@ -404,6 +495,10 @@ static void walk_binding(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl) {
     while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
       valk_lval_t *v = cur->cons.head;
       if (LVAL_TYPE(v) == LVAL_SYM) {
+        if (is_global && ctx->is_top_level && kw_pos >= 0) {
+          const char *doc = extract_doc_comment(ctx->text, ctx->text_len, kw_pos);
+          emit_symbol(ctx, v->str, kw_pos, SYMKIND_VARIABLE, -1, doc, NULL);
+        }
         int vp = (int)LVAL_SRC_POS(v);
         int vl = (int)strlen(v->str);
         if (vp >= 0) {
@@ -496,6 +591,7 @@ static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
     emit_semtok(ctx, pos, len, tok, 0);
   } else {
     emit_semtok(ctx, pos, len, TOK_VARIABLE, 0);
+    emit_global_ref(ctx, name, pos);
   }
   emit_ref(ctx, name, pos, len, scope_id, 0);
 }
@@ -513,7 +609,63 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
   if (strcmp(name, "\\") == 0)    { walk_fun(ctx, hd, tl, true); return; }
   if (strcmp(name, "def") == 0)   { walk_binding(ctx, hd, tl); return; }
   if (strcmp(name, "=") == 0)     { walk_binding(ctx, hd, tl); return; }
-  // type falls through to generic keyword handler
+  if (strcmp(name, "type") == 0 && ctx->is_top_level && tl && LVAL_TYPE(tl) == LVAL_CONS) {
+    int kp = (int)LVAL_SRC_POS(hd);
+    if (kp >= 0) emit_semtok(ctx, kp, 4, TOK_KEYWORD, 0);
+    valk_lval_t *type_name = tl->cons.head;
+    if (type_name && LVAL_TYPE(type_name) == LVAL_CONS &&
+        (type_name->flags & LVAL_FLAG_QUOTED) &&
+        LVAL_TYPE(type_name->cons.head) == LVAL_SYM) {
+      const char *tname = type_name->cons.head->str;
+      const char *doc = extract_doc_comment(ctx->text, ctx->text_len, kp);
+      emit_symbol(ctx, tname, kp, SYMKIND_TYPE, -1, doc, NULL);
+      // Also emit constructor
+      valk_lval_t *fields = valk_lval_list_nth(tl, 1);
+      int ctor_arity = 0;
+      if (fields && LVAL_TYPE(fields) == LVAL_CONS) {
+        valk_lval_t *fc = fields;
+        while (fc && LVAL_TYPE(fc) == LVAL_CONS) { ctor_arity++; fc = fc->cons.tail; }
+        ctor_arity /= 2; // fields are :name Type pairs
+      }
+      emit_symbol(ctx, tname, kp, SYMKIND_CONSTRUCTOR, ctor_arity, doc, NULL);
+    }
+    walk_each(ctx, tl);
+    return;
+  }
+  if (strcmp(name, "sig") == 0 && ctx->is_top_level && tl && LVAL_TYPE(tl) == LVAL_CONS) {
+    int kp = (int)LVAL_SRC_POS(hd);
+    if (kp >= 0) emit_semtok(ctx, kp, 3, TOK_KEYWORD, 0);
+    // (sig 'name {-> ...}) — extract sig text
+    valk_lval_t *sig_name_q = tl->cons.head;
+    if (sig_name_q && LVAL_TYPE(sig_name_q) == LVAL_CONS &&
+        (sig_name_q->flags & LVAL_FLAG_QUOTED) &&
+        LVAL_TYPE(sig_name_q->cons.head) == LVAL_SYM) {
+      const char *sname = sig_name_q->cons.head->str;
+      // Check if symbol already exists — update sig; otherwise insert
+      sqlite3_stmt *check;
+      sqlite3_prepare_v2(ctx->db,
+        "SELECT id FROM symbols WHERE file_id=?1 AND name=?2", -1, &check, NULL);
+      sqlite3_bind_int(check, 1, ctx->file_id);
+      sqlite3_bind_text(check, 2, sname, -1, SQLITE_STATIC);
+      if (sqlite3_step(check) == SQLITE_ROW) {
+        int sym_id = sqlite3_column_int(check, 0);
+        sqlite3_finalize(check);
+        // Build sig string from the sig form
+        sqlite3_stmt *upd;
+        sqlite3_prepare_v2(ctx->db,
+          "UPDATE symbols SET sig=?1 WHERE id=?2", -1, &upd, NULL);
+        sqlite3_bind_text(upd, 1, "(sig)", -1, SQLITE_STATIC);
+        sqlite3_bind_int(upd, 2, sym_id);
+        sqlite3_step(upd);
+        sqlite3_finalize(upd);
+      } else {
+        sqlite3_finalize(check);
+        emit_symbol(ctx, sname, kp, SYMKIND_FUNCTION, -1, NULL, "(sig)");
+      }
+    }
+    walk_each(ctx, tl);
+    return;
+  }
   if (strcmp(name, "match") == 0) {
     int kp = (int)LVAL_SRC_POS(hd);
     if (kp >= 0) emit_semtok(ctx, kp, 5, TOK_KEYWORD, 0);
@@ -550,6 +702,7 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
     }
     int scope_id = resolve_scope(ctx, name);
     emit_ref(ctx, name, pos, slen, scope_id, 0);
+    if (scope_id < 0 && pos >= 0) emit_global_ref(ctx, name, pos);
     const char *prev_call = ctx->current_call;
     ctx->current_call = name;
     walk_each(ctx, tl);
@@ -635,11 +788,16 @@ static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr) {
 // Public API — called from Valk as (lsp/index-file db file-id ast text)
 // ---------------------------------------------------------------------------
 
-static const char *SQL_DELETE_NODES = "DELETE FROM nodes WHERE file_id=?1";
-static const char *SQL_DELETE_SEMTOK = "DELETE FROM semantic_tokens WHERE file_id=?1";
-static const char *SQL_DELETE_REFS = "DELETE FROM scoped_refs WHERE file_id=?1";
-static const char *SQL_DELETE_SCOPES = "DELETE FROM scopes WHERE file_id=?1";
-static const char *SQL_DELETE_HINTS = "DELETE FROM inlay_hints WHERE file_id=?1";
+static const char *SQL_DELETE_ALL[] = {
+  "DELETE FROM nodes WHERE file_id=?1",
+  "DELETE FROM semantic_tokens WHERE file_id=?1",
+  "DELETE FROM scoped_refs WHERE file_id=?1",
+  "DELETE FROM scopes WHERE file_id=?1",
+  "DELETE FROM inlay_hints WHERE file_id=?1",
+  "DELETE FROM symbols WHERE file_id=?1",
+  "DELETE FROM refs WHERE file_id=?1",
+  NULL
+};
 
 static const char *SQL_INSERT_NODE =
     "INSERT INTO nodes (file_id,pos,end_pos,type,name,context) VALUES (?1,?2,?3,?4,?5,?6)";
@@ -651,6 +809,10 @@ static const char *SQL_INSERT_SCOPE =
     "INSERT INTO scopes (file_id,pos,parent_pos) VALUES (?1,?2,?3)";
 static const char *SQL_INSERT_HINT =
     "INSERT INTO inlay_hints (file_id,pos,label,kind) VALUES (?1,?2,?3,?4)";
+static const char *SQL_INSERT_SYMBOL =
+    "INSERT INTO symbols (name,file_id,line,col,kind,arity,doc,sig) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)";
+static const char *SQL_INSERT_GLOBAL_REF =
+    "INSERT INTO refs (name,file_id,line,col) VALUES (?1,?2,?3,?4)";
 
 valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
@@ -671,28 +833,30 @@ valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
     .db = db,
     .file_id = file_id,
     .text = text_v->str,
+    .text_len = (int)strlen(text_v->str),
     .scope_depth = 0,
+    .is_top_level = true,
   };
 
-  // Delete old data
+  // Delete ALL old data for this file
   sqlite3_stmt *del;
-  const char *del_sqls[] = {SQL_DELETE_NODES, SQL_DELETE_SEMTOK, SQL_DELETE_REFS,
-                            SQL_DELETE_SCOPES, SQL_DELETE_HINTS, NULL};
-  for (int i = 0; del_sqls[i]; i++) {
-    sqlite3_prepare_v2(db, del_sqls[i], -1, &del, NULL);
+  for (int i = 0; SQL_DELETE_ALL[i]; i++) {
+    sqlite3_prepare_v2(db, SQL_DELETE_ALL[i], -1, &del, NULL);
     sqlite3_bind_int(del, 1, file_id);
     sqlite3_step(del);
     sqlite3_finalize(del);
   }
 
-  // Prepare insert statements
+  // Prepare all insert statements
   sqlite3_prepare_v2(db, SQL_INSERT_NODE, -1, &ctx.stmt_node, NULL);
   sqlite3_prepare_v2(db, SQL_INSERT_SEMTOK, -1, &ctx.stmt_semtok, NULL);
   sqlite3_prepare_v2(db, SQL_INSERT_REF, -1, &ctx.stmt_ref, NULL);
   sqlite3_prepare_v2(db, SQL_INSERT_SCOPE, -1, &ctx.stmt_scope, NULL);
   sqlite3_prepare_v2(db, SQL_INSERT_HINT, -1, &ctx.stmt_hint, NULL);
+  sqlite3_prepare_v2(db, SQL_INSERT_SYMBOL, -1, &ctx.stmt_symbol, NULL);
+  sqlite3_prepare_v2(db, SQL_INSERT_GLOBAL_REF, -1, &ctx.stmt_global_ref, NULL);
 
-  // Single pass
+  // Single pass — produces everything
   walk_each(&ctx, ast);
 
   // Cleanup
@@ -701,6 +865,8 @@ valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
   sqlite3_finalize(ctx.stmt_ref);
   sqlite3_finalize(ctx.stmt_scope);
   sqlite3_finalize(ctx.stmt_hint);
+  sqlite3_finalize(ctx.stmt_symbol);
+  sqlite3_finalize(ctx.stmt_global_ref);
 
   return valk_lval_nil();
 }
