@@ -18,6 +18,7 @@ extern valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a);
 #include "diag.h"
 #include "gc.h"
 #include "macro.h"
+#include "module.h"
 #include "type_env.h"
 
 #define MODULE_CACHE_MAX 512
@@ -99,9 +100,6 @@ static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
     return ast; // LCOV_EXCL_LINE
   }
 
-  if (module_prefix)
-    valk_module_rewrite(ast, module_prefix);
-
   valk_name_resolver_t resolver = {.is_known = env_has_name, .ctx = target_env};
   valk_diag_list_t diags = valk_validate_ast(ast, text, resolver);
   if (valk_diag_error_count(&diags) > 0) {
@@ -113,17 +111,59 @@ static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
 
   valk_lenv_t *menv = valk_macro_env();
 
+  // Pass 1: expand macros, eval macro defs (so later forms can use them)
+  {
+    valk_lval_t *cur = ast;
+    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+      if (valk_macro_is_def(cur->cons.head)) {
+        valk_lval_t *r = valk_lval_eval(menv, cur->cons.head);
+        if (LVAL_TYPE(r) == LVAL_ERR) valk_lval_println(r);
+        cur->cons.head = valk_lval_nil();
+      } else {
+        cur->cons.head = valk_macro_expand_one(menv, cur->cons.head);
+      }
+      cur = cur->cons.tail;
+    }
+  }
+
+  // Pass 1.5: pre-register child modules from (load ...) calls
+  if (module_prefix) {
+    valk_module_t *cur_mod = valk_mod_current();
+    if (cur_mod) {
+      valk_lval_t *scan = ast;
+      while (scan && LVAL_TYPE(scan) == LVAL_CONS) {
+        valk_lval_t *form = scan->cons.head;
+        if (form && LVAL_TYPE(form) == LVAL_CONS &&
+            !(form->flags & LVAL_FLAG_QUOTED)) {
+          valk_lval_t *head = form->cons.head;
+          if (head && LVAL_TYPE(head) == LVAL_SYM &&
+              strcmp(head->str, "load") == 0) {
+            valk_lval_t *rest = form->cons.tail;
+            if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
+              valk_lval_t *path_arg = rest->cons.head;
+              if (LVAL_TYPE(path_arg) == LVAL_STR) {
+                char child_prefix[256];
+                extract_module_prefix(path_arg->str, child_prefix,
+                                      sizeof(child_prefix));
+                if (!is_prelude_path(path_arg->str))
+                  valk_mod_find_or_create_child(cur_mod, child_prefix);
+              }
+            }
+          }
+        }
+        scan = scan->cons.tail;
+      }
+    }
+  }
+
+  // Pass 2: rewrite names with FQN prefix
+  if (module_prefix)
+    valk_module_rewrite(ast, module_prefix);
+
+  // Pass 3: evaluate
   valk_lval_t *last = nullptr;
   while (valk_lval_list_count(ast)) {
     valk_lval_t *x = valk_lval_pop(ast, 0);
-
-    if (valk_macro_is_def(x)) {
-      x = valk_lval_eval(menv, x);
-      if (LVAL_TYPE(x) == LVAL_ERR) valk_lval_println(x);
-      continue;
-    }
-
-    x = valk_macro_expand_one(menv, x);
 
     x = valk_type_transform_expr(x);
     if (LVAL_TYPE(x) == LVAL_NIL) continue;
@@ -188,7 +228,7 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
   if (argc > 1)
     prefix = valk_lval_list_nth(a, 1)->str;
 
-  (void)is_prelude_path(resolved);
+  bool prelude = is_prelude_path(resolved);
 
   entry->resolved_path = strdup(resolved);
   entry->prefix = strdup(prefix);
@@ -201,9 +241,23 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
     return valk_lval_err("Could not open file (%s)", filename);
   }
 
+  valk_module_t *prev_mod = valk_mod_current();
+  valk_module_t *child_mod = NULL;
+
+  char fqn[VALK_MOD_PATH_MAX] = {0};
+  if (!prelude) {
+    child_mod = valk_mod_find_or_create_child(
+      prev_mod ? prev_mod : valk_mod_root(), prefix);
+    child_mod->resolved_path = strdup(resolved);
+    valk_mod_set_current(child_mod);
+    valk_mod_qualified_path(child_mod, fqn, sizeof(fqn));
+  }
+
   valk_lval_t *result = load_eval_file(e, filename, text,
-                                       NULL); // TODO: hierarchical module rewrite
+                                       prelude ? NULL : fqn);
   free(text);
+
+  valk_mod_set_current(prev_mod);
 
   if (LVAL_TYPE(result) == LVAL_ERR) {
     entry->state = 0;

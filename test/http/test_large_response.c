@@ -71,7 +71,7 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   valk_load_file(ctx->env, "stdlib/prelude.valk");
   valk_load_file(ctx->env, "test/http/test_large_response_handler.valk");
 
-  ctx->handler_fn = valk_lenv_get(ctx->env, valk_lval_sym("handler"));
+  ctx->handler_fn = valk_lenv_get(ctx->env, valk_lval_sym("test_large_response_handler/handler"));
   if (!ctx->handler_fn || LVAL_TYPE(ctx->handler_fn) != LVAL_FUN) {
     VALK_FAIL("Handler is not a function, got type: %s",
               ctx->handler_fn ? valk_ltype_name(LVAL_TYPE(ctx->handler_fn)) : "nullptr");

@@ -1,4 +1,5 @@
 #include "macro.h"
+#include "module.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -155,7 +156,22 @@ static void rewrite_node(valk_lval_t *cell, const char *prefix,
 
   if (LVAL_TYPE(expr) == LVAL_SYM) {
     if (expr->str[0] == ':') return;
-    if (strchr(expr->str, '/')) return;
+
+    const char *slash = strchr(expr->str, '/');
+    if (slash) {
+      size_t seg_len = (size_t)(slash - expr->str);
+      char seg[256];
+      if (seg_len < sizeof(seg)) {
+        memcpy(seg, expr->str, seg_len);
+        seg[seg_len] = '\0';
+        valk_module_t *cur = valk_mod_current();
+        if (cur && valk_mod_child(cur, seg)) {
+          cell->cons.head = qualify_sym(prefix, expr->str);
+        }
+      }
+      return;
+    }
+
     if (!ns_has(defs, expr->str)) return;
     if (ns_has(shadows, expr->str)) return;
     cell->cons.head = qualify_sym(prefix, expr->str);
@@ -248,4 +264,9 @@ void valk_module_rewrite(valk_lval_t *ast, const char *prefix) {
 
   ns_free(&defs);
   ns_free(&shadows);
+}
+
+void valk_module_rewrite_form(valk_lval_t *form, const char *prefix) {
+  valk_lval_t *wrapper = valk_lval_cons(form, valk_lval_nil());
+  valk_module_rewrite(wrapper, prefix);
 }
