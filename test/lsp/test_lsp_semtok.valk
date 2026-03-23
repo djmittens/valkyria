@@ -35,7 +35,7 @@
       (test/assert-eq 1 (tok-count "42")
         "single number should produce 1 token")
       (= {tok} (nth-tok "42" 1))
-      (test/assert-eq SEM_NUMBER (tok-type tok) "should be number type")
+      (test/assert-eq analysis/SEM_NUMBER (tok-type tok) "should be number type")
       true
     })
 
@@ -44,14 +44,14 @@
       (test/assert (>= (tok-count "foo") 1)
         "standalone symbol should produce at least 1 token")
       (= {tok} (nth-tok "foo" 1))
-      (test/assert-eq SEM_VARIABLE (tok-type tok) "bare symbol should be variable")
+      (test/assert-eq analysis/SEM_VARIABLE (tok-type tok) "bare symbol should be variable")
       true
     })
 
   (test/case "keyword-property"
     {do
       (= {tok} (nth-tok ":foo" 1))
-      (test/assert-eq SEM_PROPERTY (tok-type tok) ":keyword should be property")
+      (test/assert-eq analysis/SEM_PROPERTY (tok-type tok) ":keyword should be property")
       true
     })
 
@@ -61,7 +61,7 @@
     {do
       (= {toks} (tok-groups "(+ 1 2)"))
       (= {head-tok} (nth 1 toks))
-      (test/assert-eq SEM_OPERATOR (tok-type head-tok) "+ should be operator")
+      (test/assert-eq analysis/SEM_OPERATOR (tok-type head-tok) "+ should be operator")
       true
     })
 
@@ -69,7 +69,7 @@
     {do
       (= {toks} (tok-groups "(foo 1)"))
       (= {head-tok} (nth 1 toks))
-      (test/assert-eq SEM_FUNCTION (tok-type head-tok) "foo in call pos should be function")
+      (test/assert-eq analysis/SEM_FUNCTION (tok-type head-tok) "foo in call pos should be function")
       true
     })
 
@@ -79,7 +79,7 @@
     {do
       (= {toks} (tok-groups "(if true {1} {2})"))
       (= {head-tok} (nth 1 toks))
-      (test/assert-eq SEM_KEYWORD (tok-type head-tok) "if should be keyword")
+      (test/assert-eq analysis/SEM_KEYWORD (tok-type head-tok) "if should be keyword")
       true
     })
 
@@ -87,7 +87,7 @@
     {do
       (= {toks} (tok-groups "(do 1 2)"))
       (= {head-tok} (nth 1 toks))
-      (test/assert-eq SEM_KEYWORD (tok-type head-tok) "do should be keyword")
+      (test/assert-eq analysis/SEM_KEYWORD (tok-type head-tok) "do should be keyword")
       true
     })
 
@@ -97,9 +97,9 @@
     {do
       (= {toks} (tok-groups "(fun {add x y} {+ x y})"))
       (= {kw} (nth 1 toks))
-      (test/assert-eq SEM_KEYWORD (tok-type kw) "fun should be keyword")
+      (test/assert-eq analysis/SEM_KEYWORD (tok-type kw) "fun should be keyword")
       (= {name-tok} (nth 2 toks))
-      (test/assert-eq SEM_FUNCTION (tok-type name-tok) "function name should be function type")
+      (test/assert-eq analysis/SEM_FUNCTION (tok-type name-tok) "function name should be function type")
       true
     })
 
@@ -108,8 +108,8 @@
       (= {toks} (tok-groups "(fun {f x y} {x})"))
       (= {x-tok} (nth 3 toks))
       (= {y-tok} (nth 4 toks))
-      (test/assert-eq SEM_PARAMETER (tok-type x-tok) "param x declaration should be parameter")
-      (test/assert-eq SEM_PARAMETER (tok-type y-tok) "param y declaration should be parameter")
+      (test/assert-eq analysis/SEM_PARAMETER (tok-type x-tok) "param x declaration should be parameter")
+      (test/assert-eq analysis/SEM_PARAMETER (tok-type y-tok) "param y declaration should be parameter")
       true
     })
 
@@ -117,7 +117,7 @@
     {do
       (= {toks} (tok-groups "(fun {f x} {x})"))
       (= {body-x} (nth 4 toks))
-      (test/assert-eq SEM_PARAMETER (tok-type body-x) "x in body should be parameter (in scope)")
+      (test/assert-eq analysis/SEM_PARAMETER (tok-type body-x) "x in body should be parameter (in scope)")
       true
     })
 
@@ -127,7 +127,7 @@
     {do
       (= {toks} (tok-groups "(\\ {x} {x})"))
       (= {kw} (nth 1 toks))
-      (test/assert-eq SEM_KEYWORD (tok-type kw) "\\ should be keyword")
+      (test/assert-eq analysis/SEM_KEYWORD (tok-type kw) "\\ should be keyword")
       true
     })
 
@@ -135,7 +135,7 @@
     {do
       (= {toks} (tok-groups "(\\ {a} {a})"))
       (= {body-a} (nth 3 toks))
-      (test/assert-eq SEM_PARAMETER (tok-type body-a) "a in lambda body should be parameter")
+      (test/assert-eq analysis/SEM_PARAMETER (tok-type body-a) "a in lambda body should be parameter")
       true
     })
 
@@ -145,9 +145,9 @@
     {do
       (= {toks} (tok-groups "(def {x} 42)"))
       (= {kw} (nth 1 toks))
-      (test/assert-eq SEM_KEYWORD (tok-type kw) "def should be keyword")
+      (test/assert-eq analysis/SEM_KEYWORD (tok-type kw) "def should be keyword")
       (= {var-tok} (nth 2 toks))
-      (test/assert-eq SEM_VARIABLE (tok-type var-tok) "x in def should be variable")
+      (test/assert-eq analysis/SEM_VARIABLE (tok-type var-tok) "x in def should be variable")
       true
     })
 
@@ -155,7 +155,7 @@
     {do
       (= {toks} (tok-groups "(= {y} 10)"))
       (= {kw} (nth 1 toks))
-      (test/assert-eq SEM_KEYWORD (tok-type kw) "= should be keyword")
+      (test/assert-eq analysis/SEM_KEYWORD (tok-type kw) "= should be keyword")
       true
     })
 
@@ -165,11 +165,11 @@
     {do
       (= {toks} (tok-groups "(type {Color} {Red} {Green})"))
       (= {kw} (nth 1 toks))
-      (test/assert-eq SEM_KEYWORD (tok-type kw) "type should be keyword")
+      (test/assert-eq analysis/SEM_KEYWORD (tok-type kw) "type should be keyword")
       (= {tname} (nth 2 toks))
-      (test/assert-eq SEM_TYPE (tok-type tname) "Color should be type")
+      (test/assert-eq analysis/SEM_TYPE (tok-type tname) "Color should be type")
       (= {ctor1} (nth 3 toks))
-      (test/assert-eq SEM_TYPE (tok-type ctor1) "Red should be type")
+      (test/assert-eq analysis/SEM_TYPE (tok-type ctor1) "Red should be type")
       true
     })
 
@@ -177,7 +177,7 @@
     {do
       (= {toks} (tok-groups "(type {Point} {Point :x :y})"))
       (= {field-x} (nth 4 toks))
-      (test/assert-eq SEM_PROPERTY (tok-type field-x) ":x field should be property")
+      (test/assert-eq analysis/SEM_PROPERTY (tok-type field-x) ":x field should be property")
       true
     })
 
@@ -187,7 +187,7 @@
     {do
       (= {toks} (tok-groups "(* 2 3)"))
       (= {op} (nth 1 toks))
-      (test/assert-eq SEM_OPERATOR (tok-type op) "* should be operator")
+      (test/assert-eq analysis/SEM_OPERATOR (tok-type op) "* should be operator")
       true
     })
 
@@ -195,7 +195,7 @@
     {do
       (= {toks} (tok-groups "(>= 1 2)"))
       (= {op} (nth 1 toks))
-      (test/assert-eq SEM_OPERATOR (tok-type op) ">= should be operator")
+      (test/assert-eq analysis/SEM_OPERATOR (tok-type op) ">= should be operator")
       true
     })
 

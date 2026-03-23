@@ -30,7 +30,7 @@
       (test/assert-eq 1 (len syms) "should extract 1 symbol")
       (= {s} (head syms))
       (test/assert-eq "add" s:name "name should be add")
-      (test/assert-eq SYMKIND_FUNCTION s:kind "kind should be function")
+      (test/assert-eq symdb/SYMKIND_FUNCTION s:kind "kind should be function")
       (test/assert-eq 2 s:arity "arity should be 2")
       true
     })
@@ -41,7 +41,7 @@
       (test/assert-eq 1 (len syms) "should extract 1 symbol")
       (= {s} (head syms))
       (test/assert-eq "MY_CONST" s:name "name should be MY_CONST")
-      (test/assert-eq SYMKIND_VARIABLE s:kind "kind should be variable")
+      (test/assert-eq symdb/SYMKIND_VARIABLE s:kind "kind should be variable")
       true
     })
 
@@ -60,7 +60,7 @@
   (test/case "extract-type-ctor-arity"
     {do
       (= {syms} (symdb/extract-symbols "(type {Point} {Point :x :y})"))
-      (= {ctor} (head (filter (\{s} {== s:kind SYMKIND_CONSTRUCTOR}) syms)))
+      (= {ctor} (head (filter (\{s} {== s:kind symdb/SYMKIND_CONSTRUCTOR}) syms)))
       (test/assert-eq "Point" ctor:name "ctor name should be Point")
       (test/assert-eq 2 ctor:arity "ctor arity should be 2")
       true
@@ -321,14 +321,14 @@
 
   (test/case "uri-to-path"
     {do
-      (test/assert-eq "/home/user/file.valk" (uri->path "file:///home/user/file.valk")
+      (test/assert-eq "/home/user/file.valk" (symdb/uri->path "file:///home/user/file.valk")
         "should strip file:// prefix")
       true
     })
 
   (test/case "uri-to-path-short"
     {do
-      (test/assert-eq "short" (uri->path "short")
+      (test/assert-eq "short" (symdb/uri->path "short")
         "short string returned as-is")
       true
     })
@@ -337,10 +337,10 @@
 
   (test/case "symkind-to-lsp-kind"
     {do
-      (test/assert-eq LSP_SK_FUNCTION (symkind->lsp-kind SYMKIND_FUNCTION) "function")
-      (test/assert-eq LSP_SK_VARIABLE (symkind->lsp-kind SYMKIND_VARIABLE) "variable")
-      (test/assert-eq LSP_SK_CLASS (symkind->lsp-kind SYMKIND_TYPE) "type -> class")
-      (test/assert-eq LSP_SK_CONSTRUCTOR (symkind->lsp-kind SYMKIND_CONSTRUCTOR) "constructor")
+      (test/assert-eq symdb/LSP_SK_FUNCTION (symdb/symkind->lsp-kind symdb/SYMKIND_FUNCTION) "function")
+      (test/assert-eq symdb/LSP_SK_VARIABLE (symdb/symkind->lsp-kind symdb/SYMKIND_VARIABLE) "variable")
+      (test/assert-eq symdb/LSP_SK_CLASS (symdb/symkind->lsp-kind symdb/SYMKIND_TYPE) "type -> class")
+      (test/assert-eq symdb/LSP_SK_CONSTRUCTOR (symdb/symkind->lsp-kind symdb/SYMKIND_CONSTRUCTOR) "constructor")
       true
     })
 
