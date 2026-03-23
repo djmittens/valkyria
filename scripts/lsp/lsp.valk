@@ -217,7 +217,7 @@
 (sig 'lsp/start {-> Nil})
 (fun {lsp/start} {do
   (stderr/write "[valk-lsp] starting (threaded)\n")
-  (def {lsp/sys} (aio/await (aio/start {:num-threads 4})))
+  (def {lsp/sys} (aio/await (aio/start {:num-threads 0})))
   (= {stdin-pipe} (pipe/stdin-open lsp/sys))
   (def {lsp/out} (pipe/stdout-open lsp/sys))
   (pipe/lsp-reader stdin-pipe (\ {body} {lsp/on-message body}))

@@ -531,7 +531,7 @@
 })
 
 ; Dispatch ALL files at once across worker threads.
-; Workers do read+parse, callbacks do commit sequentially on loop 0.
+; Workers do read+parse (CPU). Callbacks do index+SQLite (IO, sequential on loop 0).
 (sig 'lsp/dispatch-all {-> Ref List Dict Num Nil})
 (fun {lsp/dispatch-all db files state tok} {
   if (nil? files) {}

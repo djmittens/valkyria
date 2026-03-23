@@ -1,0 +1,535 @@
+; Single-pass AST indexer — produces all DB records in one traversal.
+; Shared pattern recognition for LSP, valk-check, and compiler.
+
+(def {IDX_KEYWORDS} (list
+  "fun" "\\" "def" "=" "if" "select" "case"
+  "do" "let" "type" "sig" "load" "and" "or" "not"
+  "quote" "quasiquote" "unquote" "unquote-splicing"))
+
+(def {IDX_OPERATORS} (list
+  "+" "-" "*" "/" ">" "<" ">=" "<=" "==" "!=" "%" "ord"))
+
+(def {TOK_KEYWORD} 0)
+(def {TOK_FUNCTION} 1)
+(def {TOK_PARAMETER} 2)
+(def {TOK_VARIABLE} 3)
+(def {TOK_NUMBER} 4)
+(def {TOK_STRING} 5)
+(def {TOK_TYPE} 6)
+(def {TOK_OPERATOR} 7)
+(def {TOK_PROPERTY} 8)
+
+(def {SYMKIND_FUNCTION} 1)
+(def {SYMKIND_VARIABLE} 2)
+(def {SYMKIND_TYPE} 3)
+(def {SYMKIND_CONSTRUCTOR} 4)
+
+; --- Scope stack (mutable dict-based) ---
+
+(sig 'idx/push-scope {-> Dict Num Nil})
+(fun {idx/push-scope ctx pos} {do
+  (= {parent} (dict/get ctx :scope-pos))
+  (= {depth} (dict/get ctx :scope-depth))
+  (= {stmts} (dict/get ctx :stmts))
+  (sqlite/bind (dict/get stmts :scope) (dict/get ctx :file-id) pos
+    (if (nil? parent) {-1} {parent}))
+  (sqlite/step (dict/get stmts :scope))
+  (dict/set! ctx :scope-pos pos)
+  (dict/set! ctx :scope-depth (+ depth 1))
+  (dict/set! ctx :scope-names (list))
+  (dict/set! ctx :scope-parent-names
+    (join (dict/get ctx :scope-names) (dict/get ctx :scope-parent-names)))
+})
+
+(sig 'idx/pop-scope {-> Dict Nil})
+(fun {idx/pop-scope ctx} {do
+  (= {depth} (- (dict/get ctx :scope-depth) 1))
+  (dict/set! ctx :scope-depth depth)
+  (if (<= depth 0)
+    {do (dict/set! ctx :scope-pos nil) (dict/set! ctx :scope-names (list))}
+    {})
+})
+
+(sig 'idx/add-name {-> Dict Str Nil})
+(fun {idx/add-name ctx name} {
+  dict/set! ctx :scope-names (qcons name (dict/get ctx :scope-names))
+})
+
+(sig 'idx/in-scope? {-> Dict Str Num})
+(fun {idx/in-scope? ctx name} {
+  if (or (contains? (dict/get ctx :scope-names) name)
+         (contains? (dict/get ctx :scope-parent-names) name)) {1} {0}
+})
+
+; --- Classification ---
+
+(sig 'idx/keyword? {-> Str Num})
+(fun {idx/keyword? name} {if (contains? IDX_KEYWORDS name) {1} {0}})
+
+(sig 'idx/operator? {-> Str Num})
+(fun {idx/operator? name} {if (contains? IDX_OPERATORS name) {1} {0}})
+
+; --- Emit helpers ---
+
+(sig 'idx/emit-node {-> Dict Num Num Str Str Nil})
+(fun {idx/emit-node ctx pos end type name} {do
+  (sqlite/bind (dict/get (dict/get ctx :stmts) :node)
+    (dict/get ctx :file-id) pos end type name nil)
+  (sqlite/step (dict/get (dict/get ctx :stmts) :node))
+})
+
+(sig 'idx/emit-semtok {-> Dict Num Num Num Num Nil})
+(fun {idx/emit-semtok ctx pos slen tok mods} {do
+  (sqlite/bind (dict/get (dict/get ctx :stmts) :semtok)
+    (dict/get ctx :file-id) pos slen tok mods)
+  (sqlite/step (dict/get (dict/get ctx :stmts) :semtok))
+})
+
+(sig 'idx/emit-ref {-> Dict Str Num Num Num Num Nil})
+(fun {idx/emit-ref ctx name pos slen scope-id is-def} {do
+  (sqlite/bind (dict/get (dict/get ctx :stmts) :ref)
+    (dict/get ctx :file-id) name pos slen scope-id is-def)
+  (sqlite/step (dict/get (dict/get ctx :stmts) :ref))
+})
+
+(sig 'idx/emit-symbol {-> Dict Str Num Num Num Str Str Nil})
+(fun {idx/emit-symbol ctx name kind arity doc sig-text} {do
+  (= {pos-data} (offset->line-col (dict/get ctx :text) (dict/get ctx :last-pos))})
+  (sqlite/bind (dict/get (dict/get ctx :stmts) :symbol)
+    name (dict/get ctx :file-id) (head pos-data) (head (tail pos-data))
+    kind arity doc sig-text)
+  (sqlite/step (dict/get (dict/get ctx :stmts) :symbol))
+})
+
+(sig 'idx/emit-global-ref {-> Dict Str Num Nil})
+(fun {idx/emit-global-ref ctx name pos} {do
+  (= {pos-data} (offset->line-col (dict/get ctx :text) pos))
+  (sqlite/bind (dict/get (dict/get ctx :stmts) :global-ref)
+    name (dict/get ctx :file-id) (head pos-data) (head (tail pos-data)))
+  (sqlite/step (dict/get (dict/get ctx :stmts) :global-ref))
+})
+
+; --- Core walker ---
+
+(sig 'idx/walk-each {-> Dict List Nil})
+(fun {idx/walk-each ctx exprs} {
+  if (nil? exprs) {}
+  {do
+    (= {e} (head exprs))
+    (if (and (list? e) (not (nil? e)) (quoted? e))
+      {idx/walk-qbody ctx e}
+      {idx/walk-expr ctx e})
+    (idx/walk-each ctx (tail exprs))}
+})
+
+(sig 'idx/walk-expr {-> Dict Any Nil})
+(fun {idx/walk-expr ctx expr} {do
+  (if (nil? expr) {}
+  {if (num? expr) {do
+    (= {p} (src-pos expr))
+    (if (>= p 0) {do
+      (= {s} (str expr))
+      (idx/emit-semtok ctx p (len s) TOK_NUMBER 0)
+      (idx/emit-node ctx p (+ p (len s)) "num" s)} {})}
+  {if (str? expr) {do
+    (= {p} (src-pos expr))
+    (if (>= p 0) {do
+      (idx/emit-semtok ctx p (+ (len expr) 2) TOK_STRING 0)
+      (idx/emit-node ctx p (+ p (len expr) 2) "str" expr)} {})}
+  {if (sym? expr) {idx/walk-sym ctx expr}
+  {if (and (list? expr) (not (nil? expr))) {do
+    (if (quoted? expr) {idx/walk-qexpr-tokens ctx expr}
+      {do
+        (= {hd} (head expr))
+        (= {tl} (tail expr))
+        (if (and (sym? hd) (not (nil? tl)))
+          {idx/walk-list-head ctx expr hd tl}
+          {idx/walk-expr ctx hd})})}
+  {}}}}})
+})
+
+(sig 'idx/walk-sym {-> Dict Any Nil})
+(fun {idx/walk-sym ctx sym} {do
+  (= {name} (str sym))
+  (= {p} (src-pos sym))
+  (= {slen} (len name))
+  (if (< p 0) {}
+  {if (str/starts-with? name ":") {do
+    (idx/emit-node ctx p (+ p slen) "sym" name)
+    (idx/emit-semtok ctx p slen TOK_PROPERTY 0)}
+  {do
+    (idx/emit-node ctx p (+ p slen) "sym" name)
+    (= {in-scope} (idx/in-scope? ctx name))
+    (if in-scope
+      {do (idx/emit-semtok ctx p slen TOK_VARIABLE 0)
+          (idx/emit-ref ctx name p slen (dict/get ctx :scope-pos) 0)}
+      {do (idx/emit-semtok ctx p slen TOK_VARIABLE 0)
+          (idx/emit-ref ctx name p slen -1 0)
+          (idx/emit-global-ref ctx name p)})}})
+})
+
+(sig 'idx/walk-list-head {-> Dict List Any List Nil})
+(fun {idx/walk-list-head ctx expr hd tl} {do
+  (= {name} (str hd))
+  (if (== name "fun") {idx/walk-fun ctx hd tl 0}
+  {if (== name "\\") {idx/walk-fun ctx hd tl 1}
+  {if (or (== name "def") (== name "=")) {idx/walk-binding ctx hd tl}
+  {if (== name "do") {do
+    (= {p} (src-pos hd))
+    (if (>= p 0) {idx/emit-semtok ctx p 2 TOK_KEYWORD 0} {})
+    (idx/walk-do ctx tl)}
+  {if (== name "match") {do
+    (= {p} (src-pos hd))
+    (if (>= p 0) {idx/emit-semtok ctx p 5 TOK_KEYWORD 0} {})
+    (idx/walk-match ctx tl)}
+  {if (== name "type") {do
+    (= {p} (src-pos hd))
+    (if (>= p 0) {idx/emit-semtok ctx p 4 TOK_KEYWORD 0} {})
+    (if (dict/get ctx :top-level) {idx/extract-type ctx p tl} {})
+    (idx/walk-each ctx tl)}
+  {if (== name "sig") {do
+    (= {p} (src-pos hd))
+    (if (>= p 0) {idx/emit-semtok ctx p 3 TOK_KEYWORD 0} {})
+    (if (dict/get ctx :top-level) {idx/extract-sig ctx p tl} {})
+    (idx/walk-each ctx tl)}
+  {if (idx/keyword? name) {do
+    (= {p} (src-pos hd))
+    (if (>= p 0) {idx/emit-semtok ctx p (len name) TOK_KEYWORD 0} {})
+    (idx/walk-each ctx tl)}
+  {if (idx/operator? name) {do
+    (= {p} (src-pos hd))
+    (if (>= p 0) {do
+      (idx/emit-semtok ctx p (len name) TOK_OPERATOR 0)
+      (idx/emit-node ctx p (+ p (len name)) "sym" name)} {})
+    (idx/emit-ref ctx name p (len name) (dict/get ctx :scope-pos) 0)
+    (idx/walk-each ctx tl)}
+  {do
+    (= {p} (src-pos hd))
+    (= {slen} (len name))
+    (if (>= p 0) {do
+      (idx/emit-semtok ctx p slen TOK_FUNCTION 0)
+      (idx/emit-node ctx p (+ p slen) "sym" name)} {})
+    (= {scope-id} (if (idx/in-scope? ctx name) {dict/get ctx :scope-pos} {-1}))
+    (idx/emit-ref ctx name p slen scope-id 0)
+    (if (== scope-id -1) {idx/emit-global-ref ctx name p} {})
+    (idx/walk-each ctx tl)})}}}}}}}}})
+})
+
+; --- Fun/lambda ---
+
+(sig 'idx/walk-fun {-> Dict Any List Num Nil})
+(fun {idx/walk-fun ctx kw tl is-lambda} {do
+  (= {kp} (src-pos kw))
+  (= {klen} (if is-lambda {1} {3}))
+  (if (>= kp 0) {idx/emit-semtok ctx kp klen TOK_KEYWORD 0} {})
+  (if (< (len tl) 2) {idx/walk-each ctx tl}
+    {do
+      (= {formals} (head tl))
+      (= {body} (nth 2 tl))
+      (= {fname} nil)
+      (= {params} formals)
+      (if (and (not is-lambda) (list? formals) (not (nil? formals)))
+        {do
+          (= {fname} (head formals))
+          (= {params} (tail formals))
+          (if (sym? fname) {do
+            (= {fp} (src-pos fname))
+            (= {fl} (len (str fname)))
+            (if (>= fp 0) {do
+              (idx/emit-semtok ctx fp fl TOK_FUNCTION 1)
+              (idx/emit-ref ctx (str fname) fp fl -1 1)
+              (idx/emit-node ctx fp (+ fp fl) "sym" (str fname))} {})
+            (if (dict/get ctx :top-level) {do
+              (= {arity} (idx/count-params params 0))
+              (dict/set! ctx :last-pos kp)
+              (idx/emit-symbol ctx (str fname) SYMKIND_FUNCTION arity nil nil)} {})}
+            {})} {})
+      (= {scope-pos} (if (> kp 0) {- kp 1} {kp}))
+      (idx/push-scope ctx scope-pos)
+      (idx/collect-params ctx params scope-pos)
+      (= {was-top} (dict/get ctx :top-level))
+      (dict/set! ctx :top-level nil)
+      (if (and (list? body) (not (nil? body)) (quoted? body))
+        {idx/walk-qbody ctx body}
+        {idx/walk-expr ctx body})
+      (dict/set! ctx :top-level was-top)
+      (idx/pop-scope ctx)})
+})
+
+(sig 'idx/count-params {-> List Num Num})
+(fun {idx/count-params params n} {
+  if (nil? params) {n}
+  {if (and (sym? (head params)) (== (str (head params)) "&")) {n}
+  {idx/count-params (tail params) (+ n 1)}}
+})
+
+(sig 'idx/collect-params {-> Dict List Num Nil})
+(fun {idx/collect-params ctx params scope-pos} {
+  if (nil? params) {}
+  {do
+    (= {p} (head params))
+    (if (sym? p) {do
+      (= {name} (str p))
+      (if (== name "&") {}
+        {do
+          (idx/add-name ctx name)
+          (= {pp} (src-pos p))
+          (= {pl} (len name))
+          (if (>= pp 0) {do
+            (idx/emit-semtok ctx pp pl TOK_PARAMETER 1)
+            (idx/emit-ref ctx name pp pl scope-pos 1)
+            (idx/emit-node ctx pp (+ pp pl) "sym" name)} {})})} {})
+    (idx/collect-params ctx (tail params) scope-pos)}
+})
+
+; --- Binding (def/=) ---
+
+(sig 'idx/walk-binding {-> Dict Any List Nil})
+(fun {idx/walk-binding ctx kw tl} {do
+  (= {kp} (src-pos kw))
+  (= {klen} (len (str kw)))
+  (if (>= kp 0) {idx/emit-semtok ctx kp klen TOK_KEYWORD 0} {})
+  (if (nil? tl) {}
+    {do
+      (= {binding} (head tl))
+      (= {vals} (tail tl))
+      (= {is-global} (== (str kw) "def"))
+      (= {scope-id} (if is-global {-1} {dict/get ctx :scope-pos}))
+      (if (and (list? binding) (quoted? binding))
+        {idx/walk-binding-names ctx binding scope-id kp is-global}
+        {})
+      (if (and (not is-global) (list? binding) (quoted? binding)
+               (sym? (head binding)))
+        {idx/add-name ctx (str (head binding))} {})
+      (idx/walk-each ctx vals)})
+})
+
+(sig 'idx/walk-binding-names {-> Dict List Num Num Num Nil})
+(fun {idx/walk-binding-names ctx binding scope-id kp is-global} {
+  if (nil? binding) {}
+  {do
+    (= {v} (head binding))
+    (if (sym? v) {do
+      (= {vp} (src-pos v))
+      (= {vl} (len (str v)))
+      (if (>= vp 0) {do
+        (idx/emit-semtok ctx vp vl TOK_VARIABLE 1)
+        (idx/emit-ref ctx (str v) vp vl scope-id 1)
+        (idx/emit-node ctx vp (+ vp vl) "sym" (str v))} {})
+      (if (and is-global (dict/get ctx :top-level))
+        {do (dict/set! ctx :last-pos kp)
+            (idx/emit-symbol ctx (str v) SYMKIND_VARIABLE -1 nil nil)} {})} {})
+    (idx/walk-binding-names ctx (tail binding) scope-id kp is-global)}
+})
+
+; --- Do block ---
+
+(sig 'idx/walk-do {-> Dict List Nil})
+(fun {idx/walk-do ctx tl} {
+  if (nil? tl) {}
+  {do
+    (= {child} (head tl))
+    (if (and (list? child) (not (nil? child)) (not (quoted? child)))
+      {do
+        (= {ch} (head child))
+        (if (and (sym? ch) (== (str ch) "="))
+          {do (= {b} (nth 2 child))
+              (if (and (list? b) (quoted? b) (sym? (head b)))
+                {idx/add-name ctx (str (head b))} {})} {})} {})
+    (idx/walk-expr ctx child)
+    (idx/walk-do ctx (tail tl))}
+})
+
+; --- Match ---
+
+(sig 'idx/walk-match {-> Dict List Nil})
+(fun {idx/walk-match ctx tl} {do
+  (if (nil? tl) {}
+    {do
+      (idx/walk-expr ctx (head tl))
+      (idx/walk-match-clauses ctx (tail tl))})
+})
+
+(sig 'idx/walk-match-clauses {-> Dict List Nil})
+(fun {idx/walk-match-clauses ctx clauses} {
+  if (nil? clauses) {}
+  {do
+    (= {clause} (head clauses))
+    (if (and (list? clause) (quoted? clause))
+      {do
+        (= {pattern} (head clause))
+        (= {body-list} (tail clause))
+        (= {cp} (src-pos clause))
+        (idx/push-scope ctx cp)
+        (if (and (list? pattern) (not (nil? pattern)))
+          {do
+            (= {ctor} (head pattern))
+            (if (sym? ctor) {do
+              (= {cpos} (src-pos ctor))
+              (= {clen} (len (str ctor)))
+              (if (>= cpos 0) {do
+                (idx/emit-semtok ctx cpos clen TOK_TYPE 0)
+                (idx/emit-node ctx cpos (+ cpos clen) "sym" (str ctor))} {})} {})
+            (idx/walk-match-vars ctx (tail pattern) cp)}
+          {if (sym? pattern) {do
+            (= {pname} (str pattern))
+            (= {pp} (src-pos pattern))
+            (if (and (>= pp 0) (not (== pname "_")))
+              {do (idx/add-name ctx pname)
+                  (idx/emit-semtok ctx pp (len pname) TOK_PARAMETER 1)
+                  (idx/emit-ref ctx pname pp (len pname) cp 1)
+                  (idx/emit-node ctx pp (+ pp (len pname)) "sym" pname)} {})} {}})
+        (idx/walk-match-body ctx body-list)
+        (idx/pop-scope ctx)} {})
+    (idx/walk-match-clauses ctx (tail clauses))}
+})
+
+(sig 'idx/walk-match-vars {-> Dict List Num Nil})
+(fun {idx/walk-match-vars ctx vars cp} {
+  if (nil? vars) {}
+  {do
+    (= {v} (head vars))
+    (if (sym? v) {do
+      (= {vn} (str v))
+      (= {vp} (src-pos v))
+      (= {vl} (len vn))
+      (idx/add-name ctx vn)
+      (if (>= vp 0) {do
+        (idx/emit-semtok ctx vp vl TOK_PARAMETER 1)
+        (idx/emit-ref ctx vn vp vl cp 1)
+        (idx/emit-node ctx vp (+ vp vl) "sym" vn)} {})} {})
+    (idx/walk-match-vars ctx (tail vars) cp)}
+})
+
+(sig 'idx/walk-match-body {-> Dict List Nil})
+(fun {idx/walk-match-body ctx body-list} {
+  if (nil? body-list) {}
+  {do
+    (= {be} (head body-list))
+    (if (and (list? be) (quoted? be))
+      {idx/walk-qbody ctx be}
+      {idx/walk-expr ctx be})
+    (idx/walk-match-body ctx (tail body-list))}
+})
+
+; --- Q-expression handling ---
+
+(sig 'idx/walk-qbody {-> Dict List Nil})
+(fun {idx/walk-qbody ctx qexpr} {do
+  (if (or (nil? qexpr) (not (list? qexpr))) {}
+    {do
+      (= {hd} (head qexpr))
+      (if (and (sym? hd) (== (str hd) "do"))
+        {do (= {dp} (src-pos hd))
+            (if (>= dp 0) {idx/emit-semtok ctx dp 2 TOK_KEYWORD 0} {})
+            (idx/walk-do ctx (tail qexpr))}
+        {if (and (sym? hd) (not (nil? (tail qexpr))))
+          {idx/walk-list-head ctx qexpr hd (tail qexpr)}
+          {idx/walk-each ctx qexpr}})})
+})
+
+(sig 'idx/walk-qexpr-tokens {-> Dict List Nil})
+(fun {idx/walk-qexpr-tokens ctx qexpr} {
+  if (nil? qexpr) {}
+  {do
+    (= {elem} (head qexpr))
+    (if (sym? elem) {do
+      (= {p} (src-pos elem))
+      (= {l} (len (str elem)))
+      (if (>= p 0) {do
+        (idx/emit-semtok ctx p l TOK_VARIABLE 0)
+        (idx/emit-node ctx p (+ p l) "sym" (str elem))} {})}
+    {if (num? elem) {do
+      (= {p} (src-pos elem))
+      (if (>= p 0) {do
+        (= {s} (str elem))
+        (idx/emit-semtok ctx p (len s) TOK_NUMBER 0)} {})}
+    {if (str? elem) {do
+      (= {p} (src-pos elem))
+      (if (>= p 0) {idx/emit-semtok ctx p (+ (len elem) 2) TOK_STRING 0} {})}
+    {if (list? elem) {idx/walk-qexpr-tokens ctx elem} {}}}})
+    (idx/walk-qexpr-tokens ctx (tail qexpr))}
+})
+
+; --- Type/sig extraction ---
+
+(sig 'idx/extract-type {-> Dict Num List Nil})
+(fun {idx/extract-type ctx kp tl} {do
+  (if (nil? tl) {}
+    {do
+      (= {type-name-q} (head tl))
+      (if (and (list? type-name-q) (quoted? type-name-q) (sym? (head type-name-q)))
+        {do
+          (= {tname} (str (head type-name-q)))
+          (dict/set! ctx :last-pos kp)
+          (idx/emit-symbol ctx tname SYMKIND_TYPE -1 nil nil)
+          (= {fields} (nth 2 tl))
+          (= {arity} (if (list? fields) {/ (len fields) 2} {0}))
+          (idx/emit-symbol ctx tname SYMKIND_CONSTRUCTOR arity nil nil)}
+        {})})
+})
+
+(sig 'idx/extract-sig {-> Dict Num List Nil})
+(fun {idx/extract-sig ctx kp tl} {do
+  (if (nil? tl) {}
+    {do
+      (= {sig-name-q} (head tl))
+      (if (and (list? sig-name-q) (quoted? sig-name-q) (sym? (head sig-name-q)))
+        {do
+          (= {sname} (str (head sig-name-q)))
+          (dict/set! ctx :last-pos kp)
+          (idx/emit-symbol ctx sname SYMKIND_FUNCTION -1 nil "(sig)")}
+        {})})
+})
+
+; --- Public API ---
+
+(sig 'idx/index-file {-> Ref Num List Str Nil})
+(fun {idx/index-file db file-id ast text} {do
+  (= {stmts} (dict/new))
+  (dict/set! stmts :node (sqlite/prepare db
+    "INSERT INTO nodes (file_id,pos,end_pos,type,name,context) VALUES (?1,?2,?3,?4,?5,?6)"))
+  (dict/set! stmts :semtok (sqlite/prepare db
+    "INSERT INTO semantic_tokens (file_id,pos,length,token_type,modifiers) VALUES (?1,?2,?3,?4,?5)"))
+  (dict/set! stmts :ref (sqlite/prepare db
+    "INSERT INTO scoped_refs (file_id,name,pos,len,scope_id,is_def) VALUES (?1,?2,?3,?4,?5,?6)"))
+  (dict/set! stmts :scope (sqlite/prepare db
+    "INSERT INTO scopes (file_id,pos,parent_pos) VALUES (?1,?2,?3)"))
+  (dict/set! stmts :hint (sqlite/prepare db
+    "INSERT INTO inlay_hints (file_id,pos,label,kind) VALUES (?1,?2,?3,?4)"))
+  (dict/set! stmts :symbol (sqlite/prepare db
+    "INSERT INTO symbols (name,file_id,line,col,kind,arity,doc,sig) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)"))
+  (dict/set! stmts :global-ref (sqlite/prepare db
+    "INSERT INTO refs (name,file_id,line,col) VALUES (?1,?2,?3,?4)"))
+
+  ; Delete old data
+  (sqlite/exec db "DELETE FROM nodes WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM semantic_tokens WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM scoped_refs WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM scopes WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM inlay_hints WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
+
+  (= {ctx} (dict/new))
+  (dict/set! ctx :db db)
+  (dict/set! ctx :file-id file-id)
+  (dict/set! ctx :text text)
+  (dict/set! ctx :stmts stmts)
+  (dict/set! ctx :top-level 1)
+  (dict/set! ctx :scope-pos nil)
+  (dict/set! ctx :scope-depth 0)
+  (dict/set! ctx :scope-names (list))
+  (dict/set! ctx :scope-parent-names (list))
+  (dict/set! ctx :last-pos 0)
+
+  (idx/walk-each ctx ast)
+
+  (sqlite/finalize (dict/get stmts :node))
+  (sqlite/finalize (dict/get stmts :semtok))
+  (sqlite/finalize (dict/get stmts :ref))
+  (sqlite/finalize (dict/get stmts :scope))
+  (sqlite/finalize (dict/get stmts :hint))
+  (sqlite/finalize (dict/get stmts :symbol))
+  (sqlite/finalize (dict/get stmts :global-ref))
+})
