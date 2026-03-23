@@ -69,17 +69,17 @@
       {hover/format-markdown info name})}
 })
 
-(sig 'handle-hover {-> Num io/TextDocPosParams Nil})
+(sig 'handle-hover {-> Num TextDocPosParams Nil})
 (fun {handle-hover id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
       (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
-      (= {path} (uri->path ctx:uri))
+      (= {path} (symdb/uri->path ctx:uri))
       (= {info} (if (nil? lsp/db) {nil}
         {do (= {r} (symdb/node-at-offset lsp/db path offset))
             (if (error? r) {nil} {r})}))
-      (= {wr} (word-range-at-position ctx:text ctx:line ctx:col))
+      (= {wr} (symdb/word-range-at-position ctx:text ctx:line ctx:col))
       (= {word} (if (nil? info)
         {if (nil? wr) {nil} {wr:word}}
         {plist/get info :name}))
@@ -117,12 +117,12 @@
 ; Definition and references
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-definition {-> Num io/TextDocPosParams Nil})
+(sig 'handle-definition {-> Num TextDocPosParams Nil})
 (fun {handle-definition id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
-      (= {path} (uri->path ctx:uri))
+      (= {path} (symdb/uri->path ctx:uri))
       (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
       (= {local-def} (lsp/find-local-def ctx:ast ctx:text ctx:line ctx:col ctx:word path offset))
       (if (not (nil? local-def))
@@ -202,12 +202,12 @@
           :end (list :line (head lc) :character (+ (head (tail lc)) (len rname)))))
 })
 
-(sig 'handle-references {-> Num io/TextDocPosParams Nil})
+(sig 'handle-references {-> Num TextDocPosParams Nil})
 (fun {handle-references id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
     {do
-      (= {path} (uri->path ctx:uri))
+      (= {path} (symdb/uri->path ctx:uri))
       (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
       (= {target} (if (nil? lsp/db) {nil}
         {symdb/get-ref-at-offset lsp/db path offset}))
@@ -374,14 +374,14 @@
   CompletionRow (plist/get r :name) (plist/get r :kind) (plist/get r :sig) (plist/get r :doc)
 })
 
-(sig 'handle-completion {-> Num io/TextDocPosParams Nil})
+(sig 'handle-completion {-> Num TextDocPosParams Nil})
 (fun {handle-completion id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id nil}
     {if (lsp/in-string? ctx:text ctx:line ctx:col)
       {lsp/send-response id (list :isIncomplete :false :items nil)}
       {do
-        (= {word} (word-at-position ctx:text ctx:line ctx:col))
+        (= {word} (symdb/word-at-position ctx:text ctx:line ctx:col))
         (= {prefix} (if (nil? word) {""} {word}))
         (= {snippet-items} (if (str/starts-with? prefix ":")
           {nil}
@@ -402,13 +402,13 @@
 ; Document and workspace symbols, semantic tokens
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-document-symbols {-> Num io/DocParams Nil})
+(sig 'handle-document-symbols {-> Num DocParams Nil})
 (fun {handle-document-symbols id params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
-      (= {path} (uri->path uri))
+      (= {path} (symdb/uri->path uri))
       (= {syms} (symdb/file-symbols lsp/db path))
       (= {lsp-syms} (map (\ {s} {do
         (= {sym-line} s:line)
@@ -451,12 +451,12 @@
       }) syms))
       (lsp/send-response id lsp-syms)})})
 
-(sig 'handle-semantic-tokens {-> Num io/DocParams Nil})
+(sig 'handle-semantic-tokens {-> Num DocParams Nil})
 (fun {handle-semantic-tokens id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id (list :data nil)}
     {do
-      (= {path} (uri->path ctx:uri))
+      (= {path} (symdb/uri->path ctx:uri))
       (= {rows} (if (nil? lsp/db) {nil} {symdb/get-semantic-tokens lsp/db path}))
       (= {data} (if (nil? rows)
         {sem/tokenize-ast ctx:ast ctx:text}
@@ -478,12 +478,12 @@
 ; Rename support
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-prepare-rename {-> Num io/TextDocPosParams Nil})
+(sig 'handle-prepare-rename {-> Num TextDocPosParams Nil})
 (fun {handle-prepare-rename id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-error id -32602 "Document not found"}
     {do
-      (= {wr} (word-range-at-position ctx:text ctx:line ctx:col))
+      (= {wr} (symdb/word-range-at-position ctx:text ctx:line ctx:col))
       (if (nil? wr) {lsp/send-error id -32602 "No symbol at cursor"}
         {lsp/send-response id
           (list :range (list
@@ -538,7 +538,7 @@
     (rename/make-doc-changes-walk (tail (tail pairs)) (qcons doc-edit acc))}
 })
 
-(sig 'handle-rename {-> Num io/RenameParams Nil})
+(sig 'handle-rename {-> Num RenameParams Nil})
 (fun {handle-rename id params} {do
   (= {new-name} params:newName)
   (= {ctx} (lsp/get-word-ctx params))

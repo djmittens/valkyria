@@ -226,7 +226,7 @@
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {nil}
     {do
-      (= {w} (word-at-position ctx:text ctx:line ctx:col))
+      (= {w} (symdb/word-at-position ctx:text ctx:line ctx:col))
       (if (nil? w) {nil}
         {(WordCtx :uri ctx:uri :text ctx:text :ast ctx:ast :line ctx:line :col ctx:col :word w)})})
 })

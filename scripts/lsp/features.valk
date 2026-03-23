@@ -5,13 +5,13 @@
 ; Inlay hints — parameter name hints for function calls
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-inlay-hints {-> Num io/RangeParams Nil})
+(sig 'handle-inlay-hints {-> Num RangeParams Nil})
 (fun {handle-inlay-hints id params} {do
   (= {range} (plist/get params :range))
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
     {do
-      (= {path} (uri->path ctx:uri))
+      (= {path} (symdb/uri->path ctx:uri))
       (= {rows} (if (nil? lsp/db) {nil}
         {symdb/get-inlay-hints lsp/db path 0 999999}))
       (= {hints} (if (nil? rows)
@@ -85,12 +85,12 @@
       (plist/get local name)})
 })
 
-(sig 'handle-signature-help {-> Num io/TextDocPosParams Nil})
+(sig 'handle-signature-help {-> Num TextDocPosParams Nil})
 (fun {handle-signature-help id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
-      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
       (= {open-pos} (sig/scan-back ctx:text (- offset 1) 0 0))
       (if (nil? open-pos) {lsp/send-response id (None)}
         {do
@@ -144,13 +144,13 @@
   :kind kind)
 })
 
-(sig 'handle-document-highlight {-> Num io/TextDocPosParams Nil})
+(sig 'handle-document-highlight {-> Num TextDocPosParams Nil})
 (fun {handle-document-highlight id params} {do
   (= {ctx} (lsp/get-word-ctx params))
   (if (nil? ctx) {lsp/send-response id nil}
     {do
-      (= {path} (uri->path ctx:uri))
-      (= {offset} (line-col->offset ctx:text ctx:line ctx:col))
+      (= {path} (symdb/uri->path ctx:uri))
+      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
       (= {target} (if (nil? lsp/db) {nil}
         {symdb/get-ref-at-offset lsp/db path offset}))
       (= {db-refs} (if (nil? target) {nil}
@@ -224,7 +224,7 @@
           :target (str "file://" full-path)) acc)})}
 })
 
-(sig 'handle-document-link {-> Num io/DocParams Nil})
+(sig 'handle-document-link {-> Num DocParams Nil})
 (fun {handle-document-link id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -287,7 +287,7 @@
                      :kind "region") acc})})
 })
 
-(sig 'handle-folding-range {-> Num io/DocParams Nil})
+(sig 'handle-folding-range {-> Num DocParams Nil})
 (fun {handle-folding-range id params} {do
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -304,7 +304,7 @@
   map (\ {pos} {do
     (= {line} pos:line)
     (= {col} pos:character)
-    (= {offset} (line-col->offset text line col))
+    (= {offset} (analysis/line-col->offset text line col))
     (if (error? ast)
       {list :range (list :start pos :end pos)}
       {do
@@ -367,13 +367,13 @@
 ; Code lens — show reference counts above function definitions
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-code-lens {-> Num io/DocParams Nil})
+(sig 'handle-code-lens {-> Num DocParams Nil})
 (fun {handle-code-lens id params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (if (nil? lsp/db) {lsp/send-response id nil}
     {do
-      (= {path} (uri->path uri))
+      (= {path} (symdb/uri->path uri))
       (= {syms} (symdb/file-symbols lsp/db path))
       (= {lenses} (lens/build-from-syms syms lsp/db))
       (lsp/send-response id lenses)})})

@@ -10,7 +10,7 @@
   (= {fp} (file/fingerprint path))
   (if (error? fp) {0}
     {do
-      (= {fpath} (uri->path (str "file://" path)))
+      (= {fpath} (symdb/uri->path (str "file://" path)))
       (= {existing} (sqlite/query-maybe db
         "SELECT hash FROM files WHERE path=?1" fpath))
       (if (not (nil? existing))
@@ -24,7 +24,7 @@
                 (= {ast} (parse text))
                 (if (not (error? ast))
                   {do
-                    (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (uri->path uri)))
+                    (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (symdb/uri->path uri)))
                     (if (not (nil? fid)) {lsp/index-ast db fid ast text} {})}
                   {})
                 1})}}
@@ -37,7 +37,7 @@
               (= {ast} (parse text))
               (if (not (error? ast))
                 {do
-                  (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (uri->path uri)))
+                  (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (symdb/uri->path uri)))
                   (if (not (nil? fid)) {lsp/index-ast db fid ast text} {})}
                 {})
               1})})})
@@ -62,7 +62,7 @@
 
 (sig 'lsp/precompute-file-data {-> Ref Str List Str Nil})
 (fun {lsp/precompute-file-data db uri ast text} {do
-  (= {path} (uri->path uri))
+  (= {path} (symdb/uri->path uri))
   (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
   (if (nil? file-id) {}
     {do
@@ -168,7 +168,7 @@
       (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
       (map make-lsp-diag diags)})})
 
-(sig 'handle-pull-diagnostics {-> Num io/DocParams Nil})
+(sig 'handle-pull-diagnostics {-> Num DocParams Nil})
 (fun {handle-pull-diagnostics id params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
@@ -193,7 +193,7 @@
             (= {ast} (lsp/get-ast uri text))
             (if (not (error? ast))
               {do
-                (= {path} (uri->path uri))
+                (= {path} (symdb/uri->path uri))
                 (= {fid} (sqlite/query-value lsp/db "SELECT id FROM files WHERE path=?1" path))
                 (if (not (nil? fid)) {lsp/index-ast lsp/db fid ast text} {})}
               {})
@@ -205,7 +205,7 @@
   (if (nil? lsp/db) {}
     {do
       (= {hash} (str "mem:" (len text)))
-      (= {path} (uri->path uri))
+      (= {path} (symdb/uri->path uri))
       (= {existing} (sqlite/query-maybe lsp/db
         "SELECT hash FROM files WHERE path=?1" path))
       (if (not (nil? existing))
@@ -308,7 +308,7 @@
   {do
     (= {path} (plist/get prep :path))
     (= {fp} (plist/get prep :fp))
-    (= {fpath} (uri->path (str "file://" path)))
+    (= {fpath} (symdb/uri->path (str "file://" path)))
     (= {existing} (sqlite/query-maybe db
       "SELECT hash FROM files WHERE path=?1" fpath))
     (if (and (not (nil? existing)) (and (not (error? existing)) (== existing:hash fp)))
@@ -428,7 +428,7 @@
     (= {rest} (lsp/filter-changed db (tail files)))
     (if (error? fp) {rest}
       {do
-        (= {fpath} (uri->path (str "file://" path)))
+        (= {fpath} (symdb/uri->path (str "file://" path)))
         (= {existing} (sqlite/query-maybe db
           "SELECT hash FROM files WHERE path=?1" fpath))
         (if (and (not (nil? existing)) (== existing:hash fp))
@@ -593,13 +593,13 @@
 ; Method handlers — notifications
 ; ---------------------------------------------------------------------------
 
-(sig 'handle-initialize {-> Num io/InitParams Nil})
+(sig 'handle-initialize {-> Num InitParams Nil})
 (fun {handle-initialize id params} {do
   (= {root-uri} params:rootUri)
   (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
   (if (not (nil? root-uri))
     {do
-      (def {lsp/root-path} (uri->path root-uri))
+      (def {lsp/root-path} (symdb/uri->path root-uri))
       (= {db-dir} (str lsp/root-path "/.valk"))
       (= {db-path} (str db-dir "/symdb.sqlite"))
       (def {lsp/db} (symdb/init db-path))}
@@ -608,7 +608,7 @@
 
 (def {lsp/noop-cb} (\ {_} {}))
 
-(sig 'handle-did-open {-> io/OpenParams Nil})
+(sig 'handle-did-open {-> OpenParams Nil})
 (fun {handle-did-open params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
@@ -616,7 +616,7 @@
   (lsp/doc-store uri text)
   (dict/remove! lsp/line-index-cache uri)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
-  (= {snap} (io/DocSnapshot uri text lsp/doc-version))
+  (= {snap} (DocSnapshot uri text lsp/doc-version))
   (aio/dispatch lsp/sys
     (\ {_} {do (lsp/cache-ast snap:uri snap:text)
                (lsp/sync-doc snap:uri snap:text)
@@ -624,7 +624,7 @@
                nil})
     nil lsp/noop-cb)})
 
-(sig 'handle-did-change {-> io/ChangeParams Nil})
+(sig 'handle-did-change {-> ChangeParams Nil})
 (fun {handle-did-change params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
@@ -639,7 +639,7 @@
       (dict/remove! lsp/ast-cache uri)
       (dict/remove! lsp/line-index-cache uri)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (= {snap} (io/DocSnapshot uri text lsp/doc-version))
+      (= {snap} (DocSnapshot uri text lsp/doc-version))
       (= {v} lsp/doc-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/doc-version v)) {nil}
@@ -654,7 +654,7 @@
           {do (lsp/publish-diagnostics snap:uri snap:text) nil}})
         nil lsp/noop-cb)})})
 
-(sig 'handle-did-close {-> io/DocParams Nil})
+(sig 'handle-did-close {-> DocParams Nil})
 (fun {handle-did-close params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
@@ -676,7 +676,7 @@
       (lsp/doc-store uri save-text)
       (dict/remove! lsp/line-index-cache uri)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (= {snap} (io/DocSnapshot uri save-text lsp/doc-version))
+      (= {snap} (DocSnapshot uri save-text lsp/doc-version))
       (aio/dispatch lsp/sys
         (\ {_} {do (lsp/cache-ast snap:uri snap:text)
                    (lsp/sync-doc snap:uri snap:text)
