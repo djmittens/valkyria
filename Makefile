@@ -182,6 +182,7 @@ TEST_RUN_ARGS = $(TEST_RUN_BASE)
 # Default test target (all C + Valk + stress)
 .PHONY: test
 test: build
+	-@$(MAKE) check 2>&1 | tail -3
 	$(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
 
 # C tests only

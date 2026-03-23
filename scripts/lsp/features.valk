@@ -1,5 +1,6 @@
 ; Valkyria LSP Server — inlay hints, signature help, highlight, links, folding, selection, code lens, code actions
 
+(load "scripts/lsp/nav.valk")
 
 ; ---------------------------------------------------------------------------
 ; Inlay hints — parameter name hints for function calls

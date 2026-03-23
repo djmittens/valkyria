@@ -222,16 +222,16 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
   valk_module_t *child_mod = NULL;
 
   char fqn[VALK_MOD_PATH_MAX] = {0};
-  if (!prelude) {
-    child_mod = valk_mod_find_or_create_child(
-      prev_mod ? prev_mod : valk_mod_root(), prefix);
+  bool do_rewrite = !prelude && prev_mod != NULL;
+  if (do_rewrite) {
+    child_mod = valk_mod_find_or_create_child(prev_mod, prefix);
     child_mod->resolved_path = strdup(resolved);
     valk_mod_set_current(child_mod);
     valk_mod_qualified_path(child_mod, fqn, sizeof(fqn));
   }
 
   valk_lval_t *result = load_eval_file(e, filename, text,
-                                       prelude ? NULL : fqn);
+                                       do_rewrite ? fqn : NULL);
   free(text);
 
   valk_mod_set_current(prev_mod);

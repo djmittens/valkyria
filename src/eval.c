@@ -256,8 +256,6 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
   } else {
     call_env->parent = env;
   }
-
-
   // LCOV_EXCL_BR_STOP
 
   // LCOV_EXCL_BR_START - lambda argument binding has many internal branches for variadics/partial application

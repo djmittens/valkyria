@@ -1,14 +1,5 @@
 ; Valkyria LSP Server — dispatch, main loop
 
-(load "stdlib/prelude.valk")
-(load "stdlib/diag/symdb.valk")
-(load "stdlib/diag/validate.valk")
-(load "scripts/lsp/analysis.valk")
-(load "scripts/lsp/hints.valk")
-(load "scripts/lsp/hints-fields.valk")
-(load "scripts/lsp/io.valk")
-(load "scripts/lsp/workspace.valk")
-(load "scripts/lsp/nav.valk")
 (load "scripts/lsp/features.valk")
 
 ; ---------------------------------------------------------------------------
@@ -160,25 +151,25 @@
 (sig 'lsp/handle-readonly {-> Str Any List Nil})
 (fun {lsp/handle-readonly method id params} {
   match method
-    {"textDocument/hover" (nav/handle-hover id (lsp/to-tdp-params params))}
-    {"textDocument/definition" (nav/handle-definition id (lsp/to-tdp-params params))}
-    {"textDocument/references" (nav/handle-references id (lsp/to-tdp-params params))}
-    {"textDocument/completion" (nav/handle-completion id (lsp/to-tdp-params params))}
-    {"textDocument/documentSymbol" (nav/handle-document-symbols id (lsp/to-doc-params params))}
-    {"workspace/symbol" (nav/handle-workspace-symbols id params)}
-    {"textDocument/semanticTokens/full" (nav/handle-semantic-tokens id (lsp/to-doc-params params))}
+    {"textDocument/hover" (handle-hover id (lsp/to-tdp-params params))}
+    {"textDocument/definition" (handle-definition id (lsp/to-tdp-params params))}
+    {"textDocument/references" (handle-references id (lsp/to-tdp-params params))}
+    {"textDocument/completion" (handle-completion id (lsp/to-tdp-params params))}
+    {"textDocument/documentSymbol" (handle-document-symbols id (lsp/to-doc-params params))}
+    {"workspace/symbol" (handle-workspace-symbols id params)}
+    {"textDocument/semanticTokens/full" (handle-semantic-tokens id (lsp/to-doc-params params))}
     {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id (lsp/to-range-params params))}
-    {"textDocument/prepareRename" (nav/handle-prepare-rename id (lsp/to-tdp-params params))}
-    {"textDocument/rename" (nav/handle-rename id (lsp/to-rename-params params))}
-    {"textDocument/inlayHint" (features/handle-inlay-hints id (lsp/to-range-params params))}
-    {"textDocument/signatureHelp" (features/handle-signature-help id (lsp/to-tdp-params params))}
-    {"textDocument/documentHighlight" (features/handle-document-highlight id (lsp/to-tdp-params params))}
-    {"textDocument/documentLink" (features/handle-document-link id (lsp/to-doc-params params))}
-    {"textDocument/foldingRange" (features/handle-folding-range id params)}
-    {"textDocument/selectionRange" (features/handle-selection-range id params)}
-    {"textDocument/codeLens" (features/handle-code-lens id (lsp/to-doc-params params))}
-    {"textDocument/codeAction" (features/handle-code-action id params)}
-    {"textDocument/diagnostic" (workspace/handle-pull-diagnostics id (lsp/to-doc-params params))}
+    {"textDocument/prepareRename" (handle-prepare-rename id (lsp/to-tdp-params params))}
+    {"textDocument/rename" (handle-rename id (lsp/to-rename-params params))}
+    {"textDocument/inlayHint" (handle-inlay-hints id (lsp/to-range-params params))}
+    {"textDocument/signatureHelp" (handle-signature-help id (lsp/to-tdp-params params))}
+    {"textDocument/documentHighlight" (handle-document-highlight id (lsp/to-tdp-params params))}
+    {"textDocument/documentLink" (handle-document-link id (lsp/to-doc-params params))}
+    {"textDocument/foldingRange" (handle-folding-range id params)}
+    {"textDocument/selectionRange" (handle-selection-range id params)}
+    {"textDocument/codeLens" (handle-code-lens id (lsp/to-doc-params params))}
+    {"textDocument/codeAction" (handle-code-action id params)}
+    {"textDocument/diagnostic" (handle-pull-diagnostics id (lsp/to-doc-params params))}
     {_ (if (num? id)
          {lsp/send-error id -32601 (str "Method not found: " method)} {})}
 })
@@ -198,7 +189,7 @@
       (if (nil? method) {}
         {match method
             {"initialize" (do (stderr/write (str "[valk-lsp] <- initialize\n"))
-                              (workspace/handle-initialize id (InitParams (plist/get params :rootUri)))
+                              (handle-initialize id (InitParams (plist/get params :rootUri)))
                               (def {lsp/initialized} 1))}
             {"initialized" (do
               (if (not (nil? lsp/db))
@@ -214,10 +205,10 @@
                  {if (num? id)
                    {lsp/send-error id -32002 "Server not initialized"} {}}
                  {match method
-                   {"textDocument/didOpen" (workspace/handle-did-open (lsp/to-open-params params))}
-                   {"textDocument/didChange" (workspace/handle-did-change (lsp/to-change-params params))}
-                   {"textDocument/didClose" (workspace/handle-did-close (lsp/to-doc-params params))}
-                   {"textDocument/didSave" (workspace/handle-did-save (lsp/to-save-params params))}
+                   {"textDocument/didOpen" (handle-did-open (lsp/to-open-params params))}
+                   {"textDocument/didChange" (handle-did-change (lsp/to-change-params params))}
+                   {"textDocument/didClose" (handle-did-close (lsp/to-doc-params params))}
+                   {"textDocument/didSave" (handle-did-save (lsp/to-save-params params))}
                    {"$/cancelRequest" {}}
                    {_ (if (num? id)
                          {lsp/dispatch-request method id params}

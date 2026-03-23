@@ -112,7 +112,7 @@ valk_module_t *valk_mod_root(void) {
 }
 
 valk_module_t *valk_mod_current(void) {
-  return g_current_mod ? g_current_mod : valk_mod_root();
+  return g_current_mod;
 }
 
 void valk_mod_set_current(valk_module_t *mod) {
