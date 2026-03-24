@@ -13,12 +13,31 @@
 ;   - Unknown types in sig declarations
 ;   - Match pattern field count
 ;   - Division by literal zero
-;   - Unresolvable types
 
 (load "stdlib/diag/symdb.valk")
 (load "stdlib/diag/validate.valk")
 
 (fun {eprintln s} {stderr/write (str s "\n")})
+
+; === Module prefix derivation ===
+; Mirrors the compiler's extract_module_prefix: basename without extension.
+; Files loaded by the C runtime (prelude, builtins) get no prefix.
+
+(def {check/NO_PREFIX_FILES}
+  (dict/from-keys {"stdlib/prelude.valk" "stdlib/builtins.valk"}))
+
+(fun {check/basename-stem path} {do
+  (= {parts} (str/split path "/"))
+  (= {filename} (last parts))
+  (= {dot} (str/index-of filename "."))
+  (if (< dot 1) {filename}
+    {str/slice filename 0 dot})
+})
+
+(fun {check/module-prefix path} {
+  if (dict/has? check/NO_PREFIX_FILES path) {""}
+    {check/basename-stem path}
+})
 
 ; === Find .valk files via git ===
 
@@ -33,6 +52,20 @@
         {all}
         {filter (\ {f} {str/starts-with? f dir}) all})})
 })
+
+; === Ignore list ===
+
+(fun {check/load-ignore-list} {do
+  (= {text} (read-file ".valkcheckignore"))
+  (if (error? text) {(dict/new)}
+    {dict/from-keys
+      (filter (\ {l} {if (> (len l) 0) {not (== (str/slice l 0 1) "#")} {0}})
+        (str/split text "\n"))})
+})
+
+(def {check/IGNORED} (check/load-ignore-list))
+
+(fun {check/ignored? path} {dict/has? check/IGNORED path})
 
 ; === Diagnostic formatting ===
 
@@ -64,7 +97,22 @@
          (check/count-severity (tail diags) sev))}}
 })
 
-; === Phase 1: Sync all files into symdb ===
+; === Phase 1: Sync all files into symdb (using compiler pipeline) ===
+
+(fun {check/sync-light db uri text ast} {do
+  (= {path} (symdb/uri->path uri))
+  (= {hash} (str "mem:" (len text)))
+  (sqlite/exec db
+    "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
+    path hash)
+  (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
+  (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
+  (= {syms} (symdb/extract-symbols-from-ast ast text))
+  (symdb/insert-symbols db file-id syms)
+  (= {refs} (symdb/extract-refs-from-ast ast text))
+  (symdb/insert-refs db file-id refs)
+})
 
 (fun {check/sync-all db files} {
   if (nil? files) {nil}
@@ -72,7 +120,14 @@
     (= {path} (head files))
     (= {text} (read-file path))
     (if (not (error? text))
-      {symdb/sync-document db (str "file://" path) text}
+      {do
+        (= {prefix} (check/module-prefix path))
+        (= {ast} (compile/process text prefix))
+        (if (error? ast) {nil}
+          {do
+            (sqlite/exec db "BEGIN")
+            (check/sync-light db (str "file://" path) text ast)
+            (sqlite/exec db "COMMIT")})}
       {nil})
     (check/sync-all db (tail files))}
 })
@@ -88,27 +143,31 @@
                         :warnings total-warnings}
   {do
     (= {path} (head files))
-    (= {text} (read-file path))
-    (if (error? text)
+    (if (check/ignored? path)
       {check/validate-walk db (tail files) total-lines total-errors total-warnings}
       {do
-        (= {lines} (+ 1 (len (str/split text "\n"))))
-        (= {ast} (parse text))
-        (if (error? ast)
-          {do (eprintln (str path ":1:1: error: " ast))
-              (check/validate-walk db (tail files) (+ total-lines lines)
-                (+ total-errors 1) total-warnings)}
+        (= {text} (read-file path))
+        (if (error? text)
+          {check/validate-walk db (tail files) total-lines total-errors total-warnings}
           {do
-            (= {diags} (vd/validate db ast text))
-            (if (error? diags)
-              {check/validate-walk db (tail files) (+ total-lines lines)
-                total-errors total-warnings}
+            (= {lines} (+ 1 (len (str/split text "\n"))))
+            (= {ast} (parse text))
+            (if (error? ast)
+              {do (eprintln (str path ":1:1: error: " ast))
+                  (check/validate-walk db (tail files) (+ total-lines lines)
+                    (+ total-errors 1) total-warnings)}
               {do
-                (= {errs} (check/count-severity diags 1))
-                (= {warns} (check/count-severity diags 2))
-                (if (> (len diags) 0) {check/print-diags path diags} {nil})
-                (check/validate-walk db (tail files) (+ total-lines lines)
-                  (+ total-errors errs) (+ total-warnings warns))})})})}
+                (= {diags} (vd/validate db ast text))
+                (if (error? diags)
+                  {do (eprintln (str path ": internal error: " diags))
+                      (check/validate-walk db (tail files) (+ total-lines lines)
+                        (+ total-errors 1) total-warnings)}
+                  {do
+                    (= {errs} (check/count-severity diags 1))
+                    (= {warns} (check/count-severity diags 2))
+                    (if (> (len diags) 0) {check/print-diags path diags} {nil})
+                    (check/validate-walk db (tail files) (+ total-lines lines)
+                      (+ total-errors errs) (+ total-warnings warns))})})})})}
 })
 
 ; === Arg parsing ===

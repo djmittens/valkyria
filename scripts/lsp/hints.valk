@@ -37,22 +37,12 @@
 (fun {hint/params-one expr params} {
   if (not (list? expr)) {params}
   {if (nil? expr) {params}
-  {hint/params-dispatch (head expr) (tail expr) params}}
-})
-
-(sig 'hint/params-dispatch {-> Any List List List})
-(fun {hint/params-dispatch hd tl params} {
-  if (not (sym? hd)) {hint/params-walk tl params}
   {do
-    (= {name} (str hd))
-    (if (== name "fun") {hint/params-from-fun tl params}
-    {if (== name "do") {hint/params-walk tl params}
-    {if (== name "\\") {hint/params-walk-lambda tl params}
-    {if (== name "if") {hint/params-walk tl params}
-    {if (== name "match") {hint/params-walk tl params}
-    {if (== name "select") {hint/params-walk tl params}
-    {if (== name "let") {hint/params-walk tl params}
-    {hint/params-walk tl params}}}}}}})}
+    (= {name} (ast/head-name expr))
+    (if (== name "") {hint/params-walk (tail expr) params}
+    {if (== name "fun") {hint/params-from-fun (tail expr) params}
+    {if (== name "\\") {hint/params-walk-lambda (tail expr) params}
+    {hint/params-walk (tail expr) params}}})}}
 })
 
 (sig 'hint/params-walk-lambda {-> List List List})
@@ -181,14 +171,11 @@
 (fun {hint/walk-code expr ctx acc} {
   if (nil? expr) {acc}
   {if (not (list? expr)) {acc}
-  {hint/walk-list (head expr) (tail expr) ctx acc}}
-})
-
-(sig 'hint/walk-list {-> Any List List List List})
-(fun {hint/walk-list hd tl ctx acc} {
-  if (not (sym? hd))
-    {hint/walk-exprs tl ctx (hint/walk-code hd ctx acc)}
-  {hint/walk-dispatch (str hd) tl ctx acc}
+  {do
+    (= {name} (ast/head-name expr))
+    (if (== name "")
+      {hint/walk-exprs (tail expr) ctx acc}
+      {hint/walk-dispatch name (tail expr) ctx acc})}}
 })
 
 (sig 'hint/walk-dispatch {-> Str List List List List})
@@ -241,7 +228,7 @@
   (hint/walk-exprs args ctx acc2)
 })
 
-(sig 'hint/lookup-params {-> Str List List})
+(sig 'hint/lookup-params {-> Str HintCtx List})
 (fun {hint/lookup-params name ctx} {do
   (= {local} (plist/get ctx:local name))
   (if (not (nil? local)) {local}
@@ -367,10 +354,14 @@
 (fun {hint/in-range? line range} {
   if (nil? range) {1}
   {do
-    (= {start-pos} range:start)
-    (= {end-pos} range:end)
-    (= {start-line} start-pos:line)
-    (= {end-line} end-pos:line)
+    (= {start-pos} (plist/get range :start))
+    (= {start-pos} (if (nil? start-pos) {nth 2 range} {start-pos}))
+    (= {end-pos} (plist/get range :end))
+    (= {end-pos} (if (nil? end-pos) {nth 3 range} {end-pos}))
+    (= {start-line} (plist/get start-pos :line))
+    (= {start-line} (if (nil? start-line) {nth 2 start-pos} {start-line}))
+    (= {end-line} (plist/get end-pos :line))
+    (= {end-line} (if (nil? end-line) {nth 2 end-pos} {end-line}))
     (and (>= line start-line) (<= line end-line))}
 })
 

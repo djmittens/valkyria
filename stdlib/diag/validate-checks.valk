@@ -18,7 +18,7 @@
    "type" "match" "sig" "ctx/with" "ctx/with-deadline" "with"}))
 
 (def {vd/VALIDATE_CONSTANTS}
-  (dict/from-keys {"true" "false" "nil" "otherwise" "_"}))
+  (dict/from-keys {"true" "false" "nil" "otherwise" "_" "sys/argv" "test"}))
 
 (def {vd/VALIDATE_BUILTIN_TYPES}
   (dict/from-keys {"Num" "Str" "Nil" "Bool" "Err" "QExpr" "Fun" "Sym"
@@ -33,6 +33,7 @@
   vd/collect-globals-walk ast nil
 })
 
+
 (sig 'vd/collect-globals-walk {-> List List List})
 (fun {vd/collect-globals-walk exprs acc} {
   if (nil? exprs) {acc}
@@ -44,13 +45,10 @@
 (fun {vd/collect-globals-one expr acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
-  {vd/collect-globals-dispatch (head expr) (tail expr) acc}}
-})
-
-(sig 'vd/collect-globals-dispatch {-> Any List List List})
-(fun {vd/collect-globals-dispatch hd tl acc} {
-  if (not (sym? hd)) {acc}
-  {vd/collect-globals-by-form (str hd) tl acc}
+  {do
+    (= {name} (ast/head-name expr))
+    (if (== name "") {acc}
+      {vd/collect-globals-by-form name (tail expr) acc})}}
 })
 
 (sig 'vd/collect-globals-by-form {-> Str List List List})
@@ -183,10 +181,9 @@
 (fun {vd/collect-ast-type-one expr acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
-  {if (not (sym? (head expr))) {acc}
-  {if (== (str (head expr)) "type")
+  {if (== (ast/head-name expr) "type")
     {vd/collect-type-decl-name (tail expr) acc}
-    {acc}}}}
+    {acc}}}
 })
 
 (sig 'vd/collect-type-decl-name {-> List List List})
@@ -222,7 +219,10 @@
   if (nil? rows) {d}
   {do
     (= {row} (head rows))
-    (dict/put! d row:name)
+    (= {name} row:name)
+    (dict/put! d name)
+    (= {base} (vd/strip-module-prefix name))
+    (if (not (nil? base)) {dict/put! d base} {nil})
     (vd/build-known-set (tail rows) d)}
 })
 
@@ -266,7 +266,12 @@
 })
 
 (sig 'vd/lookup-arity-cached {-> List Str Any})
-(fun {vd/lookup-arity-cached ctx name} {do
+(fun {vd/lookup-arity-cached ctx name} {
+  vd/lookup-arity-cached-direct ctx name
+})
+
+(sig 'vd/lookup-arity-cached-direct {-> List Str Any})
+(fun {vd/lookup-arity-cached-direct ctx name} {do
   (= {cache} (plist/get ctx :arity-cache))
   (if (nil? cache) {vd/lookup-arity (plist/get ctx :db) name}
     {do
@@ -322,6 +327,13 @@
   {vd/in-scope? name (tail scope-chain)}}
 })
 
+(sig 'vd/strip-module-prefix {-> Str Str})
+(fun {vd/strip-module-prefix name} {do
+  (= {idx} (str/index-of name "/"))
+  (if (< idx 1) {nil}
+    {str/slice name (+ idx 1) (len name)})
+})
+
 (sig 'vd/is-known {-> Str List Dict Dict Num})
 (fun {vd/is-known name scope globals-set known-set} {
   if (dict/has? vd/VALIDATE_CONSTANTS name) {1}
@@ -330,7 +342,14 @@
   {if (dict/has? globals-set name) {1}
   {if (dict/has? known-set name) {1}
   {if (vd/is-accessor name) {1}
-  {0}}}}}}
+  {vd/is-known-by-basename name known-set}}}}}}
+})
+
+(sig 'vd/is-known-by-basename {-> Str Dict Num})
+(fun {vd/is-known-by-basename name known-set} {do
+  (= {base} (vd/strip-module-prefix name))
+  (if (nil? base) {0}
+    {dict/has? known-set base})
 })
 
 (sig 'vd/add-diag {-> List Any Str Str List})
@@ -452,15 +471,14 @@
 })
 
 (sig 'vd/infer-arg-call-type {-> List Str})
-(fun {vd/infer-arg-call-type expr} {
-  if (not (sym? (head expr))) {nil}
-  {do
-    (= {n} (str (head expr)))
-    (if (== n "list") {"List"}
-    {if (== n "dict/new") {"Dict"}
-    {if (== n "dict/from-keys") {"Dict"}
-    {if (== n "\\") {"Fun"}
-    {nil}}}})}
+(fun {vd/infer-arg-call-type expr} {do
+  (= {n} (ast/head-name expr))
+  (if (== n "") {nil}
+  {if (== n "list") {"List"}
+  {if (== n "dict/new") {"Dict"}
+  {if (== n "dict/from-keys") {"Dict"}
+  {if (== n "\\") {"Fun"}
+  {nil}}}}})
 })
 
 (sig 'vd/is-type-var {-> Str Num})
@@ -493,13 +511,15 @@
   {if (== actual "Any") {1}
   {if (vd/is-type-var expected) {1}
   {if (vd/is-type-var actual) {1}
+  {if (if (== actual "Fun") {vd/is-compound-type expected} {0})
+    {== (vd/extract-compound-base expected) "->"}
   {if (vd/is-compound-type expected)
     {do
       (= {base} (vd/extract-compound-base expected))
       (if (== base actual) {1}
         {if (vd/is-type-var base) {1}
         {== expected actual}})}
-  {== expected actual}}}}}}}
+  {== expected actual}}}}}}}}
 })
 
 (sig 'vd/parse-sig-param-types {-> Str List})
@@ -573,13 +593,13 @@
         (if is-varargs
           {do
             (= {min-arity} (vd/sig-min-arity sig-str))
-            (if (and (>= min-arity 0) (< argc min-arity))
+            (if (and (>= min-arity 0) (== argc 0) (> min-arity 0))
               {vd/add-diag ctx hd name
                 (str "'" name "' expects at least " min-arity " arguments, got " argc)}
               {if (nil? sig-str) {ctx}
                 {vd/check-arg-types tl name
                   (vd/parse-sig-param-types sig-str) ctx}})}
-          {if (not (== argc expected))
+          {if (> argc expected)
             {vd/add-diag ctx hd name
               (str "'" name "' expects " expected " arguments, got " argc)}
             {if (nil? sig-str) {ctx}
@@ -591,7 +611,7 @@
 ; Special form arity — hardcoded rules
 ; ---------------------------------------------------------------------------
 
-(sig 'vd/check-special-arity {-> Str List List Any List List})
+(sig 'vd/check-special-arity {-> Str List List Any List})
 (fun {vd/check-special-arity name tl ctx hd} {
   if (== name "if")
     {if (< (len tl) 2) {vd/add-diag ctx hd name (str "'if' requires 2-3 arguments, got " (len tl))}
@@ -890,13 +910,15 @@
   {if (sym? expr) {1}
   {if (not (list? expr)) {nil}
   {if (nil? expr) {1}
-  {vd/infer-from-call expr ctx}}}}}
+  {if (quoted? expr) {1}
+  {vd/infer-from-call expr ctx}}}}}}
 })
 
 (sig 'vd/infer-from-call {-> List List Any})
-(fun {vd/infer-from-call expr ctx} {
-  if (not (sym? (head expr))) {nil}
-  {vd/infer-by-callee (str (head expr)) ctx}
+(fun {vd/infer-from-call expr ctx} {do
+  (= {n} (ast/head-name expr))
+  (if (== n "") {nil}
+    {vd/infer-by-callee n ctx})
 })
 
 (sig 'vd/infer-by-callee {-> Str List Any})
@@ -917,8 +939,21 @@
   (= {found} (vd/query-fun-sig ctx:db name))
   (if (not (nil? found)) {1}
     {if (vd/scope-has-callable name ctx:scope) {1}
+    {if (vd/in-scope-untyped? name ctx:scope) {1}
     {if (vd/is-ctor-call name) {1}
-      {nil}}})
+    {if (dict/has? ctx:globals name) {1}
+    {if (dict/has? ctx:known name) {1}
+    {if (vd/is-known-by-basename name ctx:known) {1}
+      {nil}}}}}}})
+})
+
+(sig 'vd/in-scope-untyped? {-> Str List Num})
+(fun {vd/in-scope-untyped? name scope-chain} {
+  if (nil? scope-chain) {0}
+  {do
+    (= {entry} (dict/get (head scope-chain) name))
+    (if (nil? entry) {vd/in-scope-untyped? name (tail scope-chain)}
+      {if (num? entry) {1} {0}})}
 })
 
 (sig 'vd/param-has-annotation {-> List Num})

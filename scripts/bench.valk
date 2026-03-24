@@ -21,38 +21,38 @@
 (def {cfg-concurrency} 10)
 
 ; ============================================================================
-; Statistics Counters (all atoms for thread safety)
+; Statistics Counters (mutable globals)
 ; ============================================================================
-(def {completed} (atom 0))
-(def {successes} (atom 0))
-(def {errors} (atom 0))
-(def {in-flight} (atom 0))
-(def {next-idx} (atom 0))
+(def {completed} 0)
+(def {successes} 0)
+(def {errors} 0)
+(def {in-flight} 0)
+(def {next-idx} 0)
 
 ; Latency stats
-(def {latency-sum} (atom 0))
-(def {latency-min} (atom 999999999))
-(def {latency-max} (atom 0))
+(def {latency-sum} 0)
+(def {latency-min} 999999999)
+(def {latency-max} 0)
 
 ; Latency buckets (count per bucket)
-(def {bucket-0-1ms} (atom 0))      ; < 1ms
-(def {bucket-1-5ms} (atom 0))      ; 1-5ms
-(def {bucket-5-10ms} (atom 0))     ; 5-10ms
-(def {bucket-10-25ms} (atom 0))    ; 10-25ms
-(def {bucket-25-50ms} (atom 0))    ; 25-50ms
-(def {bucket-50-100ms} (atom 0))   ; 50-100ms
-(def {bucket-100-250ms} (atom 0))  ; 100-250ms
-(def {bucket-250-1s} (atom 0))     ; 250ms-1s
-(def {bucket-over-1s} (atom 0))    ; > 1s
+(def {bucket-0-1ms} 0)
+(def {bucket-1-5ms} 0)
+(def {bucket-5-10ms} 0)
+(def {bucket-10-25ms} 0)
+(def {bucket-25-50ms} 0)
+(def {bucket-50-100ms} 0)
+(def {bucket-100-250ms} 0)
+(def {bucket-250-1s} 0)
+(def {bucket-over-1s} 0)
 
 ; ============================================================================
 ; AIO Setup
 ; ============================================================================
 (def {aio} (aio/await (aio/start)))
-(def {start-time} (atom 0))
+(def {start-time} 0)
 
 ; Store client connection (will be set after connect)
-(def {client-conn} (atom nil))
+(def {client-conn} nil)
 
 ; ============================================================================
 ; Utility Functions
@@ -61,22 +61,22 @@
 ; Update latency bucket based on latency in microseconds
 (fun {update-bucket lat-us} {
   (if (< lat-us 1000)
-    {(atom/add! bucket-0-1ms 1)}
+    {(def {bucket-0-1ms} (+ bucket-0-1ms 1))}
     {(if (< lat-us 5000)
-       {(atom/add! bucket-1-5ms 1)}
+       {(def {bucket-1-5ms} (+ bucket-1-5ms 1))}
        {(if (< lat-us 10000)
-          {(atom/add! bucket-5-10ms 1)}
+          {(def {bucket-5-10ms} (+ bucket-5-10ms 1))}
           {(if (< lat-us 25000)
-             {(atom/add! bucket-10-25ms 1)}
+             {(def {bucket-10-25ms} (+ bucket-10-25ms 1))}
              {(if (< lat-us 50000)
-                {(atom/add! bucket-25-50ms 1)}
+                {(def {bucket-25-50ms} (+ bucket-25-50ms 1))}
                 {(if (< lat-us 100000)
-                   {(atom/add! bucket-50-100ms 1)}
+                   {(def {bucket-50-100ms} (+ bucket-50-100ms 1))}
                    {(if (< lat-us 250000)
-                      {(atom/add! bucket-100-250ms 1)}
+                      {(def {bucket-100-250ms} (+ bucket-100-250ms 1))}
                       {(if (< lat-us 1000000)
-                         {(atom/add! bucket-250-1s 1)}
-                         {(atom/add! bucket-over-1s 1)})})})})})})})})
+                         {(def {bucket-250-1s} (+ bucket-250-1s 1))}
+                         {(def {bucket-over-1s} (+ bucket-over-1s 1))})})})})})})})})
 })
 
 ; Estimate percentile from buckets (returns upper bound of bucket containing pth percentile)
@@ -122,39 +122,33 @@
 
 ; Function to send a single request on the existing connection
 (fun {send-one-request} {
-  (= {idx} (atom/get next-idx))
-  (= {conn} (atom/get client-conn))
-  (if (< idx cfg-total)
-    {(atom/add! next-idx 1)
-     (atom/add! in-flight 1)
+  (if (< next-idx cfg-total)
+    {(def {next-idx} (+ next-idx 1))
+     (def {in-flight} (+ in-flight 1))
      (= {req-start} (time-us))
      (http2/request-on-conn conn cfg-path (\ {resp} {
        (= {req-end} (time-us))
        (= {latency} (- req-end req-start))
 
        ; Update latency stats
-       (atom/add! latency-sum latency)
-       (= {cur-min} (atom/get latency-min))
-       (= {cur-max} (atom/get latency-max))
-       (if (< latency cur-min)
-         {(atom/set! latency-min latency)}
+       (def {latency-sum} (+ latency-sum latency))
+       (if (< latency latency-min)
+         {(def {latency-min} latency)}
          {1})
-       (if (> latency cur-max)
-         {(atom/set! latency-max latency)}
+       (if (> latency latency-max)
+         {(def {latency-max} latency)}
          {1})
 
        ; Update bucket
        (update-bucket latency)
 
        ; Update counters
-       (atom/add! completed 1)
-       (atom/add! in-flight -1)
+       (def {completed} (+ completed 1))
+       (def {in-flight} (- in-flight 1))
 
        (if (error? resp)
-         {(atom/add! errors 1)}
-         {(atom/add! successes 1)})
-
-       (= {done} (atom/get completed))
+         {(def {errors} (+ errors 1))}
+         {(def {successes} (+ successes 1)}))
        (if (>= done cfg-total)
          {(print-results)}
          {(maybe-send-next)})
@@ -165,10 +159,8 @@
 
 ; Try to send next request if under concurrency limit
 (fun {maybe-send-next} {
-  (= {flying} (atom/get in-flight))
-  (= {idx} (atom/get next-idx))
-  (if (< flying cfg-concurrency)
-    {(if (< idx cfg-total)
+  (if (< in-flight cfg-concurrency)
+    {(if (< next-idx cfg-total)
        {(send-one-request)}
        {1})}
     {1})
@@ -179,16 +171,15 @@
 ; ============================================================================
 (fun {print-results} {
   (= {end-time} (time-us))
-  (= {bench-start} (atom/get start-time))
-  (= {total-dur-us} (- end-time bench-start))
+  (= {total-dur-us} (- end-time start-time))
   (= {total-dur-ms} (/ total-dur-us 1000))
 
-  (= {done} (atom/get completed))
-  (= {succ} (atom/get successes))
-  (= {err} (atom/get errors))
-  (= {sum-lat} (atom/get latency-sum))
-  (= {min-lat} (atom/get latency-min))
-  (= {max-lat} (atom/get latency-max))
+  (= {done} completed)
+  (= {succ} successes)
+  (= {err} errors)
+  (= {sum-lat} latency-sum)
+  (= {min-lat} latency-min)
+  (= {max-lat} latency-max)
 
   (println "")
   (println "=========================================================")
@@ -212,15 +203,15 @@
     {1})
 
   ; Get bucket counts
-  (= {b1} (atom/get bucket-0-1ms))
-  (= {b2} (atom/get bucket-1-5ms))
-  (= {b3} (atom/get bucket-5-10ms))
-  (= {b4} (atom/get bucket-10-25ms))
-  (= {b5} (atom/get bucket-25-50ms))
-  (= {b6} (atom/get bucket-50-100ms))
-  (= {b7} (atom/get bucket-100-250ms))
-  (= {b8} (atom/get bucket-250-1s))
-  (= {b9} (atom/get bucket-over-1s))
+  (= {b1} bucket-0-1ms)
+  (= {b2} bucket-1-5ms)
+  (= {b3} bucket-5-10ms)
+  (= {b4} bucket-10-25ms)
+  (= {b5} bucket-25-50ms)
+  (= {b6} bucket-50-100ms)
+  (= {b7} bucket-100-250ms)
+  (= {b8} bucket-250-1s)
+  (= {b9} bucket-over-1s)
 
   ; Latency statistics
   (println "")
@@ -268,11 +259,11 @@
 (http2/connect aio cfg-host cfg-port (\ {conn} {
   (if (error? conn)
     {(println "Connection failed!")
-     (println (error-msg conn))
+     (println conn)
      (aio/stop aio)}
     {(println "Connected! Starting benchmark...")
-     (atom/set! client-conn conn)
-     (atom/set! start-time (time-us))
+     (def {client-conn} conn)
+      (def {start-time} (time-us))
      (map (\ {_} {(send-one-request)}) (range 0 cfg-concurrency))})
 }))
 

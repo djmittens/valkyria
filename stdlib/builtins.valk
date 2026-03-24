@@ -159,8 +159,14 @@
 (sig 'make-string {-> A Num Str})
 (sig 'str/starts-with? {-> Str Str Num})
 (sig 'str/ends-with? {-> Str Str Num})
-(sig 'str/join {-> Str (List Str) Str})
+(sig 'str/join {-> (List Str) Str Str})
 (sig 'str/index-of {-> Str Str Num})
+(sig 'str/contains? {-> Str Str Num})
+(sig 'str/trim {-> Str Str})
+(sig 'str/trim-left {-> Str Str})
+(sig 'str/trim-right {-> Str Str})
+(sig 'str/lower {-> Str Str})
+(sig 'str/upper {-> Str Str})
 
 ; === File I/O ===
 
@@ -224,6 +230,8 @@
 (sig 'aio/bracket {-> (Handle A) (-> A Nil) (-> A B) (Handle B)})
 ; Apply async function to each list element, collect results.
 (sig 'aio/traverse {-> (List A) (-> A (Handle B)) (Handle (List B))})
+; Parallel map: apply async function to each element with concurrency limit.
+(sig 'aio/pmap {-> (Ref aio) (-> A (Handle B)) (List A) (Handle (List B))})
 
 ; === Async syntax ===
 
@@ -369,6 +377,7 @@
 (sig 'mem/gc/collect {-> Num})
 ; Print GC statistics.
 (sig 'mem/gc/stats {-> Nil})
+(sig 'mem/gc/metrics {-> Str})
 ; Print memory statistics.
 (sig 'mem/stats {-> Nil})
 ; Get checkpoint timing statistics.
@@ -400,8 +409,8 @@
 (sig 'metrics/gauge {-> & Str (Ref metrics)})
 ; Create a histogram metric with name and optional labels.
 (sig 'metrics/histogram {-> & Str (Ref metrics)})
-; Increment a counter by amount.
-(sig 'metrics/counter-inc {-> (Ref metrics) Num Nil})
+; Increment a counter by amount (default 1).
+(sig 'metrics/counter-inc {-> (Ref metrics) & Num Nil})
 ; Record a histogram observation.
 (sig 'metrics/histogram-observe {-> (Ref metrics) Num Nil})
 ; Set a gauge to a value.
@@ -414,7 +423,7 @@
 ; === Random ===
 
 ; Generate random integer in [min, max] range.
-(sig 'rand {-> Num Num Num})
+(sig 'rand {-> & Num Num})
 ; Seed the random number generator.
 (sig 'rand-seed {-> Num Nil})
 
@@ -499,6 +508,12 @@
 ; Arrays become lists: [1,2] -> {1 2}
 ; Booleans become numbers: true -> 1, false -> 0
 ; null becomes nil.
+; === XML ===
+
+(sig 'xml/parse {-> Str QExpr})
+
+; === JSON ===
+
 (sig 'json/parse {-> Str QExpr})
 ; Encode a Q-expression as a JSON string.
 ; Plists (first elem is keyword) become objects: {:a 1} -> {"a":1}
@@ -528,25 +543,25 @@
 (sig 'sqlite/close {-> Ref Nil})
 ; Execute SQL (INSERT/UPDATE/DELETE/CREATE/etc). Returns rows changed.
 ; Additional args are bound as ?-parameters.
-(sig 'sqlite/exec {-> Ref Str Num})
+(sig 'sqlite/exec {-> Ref Str & A Num})
 ; Execute multiple SQL statements separated by semicolons.
 ; Useful for schema migrations. Does not support ?-parameters.
 (sig 'sqlite/exec-script {-> Ref Str Nil})
 ; Query SQL (SELECT). Returns a list of plists, one per row.
 ; Column names become keywords. Additional args are ?-parameters.
-(sig 'sqlite/query {-> Ref Str QExpr})
+(sig 'sqlite/query {-> Ref Str & A QExpr})
 ; Query returning exactly one row. Errors if 0 or 2+ rows returned.
-(sig 'sqlite/query-row {-> Ref Str QExpr})
+(sig 'sqlite/query-row {-> Ref Str & A QExpr})
 ; Query returning 0 or 1 row. Returns nil if no rows match.
 ; Errors if 2+ rows returned.
-(sig 'sqlite/query-maybe {-> Ref Str QExpr})
+(sig 'sqlite/query-maybe {-> Ref Str & A QExpr})
 ; Query returning a single scalar value from a 1-column, 1-row result.
 ; Errors if not exactly 1 row and 1 column.
-(sig 'sqlite/query-value {-> Ref Str A})
+(sig 'sqlite/query-value {-> Ref Str & A A})
 ; Prepare a SQL statement for repeated execution.
 (sig 'sqlite/prepare {-> Ref Str Ref})
 ; Bind parameters to a prepared statement. Returns the statement.
-(sig 'sqlite/bind {-> Ref Ref})
+(sig 'sqlite/bind {-> Ref & A Ref})
 ; Step a prepared statement. Returns a plist row or nil when done.
 (sig 'sqlite/step {-> Ref QExpr})
 ; Finalize (free) a prepared statement.
@@ -565,6 +580,16 @@
 (sig 'list-dir {-> Str QExpr})
 ; Return file size in bytes. Errors if file doesn't exist.
 (sig 'file/size {-> Str Num})
+(sig 'file/exists? {-> Str Num})
+(sig 'file/delete {-> Str Nil})
+(sig 'mkdir-p {-> Str Nil})
+(sig 'symlink {-> Str Str Nil})
+(sig 'realpath {-> Str Str})
+(sig 'exec {-> & Str Str})
+(sig 'write-file {-> Str Str Nil})
+(sig 'rmdir {-> Str Nil})
+(sig 'env/get {-> Str Str})
+(sig 'env/set {-> Str Str Nil})
 
 ; === Plist / Dict / List extras ===
 
@@ -615,3 +640,23 @@
 (sig 'offsets->line-cols {-> Str (List Num) (List (List Num))})
 (sig 'sem/encode-deltas {-> Str & A List})
 (sig 'lsp/index-ast {-> Ref Num List Str Nil})
+
+; === AST introspection ===
+
+(sig 'ast/node-type {-> Any Str})
+(sig 'ast/node-name {-> Any Str})
+(sig 'ast/to-data {-> Any QExpr})
+(sig 'ast/src-pos {-> Any Num})
+(sig 'ast/nil? {-> Any Num})
+(sig 'ast/len {-> Any Num})
+(sig 'ast/head-name {-> List Str})
+(sig 'ast/head-type {-> List Str})
+(sig 'ast/nth-name {-> Num List Str})
+(sig 'ast/visit {-> Any QExpr Nil})
+
+; === Compile pipeline ===
+
+; Process source text through compiler pipeline (parse, macro expand, module rewrite).
+; With 1 arg: parse + macro expand only.
+; With 2 args: also apply module prefix rewriting with given prefix.
+(sig 'compile/process {-> Str & Str (List QExpr)})

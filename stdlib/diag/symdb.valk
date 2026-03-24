@@ -318,12 +318,13 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
   (if (not (list? expr)) {nil}
     {if (nil? expr) {nil}
       {do
-        (= {form} (str (head expr)))
-        (if (== form "fun") {symdb/extract-fun expr text lines}
+        (= {form} (ast/head-name expr))
+        (if (== form "") {nil}
+        {if (== form "fun") {symdb/extract-fun expr text lines}
         {if (== form "def") {symdb/extract-def expr text lines}
         {if (== form "type") {symdb/extract-type expr text lines}
         {if (== form "sig") {symdb/extract-sig expr text lines}
-        {nil}}}})}})
+        {nil}}}}})}})
 })
 
 (sig 'symdb/extract-fun {-> List Str (List Str) List})
@@ -393,6 +394,16 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
   str/join (map str elems) " "
 })
 
+(sig 'symdb/count-positional-fields {-> List Num})
+(fun {symdb/count-positional-fields fields} {
+  if (nil? fields) {0}
+  {do
+    (= {f} (str (head fields)))
+    (if (if (> (len f) 0) {== (str/slice f 0 1) ":"} {0})
+      {+ 1 (symdb/count-positional-fields (tail fields))}
+      {symdb/count-positional-fields (tail fields)})}
+})
+
 (sig 'symdb/extract-ctors {-> List Str Str List})
 (fun {symdb/extract-ctors variants text type-name} {
   if (nil? variants) {nil}
@@ -407,7 +418,9 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
           (= {ctor-name} (if is-product {type-name} {first-str}))
           (= {fields} (if is-product {ctor} {(tail ctor)}))
           (= {fields-sig} (symdb/serialize-fields fields))
-          (= {ctor-arity} (if is-product {(/ (len ctor) 2)} {(- (len ctor) 1)}))
+          (= {ctor-arity} (if is-product
+            {(/ (len ctor) 2)}
+            {symdb/count-positional-fields fields}))
           (= {lc} (offset->line-col text (src-pos (head ctor))))
           (= {line} (head lc))
           (= {col} (head (tail lc)))
@@ -488,7 +501,7 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
             {qcons (list :name name :offset sp) acc}}}}})})}
   }
   {if (nil? expr) {acc}
-    {if (== (str (head expr)) "sig") {acc}
+    {if (== (ast/head-name expr) "sig") {acc}
       {symdb/collect-raw-ref-children expr acc}}}
 })
 

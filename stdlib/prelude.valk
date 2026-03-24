@@ -302,7 +302,7 @@
 
 ; Nth item in the list
 ; LISTS ARE 1-BASED LIKE LUA
-(sig 'nth {-> (List A) Num A})
+(sig 'nth {-> Num (List A) A})
 
 ;last item in the list
 (sig 'last {-> (List A) A})

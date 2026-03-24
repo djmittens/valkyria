@@ -19,10 +19,10 @@
 ; ============================================================================
 (def {aio} (aio/await (aio/start)))
 
-; Counters (using atoms for thread-safe updates)
-(def {completed} (atom 0))
-(def {successes} (atom 0))
-(def {errors} (atom 0))
+; Counters (mutable globals)
+(def {completed} 0)
+(def {successes} 0)
+(def {errors} 0)
 (def {start-time} (time-us))
 
 ; Header
@@ -35,34 +35,29 @@
 (map (\ {_} {
   (= {t0} (time-us))
   (aio/then (http2/client-request aio cfg-host cfg-port cfg-path) (\ {resp} {
-    (atom/add! completed 1)
-    
+    (def {completed} (+ completed 1))
+
     (if (error? resp)
-      {(atom/add! errors 1)}
-      {(atom/add! successes 1)})
-    
-    ; Check if all done
-    (= {done} (atom/get completed))
-    (if (>= done cfg-total)
-      {; Print results
-       (= {end-t} (time-us))
+      {(def {errors} (+ errors 1))}
+      {(def {successes} (+ successes 1))})
+
+    (if (>= completed cfg-total)
+      {(= {end-t} (time-us))
        (= {dur} (/ (- end-t start-time) 1000))
-       (= {succ} (atom/get successes))
-       (= {err} (atom/get errors))
-       
+
        (println "")
        (println "Summary:")
-       (printf "  Completed: %d/%d\n" done cfg-total)
-       (printf "  Success:   %d\n" succ)
-       (printf "  Errors:    %d\n" err)
+       (printf "  Completed: %d/%d\n" completed cfg-total)
+       (printf "  Success:   %d\n" successes)
+       (printf "  Errors:    %d\n" errors)
        (printf "  Duration:  %d ms\n" dur)
        (if (> dur 0)
-         {(printf "  RPS:       %d\n" (/ (* done 1000) dur))}
+         {(printf "  RPS:       %d\n" (/ (* completed 1000) dur))}
          {1})
-       (if (> done 0)
-         {(printf "  Error %%:   %d%%\n" (/ (* err 100) done))}
+       (if (> completed 0)
+         {(printf "  Error %%:   %d%%\n" (/ (* errors 100) completed))}
          {1})
-       
+
        (aio/stop aio)}
       {1})
   }))

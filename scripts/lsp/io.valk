@@ -62,7 +62,7 @@
 (def {lsp/out} nil)
 (def {lsp/initialized} 0)
 
-(sig 'lsp/write-message {-> Str Nil})
+(sig 'lsp/write-message {-> List Nil})
 (fun {lsp/write-message json-body} {do
   (= {msg} (json/encode json-body))
   (pipe/write lsp/out (str "Content-Length: " (len msg) "\r\n\r\n" msg))})

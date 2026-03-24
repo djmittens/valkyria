@@ -55,19 +55,17 @@
 (sig 'hint/td-parse-body {-> Str List List List})
 (fun {hint/td-parse-body type-name body defs} {
   if (nil? body) {defs}
-  {if (sym? (head body))
-    {do
-      (= {fs} (str (head body)))
-      (if (> (len fs) 0)
-        {if (== (str/slice fs 0 1) ":")
-          {do
-            (= {pairs} (hint/td-field-pairs body nil))
-            (qcons (list :ctor type-name :fields pairs) defs)}
-          {defs}}
-        {defs})}
-    {if (list? (head body))
-      {hint/td-parse-ctors body defs}
-      {defs}}}
+  {do
+    (= {fs} (ast/head-name body))
+    (if (> (len fs) 0)
+      {if (== (str/slice fs 0 1) ":")
+        {do
+          (= {pairs} (hint/td-field-pairs body nil))
+          (qcons (list :ctor type-name :fields pairs) defs)}
+        {defs}}
+      {if (list? (head body))
+        {hint/td-parse-ctors body defs}
+        {defs}})}
 })
 
 (sig 'hint/td-parse-ctors {-> List List List})
@@ -81,13 +79,15 @@
 (fun {hint/td-one expr defs} {
   if (not (list? expr)) {defs}
   {if (< (len expr) 3) {defs}
-  {if (not (sym? (head expr))) {defs}
-  {if (not (== (str (head expr)) "type")) {defs}
   {do
+    (= {hname} (ast/head-name expr))
+    (if (== hname "") {defs}
+    {if (not (== hname "type")) {defs}
+    {do
     (= {name-list} (nth 2 expr))
     (if (not (list? name-list)) {defs}
     {if (nil? name-list) {defs}
-    {hint/td-parse-body (str (head name-list)) (nth 3 expr) defs}})}}}}
+    {hint/td-parse-body (str (head name-list)) (nth 3 expr) defs}})}})}}
 })
 
 (sig 'hint/collect-type-defs {-> List List})
@@ -121,15 +121,15 @@
 (fun {hint/vt-scan-body expr db acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
-  {if (not (sym? (head expr))) {acc}
   {do
-    (= {n} (str (head expr)))
-    (if (== n "=") {hint/vt-scan-binding (tail expr) db acc}
+    (= {n} (ast/head-name expr))
+    (if (== n "") {acc}
+    {if (== n "=") {hint/vt-scan-binding (tail expr) db acc}
     {if (== n "do") {hint/vt-scan-list (tail expr) db acc}
     {if (== n "if") {hint/vt-scan-list (tail expr) db acc}
     {if (== n "let") {hint/vt-scan-list (tail expr) db acc}
     {if (== n "match") {hint/vt-scan-list (tail expr) db acc}
-    {acc}}}}})}}}
+    {acc}}}}}})}}
 })
 
 (sig 'hint/vt-scan-list {-> List Ref List List})
@@ -151,11 +151,11 @@
       (= {var-name} (str (head formals)))
       (= {inferred} (if (not (list? val)) {nil}
         {if (nil? val) {nil}
-        {if (not (sym? (head val))) {nil}
         {do
-          (= {hn} (str (head val)))
-          (if (hint/is-ctor-name hn) {hn}
-            {hint/infer-call-return-type hn db})}}}))
+          (= {hn} (ast/head-name val))
+          (if (== hn "") {nil}
+          {if (hint/is-ctor-name hn) {hn}
+            {hint/infer-call-return-type hn db}})}}))
       (if (nil? inferred) {acc}
         {qcons (list :var var-name :type inferred) acc})}})}
 })
@@ -194,10 +194,9 @@
     (= {expr} (head exprs))
     (= {result2} (if (not (list? expr)) {result}
       {if (nil? expr) {result}
-      {if (not (sym? (head expr))) {result}
-      {if (== (str (head expr)) "fun")
+      {if (== (ast/head-name expr) "fun")
         {hint/vt-from-fun (tail expr) db result}
-        {result}}}}))
+        {result}}}))
     (hint/vt-walk (tail exprs) db result2)}
 })
 
@@ -273,21 +272,24 @@
 (fun {hint/fa-one expr func-name var-types type-defs acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
-  {if (not (sym? (head expr))) {acc}
   {do
-    (= {n} (str (head expr)))
-    (if (== n "fun") {hint/fa-fun (tail expr) var-types type-defs acc}
+    (= {n} (ast/head-name expr))
+    (= {tl} (tail expr))
+    (if (== n "fun") {hint/fa-fun tl var-types type-defs acc}
     {if (== n "=")
-      {if (< (len (tail expr)) 2) {acc}
-      {do
-        (= {rhs-str} (if (sym? (nth 3 expr)) {str (nth 3 expr)} {nil}))
-        (if (nil? rhs-str) {acc}
-          {hint/fa-binding (tail expr) rhs-str func-name var-types type-defs acc})}}
-    {if (== n "do") {hint/fa-walk (tail expr) func-name var-types type-defs acc}
-    {if (== n "if") {hint/fa-walk (tail expr) func-name var-types type-defs acc}
-    {if (== n "let") {hint/fa-walk (tail expr) func-name var-types type-defs acc}
-    {if (== n "match") {hint/fa-walk (tail expr) func-name var-types type-defs acc}
-    {acc}}}}}})}}}
+      {hint/fa-try-binding expr tl func-name var-types type-defs acc}
+    {if (or (== n "do") (or (== n "if") (or (== n "let") (== n "match"))))
+      {hint/fa-walk tl func-name var-types type-defs acc}
+      {acc}}})}}
+})
+
+(sig 'hint/fa-try-binding {-> List List Str List List List List})
+(fun {hint/fa-try-binding expr tl func-name var-types type-defs acc} {
+  if (< (len tl) 2) {acc}
+  {do
+    (= {rhs-name} (ast/nth-name 3 expr))
+    (if (== rhs-name "") {acc}
+      {hint/fa-binding tl rhs-name func-name var-types type-defs acc})}
 })
 
 (sig 'hint/fa-fun {-> List List List List List})

@@ -367,6 +367,51 @@ static valk_lval_t* ast_to_data(valk_lval_t* v) {
   }
 }
 
+static valk_lval_t* valk_builtin_ast_head_name(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* list = valk_lval_list_nth(a, 0);
+  if (!list || LVAL_TYPE(list) != LVAL_CONS || !list->cons.head)
+    return valk_lval_str("");
+  valk_lval_t* head = list->cons.head;
+  if (LVAL_TYPE(head) == LVAL_SYM) return valk_lval_str(head->str);
+  return valk_lval_str("");
+}
+
+static valk_lval_t* valk_builtin_ast_head_type(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* list = valk_lval_list_nth(a, 0);
+  if (!list || LVAL_TYPE(list) != LVAL_CONS || !list->cons.head)
+    return valk_lval_str("");
+  valk_lval_t* head = list->cons.head;
+  switch (LVAL_TYPE(head)) {
+    case LVAL_SYM: return valk_lval_str("sym");
+    case LVAL_NUM: return valk_lval_str("num");
+    case LVAL_STR: return valk_lval_str("str");
+    case LVAL_CONS: return (head->flags & LVAL_FLAG_QUOTED)
+      ? valk_lval_str("qexpr") : valk_lval_str("sexpr");
+    case LVAL_NIL: return valk_lval_str("nil");
+    default: return valk_lval_str("other");
+  }
+}
+
+static valk_lval_t* valk_builtin_ast_nth_name(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  i64 idx = (i64)valk_lval_list_nth(a, 0)->num;
+  valk_lval_t* list = valk_lval_list_nth(a, 1);
+  if (!list || LVAL_TYPE(list) != LVAL_CONS) return valk_lval_str("");
+  valk_lval_t* cur = list;
+  for (i64 i = 1; i < idx && cur && LVAL_TYPE(cur) == LVAL_CONS; i++)
+    cur = cur->cons.tail;
+  if (!cur || LVAL_TYPE(cur) != LVAL_CONS || !cur->cons.head)
+    return valk_lval_str("");
+  valk_lval_t* elem = cur->cons.head;
+  if (LVAL_TYPE(elem) == LVAL_SYM) return valk_lval_str(elem->str);
+  return valk_lval_str("");
+}
+
 static valk_lval_t* valk_builtin_ast_to_data(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1);
@@ -437,6 +482,9 @@ void valk_register_list_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "ast/to-data", valk_builtin_ast_to_data);
   valk_lenv_put_builtin(env, "ast/node-type", valk_builtin_ast_node_type);
   valk_lenv_put_builtin(env, "ast/node-name", valk_builtin_ast_node_name);
+  valk_lenv_put_builtin(env, "ast/head-name", valk_builtin_ast_head_name);
+  valk_lenv_put_builtin(env, "ast/head-type", valk_builtin_ast_head_type);
+  valk_lenv_put_builtin(env, "ast/nth-name", valk_builtin_ast_nth_name);
   valk_lenv_put_builtin(env, "ast/src-pos", valk_builtin_ast_src_pos);
   valk_lenv_put_builtin(env, "ast/nil?", valk_builtin_ast_nil);
   valk_lenv_put_builtin(env, "ast/len", valk_builtin_ast_len);

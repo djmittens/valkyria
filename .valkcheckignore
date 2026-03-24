@@ -1,0 +1,19 @@
+# Test fixtures with intentional errors
+test/fixtures/diag_multiple_errors.valk
+test/fixtures/diag_undefined_sym.valk
+
+# Coverage tests that deliberately pass wrong types/arities to test error handling
+test/aio/test_aio_builtins_coverage.valk
+test/aio/test_aio_combinator_coverage.valk
+test/metrics/test_metrics_builtins_comprehensive.valk
+test/parser/test_parser_builtin_coverage.valk
+test/lang/test_dict.valk
+test/lang/test_sqlite.valk
+test/lang/test_stdio.valk
+test/lang/test_math_coverage.valk
+test/lang/test_string_builtins.valk
+test/lang/test_make_string.valk
+test/lang/test_capture_builtins.valk
+test/gc/test_gc_and_log_builtins.valk
+test/http/test_sse_builtins.valk
+test/stress/test_recursion_stress.valk

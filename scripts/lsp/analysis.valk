@@ -72,7 +72,7 @@
   {if (sym? expr)
     {sem/classify-sym expr scope acc}
   {if (list? expr)
-    {sem/walk-list-head expr (head expr) (tail expr) scope acc}
+    {sem/walk-list expr scope acc}
   {acc}}}}}
 })
 
@@ -93,16 +93,18 @@
 })
 
 ; ---------------------------------------------------------------------------
-; List dispatch — head is passed separately as a function arg
+; List dispatch — uses ast/head-name to avoid resolving head symbol
 ; ---------------------------------------------------------------------------
 
-(sig 'sem/walk-list-head {-> Any Any List List List List})
-(fun {sem/walk-list-head expr hd tl scope acc} {
-  if (nil? tl)
-    {sem/walk-code hd scope acc}
-  {if (sym? hd)
-    {sem/dispatch-sym-head hd (str hd) tl scope acc}
-    {sem/walk-each expr scope acc}}
+(sig 'sem/walk-list {-> List List List List})
+(fun {sem/walk-list expr scope acc} {
+  if (nil? (tail expr))
+    {sem/walk-code (head expr) scope acc}
+  {do
+    (= {name} (ast/head-name expr))
+    (if (== name "")
+      {sem/walk-each expr scope acc}
+      {sem/dispatch-sym-head (head expr) name (tail expr) scope acc})}
 })
 
 (sig 'sem/source-len {-> Str Num})
@@ -250,15 +252,16 @@
 (sig 'sem/walk-type-inner {-> List List List})
 (fun {sem/walk-type-inner variant acc} {
   if (nil? variant) {acc}
-  {sem/walk-type-head (head variant) (tail variant) acc}
+  {sem/walk-type-head variant (tail variant) acc}
 })
 
-(sig 'sem/walk-type-head {-> Any List List List})
-(fun {sem/walk-type-head hd rest acc} {
-  if (sym? hd)
-    {sem/walk-type-fields rest
-      (sem/emit (src-pos hd) (len (str hd)) SEM_TYPE MOD_DECLARATION acc)}
+(sig 'sem/walk-type-head {-> List List List List})
+(fun {sem/walk-type-head variant rest acc} {do
+  (= {hname} (ast/head-name variant))
+  (if (== hname "")
     {sem/walk-type-fields rest acc}
+    {sem/walk-type-fields rest
+      (sem/emit (src-pos (head variant)) (len hname) SEM_TYPE MOD_DECLARATION acc)})
 })
 
 (sig 'sem/walk-type-fields {-> List List List})
@@ -464,14 +467,11 @@
 (sig 'ref/walk-list {-> List List List List})
 (fun {ref/walk-list expr scopes acc} {
   if (nil? expr) {acc}
-  {ref/walk-list-head expr (head expr) (tail expr) scopes acc}
-})
-
-(sig 'ref/walk-list-head {-> List Any List List List List})
-(fun {ref/walk-list-head expr hd tl scopes acc} {
-  if (sym? hd)
-    {ref/dispatch-form expr hd (str hd) tl scopes acc}
-    {ref/walk-exprs expr scopes acc}
+  {do
+    (= {name} (ast/head-name expr))
+    (if (== name "")
+      {ref/walk-exprs expr scopes acc}
+      {ref/dispatch-form expr (head expr) name (tail expr) scopes acc})}
 })
 
 (sig 'ref/dispatch-form {-> List Any Str List List List List})
@@ -690,15 +690,9 @@
 (fun {ref/maybe-add-assign-names expr scopes} {
   if (not (list? expr)) {scopes}
   {if (nil? expr) {scopes}
-  {ref/check-assign-head expr (head expr) scopes}}
-})
-
-(sig 'ref/check-assign-head {-> List Any List List})
-(fun {ref/check-assign-head expr hd scopes} {
-  if (not (sym? hd)) {scopes}
-  {if (== (str hd) "=")
+  {if (== (ast/head-name expr) "=")
     {ref/add-assign-names expr scopes}
-    {scopes}}
+    {scopes}}}
 })
 
 (sig 'ref/add-assign-names {-> List List List})
@@ -779,18 +773,13 @@
 (fun {ref/scope-one expr scopes acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
-  {ref/scope-dispatch expr (head expr) (tail expr) scopes acc}}
-})
-
-(sig 'ref/scope-dispatch {-> List Any List List List List})
-(fun {ref/scope-dispatch expr hd tl scopes acc} {
-  if (not (sym? hd)) {ref/scope-walk expr scopes acc}
   {do
-    (= {name} (str hd))
-    (if (== name "fun") {ref/scope-fun expr tl scopes acc}
-    {if (== name "\\") {ref/scope-lambda expr tl scopes acc}
-    {if (== name "do") {ref/scope-walk tl scopes acc}
-    {ref/scope-walk tl scopes acc}}})}
+    (= {name} (ast/head-name expr))
+    (if (== name "") {ref/scope-walk expr scopes acc}
+    {if (== name "fun") {ref/scope-fun expr (tail expr) scopes acc}
+    {if (== name "\\") {ref/scope-lambda expr (tail expr) scopes acc}
+    {if (== name "do") {ref/scope-walk (tail expr) scopes acc}
+    {ref/scope-walk (tail expr) scopes acc}}}})}}
 })
 
 (sig 'ref/scope-fun {-> List List List List List})

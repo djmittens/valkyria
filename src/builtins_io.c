@@ -267,6 +267,79 @@ static valk_lval_t* valk_builtin_parse(valk_lenv_t* e, valk_lval_t* a) {
   return valk_parse_text(valk_lval_list_nth(a, 0)->str);
 }
 
+static valk_lval_t *valk_builtin_compile_process(valk_lenv_t *e,
+                                                  valk_lval_t *a) {
+  UNUSED(e);
+  u64 argc = valk_lval_list_count(a);
+  if (argc < 1 || argc > 2)
+    LVAL_RAISE(a, "compile/process: expected 1-2 arguments, got %llu", argc);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char *text = valk_lval_list_nth(a, 0)->str;
+  const char *prefix = NULL;
+  if (argc >= 2) {
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+    prefix = valk_lval_list_nth(a, 1)->str;
+    if (prefix[0] == '\0') prefix = NULL;
+  }
+
+  valk_lval_t *ast = valk_parse_text(text);
+  if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
+  VALK_GC_ROOT(ast);
+
+  valk_lenv_t *menv = valk_macro_env();
+  {
+    valk_lval_t *cur = ast;
+    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+      if (valk_macro_is_def(cur->cons.head)) {
+        valk_lval_t *r = valk_lval_eval(menv, cur->cons.head);
+        if (LVAL_TYPE(r) == LVAL_ERR) valk_lval_println(r);
+        cur->cons.head = valk_lval_nil();
+      } else {
+        cur->cons.head = valk_macro_expand_one(menv, cur->cons.head);
+      }
+      cur = cur->cons.tail;
+    }
+  }
+
+  if (!prefix) return ast;
+
+  valk_module_t *prev_mod = valk_mod_current();
+  valk_module_t *parent = prev_mod ? prev_mod : valk_mod_root();
+  valk_module_t *child_mod = valk_mod_find_or_create_child(parent, prefix);
+  valk_mod_set_current(child_mod);
+
+  {
+    valk_lval_t *scan = ast;
+    while (scan && LVAL_TYPE(scan) == LVAL_CONS) {
+      valk_lval_t *form = scan->cons.head;
+      if (form && LVAL_TYPE(form) == LVAL_CONS &&
+          !(form->flags & LVAL_FLAG_QUOTED)) {
+        valk_lval_t *head = form->cons.head;
+        if (head && LVAL_TYPE(head) == LVAL_SYM &&
+            strcmp(head->str, "load") == 0) {
+          valk_lval_t *rest = form->cons.tail;
+          if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
+            valk_lval_t *path_arg = rest->cons.head;
+            if (LVAL_TYPE(path_arg) == LVAL_STR) {
+              char child_prefix[256];
+              extract_module_prefix(path_arg->str, child_prefix,
+                                    sizeof(child_prefix));
+              valk_mod_find_or_create_child(child_mod, child_prefix);
+            }
+          }
+        }
+      }
+      scan = scan->cons.tail;
+    }
+  }
+
+  valk_module_rewrite(ast, prefix);
+  valk_mod_set_current(prev_mod);
+
+  return ast;
+}
+
 static valk_lval_t* valk_builtin_src_pos(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   LVAL_ASSERT_COUNT_EQ(a, a, 1); // LCOV_EXCL_BR_LINE
@@ -998,5 +1071,6 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "file/open", valk_builtin_file_open);
   valk_lenv_put_builtin(env, "file/write", valk_builtin_file_write_str);
   valk_lenv_put_builtin(env, "file/close", valk_builtin_file_close);
+  valk_lenv_put_builtin(env, "compile/process", valk_builtin_compile_process);
 }
 

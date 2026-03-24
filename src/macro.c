@@ -98,10 +98,13 @@ void valk_module_register_defs(valk_lval_t *ast, valk_module_t *mod) {
   }
 }
 
-static valk_lval_t *qualify_sym(const char *fqn, const char *name) {
+static valk_lval_t *qualify_sym(const char *fqn, const char *name,
+                                i32 src_pos) {
   char buf[VALK_MOD_PATH_MAX];
   snprintf(buf, sizeof(buf), "%s/%s", fqn, name);
-  return valk_lval_sym(buf);
+  valk_lval_t *sym = valk_lval_sym(buf);
+  if (src_pos >= 0) LVAL_SRC_POS_SET(sym, src_pos);
+  return sym;
 }
 
 
@@ -198,7 +201,7 @@ static void rewrite_node(valk_lval_t *cell, valk_module_t *mod,
 
     if (shadow_has(shadows, expr->str)) return;
     if (valk_mod_get(mod, expr->str)) {
-      cell->cons.head = qualify_sym(fqn, expr->str);
+      cell->cons.head = qualify_sym(fqn, expr->str, LVAL_SRC_POS(expr));
       return;
     }
     return;
@@ -267,7 +270,7 @@ static void rewrite_node(valk_lval_t *cell, valk_module_t *mod,
 
       if (def_name && def_name[0] != ':') {
         if (!strchr(def_name, '/') && valk_mod_get(mod, def_name)) {
-          *def_cell = qualify_sym(fqn, def_name);
+          *def_cell = qualify_sym(fqn, def_name, LVAL_SRC_POS(*def_cell));
         } else if (strchr(def_name, '/')) {
           valk_lval_t *resolved = resolve_qualified(mod, def_name);
           if (resolved) *def_cell = resolved;

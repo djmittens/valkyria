@@ -9,6 +9,38 @@
 ; Main walk dispatcher
 ; ---------------------------------------------------------------------------
 
+; ---------------------------------------------------------------------------
+; Quasiquote walker — skip template literals, check unquoted expressions
+; ---------------------------------------------------------------------------
+
+(sig 'vd/walk-quasiquote-body {-> List List List})
+(fun {vd/walk-quasiquote-body tl ctx} {
+  if (nil? tl) {ctx}
+  {vd/walk-quasiquote-template (head tl) ctx}
+})
+
+(sig 'vd/walk-quasiquote-template {-> Any List List})
+(fun {vd/walk-quasiquote-template expr ctx} {
+  if (not (list? expr)) {ctx}
+  {if (nil? expr) {ctx}
+  {do
+    (= {n} (ast/head-name expr))
+    (if (if (not (== n "")) {if (== n "unquote") {1} {== n "unquote-splicing"}} {0})
+      {vd/walk-body (tail expr) ctx}
+      {vd/walk-quasiquote-elems expr ctx})}}
+})
+
+(sig 'vd/walk-quasiquote-elems {-> List List List})
+(fun {vd/walk-quasiquote-elems elems ctx} {
+  if (nil? elems) {ctx}
+  {vd/walk-quasiquote-elems (tail elems)
+    (vd/walk-quasiquote-template (head elems) ctx)}
+})
+
+; ---------------------------------------------------------------------------
+; Main walk dispatcher
+; ---------------------------------------------------------------------------
+
 (sig 'vd/walk-body {-> List List List})
 (fun {vd/walk-body exprs ctx} {
   if (nil? exprs) {ctx}
@@ -38,33 +70,18 @@
 (sig 'vd/walk-list {-> List List List})
 (fun {vd/walk-list expr ctx} {
   if (nil? expr) {ctx}
-  {vd/walk-list-head expr (head expr) (tail expr) ctx}
+  {do
+    (= {name} (ast/head-name expr))
+    (if (not (== name ""))
+      {vd/dispatch-call expr nil name (tail expr) ctx}
+      {if (quoted? expr)
+        {vd/walk-quoted-data expr ctx}
+        {vd/walk-body (tail expr) ctx}})}
 })
 
-(sig 'vd/walk-list-head {-> List Any List List List})
-(fun {vd/walk-list-head expr hd tl ctx} {
-  if (quoted? expr)
-    {vd/walk-quoted expr hd tl ctx}
-  {if (sym? hd)
-    {vd/dispatch-call expr hd (str hd) tl ctx}
-  {vd/walk-expr hd (vd/walk-body tl ctx)}}
-})
+(sig 'vd/walk-quoted-data {-> List List List})
+(fun {vd/walk-quoted-data expr ctx} {ctx})
 
-(sig 'vd/walk-quoted {-> List Any List List List})
-(fun {vd/walk-quoted expr hd tl ctx} {
-  if (sym? hd)
-    {vd/walk-quoted-sym hd (str hd) tl ctx}
-  {vd/walk-implicit-do expr ctx}
-})
-
-(sig 'vd/walk-quoted-sym {-> Any Str List List List})
-(fun {vd/walk-quoted-sym hd name tl ctx} {
-  if (vd/is-known name ctx:scope
-                  ctx:globals
-                  ctx:known)
-    {vd/dispatch-call nil hd name tl ctx}
-  {ctx}
-})
 
 (sig 'vd/walk-implicit-do {-> List List List})
 (fun {vd/walk-implicit-do exprs ctx} {
@@ -82,15 +99,9 @@
 (fun {vd/maybe-thread-binding expr ctx} {
   if (not (list? expr)) {ctx}
   {if (nil? expr) {ctx}
-  {vd/check-thread-head (head expr) (tail expr) ctx}}
-})
-
-(sig 'vd/check-thread-head {-> Any List List List})
-(fun {vd/check-thread-head hd tl ctx} {
-  if (not (sym? hd)) {ctx}
-  {if (== (str hd) "=")
-    {vd/thread-binding-names tl ctx}
-    {ctx}}
+  {if (== (ast/head-name expr) "=")
+    {vd/thread-binding-names (tail expr) ctx}
+    {ctx}}}
 })
 
 (sig 'vd/thread-binding-names {-> List List List})
@@ -138,6 +149,7 @@
   {vd/walk-sig-type-q (head (tail tl)) ctx}
 })
 
+
 ; ---------------------------------------------------------------------------
 ; Call dispatcher
 ; ---------------------------------------------------------------------------
@@ -153,12 +165,13 @@
   {if (== name "type")   {vd/walk-type tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "sig")    {vd/walk-sig tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "quote")  {ctx}
+  {if (== name "quasiquote") {vd/walk-quasiquote-body tl ctx}
   {if (== name "match")  {vd/walk-match tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "aio/do") {vd/walk-aio-do tl ctx}
   {if (== name "aio/let") {vd/walk-aio-let tl ctx}
   {if (dict/has? vd/VALIDATE_SPECIAL_FORMS name)
     {vd/walk-body tl (vd/check-special-arity name tl ctx hd)}
-  {vd/walk-call expr hd name tl ctx}}}}}}}}}}}}}
+  {vd/walk-call expr hd name tl ctx}}}}}}}}}}}}}}
 })
 
 ; ---------------------------------------------------------------------------
@@ -210,9 +223,12 @@
   (if (nil? db) {ctx}
     {do
       (= {sig-row} (vd/query-fun-sig db name))
-      (if (nil? sig-row)
-        {vd/flag-untyped-params params ctx}
-        {ctx})})
+      (if (not (nil? sig-row)) {ctx}
+        {if (vd/in-scope? name ctx:scope) {ctx}
+        {if (dict/has? ctx:globals name) {ctx}
+        {if (dict/has? ctx:known name) {ctx}
+        {if (vd/is-known-by-basename name ctx:known) {ctx}
+          {vd/flag-untyped-params params ctx}}}}})})
 })
 
 (sig 'vd/check-binding-types {-> Any List List List})
@@ -456,12 +472,14 @@
 })
 
 (sig 'vd/walk-aio-do-bind-check {-> Any Any List List List})
-(fun {vd/walk-aio-do-bind-check var arrow rest ctx} {
-  if (not (sym? var)) {vd/walk-expr var (vd/walk-expr arrow (vd/walk-body rest ctx))}
-  {if (not (sym? arrow)) {vd/walk-expr var (vd/walk-expr arrow (vd/walk-body rest ctx))}
-  {if (== (str arrow) "<-")
-    {vd/walk-aio-do-bind (str var) rest ctx}
-    {vd/walk-expr var (vd/walk-expr arrow (vd/walk-body rest ctx))}}}
+(fun {vd/walk-aio-do-bind-check first second rest ctx} {
+  if (not (sym? first)) {vd/walk-expr first (vd/walk-expr second (vd/walk-body rest ctx))}
+  {if (not (sym? second)) {vd/walk-expr first (vd/walk-expr second (vd/walk-body rest ctx))}
+  {if (== (str first) "<-")
+    {vd/walk-aio-do-bind (str second) rest ctx}
+  {if (== (str second) "<-")
+    {vd/walk-aio-do-bind (str first) rest ctx}
+    {vd/walk-expr first (vd/walk-expr second (vd/walk-body rest ctx))}}}}
 })
 
 (sig 'vd/walk-aio-do-bind {-> Str List List List})
@@ -503,9 +521,18 @@
 (fun {vd/walk-aio-let-one item ctx} {
   if (sym? item)
     {if (== (str/slice (str item) 0 1) ":") {ctx} {ctx}}
-  {if (list? item)
-    {vd/walk-aio-let-pair item ctx}
-  {ctx}}
+  {if (not (list? item)) {ctx}
+  {if (nil? item) {ctx}
+  {if (list? (head item))
+    {vd/walk-aio-let-pairs item ctx}
+    {vd/walk-aio-let-pair item ctx}}}}
+})
+
+(sig 'vd/walk-aio-let-pairs {-> List List List})
+(fun {vd/walk-aio-let-pairs items ctx} {
+  if (nil? items) {ctx}
+  {vd/walk-aio-let-pairs (tail items)
+    (vd/walk-aio-let-one (head items) ctx)}
 })
 
 (sig 'vd/walk-aio-let-pair {-> List List List})

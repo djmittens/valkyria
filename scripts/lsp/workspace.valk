@@ -1,73 +1,81 @@
 ; Valkyria LSP Server — diagnostics, document sync, workspace indexing, notification handlers
+;
+; === Indexing architecture ===
+;
+; ONE function indexes a file: lsp/index-file-full
+;   1. Sync symbols + refs to DB (symdb/sync-file-symbols)
+;   2. Run C indexer for semantic tokens + scoped refs (lsp/index-ast)
+;   3. Compute inlay hints (lsp/precompute-file-data)
+;   Returns 1 if file changed, 0 if cached.
+;
+; Callers:
+;   - lsp/sync-doc:       called by did-open/did-change/did-save (text from editor)
+;   - lsp/seed-from-disk: called by workspace scan (text from disk)
 
 
 ; ---------------------------------------------------------------------------
-; File indexing and seeding (must be defined before diagnostic publishing)
+; Core indexing — single function, does everything
 ; ---------------------------------------------------------------------------
 
-(sig 'lsp/sync-file {-> Ref Str Num})
-(fun {lsp/sync-file db path} {do
+(sig 'lsp/index-file-full {-> Ref Str Str Str Num})
+(fun {lsp/index-file-full db uri text hash} {do
+  (= {path} (symdb/uri->path uri))
+  (= {existing} (sqlite/query-maybe db
+    "SELECT hash FROM files WHERE path=?1" path))
+  (if (if (not (nil? existing)) {== existing:hash hash} {0}) {0}
+    {do
+      (symdb/sync-file-symbols db uri text hash)
+      (= {ast} (lsp/get-ast uri text))
+      (if (not (error? ast))
+        {do
+          (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
+          (if (not (nil? fid))
+            {lsp/index-ast db fid ast text}
+            {})}
+        {})
+      1})
+})
+
+(sig 'lsp/index-file-with-hints {-> Ref Str Str Str Num})
+(fun {lsp/index-file-with-hints db uri text hash} {do
+  (= {changed} (lsp/index-file-full db uri text hash))
+  (if (> changed 0)
+    {do
+      (= {ast} (lsp/get-ast uri text))
+      (if (not (error? ast))
+        {lsp/precompute-file-data db uri ast text}
+        {})}
+    {})
+  changed
+})
+
+; ---------------------------------------------------------------------------
+; Disk seeding (workspace scan at startup)
+; ---------------------------------------------------------------------------
+
+(sig 'lsp/seed-from-disk {-> Ref Str Num})
+(fun {lsp/seed-from-disk db path} {do
   (= {fp} (file/fingerprint path))
   (if (error? fp) {0}
     {do
-      (= {fpath} (symdb/uri->path (str "file://" path)))
-      (= {existing} (sqlite/query-maybe db
-        "SELECT hash FROM files WHERE path=?1" fpath))
-      (if (not (nil? existing))
-        {if (== existing:hash fp) {0}
-          {do
-            (= {text} (read-file path))
-            (if (error? text) {0}
-              {do
-                (= {uri} (str "file://" path))
-                (symdb/sync-file-symbols db uri text fp)
-                (= {ast} (parse text))
-                (if (not (error? ast))
-                  {do
-                    (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (symdb/uri->path uri)))
-                    (if (not (nil? fid)) {lsp/index-ast db fid ast text} {})}
-                  {})
-                1})}}
+      (= {text} (read-file path))
+      (if (error? text) {0}
         {do
-          (= {text} (read-file path))
-          (if (error? text) {0}
-            {do
-              (= {uri} (str "file://" path))
-              (symdb/sync-file-symbols db uri text fp)
-              (= {ast} (parse text))
-              (if (not (error? ast))
-                {do
-                  (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" (symdb/uri->path uri)))
-                  (if (not (nil? fid)) {lsp/index-ast db fid ast text} {})}
-                {})
-              1})})})
-})
-
-(sig 'lsp/seed-file {-> Ref Str Num})
-(fun {lsp/seed-file db path} {do
-  (= {path} (if (str/starts-with? path "/") {path}
-               {str lsp/root-path "/" path}))
-  (lsp/sync-file db path)
+          (sqlite/exec db "BEGIN")
+          (= {r} (lsp/index-file-full db (str "file://" path) text fp))
+          (sqlite/exec db "COMMIT")
+          r})})
 })
 
 (sig 'lsp/seed-builtins {-> Ref Str Nil})
 (fun {lsp/seed-builtins db root} {do
-  (= {builtins-path} (str root "/src/builtins.valk"))
-  (= {prelude-path} (str root "/src/prelude.valk"))
-  (= {b} (lsp/seed-fast db builtins-path))
-  (= {p} (lsp/seed-fast db prelude-path))
+  (= {builtins-path} (str root "/stdlib/builtins.valk"))
+  (= {prelude-path} (str root "/stdlib/prelude.valk"))
+  (= {b} (lsp/seed-from-disk db builtins-path))
+  (= {p} (lsp/seed-from-disk db prelude-path))
   (if (== (+ b p) 0)
     {stderr/write "[valk-lsp] builtins + prelude cached\n"}
     {stderr/write "[valk-lsp] seeded builtins + prelude\n"})})
-
-(sig 'lsp/seed-fast {-> Ref Str Num})
-(fun {lsp/seed-fast db path} {do
-  (= {fp} (file/fingerprint path))
-  (if (error? fp) {0}
-    {do
-      (= {prep} (lsp/prepare-file-read path fp))
-      (if (nil? prep) {0}
-        {lsp/commit-prepared-fast db prep})})})
 
 (sig 'lsp/precompute-file-data {-> Ref Str List Str Nil})
 (fun {lsp/precompute-file-data db uri ast text} {do
@@ -118,10 +126,28 @@
             {if (nil? (tail e)) {}
               {do
                 (= {path} (str (head (tail e))))
-                (lsp/seed-file lsp/db path)}}
+                (lsp/seed-from-disk lsp/db (if (str/starts-with? path "/") {path}
+                  {str lsp/root-path "/" path}))}}
             {})}}
       {})
     (lsp/ensure-loads-walk (tail exprs))}
+})
+
+(sig 'lsp/republish-all-diagnostics {-> Nil})
+(fun {lsp/republish-all-diagnostics} {do
+  (= {uris} (dict/keys lsp/documents))
+  (lsp/republish-loop uris)
+})
+
+(sig 'lsp/republish-loop {-> List Nil})
+(fun {lsp/republish-loop uris} {
+  if (nil? uris) {}
+  {do
+    (= {uri} (head uris))
+    (= {text} (lsp/doc-get uri))
+    (if (nil? text) {}
+      {lsp/publish-diagnostics uri text})
+    (lsp/republish-loop (tail uris))}
 })
 
 (sig 'lsp/publish-diagnostics {-> Str Str Nil})
@@ -139,9 +165,13 @@
     {do
       (lsp/ensure-loads-indexed ast)
       (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
-      (= {lsp-diags} (map make-lsp-diag diags))
+      (= {lsp-diags} (if (error? diags)
+        {do (stderr/write (str "[lsp] validate error: " diags "\n")) nil}
+        {map make-lsp-diag diags}))
       (lsp/send-notification "textDocument/publishDiagnostics"
-        (list :uri uri :diagnostics lsp-diags))})})
+        (list :uri uri :diagnostics (if (error? lsp-diags)
+          {do (stderr/write (str "[lsp] diag map error: " lsp-diags "\n")) nil}
+          {lsp-diags})))})})
 
 (sig 'lsp/publish-diagnostics-fast {-> Str Str Nil})
 (fun {lsp/publish-diagnostics-fast uri text} {do
@@ -155,7 +185,7 @@
           :severity 1
           :source "valk"
           :message (str ast))))}
-    {lsp/send-notification "textDocument/publishDiagnostics"
+     {lsp/send-notification "textDocument/publishDiagnostics"
       (list :uri uri :diagnostics nil)})})
 
 ; ---------------------------------------------------------------------------
@@ -175,7 +205,14 @@
     {do
       (lsp/ensure-loads-indexed ast)
       (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
-      (map make-lsp-diag diags)})})
+      (if (error? diags)
+        {do (stderr/write (str "[lsp] validate error: " diags "\n"))
+            nil}
+        {do
+          (= {mapped} (map make-lsp-diag diags))
+          (if (error? mapped)
+            {do (stderr/write (str "[lsp] diag map error: " mapped "\n")) nil}
+            {mapped})})})})
 
 (sig 'handle-pull-diagnostics {-> Num DocParams Nil})
 (fun {handle-pull-diagnostics id params} {do
@@ -186,7 +223,8 @@
     {lsp/send-response id (list :kind "full" :items nil)}
     {do
       (= {items} (lsp/compute-diagnostics uri text))
-      (lsp/send-response id (list :kind "full" :items items))})})
+      (lsp/send-response id (list :kind "full" :items
+        (if (error? items) {nil} {items})))})})
 
 ; ---------------------------------------------------------------------------
 ; Sync document to symdb
@@ -196,41 +234,14 @@
 (fun {lsp/sync-doc uri text} {do
   (lsp/doc-store uri text)
   (if (nil? lsp/db) {}
-    {do (= {changed} (symdb/sync-document lsp/db uri text))
-        (if (> changed 0)
-          {do
-            (= {ast} (lsp/get-ast uri text))
-            (if (not (error? ast))
-              {do
-                (= {path} (symdb/uri->path uri))
-                (= {fid} (sqlite/query-value lsp/db "SELECT id FROM files WHERE path=?1" path))
-                (if (not (nil? fid)) {lsp/index-ast lsp/db fid ast text} {})}
-              {})
-            (lsp/invalidate-known-set)}
-          {})})})
-
-(sig 'lsp/sync-doc-text {-> Str Str Nil})
-(fun {lsp/sync-doc-text uri text} {do
-  (if (nil? lsp/db) {}
     {do
       (= {hash} (str "mem:" (len text)))
-      (= {path} (symdb/uri->path uri))
-      (= {existing} (sqlite/query-maybe lsp/db
-        "SELECT hash FROM files WHERE path=?1" path))
-      (if (not (nil? existing))
-        {if (== existing:hash hash) {}
-          {do (sqlite/exec lsp/db "BEGIN")
-              (symdb/sync-file-symbols lsp/db uri text hash)
-              (= {ast} (lsp/get-ast uri text))
-              (lsp/precompute-file-data lsp/db uri ast text)
-              (sqlite/exec lsp/db "COMMIT")
-              (lsp/invalidate-known-set)}}
-        {do (sqlite/exec lsp/db "BEGIN")
-            (symdb/sync-file-symbols lsp/db uri text hash)
-            (= {ast} (lsp/get-ast uri text))
-            (lsp/precompute-file-data lsp/db uri ast text)
-            (sqlite/exec lsp/db "COMMIT")
-            (lsp/invalidate-known-set)})})})
+      (sqlite/exec lsp/db "BEGIN")
+      (= {changed} (lsp/index-file-with-hints lsp/db uri text hash))
+      (sqlite/exec lsp/db "COMMIT")
+      (if (> changed 0) {lsp/invalidate-known-set} {})})})
+
+
 
 ; ---------------------------------------------------------------------------
 ; Workspace scanning — incremental background indexing
@@ -278,7 +289,7 @@
 
 (sig 'lsp/index-file {-> Ref Str Num})
 (fun {lsp/index-file db path} {
-  lsp/sync-file db path
+  lsp/seed-from-disk db path
 })
 
 (sig 'lsp/collect-workspace-files {-> Str List})
@@ -348,8 +359,12 @@
         (sqlite/exec db
           "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
           fpath fp)
-    (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" fpath))
-    (if (not (nil? file-id)) {idx/index-file-fast db file-id ast text} {})
+     (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" fpath))
+    (if (not (nil? file-id))
+      {do (idx/index-file-fast db file-id ast text)
+          (lsp/index-ast db file-id ast text)
+          (lsp/precompute-file-data db (str "file://" path) ast text)}
+      {})
     1})}
 })
 
@@ -572,8 +587,9 @@
     (aio/dispatch lsp/sys
       (\ {_} {lsp/prepare-file path})
       nil
-      (\ {result} {do
-        (= {did-raw} (lsp/commit-prepared-fast db result))
+       (\ {result} {do
+        (= {did-raw} (if (nil? result) {0}
+          {lsp/index-file-full db (str "file://" result:path) result:text result:fp}))
         (= {did} (if (num? did-raw) {did-raw} {0}))
         (dict/set! state :indexed (+ (dict/get state :indexed) did))
         (dict/set! state :done (+ (dict/get state :done) 1))
@@ -589,8 +605,9 @@
             (lsp/invalidate-known-set)
             (= {indexed} (dict/get state :indexed))
             (lsp/progress-end tok (if (== indexed 0) {"up to date"} {str "indexed " indexed " files"}))
-            (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
-            (lsp/cleanup-stale-files)}
+             (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
+             (lsp/cleanup-stale-files)
+             (lsp/republish-all-diagnostics)}
           {})}))
     (lsp/dispatch-all db (tail files) state tok)}
 })
@@ -626,13 +643,9 @@
   (lsp/doc-store uri text)
   (dict/remove! lsp/line-index-cache uri)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
-  (= {snap} (DocSnapshot uri text lsp/doc-version))
-  (aio/dispatch lsp/sys
-    (\ {_} {do (lsp/cache-ast snap:uri snap:text)
-               (lsp/sync-doc snap:uri snap:text)
-               (lsp/publish-diagnostics snap:uri snap:text)
-               nil})
-    nil lsp/noop-cb)})
+  (lsp/cache-ast uri text)
+  (lsp/sync-doc uri text)
+  (lsp/publish-diagnostics uri text)})
 
 (sig 'handle-did-change {-> ChangeParams Nil})
 (fun {handle-did-change params} {do
@@ -649,19 +662,18 @@
       (dict/remove! lsp/ast-cache uri)
       (dict/remove! lsp/line-index-cache uri)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (= {snap} (DocSnapshot uri text lsp/doc-version))
       (= {v} lsp/doc-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/doc-version v)) {nil}
-          {do (lsp/cache-ast snap:uri snap:text)
-              (lsp/sync-doc snap:uri snap:text)
+          {do (lsp/cache-ast uri text)
+              (lsp/sync-doc uri text)
               nil}})
         nil lsp/noop-cb)
       (def {lsp/diag-version} (+ lsp/diag-version 1))
       (= {dv} lsp/diag-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/diag-version dv)) {nil}
-          {do (lsp/publish-diagnostics snap:uri snap:text) nil}})
+          {do (lsp/publish-diagnostics uri text) nil}})
         nil lsp/noop-cb)})})
 
 (sig 'handle-did-close {-> DocParams Nil})
@@ -686,10 +698,10 @@
       (lsp/doc-store uri save-text)
       (dict/remove! lsp/line-index-cache uri)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (= {snap} (DocSnapshot uri save-text lsp/doc-version))
       (aio/dispatch lsp/sys
-        (\ {_} {do (lsp/cache-ast snap:uri snap:text)
-                   (lsp/sync-doc snap:uri snap:text)
-                   (lsp/publish-diagnostics snap:uri snap:text)
+        (\ {_} {do (lsp/cache-ast uri save-text)
+                   (lsp/sync-doc uri save-text)
+                   (lsp/publish-diagnostics uri save-text)
                    nil})
         nil lsp/noop-cb)})})
+

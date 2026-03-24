@@ -52,7 +52,7 @@
   if (nil? params) {n}
   {do
     (= {p} (head params))
-    (if (and (== (ast/type p) "sym") (== (ast/name p) "&")) {n}
+    (if (and (== (ast/node-type p) "sym") (== (ast/node-name p) "&")) {n}
       {idx/count-params (tail params) (+ n 1)})}
 })
 
