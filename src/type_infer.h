@@ -75,6 +75,9 @@ typedef struct {
   struct { const char *name; valk_type_t *type; } *all_bindings;
   u32 all_bindings_count;
   u32 all_bindings_cap;
+
+  u64 imported_sig_count;
+  u64 imported_type_count;
 } valk_ti_ctx_t;
 
 valk_ti_ctx_t *valk_ti_create(valk_type_env_t *type_env);
@@ -108,6 +111,7 @@ valk_type_t *valk_ti_parse_sig_str(valk_ti_ctx_t *ctx, const char *s);
 valk_type_t *valk_ti_lookup_binding(valk_ti_ctx_t *ctx, const char *name);
 void valk_ti_import_sigs(valk_ti_ctx_t *ctx);
 void valk_ti_import_constructors(valk_ti_ctx_t *ctx);
+void valk_ti_import_new(valk_ti_ctx_t *ctx);
 
 valk_type_t *valk_ti_infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
                                 valk_lval_t *expr);

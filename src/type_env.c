@@ -455,28 +455,10 @@ static void valk_type_env_register_sig(valk_type_env_t *env, valk_lval_t *sig_fo
 
 static valk_ti_ctx_t *g_ti_ctx = NULL;
 
-static bool type_has_vars(valk_type_t *t) {
-  t = valk_type_find(t);
-  if (!t) return false;
-  if (t->kind == VALK_TY_VAR) return true;
-  if (t->kind == VALK_TY_CON) {
-    for (u32 i = 0; i < t->con.arity; i++)
-      if (type_has_vars(t->con.args[i])) return true;
-    return false;
-  }
-  if (t->kind == VALK_TY_FUN) {
-    for (u32 i = 0; i < t->fun.param_count; i++)
-      if (type_has_vars(t->fun.params[i])) return true;
-    return type_has_vars(t->fun.ret);
-  }
-  return false;
-}
-
 static const char *ti_lookup_type_str(const char *name) {
   if (!g_ti_ctx || !name) return NULL;
   valk_type_t *t = valk_ti_lookup_binding(g_ti_ctx, name);
   if (!t || t->kind != VALK_TY_CON) return NULL;
-  if (type_has_vars(t)) return NULL;
   if (t->con.arity == 0) return t->con.name;
   static char ti_buf[256];
   valk_type_to_str(t, ti_buf, sizeof(ti_buf));
