@@ -247,14 +247,7 @@
 })
 
 (sig 'vd/check-one-binding-str {-> Any Str Any List List})
-(fun {vd/check-one-binding-str name-sym name rhs ctx} {
-  if (== name "_") {ctx}
-  {do
-    (= {type} (vd/infer-expr-type rhs ctx))
-    (if (not (nil? type)) {ctx}
-      {vd/add-diag ctx name-sym name
-        (str "Type of '" name "' could not be resolved")})}
-})
+(fun {vd/check-one-binding-str name-sym name rhs ctx} {ctx})
 
 (sig 'vd/walk-fun-parts {-> Any List List List List})
 (fun {vd/walk-fun-parts fname params body-rest ctx} {do

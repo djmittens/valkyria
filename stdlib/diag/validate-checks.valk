@@ -461,66 +461,7 @@
 ; Argument type checking — infer literal types, compare against sig
 ; ---------------------------------------------------------------------------
 
-(sig 'vd/infer-arg-type {-> Any Str})
-(fun {vd/infer-arg-type expr} {
-  if (num? expr) {"Num"}
-  {if (str? expr) {"Str"}
-  {if (not (list? expr)) {nil}
-  {if (nil? expr) {nil}
-  {vd/infer-arg-call-type expr}}}}
-})
-
-(sig 'vd/infer-arg-call-type {-> List Str})
-(fun {vd/infer-arg-call-type expr} {do
-  (= {n} (ast/head-name expr))
-  (if (== n "") {nil}
-  {if (== n "list") {"List"}
-  {if (== n "dict/new") {"Dict"}
-  {if (== n "dict/from-keys") {"Dict"}
-  {if (== n "\\") {"Fun"}
-  {nil}}}}})
-})
-
-(sig 'vd/is-type-var {-> Str Num})
-(fun {vd/is-type-var t} {
-  if (== (len t) 1)
-    {>= (str/index-of "ABCDEFGHIJKLMNOPQRSTUVWXYZ" t) 0}
-    {0}
-})
-
-(sig 'vd/is-compound-type {-> Str Num})
-(fun {vd/is-compound-type t} {
-  if (<= (len t) 0) {0}
-  {== (str/slice t 0 1) "("}
-})
-
-(sig 'vd/extract-compound-base {-> Str Str})
-(fun {vd/extract-compound-base t} {
-  if (not (vd/is-compound-type t)) {t}
-  {do
-    (= {inner} (str/slice t 1 (len t)))
-    (= {sp} (str/index-of inner " "))
-    (if (< sp 0) {inner} {str/slice inner 0 sp})}
-})
-
-(sig 'vd/types-compatible {-> Str Str Num})
-(fun {vd/types-compatible expected actual} {
-  if (nil? expected) {1}
-  {if (nil? actual) {1}
-  {if (== expected "Any") {1}
-  {if (== actual "Any") {1}
-  {if (vd/is-type-var expected) {1}
-  {if (vd/is-type-var actual) {1}
-  {if (if (== actual "Fun") {vd/is-compound-type expected} {0})
-    {== (vd/extract-compound-base expected) "->"}
-  {if (vd/is-compound-type expected)
-    {do
-      (= {base} (vd/extract-compound-base expected))
-      (if (== base actual) {1}
-        {if (vd/is-type-var base) {1}
-        {== expected actual}})}
-  {== expected actual}}}}}}}}
-})
+; Type inference functions removed — replaced by C HM engine (type/infer-file)
 
 (sig 'vd/parse-sig-param-types {-> Str List})
 (fun {vd/parse-sig-param-types sig-str} {
@@ -565,20 +506,7 @@
 })
 
 (sig 'vd/check-arg-types {-> List Str List List List})
-(fun {vd/check-arg-types args name param-types ctx} {
-  if (nil? args) {ctx}
-  {if (nil? param-types) {ctx}
-  {do
-    (= {arg} (head args))
-    (= {expected-type} (head param-types))
-    (= {actual-type} (vd/infer-arg-type arg))
-    (= {ctx2} (if (nil? actual-type) {ctx}
-      {if (vd/types-compatible expected-type actual-type) {ctx}
-        {vd/add-diag ctx arg (str arg)
-          (str "'" name "' expects " expected-type " but got " actual-type)}}))
-    (= {rest-types} (if (nil? (tail param-types)) {param-types} {(tail param-types)}))
-    (vd/check-arg-types (tail args) name rest-types ctx2)}}
-})
+(fun {vd/check-arg-types args name param-types ctx} {ctx})
 
 (sig 'vd/check-arity {-> List Any Str Num List List List})
 (fun {vd/check-arity expr hd name argc tl ctx} {
@@ -884,107 +812,6 @@
 (fun {vd/build-typed-scope fname param-names db} {
   if (nil? db) {dict/from-keys param-names}
   {vd/build-typed-scope-q fname param-names db}
-})
-
-(sig 'vd/check-type-callable {-> Any Num})
-(fun {vd/check-type-callable type} {
-  if (not (list? type)) {0}
-  {if (nil? type) {0}
-  {if (sym? (head type))
-    {== (str (head type)) "->"}
-    {0}}}
-})
-
-(sig 'vd/scope-has-callable {-> Str List Num})
-(fun {vd/scope-has-callable name scope-chain} {
-  if (nil? scope-chain) {0}
-  {if (dict/has? (head scope-chain) name)
-    {vd/check-type-callable (dict/get (head scope-chain) name)}
-    {vd/scope-has-callable name (tail scope-chain)}}
-})
-
-(sig 'vd/infer-expr-type {-> Any List Any})
-(fun {vd/infer-expr-type expr ctx} {
-  if (num? expr) {1}
-  {if (str? expr) {1}
-  {if (sym? expr) {1}
-  {if (not (list? expr)) {nil}
-  {if (nil? expr) {1}
-  {if (quoted? expr) {1}
-  {vd/infer-from-call expr ctx}}}}}}
-})
-
-(sig 'vd/infer-from-call {-> List List Any})
-(fun {vd/infer-from-call expr ctx} {do
-  (= {n} (ast/head-name expr))
-  (if (== n "") {nil}
-    {vd/infer-by-callee n ctx})
-})
-
-(sig 'vd/infer-by-callee {-> Str List Any})
-(fun {vd/infer-by-callee name ctx} {
-  if (dict/has? vd/VALIDATE_SPECIAL_FORMS name) {1}
-  {if (if (> (len name) 0) {== (str/slice name 0 1) ":"} {0}) {1}
-  {if (== name "list") {1}
-  {if (== name "dict/new") {1}
-  {if (== name "dict/from-keys") {1}
-  {if (== name "None") {1}
-  {if (== name "Some") {1}
-  {if (== name "\\") {1}
-  {vd/infer-by-callee-db name ctx}}}}}}}}
-})
-
-(sig 'vd/infer-by-callee-db {-> Str List Any})
-(fun {vd/infer-by-callee-db name ctx} {do
-  (= {found} (vd/query-fun-sig ctx:db name))
-  (if (not (nil? found)) {1}
-    {if (vd/scope-has-callable name ctx:scope) {1}
-    {if (vd/in-scope-untyped? name ctx:scope) {1}
-    {if (vd/is-ctor-call name) {1}
-    {if (dict/has? ctx:globals name) {1}
-    {if (dict/has? ctx:known name) {1}
-    {if (vd/is-known-by-basename name ctx:known) {1}
-      {nil}}}}}}})
-})
-
-(sig 'vd/in-scope-untyped? {-> Str List Num})
-(fun {vd/in-scope-untyped? name scope-chain} {
-  if (nil? scope-chain) {0}
-  {do
-    (= {entry} (dict/get (head scope-chain) name))
-    (if (nil? entry) {vd/in-scope-untyped? name (tail scope-chain)}
-      {if (num? entry) {1} {0}})}
-})
-
-(sig 'vd/param-has-annotation {-> List Num})
-(fun {vd/param-has-annotation rest} {
-  if (nil? rest) {0}
-  {if (not (sym? (head rest))) {0}
-  {== (str (head rest)) "::"}}
-})
-
-(sig 'vd/flag-untyped-params {-> List List List})
-(fun {vd/flag-untyped-params params ctx} {
-  if (nil? params) {ctx}
-  {vd/flag-untyped-one (head params) (tail params) ctx}
-})
-
-(sig 'vd/flag-untyped-one {-> Any List List List})
-(fun {vd/flag-untyped-one p rest ctx} {
-  if (not (sym? p)) {vd/flag-untyped-params rest ctx}
-  {vd/flag-untyped-str p (str p) rest ctx}
-})
-
-(sig 'vd/flag-untyped-str {-> Any Str List List List})
-(fun {vd/flag-untyped-str p name rest ctx} {
-  if (== name "&") {ctx}
-  {if (== name "::") {if (nil? rest) {ctx} {vd/flag-untyped-params (tail rest) ctx}}
-  {if (== name "->") {ctx}
-  {if (vd/param-has-annotation rest)
-    {if (< (len rest) 2) {ctx} {vd/flag-untyped-params (tail (tail rest)) ctx}}
-  {vd/flag-untyped-params rest
-    (vd/add-diag ctx p name
-      (str "Type of '" name "' could not be resolved"))}}}}
 })
 
 (sig 'vd/is-ctor-call {-> Str Num})

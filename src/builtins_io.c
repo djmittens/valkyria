@@ -1,4 +1,5 @@
 #include "builtins_internal.h"
+#include "type_infer.h"
 extern valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a);
 
 #include <dirent.h>
@@ -1031,6 +1032,37 @@ static valk_lval_t* valk_builtin_for_each_line(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num((long)lines_read);
 }
 
+static valk_lval_t *valk_builtin_type_infer_file(valk_lenv_t *e,
+                                                  valk_lval_t *a) {
+  UNUSED(e);
+  u64 argc = valk_lval_list_count(a);
+  if (argc < 1)
+    LVAL_RAISE(a, "type/infer-file: expected at least 1 argument (ast)");
+  valk_lval_t *ast = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, ast, LVAL_CONS, LVAL_NIL);
+
+  valk_ti_ctx_t *ctx = valk_ti_create(valk_type_env_global());
+  valk_ti_import_sigs(ctx);
+  valk_ti_import_constructors(ctx);
+  valk_ti_infer_file(ctx, ast);
+
+  valk_lval_t *result = valk_lval_nil();
+  for (u32 i = ctx->error_count; i > 0; i--) {
+    valk_ti_error_t *err = &ctx->errors[i - 1];
+    valk_lval_t *entry = valk_lval_nil();
+    entry = valk_lval_cons(valk_lval_str(err->message), entry);
+    entry = valk_lval_cons(valk_lval_sym(":message"), entry);
+    entry = valk_lval_cons(valk_lval_num(err->col), entry);
+    entry = valk_lval_cons(valk_lval_sym(":col"), entry);
+    entry = valk_lval_cons(valk_lval_num(err->line), entry);
+    entry = valk_lval_cons(valk_lval_sym(":line"), entry);
+    result = valk_lval_cons(entry, result);
+  }
+
+  valk_ti_destroy(ctx);
+  return result;
+}
+
 void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
   valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
@@ -1072,5 +1104,6 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "file/write", valk_builtin_file_write_str);
   valk_lenv_put_builtin(env, "file/close", valk_builtin_file_close);
   valk_lenv_put_builtin(env, "compile/process", valk_builtin_compile_process);
+  valk_lenv_put_builtin(env, "type/infer-file", valk_builtin_type_infer_file);
 }
 

@@ -619,16 +619,11 @@
 
   (test/case "type-non-callable-param-flagged"
     {do
-      (= {db} (symdb/init ":memory:"))
-      (= {bt} (read-file "stdlib/builtins.valk"))
-      (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(sig 'process {-> Num Num Num})\n(fun {process x y} {do (= {r} (x 1)) r})")
-      (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
-      (= {_} (sqlite/close db))
-      (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
+      (= {errs} (type/infer-file (parse code)))
+      (= {type-msgs} (filter (\{e} {>= (str/index-of (plist/get e :message) "mismatch") 0}) errs))
       (test/assert (>= (len type-msgs) 1)
-        "calling a non-function-typed param should flag binding")
+        "calling a non-function-typed param should flag via HM inference")
       true
     })
 
@@ -863,14 +858,10 @@
 
   (test/case "type-check-num-to-str-fn"
     {do
-      (= {db} (sqlite/open ":memory:"))
-      (sqlite/exec-script db symdb/schema-sql)
-      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
-      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('str/split', 1, 0, 0, 1, 2, '{-> Str Str (List Str)}')")
-      (= {diags} (vd/validate db (parse "(str/split 42 \" \")") "(str/split 42 \" \")"))
-      (= {type-errs} (filter (\ {d} {>= (str/index-of (plist/get d :message) "expects") 0}) diags))
-      (sqlite/close db)
-      (test/assert (> (len type-errs) 0) "num to str fn should produce type error")
+      (= {code} "(sig 'str/split {-> Str Str (List Str)})\n(str/split 42 \" \")")
+      (= {errs} (type/infer-file (parse code)))
+      (= {type-errs} (filter (\{e} {>= (str/index-of (plist/get e :message) "Num") 0}) errs))
+      (test/assert (> (len type-errs) 0) "num to str fn should produce type error via HM inference")
       true
     })
 
@@ -900,16 +891,13 @@
 
   (test/case "type-check-message-format"
     {do
-      (= {db} (sqlite/open ":memory:"))
-      (sqlite/exec-script db symdb/schema-sql)
-      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
-      (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('mod', 1, 0, 0, 1, 2, '{-> Num Num Num}')")
-      (= {diags} (vd/validate db (parse "(mod \"x\" 2)") "(mod \"x\" 2)"))
-      (= {type-errs} (filter (\ {d} {>= (str/index-of (plist/get d :message) "expects Num") 0}) diags))
-      (sqlite/close db)
-      (test/assert (> (len type-errs) 0) "message should say expects Num")
+      (= {code} "(sig 'mod {-> Num Num Num})\n(mod \"x\" 2)")
+      (= {errs} (type/infer-file (parse code)))
+      (= {type-errs} (filter (\{e} {>= (str/index-of (plist/get e :message) "mismatch") 0}) errs))
+      (test/assert (> (len type-errs) 0) "HM inference should detect Str vs Num mismatch")
       (= {msg} (plist/get (head type-errs) :message))
-      (test/assert (>= (str/index-of msg "got Str") 0) "message should say got Str")
+      (test/assert (>= (str/index-of msg "Num") 0) "message should mention Num")
+      (test/assert (>= (str/index-of msg "Str") 0) "message should mention Str")
       true
     })
 

@@ -105,6 +105,7 @@ set(VALKYRIA_SOURCES
   src/lenv.c
   src/reader.c
   src/type_env.c
+  src/type_infer.c
   src/builtins_math.c
   src/builtins_list.c
   src/builtins_string.c
@@ -580,6 +581,9 @@ target_link_libraries(test_validate PRIVATE "-lc" valkyria)
 
 add_executable(test_type_env test/parser/test_type_env.c test/testing.c)
 target_link_libraries(test_type_env PRIVATE "-lc" valkyria)
+
+add_executable(test_type_infer test/parser/test_type_infer.c test/testing.c)
+target_link_libraries(test_type_infer PRIVATE "-lc" valkyria)
 
 # LLVM backend tests
 if(VALK_LLVM)

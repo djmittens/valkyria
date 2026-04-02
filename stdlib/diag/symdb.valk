@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS symbols (
   arity INTEGER NOT NULL DEFAULT -1,
   doc TEXT,
   sig TEXT,
+  inferred_type TEXT,
   exported INTEGER NOT NULL DEFAULT 1
 );
 
@@ -125,7 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 
 ; === Lifecycle ===
 
-(def {SYMDB_VERSION} 4)
+(def {SYMDB_VERSION} 5)
 
 (sig 'symdb/init {-> Str Ref})
 (fun {symdb/init path} {do
@@ -906,7 +907,42 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
       (symdb/insert-nodes db file-id nodes)
       (sqlite/exec db "DELETE FROM semantic_tokens WHERE file_id=?1" file-id)
       (sqlite/exec db "DELETE FROM inlay_hints WHERE file_id=?1" file-id)
-      (sqlite/exec db "DELETE FROM scoped_refs WHERE file_id=?1" file-id)})
+      (sqlite/exec db "DELETE FROM scoped_refs WHERE file_id=?1" file-id)
+      (symdb/store-inferred-types db file-id ast)})
+})
+
+(sig 'symdb/store-inferred-types {-> Ref Num List Nil})
+(fun {symdb/store-inferred-types db file-id ast} {do
+  (= {ti-errors} (type/infer-file ast))
+  (symdb/update-inferred db file-id ast)
+})
+
+(sig 'symdb/update-inferred {-> Ref Num List Nil})
+(fun {symdb/update-inferred db file-id exprs} {
+  if (nil? exprs) {nil}
+  {do
+    (= {expr} (head exprs))
+    (= {name} (ast/head-name expr))
+    (if (== name "fun")
+      {do
+        (= {formals} (if (nil? (tail expr)) {nil} {head (tail expr)}))
+        (= {fname} (if (list? formals) {if (nil? formals) {""} {str (head formals)}} {""}))
+        (if (> (len fname) 0)
+          {sqlite/exec db
+            "UPDATE symbols SET inferred_type='fn' WHERE file_id=?1 AND name=?2"
+            file-id fname}
+          {nil})}
+      {if (== name "=")
+        {do
+          (= {binding} (if (nil? (tail expr)) {nil} {head (tail expr)}))
+          (= {bname} (if (list? binding) {if (nil? binding) {""} {str (head binding)}} {""}))
+          (if (> (len bname) 0)
+            {sqlite/exec db
+              "UPDATE symbols SET inferred_type='val' WHERE file_id=?1 AND name=?2"
+              file-id bname}
+            {nil})}
+        {nil}})
+    (symdb/update-inferred db file-id (tail exprs))}
 })
 
 (sig 'symdb/insert-symbols {-> Ref Num List Nil})

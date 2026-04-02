@@ -1,9 +1,11 @@
 #include "type_env.h"
+#include "type_infer.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "common.h"
 #include "memory.h"
 
 #define GROW_ARRAY(arr, count, cap, type) do {  \
@@ -399,20 +401,6 @@ static char *serialize_type_expr(valk_lval_t *type_expr) {
   return strdup(buf);
 }
 
-static const char *extract_list_element_type(const char *type) {
-  if (!type || type[0] != '(') return NULL;
-  if (strncmp(type + 1, "List ", 5) != 0) return NULL;
-  const char *start = type + 6;
-  const char *end = type + strlen(type) - 1;
-  if (*end != ')') return NULL;
-  static char buf[128];
-  int len = end - start;
-  if (len <= 0 || len >= 128) return NULL;
-  memcpy(buf, start, len);
-  buf[len] = '\0';
-  return buf;
-}
-
 static valk_type_sig_t *valk_type_env_find_sig(valk_type_env_t *env, const char *name) {
   for (u64 i = 0; i < env->sig_count; i++) {
     if (strcmp(env->sigs[i]->name, name) == 0) return env->sigs[i];
@@ -465,14 +453,34 @@ static void valk_type_env_register_sig(valk_type_env_t *env, valk_lval_t *sig_fo
   env->sigs[env->sig_count++] = sig;
 }
 
-static const char *resolve_type_name(valk_type_env_t *env, const char *name) {
-  if (!name) return NULL;
-  valk_constructor_t *ctor = valk_type_env_find_constructor(env, name);
-  if (!ctor) ctor = find_constructor_by_short_name(env, name);
-  if (ctor) return ctor->name;
-  valk_type_decl_t *type = valk_type_env_find_type(env, name);
-  if (type) return type->name;
-  return NULL;
+static valk_ti_ctx_t *g_ti_ctx = NULL;
+
+static bool type_has_vars(valk_type_t *t) {
+  t = valk_type_find(t);
+  if (!t) return false;
+  if (t->kind == VALK_TY_VAR) return true;
+  if (t->kind == VALK_TY_CON) {
+    for (u32 i = 0; i < t->con.arity; i++)
+      if (type_has_vars(t->con.args[i])) return true;
+    return false;
+  }
+  if (t->kind == VALK_TY_FUN) {
+    for (u32 i = 0; i < t->fun.param_count; i++)
+      if (type_has_vars(t->fun.params[i])) return true;
+    return type_has_vars(t->fun.ret);
+  }
+  return false;
+}
+
+static const char *ti_lookup_type_str(const char *name) {
+  if (!g_ti_ctx || !name) return NULL;
+  valk_type_t *t = valk_ti_lookup_binding(g_ti_ctx, name);
+  if (!t || t->kind != VALK_TY_CON) return NULL;
+  if (type_has_vars(t)) return NULL;
+  if (t->con.arity == 0) return t->con.name;
+  static char ti_buf[256];
+  valk_type_to_str(t, ti_buf, sizeof(ti_buf));
+  return ti_buf;
 }
 
 static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_lval_t *child_expr) {
@@ -483,14 +491,13 @@ static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_l
 
   valk_lval_t *binding = valk_lval_list_nth(child_expr, 1);
   valk_lval_t *rhs = valk_lval_list_nth(child_expr, 2);
-
   if (!is_qexpr(binding) || LVAL_TYPE(binding->cons.head) != LVAL_SYM ||
       LVAL_TYPE(binding->cons.tail) != LVAL_NIL) return;
   const char *var_name = binding->cons.head->str;
 
-  scope_add(scope, var_name, NULL);
+  const char *inferred = ti_lookup_type_str(var_name);
+  if (inferred) { scope_add(scope, var_name, inferred); return; }
 
-  // Handle direct symbol RHS (e.g., o:inner field access)
   if (LVAL_TYPE(rhs) == LVAL_SYM) {
     const char *sym = rhs->str;
     const char *colon = strchr(sym, ':');
@@ -507,8 +514,11 @@ static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_l
           if (ctor) {
             for (u64 f = 0; f < ctor->field_count; f++) {
               if (strcmp(ctor->fields[f].name, colon) == 0 && ctor->fields[f].type_name) {
-                const char *ft_resolved = resolve_type_name(env, ctor->fields[f].type_name);
-                if (ft_resolved) { scope_add(scope, var_name, ft_resolved); return; }
+                valk_constructor_t *fc = valk_type_env_find_constructor(env, ctor->fields[f].type_name);
+                if (!fc) fc = find_constructor_by_short_name(env, ctor->fields[f].type_name);
+                if (fc) { scope_add(scope, var_name, fc->name); return; }
+                valk_type_decl_t *ft = valk_type_env_find_type(env, ctor->fields[f].type_name);
+                if (ft) { scope_add(scope, var_name, ft->name); return; }
                 break;
               }
             }
@@ -523,49 +533,55 @@ static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_l
       LVAL_TYPE(rhs->cons.head) != LVAL_SYM) return;
   const char *rhs_name = rhs->cons.head->str;
 
-  const char *resolved = resolve_type_name(env, rhs_name);
-  if (resolved) { scope_add(scope, var_name, resolved); return; }
+  valk_constructor_t *ctor = valk_type_env_find_constructor(env, rhs_name);
+  if (ctor) { scope_add(scope, var_name, ctor->name); return; }
+  if (!ctor) ctor = find_constructor_by_short_name(env, rhs_name);
+  if (ctor) { scope_add(scope, var_name, ctor->name); return; }
 
-  valk_type_sig_t *call_sig = valk_type_env_find_sig(env, rhs_name);
-  if (call_sig && call_sig->return_type) {
-    resolved = resolve_type_name(env, call_sig->return_type);
-    if (resolved) { scope_add(scope, var_name, resolved); return; }
+  valk_type_sig_t *sig = valk_type_env_find_sig(env, rhs_name);
+  if (sig && sig->return_type) {
+    valk_constructor_t *rc = valk_type_env_find_constructor(env, sig->return_type);
+    if (rc) { scope_add(scope, var_name, rc->name); return; }
+    if (!rc) rc = find_constructor_by_short_name(env, sig->return_type);
+    if (rc) { scope_add(scope, var_name, rc->name); return; }
+    valk_type_decl_t *rt = valk_type_env_find_type(env, sig->return_type);
+    if (rt) { scope_add(scope, var_name, rt->name); return; }
+    if (sig->return_type[0] == '(') {
+      scope_add(scope, var_name, sig->return_type); return;
+    }
   }
 
   if (strcmp(rhs_name, "head") == 0 && valk_lval_list_count(rhs) == 2) {
     valk_lval_t *arg = valk_lval_list_nth(rhs, 1);
     if (LVAL_TYPE(arg) == LVAL_SYM) {
       const char *arg_type = scope_find_type(scope, arg->str);
-      if (arg_type) {
-        const char *inner = extract_list_element_type(arg_type);
-        if (inner) {
-          resolved = resolve_type_name(env, inner);
-          if (resolved) { scope_add(scope, var_name, resolved); return; }
+      if (arg_type && arg_type[0] == '(' && strncmp(arg_type + 1, "List ", 5) == 0) {
+        const char *start = arg_type + 6;
+        const char *end = arg_type + strlen(arg_type) - 1;
+        if (*end == ')') {
+          static char hbuf[128];
+          int hlen = end - start;
+          if (hlen > 0 && hlen < 128) {
+            memcpy(hbuf, start, hlen); hbuf[hlen] = 0;
+            valk_constructor_t *hc = valk_type_env_find_constructor(env, hbuf);
+            if (!hc) hc = find_constructor_by_short_name(env, hbuf);
+            if (hc) { scope_add(scope, var_name, hc->name); return; }
+            valk_type_decl_t *ht = valk_type_env_find_type(env, hbuf);
+            if (ht) { scope_add(scope, var_name, ht->name); return; }
+          }
         }
       }
     }
   }
 
-  if (strcmp(rhs_name, "tail") == 0 && valk_lval_list_count(rhs) == 2) {
-    valk_lval_t *arg = valk_lval_list_nth(rhs, 1);
-    if (LVAL_TYPE(arg) == LVAL_SYM) {
-      const char *arg_type = scope_find_type(scope, arg->str);
-      if (arg_type && arg_type[0] == '(') {
-        scope_add(scope, var_name, arg_type);
-        return;
-      }
-    }
-  }
-
-  if ((strcmp(rhs_name, "filter") == 0 || strcmp(rhs_name, "reverse") == 0) &&
-      valk_lval_list_count(rhs) >= 2) {
+  if ((strcmp(rhs_name, "tail") == 0 || strcmp(rhs_name, "filter") == 0 ||
+       strcmp(rhs_name, "reverse") == 0) && valk_lval_list_count(rhs) >= 2) {
     u64 rhs_count = valk_lval_list_count(rhs);
     valk_lval_t *list_arg = valk_lval_list_nth(rhs, rhs_count - 1);
     if (LVAL_TYPE(list_arg) == LVAL_SYM) {
       const char *list_type = scope_find_type(scope, list_arg->str);
       if (list_type && list_type[0] == '(') {
-        scope_add(scope, var_name, list_type);
-        return;
+        scope_add(scope, var_name, list_type); return;
       }
     }
   }
@@ -578,15 +594,7 @@ static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_l
     }
   }
 
-  valk_type_sig_t *sig = valk_type_env_find_sig(env, rhs_name);
-  if (sig && sig->return_type) {
-    resolved = resolve_type_name(env, sig->return_type);
-    if (resolved) { scope_add(scope, var_name, resolved); return; }
-    if (sig->return_type[0] == '(') {
-      scope_add(scope, var_name, sig->return_type);
-      return;
-    }
-  }
+  scope_add(scope, var_name, NULL);
 }
 
 static void track_fun_params(valk_type_env_t *env, valk_type_scope_t *scope, valk_lval_t *formals) {
@@ -595,22 +603,23 @@ static void track_fun_params(valk_type_env_t *env, valk_type_scope_t *scope, val
   if (LVAL_TYPE(fn_name) != LVAL_SYM) return;
 
   valk_lval_t *param = formals->cons.tail;
+  u64 idx = 0;
+  valk_type_sig_t *sig = valk_type_env_find_sig(env, fn_name->str);
   while (LVAL_TYPE(param) != LVAL_NIL) {
     valk_lval_t *psym = param->cons.head;
-    if (LVAL_TYPE(psym) == LVAL_SYM)
-      scope_add(scope, psym->str, NULL);
-    param = param->cons.tail;
-  }
-
-  valk_type_sig_t *sig = valk_type_env_find_sig(env, fn_name->str);
-  if (!sig) return;
-
-  param = formals->cons.tail;
-  for (u64 p = 0; p < sig->param_count && LVAL_TYPE(param) != LVAL_NIL; p++) {
-    valk_lval_t *psym = param->cons.head;
-    if (LVAL_TYPE(psym) == LVAL_SYM && sig->param_types[p]) {
-      const char *resolved = resolve_type_name(env, sig->param_types[p]);
-      if (resolved) scope_add(scope, psym->str, resolved);
+    if (LVAL_TYPE(psym) == LVAL_SYM) {
+      const char *inferred = ti_lookup_type_str(psym->str);
+      if (inferred) {
+        scope_add(scope, psym->str, inferred);
+      } else if (sig && idx < sig->param_count && sig->param_types[idx]) {
+        valk_constructor_t *pc = valk_type_env_find_constructor(env, sig->param_types[idx]);
+        if (!pc) pc = find_constructor_by_short_name(env, sig->param_types[idx]);
+        valk_type_decl_t *pt = pc ? NULL : valk_type_env_find_type(env, sig->param_types[idx]);
+        scope_add(scope, psym->str, pc ? pc->name : (pt ? pt->name : NULL));
+      } else {
+        scope_add(scope, psym->str, NULL);
+      }
+      idx++;
     }
     param = param->cons.tail;
   }
@@ -1177,8 +1186,9 @@ valk_lval_t *valk_type_transform_expr(valk_lval_t *expr) {
 
   if (env->type_count == 0 && env->sig_count == 0) return expr;
 
-  valk_type_scope_t scope = {0};
-  return transform_expr(env, &scope, expr);
+  static valk_type_scope_t persistent_scope = {0};
+  track_binding(env, &persistent_scope, expr);
+  return transform_expr(env, &persistent_scope, expr);
 }
 
 valk_lval_t *valk_type_transform(valk_lval_t *exprs) {
@@ -1206,16 +1216,32 @@ valk_lval_t *valk_type_transform(valk_lval_t *exprs) {
   }
 
   valk_type_scope_t scope = {0};
-  valk_lval_t *result = valk_lval_nil();
+  valk_ti_ctx_t *ti = valk_ti_create(env);
+  valk_ti_import_sigs(ti);
+  valk_ti_import_constructors(ti);
+  valk_ti_infer_file(ti, exprs);
+  valk_ti_populate_type_scope(ti, ti->scope, &scope);
+  g_ti_ctx = ti;
+
   u64 count = valk_lval_list_count(exprs);
+  valk_lval_t **items = malloc(sizeof(valk_lval_t *) * count);
+  for (u64 i = 0; i < count; i++) {
+    valk_lval_t *expr = valk_lval_list_nth(exprs, i);
+    track_binding(env, &scope, expr);
+    items[i] = transform_expr(env, &scope, expr);
+  }
+  valk_lval_t *result = valk_lval_nil();
   for (u64 i = count; i > 0; i--) {
     valk_lval_t *expr = valk_lval_list_nth(exprs, i - 1);
-    valk_lval_t *transformed = transform_expr(env, &scope, expr);
-    if (LVAL_TYPE(transformed) != LVAL_NIL || (!is_type_form(expr) && !is_sig_form(expr))) {
-      result = valk_lval_cons(transformed, result);
+    if (LVAL_TYPE(items[i - 1]) != LVAL_NIL || (!is_type_form(expr) && !is_sig_form(expr))) {
+      result = valk_lval_cons(items[i - 1], result);
     }
   }
+  free(items);
 
+  g_ti_ctx = NULL;
+  valk_ti_destroy(ti);
+  if (scope.entries) free(scope.entries);
   (void)types_before;
   return result;
 }
