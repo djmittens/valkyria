@@ -7,24 +7,11 @@
 
 #include "common.h"
 
-static bool ti_oom(valk_ti_ctx_t *ctx) {
-  return ctx->arena_off > ctx->arena_cap - 256;
-}
-
 static void *ti_alloc(valk_ti_ctx_t *ctx, sz bytes) {
   bytes = (bytes + 7) & ~(sz)7;
-  if (ctx->arena_off + bytes > ctx->arena_cap) {
-    sz new_cap = ctx->arena_cap;
-    u8 *new_block = calloc(1, new_cap);
-    if (!new_block) return nullptr;
-    u8 **chain = (u8 **)new_block;
-    *chain = ctx->arena;
-    ctx->arena = new_block;
-    ctx->arena_off = sizeof(u8 *);
-    ctx->arena_off = (ctx->arena_off + 7) & ~(sz)7;
-  }
-  void *p = ctx->arena + ctx->arena_off;
-  ctx->arena_off += bytes;
+  if (ctx->temp_off + bytes > ctx->temp_cap) return nullptr;
+  void *p = ctx->temp + ctx->temp_off;
+  ctx->temp_off += bytes;
   return p;
 }
 
@@ -52,35 +39,49 @@ static void ti_error(valk_ti_ctx_t *ctx, int line, int col,
 valk_ti_ctx_t *valk_ti_create(valk_type_env_t *type_env) {
   valk_ti_ctx_t *ctx = calloc(1, sizeof(valk_ti_ctx_t));
   VALK_OOM_ASSERT(ctx);
-  ctx->arena_cap = VALK_TI_ARENA_SIZE;
-  ctx->arena = calloc(1, ctx->arena_cap);
-  VALK_OOM_ASSERT(ctx->arena);
-  *(u8 **)ctx->arena = NULL;
-  ctx->arena_off = (sizeof(u8 *) + 7) & ~(sz)7;
+  ctx->perm_cap = VALK_TI_PERM_SIZE;
+  ctx->perm = calloc(1, ctx->perm_cap);
+  VALK_OOM_ASSERT(ctx->perm);
+  ctx->temp_cap = VALK_TI_TEMP_SIZE;
+  ctx->temp = calloc(1, ctx->temp_cap);
+  VALK_OOM_ASSERT(ctx->temp);
   ctx->type_env = type_env;
-  ctx->scope = valk_ti_scope_new(ctx, nullptr);
 
+  u8 *st = ctx->temp; sz so = ctx->temp_off; sz sc = ctx->temp_cap;
+  ctx->temp = ctx->perm; ctx->temp_off = ctx->perm_off; ctx->temp_cap = ctx->perm_cap;
+
+  ctx->scope = valk_ti_scope_new(ctx, nullptr);
+  ctx->perm_scope = ctx->scope;
   ctx->t_num = valk_ti_con(ctx, "Num", nullptr, 0);
   ctx->t_str = valk_ti_con(ctx, "Str", nullptr, 0);
   ctx->t_nil = valk_ti_con(ctx, "Nil", nullptr, 0);
   ctx->t_bool = valk_ti_con(ctx, "Num", nullptr, 0);
+
+  ctx->perm_off = ctx->temp_off;
+  ctx->temp = st; ctx->temp_off = so; ctx->temp_cap = sc;
   return ctx;
 }
 
 void valk_ti_destroy(valk_ti_ctx_t *ctx) {
   if (!ctx) return;
-  u8 *block = ctx->arena;
-  while (block) {
-    u8 *prev = *(u8 **)block;
-    free(block);
-    block = prev;
-  }
+  free(ctx->perm);
+  free(ctx->temp);
   free(ctx);
+}
+
+void valk_ti_reset(valk_ti_ctx_t *ctx) {
+  ctx->temp_off = 0;
+  ctx->error_count = 0;
+  ctx->all_bindings_count = 0;
+  ctx->all_bindings_cap = 0;
+  ctx->all_bindings = NULL;
+  valk_ti_scope_t *s = valk_ti_scope_new(ctx, ctx->perm_scope);
+  ctx->scope = s ? s : ctx->perm_scope;
 }
 
 valk_type_t *valk_ti_fresh_var(valk_ti_ctx_t *ctx) {
   valk_type_t *t = ti_alloc(ctx, sizeof(valk_type_t));
-  if (!t) return nullptr;
+  if (!t) return ctx->t_nil;
   *t = (valk_type_t){.kind = VALK_TY_VAR, .var = {.id = ctx->next_var++, .link = nullptr}};
   return t;
 }
@@ -88,7 +89,7 @@ valk_type_t *valk_ti_fresh_var(valk_ti_ctx_t *ctx) {
 valk_type_t *valk_ti_con(valk_ti_ctx_t *ctx, const char *name,
                          valk_type_t **args, u32 arity) {
   valk_type_t *t = ti_alloc(ctx, sizeof(valk_type_t));
-  if (!t) return nullptr;
+  if (!t) return ctx->t_nil;
   valk_type_t **stored_args = nullptr;
   if (arity > 0 && args) {
     stored_args = ti_alloc(ctx, sizeof(valk_type_t *) * arity);
@@ -102,7 +103,7 @@ valk_type_t *valk_ti_con(valk_ti_ctx_t *ctx, const char *name,
 valk_type_t *valk_ti_fun(valk_ti_ctx_t *ctx, valk_type_t **params,
                          u32 param_count, valk_type_t *ret) {
   valk_type_t *t = ti_alloc(ctx, sizeof(valk_type_t));
-  if (!t) return nullptr;
+  if (!t) return ctx->t_nil;
   valk_type_t **stored = nullptr;
   if (param_count > 0 && params) {
     stored = ti_alloc(ctx, sizeof(valk_type_t *) * param_count);
@@ -386,7 +387,8 @@ void valk_ti_scope_bind(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
 
 valk_type_scheme_t *valk_ti_scope_lookup(valk_ti_scope_t *scope,
                                          const char *name) {
-  for (valk_ti_scope_t *s = scope; s; s = s->parent) {
+  int limit = 100;
+  for (valk_ti_scope_t *s = scope; s && --limit > 0; s = s->parent) {
     for (u32 i = 0; i < s->count; i++) {
       if (strcmp(s->entries[i].name, name) == 0)
         return &s->entries[i].scheme;
@@ -566,6 +568,7 @@ static valk_type_t *infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
 static valk_type_t *infer_do(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
                              valk_lval_t *body) {
   valk_ti_scope_t *child = valk_ti_scope_new(ctx, scope);
+  if (!child) child = scope;
   valk_type_t *result = ctx->t_nil;
   valk_lval_t *cur = body;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
@@ -578,7 +581,9 @@ static valk_type_t *infer_do(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
 static valk_type_t *infer_lambda(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
                                  valk_lval_t *formals, valk_lval_t *body_list,
                                  const char *fname) {
+  if (ctx->temp_off > ctx->temp_cap - 256) return ctx->t_nil;
   valk_ti_scope_t *child = valk_ti_scope_new(ctx, scope);
+  if (!child) return ctx->t_nil;
   valk_type_t *param_types[32];
   u32 param_count = 0;
 
@@ -707,6 +712,7 @@ static valk_type_t *infer_match(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
     valk_lval_t *clause = cur->cons.head;
     if (is_qexpr_node(clause)) {
       valk_ti_scope_t *clause_scope = valk_ti_scope_new(ctx, scope);
+      if (!clause_scope) { cur = cur->cons.tail; continue; }
       valk_lval_t *pattern = clause->cons.head;
       valk_lval_t *body = clause->cons.tail;
 
@@ -752,7 +758,7 @@ static valk_type_t *infer_match(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
 
 static valk_type_t *infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
                                valk_lval_t *expr) {
-  if (!expr || ti_oom(ctx)) return ctx->t_nil;
+  if (!expr || ctx->temp_off > ctx->temp_cap - 256) return ctx->t_nil;
   valk_ltype_e t = LVAL_TYPE(expr);
 
   if (t == LVAL_NUM) return ctx->t_num;
@@ -951,8 +957,19 @@ void valk_ti_populate_type_scope(valk_ti_ctx_t *ctx, valk_ti_scope_t *ti_scope,
   }
 }
 
+static valk_type_scheme_t ti_scheme_from_type(valk_ti_ctx_t *ctx, valk_type_t *ft) {
+  u32 vars[128]; u32 vc = 0;
+  collect_free_vars(ft, vars, &vc, 128);
+  u32 *bv = NULL;
+  if (vc > 0) { bv = ti_alloc(ctx, sizeof(u32) * vc); if (bv) memcpy(bv, vars, sizeof(u32) * vc); }
+  return (valk_type_scheme_t){.type = ft, .bound_vars = bv, .bound_count = vc};
+}
+
 void valk_ti_import_new(valk_ti_ctx_t *ctx) {
   if (!ctx->type_env) return;
+  u8 *st = ctx->temp; sz so = ctx->temp_off; sz sc = ctx->temp_cap;
+  ctx->temp = ctx->perm; ctx->temp_off = ctx->perm_off; ctx->temp_cap = ctx->perm_cap;
+
   for (u64 i = ctx->imported_sig_count; i < ctx->type_env->sig_count; i++) {
     valk_type_sig_t *sig = ctx->type_env->sigs[i];
     if (valk_ti_scope_lookup(ctx->scope, sig->name)) continue;
@@ -961,8 +978,7 @@ void valk_ti_import_new(valk_ti_ctx_t *ctx) {
       params[p] = valk_ti_parse_sig_str(ctx, sig->param_types[p]);
     valk_type_t *ret = valk_ti_parse_sig_str(ctx, sig->return_type);
     valk_type_t *ft = valk_ti_fun(ctx, params, (u32)sig->param_count, ret);
-    valk_type_scheme_t scheme = valk_type_generalize(ctx, ctx->scope, ft);
-    valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, sig->name), scheme);
+    valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, sig->name), ti_scheme_from_type(ctx, ft));
   }
   ctx->imported_sig_count = ctx->type_env->sig_count;
   for (u64 i = ctx->imported_type_count; i < ctx->type_env->type_count; i++) {
@@ -972,19 +988,22 @@ void valk_ti_import_new(valk_ti_ctx_t *ctx) {
       valk_constructor_t *ctor = decl->constructors[c];
       if (valk_ti_scope_lookup(ctx->scope, ctor->name)) continue;
       if (ctor->field_count == 0) {
-        valk_type_scheme_t s = {.type = parent_type};
-        valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, ctor->name), s);
+        valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, ctor->name),
+                           (valk_type_scheme_t){.type = parent_type});
       } else {
         valk_type_t *field_types[32];
         for (u64 f = 0; f < ctor->field_count && f < 32; f++)
           field_types[f] = valk_ti_parse_sig_str(ctx, ctor->fields[f].type_name);
         valk_type_t *ct = valk_ti_fun(ctx, field_types, (u32)ctor->field_count, parent_type);
-        valk_type_scheme_t scheme = valk_type_generalize(ctx, ctx->scope, ct);
-        valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, ctor->name), scheme);
+        valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, ctor->name), ti_scheme_from_type(ctx, ct));
       }
     }
   }
   ctx->imported_type_count = ctx->type_env->type_count;
+
+  ctx->perm_off = ctx->temp_off;
+  ctx->temp = st; ctx->temp_off = so; ctx->temp_cap = sc;
+  ctx->perm_scope = ctx->scope;
 }
 
 sz valk_type_to_str(valk_type_t *t, char *buf, sz buf_size) {

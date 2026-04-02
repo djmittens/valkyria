@@ -52,12 +52,17 @@ typedef struct {
 } valk_ti_error_t;
 
 #define VALK_TI_MAX_ERRORS 256
-#define VALK_TI_ARENA_SIZE (256 * 1024)
+#define VALK_TI_PERM_SIZE (128 * 1024)
+#define VALK_TI_TEMP_SIZE (64 * 1024)
 
 typedef struct {
-  u8 *arena;
-  sz arena_cap;
-  sz arena_off;
+  u8 *perm;
+  sz perm_cap;
+  sz perm_off;
+
+  u8 *temp;
+  sz temp_cap;
+  sz temp_off;
 
   u32 next_var;
 
@@ -65,6 +70,7 @@ typedef struct {
   u32 error_count;
 
   valk_type_env_t *type_env;
+  valk_ti_scope_t *perm_scope;
   valk_ti_scope_t *scope;
 
   valk_type_t *t_num;
@@ -82,6 +88,7 @@ typedef struct {
 
 valk_ti_ctx_t *valk_ti_create(valk_type_env_t *type_env);
 void valk_ti_destroy(valk_ti_ctx_t *ctx);
+void valk_ti_reset(valk_ti_ctx_t *ctx);
 
 valk_type_t *valk_ti_fresh_var(valk_ti_ctx_t *ctx);
 valk_type_t *valk_ti_con(valk_ti_ctx_t *ctx, const char *name,

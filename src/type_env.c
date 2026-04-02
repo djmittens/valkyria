@@ -1169,8 +1169,25 @@ valk_lval_t *valk_type_transform_expr(valk_lval_t *expr) {
   if (env->type_count == 0 && env->sig_count == 0) return expr;
 
   static valk_type_scope_t persistent_scope = {0};
+  static valk_ti_ctx_t *pti = NULL;
+
+  if (!pti) {
+    pti = valk_ti_create(env);
+    valk_ti_import_new(pti);
+  } else if (env->sig_count != pti->imported_sig_count ||
+             env->type_count != pti->imported_type_count) {
+    pti->scope = pti->perm_scope;
+    valk_ti_import_new(pti);
+  }
+
+  valk_ti_reset(pti);
+  valk_ti_infer_expr(pti, pti->scope, expr);
+
+  g_ti_ctx = pti;
   track_binding(env, &persistent_scope, expr);
-  return transform_expr(env, &persistent_scope, expr);
+  valk_lval_t *result = transform_expr(env, &persistent_scope, expr);
+  g_ti_ctx = NULL;
+  return result;
 }
 
 valk_lval_t *valk_type_transform(valk_lval_t *exprs) {
@@ -1199,6 +1216,9 @@ valk_lval_t *valk_type_transform(valk_lval_t *exprs) {
 
   valk_type_scope_t scope = {0};
   valk_ti_ctx_t *ti = valk_ti_create(env);
+  free(ti->temp);
+  ti->temp_cap = 256 * 1024;
+  ti->temp = calloc(1, ti->temp_cap);
   valk_ti_import_sigs(ti);
   valk_ti_import_constructors(ti);
   valk_ti_infer_file(ti, exprs);
