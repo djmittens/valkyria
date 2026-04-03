@@ -52,17 +52,22 @@ typedef struct {
 } valk_ti_error_t;
 
 #define VALK_TI_MAX_ERRORS 256
-#define VALK_TI_PERM_SIZE (128 * 1024)
-#define VALK_TI_TEMP_SIZE (256 * 1024)
+#define VALK_TI_PAGE_SIZE (256 * 1024)
+#define VALK_TI_EXPR_SIZE (256 * 1024)
+
+typedef struct valk_ti_page {
+  u8 *data;
+  sz cap;
+  sz off;
+  struct valk_ti_page *next;
+} valk_ti_page_t;
 
 typedef struct {
-  u8 *perm;
-  sz perm_cap;
-  sz perm_off;
-
-  u8 *temp;
-  sz temp_cap;
-  sz temp_off;
+  valk_ti_page_t *page;
+  u8 *expr_buf;
+  sz expr_cap;
+  sz expr_off;
+  bool use_expr;
 
   u32 next_var;
 
@@ -70,7 +75,7 @@ typedef struct {
   u32 error_count;
 
   valk_type_env_t *type_env;
-  valk_ti_scope_t *perm_scope;
+  valk_ti_scope_t *base_scope;
   valk_ti_scope_t *scope;
 
   valk_type_t *t_num;
@@ -116,10 +121,10 @@ valk_type_scheme_t *valk_ti_scope_lookup(valk_ti_scope_t *scope,
 
 valk_type_t *valk_ti_parse_sig_str(valk_ti_ctx_t *ctx, const char *s);
 valk_type_t *valk_ti_lookup_binding(valk_ti_ctx_t *ctx, const char *name);
+const char *valk_ti_lookup_type_name(valk_ti_ctx_t *ctx, const char *name);
 void valk_ti_import_sigs(valk_ti_ctx_t *ctx);
 void valk_ti_import_constructors(valk_ti_ctx_t *ctx);
 void valk_ti_import_new(valk_ti_ctx_t *ctx);
-void valk_ti_promote_bindings(valk_ti_ctx_t *ctx);
 
 valk_type_t *valk_ti_infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
                                 valk_lval_t *expr);

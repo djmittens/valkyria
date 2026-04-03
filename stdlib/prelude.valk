@@ -12,6 +12,16 @@
 (def {true} 1)
 (def {false} 0)
 
+(sig 'head {-> (List a) a})
+(sig 'tail {-> (List a) (List a)})
+(sig 'cons {-> a (List a) (List a)})
+(sig 'init {-> (List a) (List a)})
+(sig 'join {-> & (List a) (List a)})
+(sig 'nth {-> Num (List a) a})
+(sig 'map {-> (-> a b) (List a) (List b)})
+(sig 'foldl {-> (-> a b a) a (List b) a})
+(sig 'foldr {-> (-> a b b) b (List a) b})
+
 ; Check if value is nil (empty list)
 (sig 'nil? {-> A Num})
 (fun {nil? x} {== x nil})

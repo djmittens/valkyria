@@ -7,11 +7,35 @@
 
 #include "common.h"
 
+static valk_ti_page_t *ti_page_new(sz cap) {
+  valk_ti_page_t *p = calloc(1, sizeof(valk_ti_page_t));
+  VALK_OOM_ASSERT(p);
+  p->data = calloc(1, cap);
+  VALK_OOM_ASSERT(p->data);
+  p->cap = cap;
+  return p;
+}
+
 static void *ti_alloc(valk_ti_ctx_t *ctx, sz bytes) {
   bytes = (bytes + 7) & ~(sz)7;
-  if (ctx->temp_off + bytes > ctx->temp_cap) return nullptr;
-  void *p = ctx->temp + ctx->temp_off;
-  ctx->temp_off += bytes;
+  if (ctx->use_expr) {
+    if (ctx->expr_off + bytes <= ctx->expr_cap) {
+      void *p = ctx->expr_buf + ctx->expr_off;
+      ctx->expr_off += bytes;
+      return p;
+    }
+  }
+  valk_ti_page_t *pg = ctx->page;
+  if (pg->off + bytes > pg->cap) {
+    sz cap = pg->cap;
+    while (cap < bytes) cap *= 2;
+    valk_ti_page_t *np = ti_page_new(cap);
+    np->next = pg;
+    ctx->page = np;
+    pg = np;
+  }
+  void *p = pg->data + pg->off;
+  pg->off += bytes;
   return p;
 }
 
@@ -39,44 +63,63 @@ static void ti_error(valk_ti_ctx_t *ctx, int line, int col,
 valk_ti_ctx_t *valk_ti_create(valk_type_env_t *type_env) {
   valk_ti_ctx_t *ctx = calloc(1, sizeof(valk_ti_ctx_t));
   VALK_OOM_ASSERT(ctx);
-  ctx->perm_cap = VALK_TI_PERM_SIZE;
-  ctx->perm = calloc(1, ctx->perm_cap);
-  VALK_OOM_ASSERT(ctx->perm);
-  ctx->temp_cap = VALK_TI_TEMP_SIZE;
-  ctx->temp = calloc(1, ctx->temp_cap);
-  VALK_OOM_ASSERT(ctx->temp);
+  ctx->page = ti_page_new(VALK_TI_PAGE_SIZE);
+  ctx->expr_cap = VALK_TI_EXPR_SIZE;
+  ctx->expr_buf = calloc(1, ctx->expr_cap);
+  VALK_OOM_ASSERT(ctx->expr_buf);
   ctx->type_env = type_env;
 
-  u8 *st = ctx->temp; sz so = ctx->temp_off; sz sc = ctx->temp_cap;
-  ctx->temp = ctx->perm; ctx->temp_off = ctx->perm_off; ctx->temp_cap = ctx->perm_cap;
-
   ctx->scope = valk_ti_scope_new(ctx, nullptr);
-  ctx->perm_scope = ctx->scope;
+  ctx->base_scope = ctx->scope;
   ctx->t_num = valk_ti_con(ctx, "Num", nullptr, 0);
   ctx->t_str = valk_ti_con(ctx, "Str", nullptr, 0);
   ctx->t_nil = valk_ti_con(ctx, "Nil", nullptr, 0);
   ctx->t_bool = valk_ti_con(ctx, "Num", nullptr, 0);
-
-  ctx->perm_off = ctx->temp_off;
-  ctx->temp = st; ctx->temp_off = so; ctx->temp_cap = sc;
   return ctx;
 }
 
 void valk_ti_destroy(valk_ti_ctx_t *ctx) {
   if (!ctx) return;
-  free(ctx->perm);
-  free(ctx->temp);
+  valk_ti_page_t *pg = ctx->page;
+  while (pg) {
+    valk_ti_page_t *next = pg->next;
+    free(pg->data);
+    free(pg);
+    pg = next;
+  }
+  free(ctx->expr_buf);
   free(ctx);
 }
 
+void valk_ti_promote_to_base(valk_ti_ctx_t *ctx) {
+  if (!ctx->scope || ctx->scope == ctx->base_scope) return;
+  bool was_expr = ctx->use_expr;
+  ctx->use_expr = false;
+  for (u32 i = 0; i < ctx->scope->count; i++) {
+    const char *name = ctx->scope->entries[i].name;
+    valk_type_t *t = valk_type_find(ctx->scope->entries[i].scheme.type);
+    if (!t || t->kind == VALK_TY_VAR) continue;
+    if (valk_ti_scope_lookup(ctx->base_scope, name)) continue;
+    char buf[256];
+    valk_type_to_str(t, buf, sizeof(buf));
+    valk_type_t *pt = valk_ti_parse_sig_str(ctx, buf);
+    if (pt) {
+      valk_type_scheme_t s = {.type = pt};
+      valk_ti_scope_bind(ctx, ctx->base_scope, ti_strdup(ctx, name), s);
+    }
+  }
+  ctx->use_expr = was_expr;
+}
+
 void valk_ti_reset(valk_ti_ctx_t *ctx) {
-  ctx->temp_off = 0;
+  valk_ti_promote_to_base(ctx);
+  ctx->expr_off = 0;
+  ctx->use_expr = true;
   ctx->error_count = 0;
   ctx->all_bindings_count = 0;
   ctx->all_bindings_cap = 0;
   ctx->all_bindings = NULL;
-  valk_ti_scope_t *s = valk_ti_scope_new(ctx, ctx->perm_scope);
-  ctx->scope = s ? s : ctx->perm_scope;
+  ctx->scope = valk_ti_scope_new(ctx, ctx->base_scope);
 }
 
 valk_type_t *valk_ti_fresh_var(valk_ti_ctx_t *ctx) {
@@ -345,7 +388,7 @@ valk_ti_scope_t *valk_ti_scope_new(valk_ti_ctx_t *ctx,
 }
 
 static void ti_register_binding(valk_ti_ctx_t *ctx, const char *name,
-                                valk_type_t *type) {
+                                 valk_type_t *type) {
   if (ctx->all_bindings_count >= ctx->all_bindings_cap) {
     u32 new_cap = ctx->all_bindings_cap ? ctx->all_bindings_cap * 2 : 64;
     typeof(ctx->all_bindings) nb = ti_alloc(ctx, sizeof(ctx->all_bindings[0]) * new_cap);
@@ -568,7 +611,7 @@ static valk_type_t *infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
                                valk_lval_t *expr);
 
 static valk_type_t *infer_do(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
-                             valk_lval_t *body) {
+                              valk_lval_t *body) {
   valk_ti_scope_t *child = valk_ti_scope_new(ctx, scope);
   if (!child) child = scope;
   valk_type_t *result = ctx->t_nil;
@@ -581,13 +624,16 @@ static valk_type_t *infer_do(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
 }
 
 static valk_type_t *infer_lambda(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
-                                 valk_lval_t *formals, valk_lval_t *body_list,
-                                 const char *fname) {
-  if (ctx->temp_off > ctx->temp_cap - 256) return ctx->t_nil;
+                                   valk_lval_t *formals, valk_lval_t *body_list,
+                                   const char *fname) {
   valk_ti_scope_t *child = valk_ti_scope_new(ctx, scope);
   if (!child) return ctx->t_nil;
   valk_type_t *param_types[32];
   u32 param_count = 0;
+
+  valk_type_scheme_t *sig = fname ? valk_ti_scope_lookup(scope, fname) : nullptr;
+  valk_type_t *sig_t = nullptr;
+  if (sig) sig_t = valk_type_find(valk_type_instantiate(ctx, sig));
 
   valk_lval_t *cur = formals;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS && param_count < 32) {
@@ -608,6 +654,8 @@ static valk_type_t *infer_lambda(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
     }
     if (pname) {
       param_types[param_count] = valk_ti_fresh_var(ctx);
+      if (sig_t && sig_t->kind == VALK_TY_FUN && param_count < sig_t->fun.param_count)
+        valk_type_unify(ctx, param_types[param_count], sig_t->fun.params[param_count], 0, 0);
       valk_type_scheme_t s = {.type = param_types[param_count]};
       valk_ti_scope_bind(ctx, child, pname, s);
       param_count++;
@@ -637,12 +685,41 @@ static valk_type_t *infer_lambda(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
   return valk_ti_fun(ctx, param_types, param_count, body_type);
 }
 
+static bool is_lambda_expr(valk_lval_t *expr) {
+  if (!expr || LVAL_TYPE(expr) != LVAL_CONS || (expr->flags & LVAL_FLAG_QUOTED))
+    return false;
+  valk_lval_t *h = expr->cons.head;
+  if (h && LVAL_TYPE(h) == LVAL_SYM &&
+      (strcmp(h->str, "\\") == 0 || strcmp(h->str, "lambda") == 0))
+    return true;
+  if (h && LVAL_TYPE(h) == LVAL_FUN && h->fun.builtin) {
+    extern valk_lenv_t *valk_macro_env(void);
+    valk_lval_t *lr = valk_lenv_get(valk_macro_env(), valk_lval_sym("\\"));
+    if (LVAL_TYPE(lr) == LVAL_FUN && h->fun.builtin == lr->fun.builtin)
+      return true;
+  }
+  return false;
+}
+
 static valk_type_t *infer_binding(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
-                                  valk_lval_t *binding_q, valk_lval_t *rhs) {
+                                   valk_lval_t *binding_q, valk_lval_t *rhs) {
   if (!is_qexpr_node(binding_q)) return ctx->t_nil;
   const char *name = sym_name(binding_q->cons.head);
   if (!name) return ctx->t_nil;
-  valk_type_t *rhs_t = infer_expr(ctx, scope, rhs);
+
+  valk_type_t *rhs_t;
+  if (rhs && is_lambda_expr(rhs)) {
+    valk_lval_t *lrest = rhs->cons.tail;
+    valk_lval_t *formals = lrest ? lrest->cons.head : nullptr;
+    valk_lval_t *body = lrest ? lrest->cons.tail : nullptr;
+    bool nil_formals = formals && LVAL_TYPE(formals) == LVAL_NIL;
+    valk_lval_t *flist = nil_formals ? nullptr
+                       : (is_qexpr_node(formals) && formals->cons.head ? formals : nullptr);
+    rhs_t = infer_lambda(ctx, scope, flist, body, name);
+  } else {
+    rhs_t = infer_expr(ctx, scope, rhs);
+  }
+
   valk_ti_scope_bind(ctx, scope, name, (valk_type_scheme_t){.type = rhs_t});
   return rhs_t;
 }
@@ -758,9 +835,10 @@ static valk_type_t *infer_match(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
 }
 
 static valk_type_t *infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
-                               valk_lval_t *expr) {
-  if (!expr || ctx->temp_off > ctx->temp_cap - 256) return ctx->t_nil;
+                                valk_lval_t *expr) {
+  if (!expr) return ctx->t_nil;
   valk_ltype_e t = LVAL_TYPE(expr);
+
 
   if (t == LVAL_NUM) return ctx->t_num;
   if (t == LVAL_STR) return ctx->t_str;
@@ -817,6 +895,8 @@ static valk_type_t *infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
     if (strcmp(head_name, "\\") == 0 || strcmp(head_name, "lambda") == 0) {
       valk_lval_t *formals = rest ? rest->cons.head : nullptr;
       valk_lval_t *body = rest ? rest->cons.tail : nullptr;
+      if (formals && LVAL_TYPE(formals) == LVAL_NIL)
+        return infer_lambda(ctx, scope, nullptr, body, nullptr);
       if (!is_qexpr_node(formals)) return ctx->t_nil;
       return infer_lambda(ctx, scope, formals->cons.head ? formals : nullptr,
                           body, nullptr);
@@ -908,6 +988,7 @@ static valk_type_t *infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
     }
 
     valk_type_scheme_t *fn_s = valk_ti_scope_lookup(scope, head_name);
+
     if (fn_s) {
       valk_type_t *fn_t = valk_type_instantiate(ctx, fn_s);
       return infer_application(ctx, scope, fn_t, rest, lval_line(expr));
@@ -982,18 +1063,22 @@ static valk_type_scheme_t ti_scheme_from_type(valk_ti_ctx_t *ctx, valk_type_t *f
 
 void valk_ti_import_new(valk_ti_ctx_t *ctx) {
   if (!ctx->type_env) return;
-  u8 *st = ctx->temp; sz so = ctx->temp_off; sz sc = ctx->temp_cap;
-  ctx->temp = ctx->perm; ctx->temp_off = ctx->perm_off; ctx->temp_cap = ctx->perm_cap;
-
+  bool was_expr = ctx->use_expr;
+  ctx->use_expr = false;
   for (u64 i = ctx->imported_sig_count; i < ctx->type_env->sig_count; i++) {
     valk_type_sig_t *sig = ctx->type_env->sigs[i];
     if (valk_ti_scope_lookup(ctx->scope, sig->name)) continue;
+    ti_var_map_t vm = {0};
     valk_type_t *params[32];
-    for (u64 p = 0; p < sig->param_count && p < 32; p++)
-      params[p] = valk_ti_parse_sig_str(ctx, sig->param_types[p]);
-    valk_type_t *ret = valk_ti_parse_sig_str(ctx, sig->return_type);
-    valk_type_t *ft = valk_ti_fun(ctx, params, (u32)sig->param_count, ret);
-    valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, sig->name), ti_scheme_from_type(ctx, ft));
+    for (u64 p = 0; p < sig->param_count && p < 32; p++) {
+      int pos = 0;
+      params[p] = parse_type_str_vm(ctx, sig->param_types[p], &pos, &vm);
+    }
+    { int pos = 0;
+      valk_type_t *ret = parse_type_str_vm(ctx, sig->return_type, &pos, &vm);
+      valk_type_t *ft = valk_ti_fun(ctx, params, (u32)sig->param_count, ret);
+      valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, sig->name), ti_scheme_from_type(ctx, ft));
+    }
   }
   ctx->imported_sig_count = ctx->type_env->sig_count;
   for (u64 i = ctx->imported_type_count; i < ctx->type_env->type_count; i++) {
@@ -1022,29 +1107,19 @@ void valk_ti_import_new(valk_ti_ctx_t *ctx) {
     }
   }
   ctx->imported_type_count = ctx->type_env->type_count;
-
-  ctx->perm_off = ctx->temp_off;
-  ctx->temp = st; ctx->temp_off = so; ctx->temp_cap = sc;
-  ctx->perm_scope = ctx->scope;
+  ctx->base_scope = ctx->scope;
+  ctx->use_expr = was_expr;
 }
 
-void valk_ti_promote_bindings(valk_ti_ctx_t *ctx) {
-  if (ctx->scope->count == 0) return;
-  for (u32 i = 0; i < ctx->scope->count; i++) {
-    valk_type_t *t = valk_type_find(ctx->scope->entries[i].scheme.type);
-    if (!t || t->kind != VALK_TY_CON) continue;
-    const char *name = ctx->scope->entries[i].name;
-    if (valk_ti_scope_lookup(ctx->perm_scope, name)) continue;
-    u8 *st = ctx->temp; sz so = ctx->temp_off; sz sc = ctx->temp_cap;
-    ctx->temp = ctx->perm; ctx->temp_off = ctx->perm_off; ctx->temp_cap = ctx->perm_cap;
-    char buf[256];
-    valk_type_to_str(t, buf, sizeof(buf));
-    valk_type_t *pt = valk_ti_parse_sig_str(ctx, buf);
-    valk_ti_scope_bind(ctx, ctx->perm_scope, ti_strdup(ctx, name),
-                       (valk_type_scheme_t){.type = pt});
-    ctx->perm_off = ctx->temp_off;
-    ctx->temp = st; ctx->temp_off = so; ctx->temp_cap = sc;
-  }
+const char *valk_ti_lookup_type_name(valk_ti_ctx_t *ctx, const char *name) {
+  if (!ctx || !name) return NULL;
+  valk_type_t *t = valk_ti_lookup_binding(ctx, name);
+
+  if (!t || t->kind != VALK_TY_CON) return NULL;
+  if (t->con.arity == 0) return t->con.name;
+  static char ti_buf[256];
+  valk_type_to_str(t, ti_buf, sizeof(ti_buf));
+  return ti_buf;
 }
 
 sz valk_type_to_str(valk_type_t *t, char *buf, sz buf_size) {

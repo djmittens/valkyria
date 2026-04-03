@@ -455,18 +455,26 @@ static void valk_type_env_register_sig(valk_type_env_t *env, valk_lval_t *sig_fo
 
 static valk_ti_ctx_t *g_ti_ctx = NULL;
 
-static const char *ti_lookup_type_str(const char *name) {
-  if (!g_ti_ctx || !name) return NULL;
-  valk_type_t *t = valk_ti_lookup_binding(g_ti_ctx, name);
-  if (!t || t->kind != VALK_TY_CON) return NULL;
-  if (t->con.arity == 0) return t->con.name;
-  static char ti_buf[256];
-  valk_type_to_str(t, ti_buf, sizeof(ti_buf));
-  return ti_buf;
+static const char *infer_rhs_type(valk_type_env_t *env, valk_type_scope_t *scope,
+                                  valk_lval_t *rhs) {
+  if (!rhs || LVAL_TYPE(rhs) != LVAL_CONS || (rhs->flags & LVAL_FLAG_QUOTED)) return NULL;
+  valk_lval_t *rhs_head = rhs->cons.head;
+  if (!rhs_head || LVAL_TYPE(rhs_head) != LVAL_SYM) return NULL;
+  const char *name = rhs_head->str;
+  if (name[0] >= 'A' && name[0] <= 'Z') {
+    valk_constructor_t *ctor = valk_type_env_find_constructor(env, name);
+    if (!ctor) ctor = find_constructor_by_short_name(env, name);
+    if (ctor) return ctor->type_name;
+  }
+  if (strcmp(name, "with") == 0 && valk_lval_list_count(rhs) >= 4) {
+    valk_lval_t *wvar = valk_lval_list_nth(rhs, 1);
+    if (LVAL_TYPE(wvar) == LVAL_SYM) return scope_find_type(scope, wvar->str);
+  }
+  if (g_ti_ctx) return valk_ti_lookup_type_name(g_ti_ctx, name);
+  return NULL;
 }
 
 static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_lval_t *child_expr) {
-  UNUSED(env);
   if (LVAL_TYPE(child_expr) != LVAL_CONS || (child_expr->flags & LVAL_FLAG_QUOTED)) return;
   valk_lval_t *ch = child_expr->cons.head;
   if (LVAL_TYPE(ch) != LVAL_SYM || strcmp(ch->str, "=") != 0) return;
@@ -474,18 +482,33 @@ static void track_binding(valk_type_env_t *env, valk_type_scope_t *scope, valk_l
   valk_lval_t *binding = valk_lval_list_nth(child_expr, 1);
   if (!is_qexpr(binding) || LVAL_TYPE(binding->cons.head) != LVAL_SYM ||
       LVAL_TYPE(binding->cons.tail) != LVAL_NIL) return;
-  scope_add(scope, binding->cons.head->str, ti_lookup_type_str(binding->cons.head->str));
+  valk_lval_t *rhs = valk_lval_list_nth(child_expr, 2);
+  const char *tname = infer_rhs_type(env, scope, rhs);
+  if (!tname && g_ti_ctx)
+    tname = valk_ti_lookup_type_name(g_ti_ctx, binding->cons.head->str);
+  scope_add(scope, binding->cons.head->str, tname);
 }
 
 static void track_fun_params(valk_type_env_t *env, valk_type_scope_t *scope, valk_lval_t *formals) {
-  UNUSED(env);
   if (!is_qexpr(formals)) return;
-  valk_lval_t *p = formals->cons.head;
-  if (LVAL_TYPE(p) == LVAL_SYM) p = formals->cons.tail;
-  else p = formals;
+  valk_lval_t *fn_name = formals->cons.head;
+  if (LVAL_TYPE(fn_name) != LVAL_SYM) return;
+  valk_type_sig_t *sig = valk_type_env_find_sig(env, fn_name->str);
+  valk_lval_t *p = formals->cons.tail;
+  u64 idx = 0;
   while (LVAL_TYPE(p) != LVAL_NIL) {
-    if (LVAL_TYPE(p->cons.head) == LVAL_SYM)
-      scope_add(scope, p->cons.head->str, ti_lookup_type_str(p->cons.head->str));
+    valk_lval_t *psym = p->cons.head;
+    if (LVAL_TYPE(psym) == LVAL_SYM) {
+      const char *tname = g_ti_ctx ? valk_ti_lookup_type_name(g_ti_ctx, psym->str) : NULL;
+      if (!tname && sig && idx < sig->param_count && sig->param_types[idx]) {
+        valk_constructor_t *pc = valk_type_env_find_constructor(env, sig->param_types[idx]);
+        if (!pc) pc = find_constructor_by_short_name(env, sig->param_types[idx]);
+        valk_type_decl_t *pt = pc ? NULL : valk_type_env_find_type(env, sig->param_types[idx]);
+        tname = pc ? pc->type_name : (pt ? pt->name : NULL);
+      }
+      scope_add(scope, psym->str, tname);
+      idx++;
+    }
     p = p->cons.tail;
   }
 }
@@ -1059,13 +1082,12 @@ valk_lval_t *valk_type_transform_expr(valk_lval_t *expr) {
     valk_ti_import_new(pti);
   } else if (env->sig_count != pti->imported_sig_count ||
              env->type_count != pti->imported_type_count) {
-    pti->scope = pti->perm_scope;
+    pti->scope = pti->base_scope;
     valk_ti_import_new(pti);
   }
 
   valk_ti_reset(pti);
   valk_ti_infer_expr(pti, pti->scope, expr);
-  valk_ti_promote_bindings(pti);
 
   g_ti_ctx = pti;
   track_binding(env, &persistent_scope, expr);
@@ -1100,9 +1122,6 @@ valk_lval_t *valk_type_transform(valk_lval_t *exprs) {
 
   valk_type_scope_t scope = {0};
   valk_ti_ctx_t *ti = valk_ti_create(env);
-  free(ti->temp);
-  ti->temp_cap = 256 * 1024;
-  ti->temp = calloc(1, ti->temp_cap);
   valk_ti_import_sigs(ti);
   valk_ti_import_constructors(ti);
   valk_ti_infer_file(ti, exprs);
