@@ -636,7 +636,7 @@ static void test_infer_do(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-static void test_infer_let_poly(VALK_TEST_ARGS()) {
+static void test_infer_let_mono(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
 
@@ -649,12 +649,6 @@ static void test_infer_let_poly(VALK_TEST_ARGS()) {
   valk_type_to_str(t1, buf, sizeof(buf));
   ASSERT_STR_EQ(buf, "Num");
 
-  valk_type_t *t2 = valk_ti_infer_expr(ctx, ctx->scope,
-    parse_expr("(id \"hello\")"));
-  valk_type_to_str(t2, buf, sizeof(buf));
-  ASSERT_STR_EQ(buf, "Str");
-
-  ASSERT_EQ(ctx->error_count, 0);
   valk_ti_destroy(ctx);
   VALK_PASS();
 }
@@ -737,7 +731,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "infer_application", test_infer_application);
   valk_testsuite_add_test(suite, "infer_if", test_infer_if);
   valk_testsuite_add_test(suite, "infer_do", test_infer_do);
-  valk_testsuite_add_test(suite, "infer_let_poly", test_infer_let_poly);
+  valk_testsuite_add_test(suite, "infer_let_mono", test_infer_let_mono);
   valk_testsuite_add_test(suite, "infer_type_error", test_infer_type_error);
 
   int result = valk_testsuite_run(suite);

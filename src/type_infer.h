@@ -53,7 +53,7 @@ typedef struct {
 
 #define VALK_TI_MAX_ERRORS 256
 #define VALK_TI_PERM_SIZE (128 * 1024)
-#define VALK_TI_TEMP_SIZE (64 * 1024)
+#define VALK_TI_TEMP_SIZE (256 * 1024)
 
 typedef struct {
   u8 *perm;
@@ -119,6 +119,7 @@ valk_type_t *valk_ti_lookup_binding(valk_ti_ctx_t *ctx, const char *name);
 void valk_ti_import_sigs(valk_ti_ctx_t *ctx);
 void valk_ti_import_constructors(valk_ti_ctx_t *ctx);
 void valk_ti_import_new(valk_ti_ctx_t *ctx);
+void valk_ti_promote_bindings(valk_ti_ctx_t *ctx);
 
 valk_type_t *valk_ti_infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
                                 valk_lval_t *expr);

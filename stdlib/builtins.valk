@@ -661,6 +661,8 @@
 ; With 2 args: also apply module prefix rewriting with given prefix.
 (sig 'compile/process {-> Str & Str (List QExpr)})
 
+(sig 'with {-> A Any Any A})
+
 ; Type inference: run HM inference on AST, return list of type error plists
 ; Each error: {:line Num :col Num :message Str}
 (sig 'type/infer-file {-> List List})
