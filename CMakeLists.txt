@@ -105,12 +105,16 @@ set(VALKYRIA_SOURCES
   src/lenv.c
   src/reader.c
   src/type_env.c
+  src/type_transform.c
+  src/type_transform_forms.c
   src/type_infer.c
+  src/type_infer_scope.c
   src/builtins_math.c
   src/builtins_list.c
   src/builtins_string.c
   src/builtins_env.c
   src/builtins_io.c
+  src/builtins_file.c
   src/builtins_mem.c
   src/builtins_http.c
   src/builtins_aio.c

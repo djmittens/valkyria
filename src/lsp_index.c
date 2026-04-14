@@ -15,12 +15,14 @@ enum {
 
 // Max scope depth for lexical chain
 #define MAX_SCOPE_DEPTH 128
+// Max params/bindings tracked per scope entry
+#define MAX_SCOPE_PARAMS 64
 
 typedef struct {
   int pos;
   int parent_pos;
-  const char *params[64];
-  bool is_param[64];  // true for fun/lambda params, false for = bindings
+  const char *params[MAX_SCOPE_PARAMS];
+  bool is_param[MAX_SCOPE_PARAMS];  // true for fun/lambda params, false for = bindings
   int param_count;
 } scope_entry_t;
 
@@ -43,6 +45,9 @@ typedef struct {
 
   scope_entry_t scopes[MAX_SCOPE_DEPTH];
   int scope_depth;
+
+  char sig_buf[512];
+  char doc_buf[1024];
 } index_ctx_t;
 
 // Keyword/operator sets (simple linear scan — sets are small)
@@ -71,6 +76,42 @@ static int source_len(const char *name) {
 }
 
 // ---------------------------------------------------------------------------
+// Sig expression serializer — convert AST to string like "{-> Num Num}"
+// ---------------------------------------------------------------------------
+
+static int serialize_sig_expr(valk_lval_t *expr, char *buf, int size, int pos) {
+  if (!expr || pos >= size - 1) return pos;
+  if (LVAL_TYPE(expr) == LVAL_SYM) {
+    int len = (int)strlen(expr->str);
+    if (pos + len < size - 1) {
+      memcpy(buf + pos, expr->str, len);
+      pos += len;
+    }
+    return pos;
+  }
+  if (LVAL_TYPE(expr) == LVAL_CONS) {
+    if (pos < size - 1) buf[pos++] = '{';
+    valk_lval_t *cur = expr;
+    bool first = true;
+    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+      if (!first && pos < size - 1) buf[pos++] = ' ';
+      first = false;
+      pos = serialize_sig_expr(cur->cons.head, buf, size, pos);
+      cur = cur->cons.tail;
+    }
+    if (pos < size - 1) buf[pos++] = '}';
+    return pos;
+  }
+  return pos;
+}
+
+static const char *sig_to_string(index_ctx_t *ctx, valk_lval_t *sig_expr) {
+  int len = serialize_sig_expr(sig_expr, ctx->sig_buf, sizeof(ctx->sig_buf), 0);
+  ctx->sig_buf[len] = '\0';
+  return ctx->sig_buf;
+}
+
+// ---------------------------------------------------------------------------
 // Position helpers
 // ---------------------------------------------------------------------------
 
@@ -86,9 +127,10 @@ static void offset_to_line_col(const char *text, int tlen, int offset,
   *out_col = col;
 }
 
-static const char *extract_doc_comment(const char *text, int tlen, int offset) {
+static const char *extract_doc_comment(index_ctx_t *ctx, int offset) {
+  const char *text = ctx->text;
+  int tlen = ctx->text_len;
   (void)tlen;
-  static char doc_buf[1024];
   int line_start = offset;
   while (line_start > 0 && text[line_start - 1] != '\n') line_start--;
   int prev_end = line_start > 0 ? line_start - 1 : 0;
@@ -100,10 +142,10 @@ static const char *extract_doc_comment(const char *text, int tlen, int offset) {
   prev_end++;
   while (prev_end < line_start && text[prev_end] == ' ') prev_end++;
   int len = (line_start > 0 ? line_start - 1 : 0) - prev_end;
-  if (len <= 0 || len >= (int)sizeof(doc_buf)) return NULL;
-  memcpy(doc_buf, &text[prev_end], len);
-  doc_buf[len] = '\0';
-  return doc_buf;
+  if (len <= 0 || len >= (int)sizeof(ctx->doc_buf)) return NULL;
+  memcpy(ctx->doc_buf, &text[prev_end], len);
+  ctx->doc_buf[len] = '\0';
+  return ctx->doc_buf;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +214,10 @@ static bool is_scope_param(index_ctx_t *ctx, const char *name) {
 
 static void push_scope(index_ctx_t *ctx, int pos) {
   if (ctx->fast_mode) { ctx->scope_depth++; return; }
-  if (ctx->scope_depth >= MAX_SCOPE_DEPTH) return; // LCOV_EXCL_LINE
+  if (ctx->scope_depth >= MAX_SCOPE_DEPTH) { // LCOV_EXCL_START
+    fprintf(stderr, "[lsp-index] warning: max scope depth (%d) exceeded\n", MAX_SCOPE_DEPTH);
+    return;
+  } // LCOV_EXCL_STOP
   scope_entry_t *s = &ctx->scopes[ctx->scope_depth];
   s->pos = pos;
   s->parent_pos = current_scope_pos(ctx);
@@ -191,10 +236,17 @@ static void push_scope(index_ctx_t *ctx, int pos) {
 static void add_scope_name(index_ctx_t *ctx, const char *name, bool is_param) {
   if (ctx->scope_depth <= 0) return;
   scope_entry_t *s = &ctx->scopes[ctx->scope_depth - 1];
-  if (s->param_count < 64) {
+  if (s->param_count < MAX_SCOPE_PARAMS) {
     s->params[s->param_count] = name;
     s->is_param[s->param_count] = is_param;
     s->param_count++;
+  } else {
+    static bool warned = false;
+    if (!warned) {
+      fprintf(stderr, "[lsp-index] warning: max params per scope (%d) exceeded, later params untracked\n",
+              MAX_SCOPE_PARAMS);
+      warned = true;
+    }
   }
 }
 
@@ -433,11 +485,14 @@ static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is
   if (!is_lambda && formals && LVAL_TYPE(formals) == LVAL_CONS) {
     fname = formals->cons.head;
     params = formals->cons.tail;
-    // Count params for arity
+    // Count params for arity (stop at &, ::, ->)
     valk_lval_t *pc = params;
     while (pc && LVAL_TYPE(pc) == LVAL_CONS) {
-      if (LVAL_TYPE(pc->cons.head) == LVAL_SYM &&
-          strcmp(pc->cons.head->str, "&") == 0) break;
+      if (LVAL_TYPE(pc->cons.head) == LVAL_SYM) {
+        const char *pname = pc->cons.head->str;
+        if (strcmp(pname, "&") == 0 || strcmp(pname, "::") == 0 ||
+            strcmp(pname, "->") == 0) break;
+      }
       param_count++;
       pc = pc->cons.tail;
     }
@@ -450,7 +505,7 @@ static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is
         emit_node(ctx, fp, fp + fl, "sym", fname->str);
       }
       if (ctx->is_top_level && kw_pos >= 0) {
-        const char *doc = extract_doc_comment(ctx->text, ctx->text_len, kw_pos);
+        const char *doc = extract_doc_comment(ctx, kw_pos);
         emit_symbol(ctx, fname->str, kw_pos, SYMKIND_FUNCTION, param_count, doc, NULL);
       }
     }
@@ -501,7 +556,7 @@ static void walk_binding(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl) {
       valk_lval_t *v = cur->cons.head;
       if (LVAL_TYPE(v) == LVAL_SYM) {
         if (is_global && ctx->is_top_level && kw_pos >= 0) {
-          const char *doc = extract_doc_comment(ctx->text, ctx->text_len, kw_pos);
+          const char *doc = extract_doc_comment(ctx, kw_pos);
           emit_symbol(ctx, v->str, kw_pos, SYMKIND_VARIABLE, -1, doc, NULL);
         }
         int vp = (int)LVAL_SRC_POS(v);
@@ -622,7 +677,7 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
         (type_name->flags & LVAL_FLAG_QUOTED) &&
         LVAL_TYPE(type_name->cons.head) == LVAL_SYM) {
       const char *tname = type_name->cons.head->str;
-      const char *doc = extract_doc_comment(ctx->text, ctx->text_len, kp);
+      const char *doc = extract_doc_comment(ctx, kp);
       emit_symbol(ctx, tname, kp, SYMKIND_TYPE, -1, doc, NULL);
       // Also emit constructor
       valk_lval_t *fields = valk_lval_list_nth(tl, 1);
@@ -646,6 +701,9 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
         (sig_name_q->flags & LVAL_FLAG_QUOTED) &&
         LVAL_TYPE(sig_name_q->cons.head) == LVAL_SYM) {
       const char *sname = sig_name_q->cons.head->str;
+      valk_lval_t *sig_type = (tl->cons.tail && LVAL_TYPE(tl->cons.tail) == LVAL_CONS)
+        ? tl->cons.tail->cons.head : NULL;
+      const char *sig_str = sig_type ? sig_to_string(ctx, sig_type) : "(sig)";
       // Check if symbol already exists — update sig; otherwise insert
       sqlite3_stmt *check;
       sqlite3_prepare_v2(ctx->db,
@@ -655,17 +713,16 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
       if (sqlite3_step(check) == SQLITE_ROW) {
         int sym_id = sqlite3_column_int(check, 0);
         sqlite3_finalize(check);
-        // Build sig string from the sig form
         sqlite3_stmt *upd;
         sqlite3_prepare_v2(ctx->db,
           "UPDATE symbols SET sig=?1 WHERE id=?2", -1, &upd, NULL);
-        sqlite3_bind_text(upd, 1, "(sig)", -1, SQLITE_STATIC);
+        sqlite3_bind_text(upd, 1, sig_str, -1, SQLITE_STATIC);
         sqlite3_bind_int(upd, 2, sym_id);
         sqlite3_step(upd);
         sqlite3_finalize(upd);
       } else {
         sqlite3_finalize(check);
-        emit_symbol(ctx, sname, kp, SYMKIND_FUNCTION, -1, NULL, "(sig)");
+        emit_symbol(ctx, sname, kp, SYMKIND_FUNCTION, -1, NULL, sig_str);
       }
     }
     walk_each(ctx, tl);
@@ -699,6 +756,7 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
     }
     int scope_id = resolve_scope(ctx, name);
     emit_ref(ctx, name, pos, slen, scope_id, 0);
+    if (scope_id < 0 && pos >= 0) emit_global_ref(ctx, name, pos);
     walk_each(ctx, tl);
   } else {
     if (pos >= 0) {
@@ -847,6 +905,11 @@ valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
     .is_top_level = true,
     .fast_mode = fast,
   };
+
+  // Skip reindex if AST is empty (preserves existing data on parse error)
+  if (!ast || LVAL_TYPE(ast) == LVAL_NIL || LVAL_TYPE(ast) == LVAL_ERR) {
+    return valk_lval_nil();
+  }
 
   // Delete old data — only relevant tables
   if (fast) {
