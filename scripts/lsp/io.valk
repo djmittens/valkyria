@@ -101,17 +101,61 @@
 
 (def {lsp/ast-cache} (dict/new))
 (def {lsp/line-index-cache} (dict/new))
+; Cache of the last AST that parsed cleanly (no errors). Used as a fallback
+; for semantic tokens during in-progress edits when the current AST has
+; parse errors. Stale offsets are better than no highlighting.
+(def {lsp/last-good-ast-cache} (dict/new))
+
+; Returns the first parse error in an AST list, or nil if there are none.
+; Parse errors are now preserved in the AST list as LVAL_ERR elements
+; (see valk_parse_text in src/reader.c).
+(sig 'lsp/ast-find-error {-> List Any})
+(fun {lsp/ast-find-error ast} {
+  if (nil? ast) {nil}
+  {if (not (list? ast)) {nil}
+  {if (error? ast) {ast}
+  {if (error? (head ast)) {head ast}
+  {lsp/ast-find-error (tail ast)}}}}
+})
+
+(sig 'lsp/ast-has-error {-> List Num})
+(fun {lsp/ast-has-error ast} {not (nil? (lsp/ast-find-error ast))})
 
 (sig 'lsp/cache-ast {-> Str Str List})
 (fun {lsp/cache-ast uri text} {do
   (= {ast} (parse text))
   (dict/set! lsp/ast-cache uri ast)
+  ; Only cache as "last good" if the AST has no parse errors. This lets
+  ; semantic tokens fall back to a stale-but-valid AST during edits.
+  (if (not (lsp/ast-has-error ast))
+    {dict/set! lsp/last-good-ast-cache uri ast}
+    {})
   ast})
 
 (sig 'lsp/get-ast {-> Str Str List})
 (fun {lsp/get-ast uri text} {do
   (= {cached} (dict/get lsp/ast-cache uri))
   (if (nil? cached) {parse text} {cached})})
+
+; Returns the AST suitable for semantic tokens / hover / etc. Prefers the
+; current AST if it parsed cleanly; otherwise falls back to the most recent
+; clean parse for this document. Returns nil only if no AST is available
+; at all (brand-new file with parse errors from the first keystroke).
+(sig 'lsp/get-ast-for-display {-> Str Str List})
+(fun {lsp/get-ast-for-display uri text} {do
+  (= {current} (lsp/get-ast uri text))
+  (if (lsp/ast-has-error current)
+    {do (= {last-good} (dict/get lsp/last-good-ast-cache uri))
+        (if (nil? last-good) {current} {last-good})}
+    {current})})
+
+; Returns true if the AST returned by get-ast-for-display is the original
+; broken AST (no fallback was usable). Used to decide whether semantic
+; tokens should use the lexer fallback.
+(sig 'lsp/no-display-ast? {-> Str Num})
+(fun {lsp/no-display-ast? uri} {do
+  (= {last-good} (dict/get lsp/last-good-ast-cache uri))
+  (nil? last-good)})
 
 ; ---------------------------------------------------------------------------
 ; Line index — O(1) line:col <-> offset conversion
@@ -144,10 +188,11 @@
 })
 
 ; O(1) line-col to byte offset using line index (nth is 1-indexed)
+; Returns 0 when line is out of range.
 (sig 'lsp/lc->offset {-> List Num Num Num})
 (fun {lsp/lc->offset line-index line col} {do
   (= {line-start} (nth (+ line 1) line-index))
-  (if (nil? line-start) {0} {+ line-start col})
+  (if (or (nil? line-start) (error? line-start)) {0} {+ line-start col})
 })
 
 ; O(log n) byte offset to line-col using line index (binary search)
@@ -196,39 +241,43 @@
     {do
       (= {start} (plist/get range :start))
       (= {end} (plist/get range :end))
-      (= {start-offset} (line-col->offset text (plist/get start :line) (plist/get start :character)))
-      (= {end-offset} (line-col->offset text (plist/get end :line) (plist/get end :character)))
+      (= {line-idx} (lsp/build-line-index text))
+      (= {start-offset} (lsp/lc->offset line-idx (plist/get start :line) (plist/get start :character)))
+      (= {end-offset} (lsp/lc->offset line-idx (plist/get end :line) (plist/get end :character)))
       (str (str/slice text 0 start-offset) new-text (str/slice text end-offset (len text)))})
 })
 
+; Returns a DocCtx for display features (hover, semantic tokens, definition,
+; references, completion, etc). Uses the last-known-good AST as a fallback
+; when the current parse has errors, so the editor doesn't lose all
+; highlighting / hover info during in-progress edits.
 (sig 'lsp/get-doc {-> DocParams DocCtx})
 (fun {lsp/get-doc params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
-    {(DocCtx :uri uri :text text :ast (lsp/get-ast uri text))})
+    {(DocCtx :uri uri :text text :ast (lsp/get-ast-for-display uri text))})
 })
 
-(sig 'lsp/get-text-pos {-> TextDocPosParams TextPosCtx})
+(sig 'lsp/get-text-pos {-> TextDocPosParams List})
 (fun {lsp/get-text-pos params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
   (= {pos} params:position)
   (if (nil? text) {nil}
-    {(TextPosCtx :uri uri :text text :ast (lsp/get-ast uri text)
-                 :line pos:line :col pos:character)})
+    {list :uri uri :text text :ast (lsp/get-ast-for-display uri text)
+          :line pos:line :col pos:character})
 })
 
-(sig 'lsp/get-word-ctx {-> TextDocPosParams WordCtx})
 (fun {lsp/get-word-ctx params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {nil}
     {do
       (= {w} (symdb/word-at-position ctx:text ctx:line ctx:col))
       (if (nil? w) {nil}
-        {(WordCtx :uri ctx:uri :text ctx:text :ast ctx:ast :line ctx:line :col ctx:col :word w)})})
+        {list :uri ctx:uri :text ctx:text :ast ctx:ast :line ctx:line :col ctx:col :word w})})
 })
 
 ; ---------------------------------------------------------------------------

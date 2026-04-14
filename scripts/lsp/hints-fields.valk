@@ -103,18 +103,59 @@
     (hint/td-one (head exprs) defs)}
 })
 
-; --- Pass 2: Collect variable types (from sigs + constructor bindings) ---
+; --- Pass 2: Collect variable types (from inferred types + constructor bindings) ---
 
-(sig 'hint/vt-correlate {-> List List Num List List})
-(fun {hint/vt-correlate params sig-types idx acc} {
-  if (nil? params) {acc}
-  {if (>= idx (- (len sig-types) 1)) {acc}
+(sig 'hint/query-inferred-type {-> Ref Str Str})
+(fun {hint/query-inferred-type db name} {
+  if (nil? db) {nil}
   {do
-    (= {t} (nth (+ idx 1) sig-types))
+    (= {row} (sqlite/query-maybe db
+      "SELECT inferred_type FROM symbols WHERE name=?1 AND inferred_type IS NOT NULL LIMIT 1"
+      name))
+    (if (nil? row) {nil} {row:inferred_type})}
+})
+
+(sig 'hint/parse-fn-return-type {-> Str Str})
+(fun {hint/parse-fn-return-type type-str} {
+  if (nil? type-str) {nil}
+  {do
+    (= {parts} (hint/split-type-parts type-str))
+    (if (nil? parts) {nil}
+      {last parts})}
+})
+
+(sig 'hint/split-type-parts {-> Str List})
+(fun {hint/split-type-parts type-str} {
+  if (nil? type-str) {nil}
+  {if (< (len type-str) 5) {nil}
+  {do
+    (= {prefix} (str/slice type-str 0 4))
+    (if (not (== prefix "(-> ")) {nil}
+    {do
+      (= {inner} (str/slice type-str 4 (- (len type-str) 1)))
+      (str/split inner " ")})}}
+})
+
+(sig 'hint/vt-correlate-inferred {-> List Str Ref List List})
+(fun {hint/vt-correlate-inferred params fname db acc} {
+  if (nil? params) {acc}
+  {do
+    (= {inferred} (hint/query-inferred-type db fname))
+    (= {parts} (hint/split-type-parts inferred))
+    (if (nil? parts) {acc}
+      {hint/vt-correlate-parts params parts 0 acc})}
+})
+
+(sig 'hint/vt-correlate-parts {-> List List Num List List})
+(fun {hint/vt-correlate-parts params parts idx acc} {
+  if (nil? params) {acc}
+  {if (>= idx (- (len parts) 1)) {acc}
+  {do
+    (= {t} (nth (+ idx 1) parts))
     (= {pname} (if (sym? (head params)) {str (head params)} {nil}))
     (= {acc2} (if (nil? pname) {acc}
       {qcons (list :var pname :type t) acc}))
-    (hint/vt-correlate (tail params) sig-types (+ idx 1) acc2)}}
+    (hint/vt-correlate-parts (tail params) parts (+ idx 1) acc2)}}
 })
 
 (sig 'hint/vt-scan-body {-> Any Ref List List})
@@ -155,9 +196,19 @@
           (= {hn} (ast/head-name val))
           (if (== hn "") {nil}
           {if (hint/is-ctor-name hn) {hn}
-            {hint/infer-call-return-type hn db}})}}))
+          {do
+            (= {ret} (hint/query-inferred-ret db hn))
+            (if (nil? ret) {hint/infer-call-return-type hn db} {ret})}})}}))
       (if (nil? inferred) {acc}
         {qcons (list :var var-name :type inferred) acc})}})}
+})
+
+(sig 'hint/query-inferred-ret {-> Ref Str Str})
+(fun {hint/query-inferred-ret db name} {
+  if (nil? db) {nil}
+  {do
+    (= {t} (hint/query-inferred-type db name))
+    (hint/parse-fn-return-type t)}
 })
 
 (sig 'hint/vt-from-fun {-> List Ref List List})
@@ -171,9 +222,13 @@
     {do
       (= {fname} (str (head formals)))
       (= {params} (tail formals))
-      (= {sig-types} (hint/query-sig-types db fname))
-      (= {param-vars} (if (nil? sig-types) {nil}
-        {hint/vt-correlate params sig-types 0 nil}))
+      (= {param-vars} (hint/vt-correlate-inferred params fname db nil))
+      (= {param-vars} (if (nil? param-vars)
+        {do
+          (= {sig-types} (hint/query-sig-types db fname))
+          (if (nil? sig-types) {nil}
+            {hint/vt-correlate-parts params sig-types 0 nil})}
+        {param-vars}))
       (= {body-vars} (hint/vt-scan-body body db nil))
       (= {all-vars} (if (nil? param-vars) {body-vars}
         {join param-vars body-vars}))

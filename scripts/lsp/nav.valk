@@ -14,10 +14,10 @@
   (= {path} info:path)
   (= {sym-line} info:line)
   (= {sym-kind} info:kind)
-  (= {kind-label} (if (== sym-kind SYMKIND_FUNCTION) {"function"}
-    {if (== sym-kind SYMKIND_VARIABLE) {"variable"}
-    {if (== sym-kind SYMKIND_TYPE) {"type"}
-    {if (== sym-kind SYMKIND_CONSTRUCTOR) {"constructor"}
+  (= {kind-label} (if (== sym-kind symdb/SYMKIND_FUNCTION) {"function"}
+    {if (== sym-kind symdb/SYMKIND_VARIABLE) {"variable"}
+    {if (== sym-kind symdb/SYMKIND_TYPE) {"type"}
+    {if (== sym-kind symdb/SYMKIND_CONSTRUCTOR) {"constructor"}
       {"symbol"}}}}))
   (= {sections} nil)
   (= {sections} (if (not (nil? type-sig))
@@ -89,7 +89,7 @@
           (= {hover-str} (if (nil? hover-str)
             {do
               (= {fallback-info} (if (nil? lsp/db) {nil}
-                {symdb/symbol-hover lsp/db word}))
+                {symdb/symbol-hover-in lsp/db word path}))
               (if (nil? fallback-info)
                 {str "```valk\n" word "\n```"}
                 {hover/format-markdown fallback-info word})}
@@ -128,7 +128,7 @@
       (if (not (nil? local-def))
         {lsp/respond-def-offset id ctx:uri ctx:text local-def}
         {do
-          (= {defn} (if (nil? lsp/db) {nil} {symdb/find-definition lsp/db ctx:word}))
+          (= {defn} (if (nil? lsp/db) {nil} {symdb/find-definition-in lsp/db ctx:word path}))
           (if (nil? defn) {lsp/send-response id (None)}
             {lsp/send-response id
               (list :uri (str "file://" (plist/get defn :path))
@@ -345,10 +345,10 @@
 
 (sig 'symkind->completion-kind {-> Num Num})
 (fun {symkind->completion-kind kind} {
-  if (== kind SYMKIND_FUNCTION) {3}
-  {if (== kind SYMKIND_VARIABLE) {6}
-  {if (== kind SYMKIND_TYPE) {7}
-  {if (== kind SYMKIND_CONSTRUCTOR) {4}
+  if (== kind symdb/SYMKIND_FUNCTION) {3}
+  {if (== kind symdb/SYMKIND_VARIABLE) {6}
+  {if (== kind symdb/SYMKIND_TYPE) {7}
+  {if (== kind symdb/SYMKIND_CONSTRUCTOR) {4}
     {6}}}}
 })
 
@@ -416,7 +416,7 @@
         (= {sym-name} s:name)
         (= {sym-kind} s:kind)
         (list :name sym-name
-              :kind (symkind->lsp-kind sym-kind)
+              :kind (symdb/symkind->lsp-kind sym-kind)
               :range (list
                 :start (list :line sym-line :character sym-col)
                 :end (list :line sym-line :character (+ sym-col (len sym-name))))
@@ -441,7 +441,7 @@
         (= {sl} (if (nil? sym-line) {0} {sym-line}))
         (= {sc} (if (nil? sym-col) {0} {sym-col}))
         (list :name sym-name
-             :kind (symkind->lsp-kind s:kind)
+             :kind (symdb/symkind->lsp-kind s:kind)
              :location (list
                :uri (str "file://" (if (nil? s:path)
                  {""} {s:path}))
@@ -458,8 +458,12 @@
     {do
       (= {path} (symdb/uri->path ctx:uri))
       (= {rows} (if (nil? lsp/db) {nil} {symdb/get-semantic-tokens lsp/db path}))
+      ; ctx:ast is the last-known-good AST when current parse failed.
+      ; If no last-good AST exists either, fall back to lexer-only tokens.
       (= {data} (if (nil? rows)
-        {sem/tokenize-ast ctx:ast ctx:text}
+        {if (and (lsp/ast-has-error ctx:ast) (lsp/no-display-ast? ctx:uri))
+          {sem/lex-tokenize ctx:text}
+          {sem/tokenize-ast ctx:ast ctx:text}}
         {sem/encode-deltas ctx:text (symdb/rows-to-token-groups rows)}))
       (lsp/send-response id (list :data data))})
 })

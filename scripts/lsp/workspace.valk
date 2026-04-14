@@ -14,6 +14,27 @@
 
 
 ; ---------------------------------------------------------------------------
+; Transaction helper
+; ---------------------------------------------------------------------------
+;
+; Wraps a thunk in BEGIN/COMMIT, with ROLLBACK on error. The thunk MUST be
+; fully synchronous — no aio/dispatch, no aio/await, no callback registration.
+; Holding a transaction across an async boundary races with other handlers
+; on the main loop and causes nested-BEGIN errors.
+;
+; Use this instead of bare (sqlite/exec db "BEGIN") / (sqlite/exec db "COMMIT")
+; pairs so error handling is uniform across the codebase.
+
+(sig 'lsp/with-tx {-> Ref Fun Any})
+(fun {lsp/with-tx db thunk} {do
+  (sqlite/exec db "BEGIN")
+  (= {r} (thunk))
+  (if (error? r)
+    {do (sqlite/exec db "ROLLBACK") r}
+    {do (sqlite/exec db "COMMIT") r})
+})
+
+; ---------------------------------------------------------------------------
 ; Core indexing — single function, does everything
 ; ---------------------------------------------------------------------------
 
@@ -60,11 +81,8 @@
     {do
       (= {text} (read-file path))
       (if (error? text) {0}
-        {do
-          (sqlite/exec db "BEGIN")
-          (= {r} (lsp/index-file-full db (str "file://" path) text fp))
-          (sqlite/exec db "COMMIT")
-          r})})
+        {lsp/with-tx db
+          (\ {} {lsp/index-file-full db (str "file://" path) text fp})})})
 })
 
 (sig 'lsp/seed-builtins {-> Ref Str Nil})
@@ -150,21 +168,57 @@
     (lsp/republish-loop (tail uris))}
 })
 
+; Extract the byte offset from a parse error message of the form
+; "[offset: N] ...". Returns 0 if no offset is found.
+(sig 'lsp/parse-error-offset {-> Any Num})
+(fun {lsp/parse-error-offset err} {do
+  (= {msg} (str err))
+  (= {start} (str/index-of msg "[offset: "))
+  (if (< start 0) {0}
+    {do
+      (= {after} (str/slice msg (+ start 9) (len msg)))
+      (= {end} (str/index-of after "]"))
+      (if (< end 0) {0}
+        {do (= {n-str} (str/slice after 0 end))
+            ; Use parse to convert digit string to number
+            (= {parsed} (parse n-str))
+            (if (and (list? parsed) (and (> (len parsed) 0) (num? (head parsed))))
+              {head parsed} {0})})})})
+
+; Convert a parse error to an LSP Diagnostic, using the embedded byte offset
+; to compute the line/column.
+(sig 'lsp/parse-error->diag {-> Any Str List})
+(fun {lsp/parse-error->diag err text} {do
+  (= {offset} (lsp/parse-error-offset err))
+  (= {pos} (offset->line-col text offset))
+  (= {line} (head pos))
+  (= {col} (head (tail pos)))
+  (list :range
+    (list :start (list :line line :character col)
+          :end   (list :line line :character (+ col 1)))
+    :severity 1
+    :source "valk"
+    :message (str err))
+})
+
 (sig 'lsp/publish-diagnostics {-> Str Str Nil})
 (fun {lsp/publish-diagnostics uri text} {do
   (= {ast} (lsp/get-ast uri text))
-  (if (error? ast)
-    {lsp/send-notification "textDocument/publishDiagnostics"
-      (list :uri uri :diagnostics
-        (list (list :range
-          (list :start (list :line 0 :character 0)
-                :end   (list :line 0 :character 1))
-          :severity 1
-          :source "valk"
-          :message (str ast))))}
+  (stderr/write (str "[DBG publish] uri=" uri " text-len=" (len text) " ast-len=" (len ast) "\n"))
+  (= {parse-err} (lsp/ast-find-error ast))
+  (if (not (nil? parse-err))
+    {do (stderr/write (str "[DBG publish] parse-err: " parse-err "\n"))
+        (lsp/send-notification "textDocument/publishDiagnostics"
+          (list :uri uri :diagnostics
+            (list (lsp/parse-error->diag parse-err text))))}
     {do
       (lsp/ensure-loads-indexed ast)
-      (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
+      (= {known} (lsp/get-known-set))
+      (stderr/write (str "[DBG publish] known-set keys=" (len (dict/keys known)) "\n"))
+      (stderr/write (str "[DBG publish] fuck in known? " (dict/has? known "fuck") "\n"))
+      (= {diags} (vd/validate-with-known lsp/db ast text known))
+      (stderr/write (str "[DBG publish] diags=" (if (error? diags) {"ERR"} {len diags}) "\n"))
+      (if (error? diags) {stderr/write (str "[DBG publish] err: " diags "\n")} {})
       (= {lsp-diags} (if (error? diags)
         {do (stderr/write (str "[lsp] validate error: " diags "\n")) nil}
         {map make-lsp-diag diags}))
@@ -176,15 +230,11 @@
 (sig 'lsp/publish-diagnostics-fast {-> Str Str Nil})
 (fun {lsp/publish-diagnostics-fast uri text} {do
   (= {ast} (lsp/get-ast uri text))
-  (if (error? ast)
+  (= {parse-err} (lsp/ast-find-error ast))
+  (if (not (nil? parse-err))
     {lsp/send-notification "textDocument/publishDiagnostics"
       (list :uri uri :diagnostics
-        (list (list :range
-          (list :start (list :line 0 :character 0)
-                :end   (list :line 0 :character 1))
-          :severity 1
-          :source "valk"
-          :message (str ast))))}
+        (list (lsp/parse-error->diag parse-err text)))}
      {lsp/send-notification "textDocument/publishDiagnostics"
       (list :uri uri :diagnostics nil)})})
 
@@ -195,13 +245,9 @@
 (sig 'lsp/compute-diagnostics {-> Str Str List})
 (fun {lsp/compute-diagnostics uri text} {do
   (= {ast} (lsp/get-ast uri text))
-  (if (error? ast)
-    {list (list :range
-      (list :start (list :line 0 :character 0)
-            :end   (list :line 0 :character 1))
-      :severity 1
-      :source "valk"
-      :message (str ast))}
+  (= {parse-err} (lsp/ast-find-error ast))
+  (if (not (nil? parse-err))
+    {list (lsp/parse-error->diag parse-err text)}
     {do
       (lsp/ensure-loads-indexed ast)
       (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
@@ -236,10 +282,9 @@
   (if (nil? lsp/db) {}
     {do
       (= {hash} (str "mem:" (len text)))
-      (sqlite/exec lsp/db "BEGIN")
-      (= {changed} (lsp/index-file-with-hints lsp/db uri text hash))
-      (sqlite/exec lsp/db "COMMIT")
-      (if (> changed 0) {lsp/invalidate-known-set} {})})})
+      (= {changed} (lsp/with-tx lsp/db
+        (\ {} {lsp/index-file-with-hints lsp/db uri text hash})))
+      (if (and (num? changed) (> changed 0)) {lsp/invalidate-known-set} {})})})
 
 
 
@@ -573,7 +618,10 @@
       (dict/set! state :indexed 0)
       (dict/set! state :done 0)
       (dict/set! state :total total)
-      (sqlite/exec db "BEGIN")
+      ; Note: NO outer transaction here. Each callback wraps its own
+      ; index-file-full call in a self-contained transaction. Holding a
+      ; transaction across aio/dispatch would race with handle-did-open
+      ; (also runs on the main loop) and cause nested-BEGIN errors.
       (lsp/dispatch-all db changed state tok)})
 })
 
@@ -588,8 +636,12 @@
       (\ {_} {lsp/prepare-file path})
       nil
        (\ {result} {do
+        ; Each callback wraps its own writes in a self-contained transaction.
+        ; This avoids holding a tx across async dispatch boundaries, which
+        ; would race with concurrent handle-did-open / handle-did-change.
         (= {did-raw} (if (nil? result) {0}
-          {lsp/index-file-full db (str "file://" result:path) result:text result:fp}))
+          {lsp/with-tx db
+            (\ {} {lsp/index-file-full db (str "file://" result:path) result:text result:fp})}))
         (= {did} (if (num? did-raw) {did-raw} {0}))
         (dict/set! state :indexed (+ (dict/get state :indexed) did))
         (dict/set! state :done (+ (dict/get state :done) 1))
@@ -601,7 +653,6 @@
           {})
         (if (== done-count total)
           {do
-            (sqlite/exec db "COMMIT")
             (lsp/invalidate-known-set)
             (= {indexed} (dict/get state :indexed))
             (lsp/progress-end tok (if (== indexed 0) {"up to date"} {str "indexed " indexed " files"}))
@@ -627,10 +678,13 @@
       (= {db-path} (str db-dir "/symdb.sqlite"))
       (= {result} (symdb/init db-path))
       (if (error? result)
-        {stderr/write (str "[valk-lsp] symdb init failed: " result "\n")}
+        {do (stderr/write (str "[valk-lsp] symdb file init failed, using :memory:\n"))
+            (def {lsp/db} (symdb/init ":memory:"))}
         {do (def {lsp/db} result)
             (lsp/seed-builtins lsp/db lsp/root-path)})}
-    {})
+    {do
+      (def {lsp/root-path} "")
+      (def {lsp/db} (symdb/init ":memory:"))})
   (lsp/send-response id lsp/capabilities)})
 
 (def {lsp/noop-cb} (\ {_} {}))

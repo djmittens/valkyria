@@ -3,7 +3,9 @@
 (load "stdlib/diag/symdb.valk")
 (load "stdlib/diag/validate.valk")
 (load "stdlib/ast/walk.valk")
+(load "scripts/lsp/constants.valk")
 (load "scripts/lsp/analysis.valk")
+(load "scripts/lsp/refs.valk")
 (load "scripts/lsp/hints.valk")
 (load "scripts/lsp/hints-fields.valk")
 (load "scripts/lsp/io.valk")
@@ -24,12 +26,21 @@
       (= {start-line} params:range:start:line)
       (= {end-line} params:range:end:line)
       (= {path} (symdb/uri->path ctx:uri))
-      (= {start-offset} (line-col->offset ctx:text start-line 0))
-      (= {end-offset} (line-col->offset ctx:text (+ end-line 1) 0))
+      (= {line-idx} (lsp/get-line-index ctx:uri ctx:text))
+      (= {text-len} (len ctx:text))
+      (= {start-raw} (lsp/lc->offset line-idx start-line 0))
+      (= {end-raw} (lsp/lc->offset line-idx (+ end-line 1) 0))
+      (= {start-offset} (if (> start-raw 0) {start-raw}
+                            {if (== start-line 0) {0} {text-len}}))
+      (= {end-offset} (if (> end-raw 0) {end-raw} {text-len}))
       (= {rows} (if (nil? lsp/db) {nil}
         {symdb/get-semantic-tokens-range lsp/db path start-offset end-offset}))
+      ; ctx:ast is the last-known-good AST when current parse failed.
+      ; If no last-good AST exists either, fall back to lexer-only tokens.
       (= {data} (if (nil? rows)
-        {sem/tokenize-ast ctx:ast ctx:text}
+        {if (and (lsp/ast-has-error ctx:ast) (lsp/no-display-ast? ctx:uri))
+          {sem/lex-tokenize ctx:text}
+          {sem/tokenize-ast ctx:ast ctx:text}}
         {sem/encode-deltas ctx:text (symdb/rows-to-token-groups rows)}))
       (= {typed} (sem/parse-flat data))
       (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
@@ -54,7 +65,6 @@
 ; ---------------------------------------------------------------------------
 
 (def {lsp/sem-version} 0)
-(def {lsp/comp-version} 0)
 (def {lsp/hint-version} 0)
 (def {lsp/diag-version} 0)
 
@@ -172,14 +182,13 @@
     {"textDocument/codeLens" (features/handle-code-lens id (lsp/to-doc-params params))}
     {"textDocument/codeAction" (features/handle-code-action id params)}
     {"textDocument/diagnostic" (workspace/handle-pull-diagnostics id (lsp/to-doc-params params))}
-    {_ (if (num? id)
+    {_ (if (not (nil? id))
          {lsp/send-error id -32601 (str "Method not found: " method)} {})}
 })
 
 ; ---------------------------------------------------------------------------
 ; Event-driven main loop — pipe/lsp-reader delivers parsed messages
 ; ---------------------------------------------------------------------------
-
 (sig 'lsp/on-message {-> Str Nil})
 (fun {lsp/on-message body} {do
   (= {msg} (json/parse body))
@@ -212,9 +221,10 @@
                    {"textDocument/didClose" (workspace/handle-did-close (lsp/to-doc-params params))}
                    {"textDocument/didSave" (workspace/handle-did-save (lsp/to-save-params params))}
                    {"$/cancelRequest" {}}
-                   {_ (if (num? id)
-                         {lsp/dispatch-request method id params}
-                                                 {})}})}})})})
+                   {_ (if (not (nil? id))
+                          {lsp/dispatch-request method id params}
+                                                  {})}})}})})})
+
 
 (sig 'lsp/start {-> Nil})
 (fun {lsp/start} {do
