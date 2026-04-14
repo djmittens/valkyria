@@ -54,3 +54,4 @@ LLVMValueRef valk_llvm_compile_program(valk_llvm_ctx_t *ctx,
 
 char *valk_llvm_dump_ir(valk_llvm_ctx_t *ctx);
 bool valk_llvm_verify(valk_llvm_ctx_t *ctx, char **error);
+void valk_llvm_declare_runtime_fns(valk_llvm_ctx_t *c);

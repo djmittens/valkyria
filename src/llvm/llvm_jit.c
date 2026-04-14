@@ -80,51 +80,7 @@ void valk_jit_free(valk_jit_t *jit) {
 typedef valk_lval_t *(*jit_expr_fn_t)(valk_lenv_t *);
 
 static void init_codegen_decls(valk_llvm_ctx_t *c) {
-  LLVMTypeRef ptr = c->ptr_type;
-  LLVMTypeRef i64 = c->i64_type;
-  LLVMTypeRef i1 = c->i1_type;
-  LLVMTypeRef vd = c->void_type;
-
-  LLVMTypeRef p1[] = {i64};
-  c->fn_lval_num = LLVMAddFunction(c->module, "valk_lval_num",
-    LLVMFunctionType(ptr, p1, 1, 0));
-  LLVMTypeRef pp[] = {ptr};
-  c->fn_lval_str = LLVMAddFunction(c->module, "valk_lval_str",
-    LLVMFunctionType(ptr, pp, 1, 0));
-  c->fn_lval_nil = LLVMAddFunction(c->module, "valk_lval_nil",
-    LLVMFunctionType(ptr, NULL, 0, 0));
-  c->fn_lval_sym = LLVMAddFunction(c->module, "valk_lval_sym",
-    LLVMFunctionType(ptr, pp, 1, 0));
-  LLVMTypeRef pp2[] = {ptr, ptr};
-  c->fn_lval_cons = LLVMAddFunction(c->module, "valk_lval_cons",
-    LLVMFunctionType(ptr, pp2, 2, 0));
-  c->fn_lval_qcons = LLVMAddFunction(c->module, "valk_lval_qcons",
-    LLVMFunctionType(ptr, pp2, 2, 0));
-  LLVMTypeRef pp3[] = {ptr, ptr, ptr};
-  c->fn_lval_lambda = LLVMAddFunction(c->module, "valk_lval_lambda",
-    LLVMFunctionType(ptr, pp3, 3, 0));
-  c->fn_lval_copy = LLVMAddFunction(c->module, "valk_lval_copy",
-    LLVMFunctionType(ptr, pp, 1, 0));
-  c->fn_lval_is_truthy = LLVMAddFunction(c->module,
-    "valk_lval_is_truthy", LLVMFunctionType(i1, pp, 1, 0));
-  c->fn_lenv_get = LLVMAddFunction(c->module, "valk_lenv_get",
-    LLVMFunctionType(ptr, pp2, 2, 0));
-  c->fn_lenv_put = LLVMAddFunction(c->module, "valk_lenv_put",
-    LLVMFunctionType(vd, pp3, 3, 0));
-  c->fn_lenv_def = LLVMAddFunction(c->module, "valk_lenv_def",
-    LLVMFunctionType(vd, pp3, 3, 0));
-  c->fn_lenv_empty = LLVMAddFunction(c->module, "valk_lenv_empty",
-    LLVMFunctionType(ptr, NULL, 0, 0));
-  c->fn_lval_eval = LLVMAddFunction(c->module, "valk_lval_eval",
-    LLVMFunctionType(ptr, pp2, 2, 0));
-  c->fn_lval_eval_call = LLVMAddFunction(c->module,
-    "valk_lval_eval_call", LLVMFunctionType(ptr, pp3, 3, 0));
-  c->fn_lval_println = LLVMAddFunction(c->module,
-    "valk_lval_println", LLVMFunctionType(vd, pp, 1, 0));
-  c->fn_lval_print = LLVMAddFunction(c->module,
-    "valk_lval_print", LLVMFunctionType(vd, pp, 1, 0));
-  c->fn_printf = LLVMAddFunction(c->module, "printf",
-    LLVMFunctionType(LLVMInt32TypeInContext(c->ctx), pp, 1, 1));
+  valk_llvm_declare_runtime_fns(c);
 }
 
 valk_lval_t *valk_jit_eval(valk_jit_t *jit, valk_lenv_t *env,

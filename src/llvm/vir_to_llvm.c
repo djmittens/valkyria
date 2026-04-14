@@ -1,6 +1,7 @@
 #include "vir_to_llvm.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 typedef struct {
   valk_llvm_ctx_t *c;
@@ -236,7 +237,9 @@ static LLVMValueRef lower_value(lower_ctx_t *ctx, vir_value_t *v) {
     }
 
     default:
-      break;
+      fprintf(stderr, "vir_to_llvm: unhandled opcode %s (%d)\n",
+              vir_opcode_name(v->opcode), v->opcode);
+      abort();
   }
 
   if (result) set_val(ctx, v->id, result);
