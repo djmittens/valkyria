@@ -663,6 +663,7 @@
 
 (sig 'with {-> A Any Any A})
 
-; Type inference: run HM inference on AST, return list of type error plists
-; Each error: {:line Num :col Num :message Str}
+; Type inference: run HM inference on AST, return {:errors List :types List}
+; errors: ({:line Num :col Num :message Str} ...)
+; types: ({:var Str :type Str} ...)
 (sig 'type/infer-file {-> List List})

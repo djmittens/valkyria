@@ -286,8 +286,8 @@ static void rewrite_node(valk_lval_t *cell, valk_module_t *mod,
   rewrite_list(expr, mod, fqn, root_env, shadows);
 }
 
-void valk_module_rewrite(valk_lval_t *ast,
-                         const char *prefix __attribute__((unused))) {
+void valk_module_rewrite(valk_lval_t *ast, const char *prefix) {
+  (void)prefix;
   valk_module_t *mod = valk_mod_current();
   if (!mod) return;
 

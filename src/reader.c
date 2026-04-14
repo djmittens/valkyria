@@ -379,6 +379,10 @@ valk_lval_t* valk_parse_file(const char* filename) {
   return res;
 }
 
+// Parse a complete text buffer into a list of top-level expressions.
+// Errors (including unexpected end-of-input) are appended to the result list
+// so callers can inspect them. The reader's interactive multi-line variant
+// (valk_lval_read) is unaffected — that's what the REPL uses.
 valk_lval_t* valk_parse_text(const char* text) {
   struct { valk_lval_t** items; u64 count; u64 capacity; } tmp = {0};
   da_init(&tmp); // LCOV_EXCL_BR_LINE - macro reinit check
@@ -395,8 +399,9 @@ valk_lval_t* valk_parse_text(const char* text) {
   while (ctx.source[ctx.pos] != '\0') {
     valk_lval_t* expr = valk_lval_read_ctx(&ctx);
     if (LVAL_TYPE(expr) == LVAL_ERR) {
-      if (strstr(expr->str, "Unexpected") && strstr(expr->str, "end of input"))
-        break;
+      // Preserve all parse errors, including EOF, so callers (especially
+      // the LSP) can produce diagnostics for in-progress edits. The error
+      // already carries source position info via [offset: N].
       da_add(&tmp, expr);
       break;
     }

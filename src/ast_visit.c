@@ -1,23 +1,19 @@
 #include "builtins_internal.h"
 #include <string.h>
 
-// Generic AST visitor — walks the tree, calls Valk callbacks.
-// The traversal and pattern recognition are in C (fast).
-// The actions (what to do with each node) are Valk lambdas (extensible).
-
 #define MAX_SCOPE_DEPTH 128
 
 typedef struct {
-  valk_lval_t *on_sym;    // (fn name pos len)
-  valk_lval_t *on_num;    // (fn name pos)
-  valk_lval_t *on_str;    // (fn name pos len)
-  valk_lval_t *on_call;   // (fn name pos len)
-  valk_lval_t *on_def;    // (fn name pos is_global)
-  valk_lval_t *on_fun;    // (fn name params_node pos)
-  valk_lval_t *on_type;   // (fn name fields_node pos)
-  valk_lval_t *on_sig;    // (fn name sig_node pos)
-  valk_lval_t *on_param;  // (fn name pos)
-  valk_lval_t *on_ref;    // (fn name pos len scope_pos)
+  valk_lval_t *on_sym;
+  valk_lval_t *on_num;
+  valk_lval_t *on_str;
+  valk_lval_t *on_call;
+  valk_lval_t *on_def;
+  valk_lval_t *on_fun;
+  valk_lval_t *on_type;
+  valk_lval_t *on_sig;
+  valk_lval_t *on_param;
+  valk_lval_t *on_ref;
 
   const char *scope_names[MAX_SCOPE_DEPTH][64];
   int scope_name_count[MAX_SCOPE_DEPTH];
@@ -29,14 +25,6 @@ typedef struct {
 static void visit_each(visit_ctx_t *ctx, valk_lval_t *exprs);
 static void visit_expr(visit_ctx_t *ctx, valk_lval_t *expr);
 static void visit_qbody(visit_ctx_t *ctx, valk_lval_t *qexpr);
-
-// --- Callback dispatch ---
-
-static void __attribute__((unused)) fire1(valk_lval_t *handler, valk_lval_t *a) {
-  if (!handler) return;
-  valk_lval_t *args = valk_lval_cons(a, valk_lval_nil());
-  valk_lval_eval_call(handler->fun.env, handler, args);
-}
 
 static void fire2(valk_lval_t *handler, valk_lval_t *a, valk_lval_t *b) {
   if (!handler) return;
@@ -57,8 +45,6 @@ static void fire4(valk_lval_t *handler, valk_lval_t *a, valk_lval_t *b,
     valk_lval_cons(d, valk_lval_nil()))));
   valk_lval_eval_call(handler->fun.env, handler, args);
 }
-
-// --- Scope tracking ---
 
 static int current_scope(visit_ctx_t *ctx) {
   return ctx->scope_depth > 0 ? ctx->scope_pos[ctx->scope_depth - 1] : -1;
@@ -89,13 +75,9 @@ static bool in_scope(visit_ctx_t *ctx, const char *name) {
   return false;
 }
 
-// --- Helpers ---
-
 static bool is_qexpr(valk_lval_t *v) {
   return v && LVAL_TYPE(v) == LVAL_CONS && (v->flags & LVAL_FLAG_QUOTED);
 }
-
-// --- Form walkers ---
 
 static void visit_params(visit_ctx_t *ctx, valk_lval_t *params, int scope_pos) {
   (void)scope_pos;
@@ -248,7 +230,6 @@ static void visit_head(visit_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd, val
       valk_lval_t *name_q = tl->cons.head;
       if (name_q && is_qexpr(name_q) && LVAL_TYPE(name_q->cons.head) == LVAL_SYM) {
         int pos = (int)LVAL_SRC_POS(hd);
-        // Iterate variants: each remaining arg is {CtorName ...fields}
         valk_lval_t *variants = tl->cons.tail;
         while (variants && LVAL_TYPE(variants) == LVAL_CONS) {
           valk_lval_t *variant = variants->cons.head;
@@ -278,7 +259,6 @@ static void visit_head(visit_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd, val
     }
     visit_each(ctx, tl); return;
   }
-  // Function call
   int pos = (int)LVAL_SRC_POS(hd);
   int slen = (int)strlen(name);
   if (pos >= 0)
@@ -361,8 +341,6 @@ static void visit_each(visit_ctx_t *ctx, valk_lval_t *exprs) {
   }
 }
 
-// --- Resolve handler from ops list ---
-
 static valk_lval_t *resolve_handler(valk_lval_t *ops, const char *key) {
   while (ops && LVAL_TYPE(ops) == LVAL_CONS) {
     valk_lval_t *op = ops->cons.head;
@@ -372,8 +350,6 @@ static valk_lval_t *resolve_handler(valk_lval_t *ops, const char *key) {
   }
   return NULL;
 }
-
-// --- Public API: (ast/visit ast ops) ---
 
 valk_lval_t *valk_builtin_ast_visit(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);

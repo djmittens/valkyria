@@ -1,4 +1,5 @@
 #include "vir.h"
+#include "../common.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -63,6 +64,7 @@ static char *str_dup(const char *s) {
 
 vir_module_t *vir_module_new(const char *name) {
   vir_module_t *m = calloc(1, sizeof(vir_module_t));
+  VALK_OOM_ASSERT(m);
   m->name = str_dup(name);
   return m;
 }
@@ -122,6 +124,7 @@ void vir_module_free(vir_module_t *mod) {
 
 vir_builder_t *vir_builder_new(vir_module_t *mod) {
   vir_builder_t *b = calloc(1, sizeof(vir_builder_t));
+  VALK_OOM_ASSERT(b);
   b->module = mod;
   return b;
 }
@@ -133,14 +136,17 @@ void vir_builder_free(vir_builder_t *b) {
 vir_func_t *vir_builder_add_func(vir_builder_t *b, const char *name,
                                  u32 num_params) {
   vir_func_t *fn = calloc(1, sizeof(vir_func_t));
+  VALK_OOM_ASSERT(fn);
   fn->name = str_dup(name);
   fn->num_params = num_params;
   fn->parent = b->module;
 
   if (num_params > 0) {
     fn->params = calloc(num_params, sizeof(vir_value_t *));
+    VALK_OOM_ASSERT(fn->params);
     for (u32 i = 0; i < num_params; i++) {
       vir_value_t *p = calloc(1, sizeof(vir_value_t));
+      VALK_OOM_ASSERT(p);
       p->opcode = VIR_COPY;
       p->type = VIR_TYPE_PTR;
       p->id = b->next_val_id++;
@@ -158,6 +164,7 @@ vir_func_t *vir_builder_add_func(vir_builder_t *b, const char *name,
 
 vir_block_t *vir_builder_add_block(vir_builder_t *b, const char *name) {
   vir_block_t *bb = calloc(1, sizeof(vir_block_t));
+  VALK_OOM_ASSERT(bb);
   bb->name = str_dup(name);
   bb->id = b->next_bb_id++;
   bb->parent = b->cur_fn;
@@ -190,6 +197,7 @@ static vir_value_t *emit(vir_builder_t *b, vir_value_t *v) {
 
 static vir_value_t *new_val(vir_builder_t *b, vir_opcode_e op, vir_type_e ty) {
   vir_value_t *v = calloc(1, sizeof(vir_value_t));
+  VALK_OOM_ASSERT(v);
   v->opcode = op;
   v->type = ty;
   v->id = b->next_val_id++;
@@ -220,6 +228,7 @@ vir_value_t *vir_build_const_sym(vir_builder_t *b, const char *name) {
 
 static void set_operands(vir_value_t *v, vir_value_t **ops, u32 n) {
   v->operands = calloc(n, sizeof(vir_value_t *));
+  VALK_OOM_ASSERT(v->operands);
   memcpy(v->operands, ops, n * sizeof(vir_value_t *));
   v->num_operands = n;
 }
@@ -286,6 +295,7 @@ static vir_value_t *build_call_impl(vir_builder_t *b, vir_opcode_e op,
   v->call.num_args = num_args;
   if (num_args > 0) {
     v->call.args = calloc(num_args, sizeof(vir_value_t *));
+    VALK_OOM_ASSERT(v->call.args);
     memcpy(v->call.args, args, num_args * sizeof(vir_value_t *));
   }
   if (op == VIR_TAIL_CALL && b->cur_fn)
@@ -386,8 +396,10 @@ void vir_phi_add_incoming(vir_value_t *phi, vir_value_t *val,
   u32 n = phi->phi.num_incoming;
   phi->phi.incoming_vals = realloc(phi->phi.incoming_vals,
     (n + 1) * sizeof(vir_value_t *));
+  VALK_OOM_ASSERT(phi->phi.incoming_vals);
   phi->phi.incoming_blocks = realloc(phi->phi.incoming_blocks,
     (n + 1) * sizeof(vir_block_t *));
+  VALK_OOM_ASSERT(phi->phi.incoming_blocks);
   phi->phi.incoming_vals[n] = val;
   phi->phi.incoming_blocks[n] = from;
   phi->phi.num_incoming = n + 1;
@@ -397,6 +409,7 @@ void vir_block_add_pred(vir_block_t *bb, vir_block_t *pred) {
   if (bb->num_preds >= bb->pred_cap) {
     bb->pred_cap = bb->pred_cap ? bb->pred_cap * 2 : 4;
     bb->preds = realloc(bb->preds, bb->pred_cap * sizeof(vir_block_t *));
+    VALK_OOM_ASSERT(bb->preds);
   }
   bb->preds[bb->num_preds++] = pred;
 }
@@ -405,6 +418,7 @@ void vir_block_add_succ(vir_block_t *bb, vir_block_t *succ) {
   if (bb->num_succs >= bb->succ_cap) {
     bb->succ_cap = bb->succ_cap ? bb->succ_cap * 2 : 4;
     bb->succs = realloc(bb->succs, bb->succ_cap * sizeof(vir_block_t *));
+    VALK_OOM_ASSERT(bb->succs);
   }
   bb->succs[bb->num_succs++] = succ;
 }

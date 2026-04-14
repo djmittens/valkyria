@@ -178,7 +178,7 @@ void test_vir_gc_root_insertion(VALK_TEST_ARGS()) {
   }
 
   ASSERT_TRUE(has_gc_safepoint);
-  (void)has_gc_root;
+  ASSERT_TRUE(has_gc_root);
 
   vir_builder_free(b);
   vir_module_free(mod);

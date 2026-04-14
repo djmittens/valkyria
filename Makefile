@@ -95,10 +95,6 @@ build-coverage: build-coverage/.cmake
 check: build
 	build/valk scripts/valk-check.valk -- $(or $(DIR),.)
 
-.PHONY: check-strict
-check-strict: build
-	build/valk scripts/valk-check.valk -- $(or $(DIR),.)
-
 .PHONY: lint
 lint : build/.cmake
 	run-clang-tidy -p build -j $(JOBS) \

@@ -2,8 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
 
-static valk_module_t *g_root_mod = NULL;
+static _Atomic(valk_module_t *) g_root_mod = NULL;
 static _Thread_local valk_module_t *g_current_mod = NULL;
 
 valk_module_t *valk_mod_new(const char *name, valk_module_t *parent) {
@@ -13,6 +14,8 @@ valk_module_t *valk_mod_new(const char *name, valk_module_t *parent) {
   if (parent) {
     if (parent->child_count < VALK_MOD_MAX_CHILDREN)
       parent->children[parent->child_count++] = mod;
+    else
+      fprintf(stderr, "[module] max children exceeded for '%s'\n", parent->name);
   }
   return mod;
 }
@@ -39,6 +42,8 @@ void valk_mod_def(valk_module_t *mod, const char *name, valk_lval_t *val) {
     mod->def_names[mod->def_count] = strdup(name);
     mod->def_vals[mod->def_count] = val;
     mod->def_count++;
+  } else {
+    fprintf(stderr, "[module] max defs exceeded for '%s'\n", mod->name);
   }
 }
 
@@ -106,9 +111,17 @@ void valk_mod_qualified_path(valk_module_t *mod, char *out, size_t out_sz) {
 }
 
 valk_module_t *valk_mod_root(void) {
-  if (!g_root_mod)
-    g_root_mod = valk_mod_new("root", NULL);
-  return g_root_mod;
+  valk_module_t *root = atomic_load_explicit(&g_root_mod, memory_order_acquire);
+  if (!root) {
+    root = valk_mod_new("root", NULL);
+    valk_module_t *expected = NULL;
+    if (!atomic_compare_exchange_strong_explicit(&g_root_mod, &expected, root,
+            memory_order_release, memory_order_acquire)) {
+      valk_mod_free(root);
+      root = expected;
+    }
+  }
+  return root;
 }
 
 valk_module_t *valk_mod_current(void) {

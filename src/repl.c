@@ -136,7 +136,7 @@ int main(int argc, char* argv[]) {
                         valk_lval_str(resolved));
         }
         char script_path[PATH_MAX];
-        snprintf(script_path, sizeof(script_path), "%s/stdlib/analysis/quality.valk", resolved);
+        snprintf(script_path, sizeof(script_path), "%s/stdlib/diag/quality.valk", resolved);
         script_mode = true;
         valk_lval_t *res;
         VALK_WITH_ALLOC((void*)gc_heap) {
