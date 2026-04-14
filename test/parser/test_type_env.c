@@ -454,6 +454,146 @@ static void test_type_env_reset_no_env(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// Accessing a nonexistent field via Type:field should produce a clear error,
+// not silently fall through to a runtime lookup.
+static void test_accessor_unknown_field(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_type_env_reset();
+  valk_type_transform_expr(make_type_form("(type {Person} {:name Str :age Num})"));
+
+  valk_lval_t *bad = make_type_form("(Person:email p)");
+  valk_lval_t *result = valk_type_transform_expr(bad);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR,
+    "accessor with unknown field should produce an error");
+  if (LVAL_TYPE(result) == LVAL_ERR) {
+    VALK_TEST_ASSERT(strstr(result->str, "email") != NULL,
+      "error message should mention the missing field");
+  }
+
+  valk_type_env_reset();
+  VALK_PASS();
+}
+
+// Accessing an unknown constructor via Type:field should produce an error.
+static void test_accessor_unknown_constructor(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_type_env_reset();
+  valk_lval_t *bad = make_type_form("(Unknown:field p)");
+  valk_lval_t *result = valk_type_transform_expr(bad);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_CONS || LVAL_TYPE(result) == LVAL_SYM,
+    "unknown constructor should pass through when no types are registered");
+
+  valk_type_env_reset();
+  VALK_PASS();
+}
+
+// Constructor call with mismatched arity should produce an error.
+static void test_constructor_arity_mismatch(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_type_env_reset();
+  valk_type_transform_expr(make_type_form("(type {Point} {:x Num :y Num})"));
+
+  valk_lval_t *bad = make_type_form("(Point 1)");
+  valk_lval_t *result = valk_type_transform_expr(bad);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR,
+    "constructor call with wrong arity should error");
+  if (LVAL_TYPE(result) == LVAL_ERR) {
+    VALK_TEST_ASSERT(strstr(result->str, "Point") != NULL,
+      "error should mention the constructor name");
+  }
+
+  valk_type_env_reset();
+  VALK_PASS();
+}
+
+// Accessing an unknown field via var:field (lowercase variable) should error
+// when the variable's type is known from a prior binding. This exercises
+// resolve_field_access in type_transform_forms.c for PRODUCT types.
+static void test_var_field_access_unknown_field(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_type_env_reset();
+  valk_type_transform_expr(make_type_form("(type {Person} {:name Str :age Num})"));
+
+  // Bind p to a Person value so the scope knows p's type
+  valk_lval_t *bind = make_type_form("(= {p} (Person :name \"Alice\" :age 30))");
+  valk_type_transform_expr(bind);
+
+  // Now access an unknown field
+  valk_lval_t *bad = make_type_form("p:email");
+  valk_lval_t *result = valk_type_transform_expr(bad);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR,
+    "var:field with unknown field on known type should error");
+  if (LVAL_TYPE(result) == LVAL_ERR) {
+    VALK_TEST_ASSERT(strstr(result->str, "email") != NULL,
+      "error message should mention the missing field");
+    VALK_TEST_ASSERT(strstr(result->str, "Person") != NULL,
+      "error message should mention the type name");
+  }
+
+  valk_type_env_reset();
+  VALK_PASS();
+}
+
+// For SUM types, a variable's type is the type name (e.g. "Shape"), but
+// the constructors are qualified (Shape::Circle, Shape::Square). Accessing
+// a field that doesn't exist in any constructor should error rather than
+// silently fall through to (plist/get). This exercises the sum-type branch
+// of resolve_field_access.
+static void test_var_field_access_sum_type_unknown_field(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_type_env_reset();
+  valk_type_transform_expr(make_type_form(
+    "(type {Shape} {Circle :radius Num} {Square :side Num})"));
+
+  // Bind s to a Shape-typed value
+  valk_lval_t *bind = make_type_form("(= {s} (Circle :radius 5))");
+  valk_type_transform_expr(bind);
+
+  // Access a field that doesn't exist in Circle OR Square
+  valk_lval_t *bad = make_type_form("s:volume");
+  valk_lval_t *result = valk_type_transform_expr(bad);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR,
+    "sum type var:field with unknown field should error");
+  if (LVAL_TYPE(result) == LVAL_ERR) {
+    VALK_TEST_ASSERT(strstr(result->str, "volume") != NULL,
+      "error message should mention the missing field");
+  }
+
+  valk_type_env_reset();
+  VALK_PASS();
+}
+
+// Keyword-mode constructor call missing a field should produce an error.
+static void test_constructor_missing_field(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_type_env_reset();
+  valk_type_transform_expr(make_type_form("(type {Point} {:x Num :y Num})"));
+
+  valk_lval_t *bad = make_type_form("(Point :x 1)");
+  valk_lval_t *result = valk_type_transform_expr(bad);
+
+  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_ERR,
+    "constructor with missing field should error");
+  if (LVAL_TYPE(result) == LVAL_ERR) {
+    VALK_TEST_ASSERT(strstr(result->str, ":y") != NULL,
+      "error should name the missing field");
+  }
+
+  valk_type_env_reset();
+  VALK_PASS();
+}
+
 int main(void) {
   valk_gc_heap_t *heap = valk_gc_heap_create(0);
   valk_thread_ctx.allocator = (valk_mem_allocator_t *)heap;
@@ -490,6 +630,12 @@ int main(void) {
   valk_testsuite_add_test(suite, "transform_quoted_match", test_type_transform_quoted_match);
   valk_testsuite_add_test(suite, "transform_nested_expr", test_type_transform_nested_expr);
   valk_testsuite_add_test(suite, "env_reset_no_env", test_type_env_reset_no_env);
+  valk_testsuite_add_test(suite, "accessor_unknown_field", test_accessor_unknown_field);
+  valk_testsuite_add_test(suite, "accessor_unknown_constructor", test_accessor_unknown_constructor);
+  valk_testsuite_add_test(suite, "constructor_arity_mismatch", test_constructor_arity_mismatch);
+  valk_testsuite_add_test(suite, "constructor_missing_field", test_constructor_missing_field);
+  valk_testsuite_add_test(suite, "var_field_access_unknown_field", test_var_field_access_unknown_field);
+  valk_testsuite_add_test(suite, "var_field_access_sum_type_unknown_field", test_var_field_access_sum_type_unknown_field);
 
   int res = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

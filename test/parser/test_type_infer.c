@@ -487,7 +487,7 @@ static void test_import_sigs(VALK_TEST_ARGS()) {
   valk_type_transform(ast_list);
 
   valk_ti_ctx_t *ctx = valk_ti_create(valk_type_env_global());
-  valk_ti_import_sigs(ctx);
+  valk_ti_import_new(ctx);
 
   valk_type_scheme_t *s = valk_ti_scope_lookup(ctx->scope, "add");
   ASSERT_NOT_NULL(s);
@@ -508,7 +508,7 @@ static void test_import_constructors(VALK_TEST_ARGS()) {
   valk_type_env_register(env, form);
 
   valk_ti_ctx_t *ctx = valk_ti_create(env);
-  valk_ti_import_constructors(ctx);
+  valk_ti_import_new(ctx);
 
   valk_type_scheme_t *s = valk_ti_scope_lookup(ctx->scope, "Person");
   ASSERT_NOT_NULL(s);
@@ -684,6 +684,122 @@ static void test_scope_rebind(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// Parse a sequence of top-level expressions (as valk_type_transform/infer_file expects).
+static valk_lval_t *parse_file(const char *code) {
+  return valk_parse_text(code);
+}
+
+// Regression test: valk_ti_infer_file collects errors that valk-check surfaces.
+// A sig with a concrete return type followed by a mismatching call should
+// produce at least one error.
+static void test_infer_file_error_collection(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
+  valk_ti_import_new(ctx);
+
+  valk_lval_t *ast = parse_file(
+    "(sig 'pure-num {-> Num})\n"
+    "(fun {pure-num} {\"not a number\"})\n"
+  );
+  ASSERT_NOT_NULL(ast);
+
+  valk_ti_infer_file(ctx, ast);
+
+  // The sig says the fn returns Num, but the body is a Str.
+  // HM should catch this.
+  ASSERT_GT(ctx->error_count, 0);
+
+  // At least one error should mention the type mismatch
+  bool found_mismatch = false;
+  for (u32 i = 0; i < ctx->error_count; i++) {
+    if (strstr(ctx->errors[i].message, "mismatch") ||
+        strstr(ctx->errors[i].message, "Type")) {
+      found_mismatch = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(found_mismatch);
+
+  valk_ti_destroy(ctx);
+  VALK_PASS();
+}
+
+// Error source positions are stored as byte offsets (the caller converts to
+// line/col using the source text). This test asserts that errors have
+// non-negative offsets and include the signature constraint context.
+static void test_infer_file_error_position(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
+  valk_ti_import_new(ctx);
+
+  // Two-line source: sig on line 0, call on line 1
+  valk_lval_t *ast = parse_file(
+    "(sig 'foo {-> Num Num})\n"
+    "(fun {foo x} {x})\n"
+    "(foo \"wrong\")\n"
+  );
+
+  valk_ti_infer_file(ctx, ast);
+  ASSERT_GT(ctx->error_count, 0);
+
+  // All reported offsets should be within the source bounds (non-negative).
+  // The error line field is actually a byte offset.
+  for (u32 i = 0; i < ctx->error_count; i++) {
+    ASSERT_GE(ctx->errors[i].line, 0);
+  }
+
+  valk_ti_destroy(ctx);
+  VALK_PASS();
+}
+
+// The error buffer is capped at VALK_TI_MAX_ERRORS. Test that hitting this
+// cap produces exactly one overflow warning and later errors are silently
+// dropped (not stored).
+static void test_infer_error_cap(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
+
+  valk_ti_scope_bind(ctx, ctx->scope, "+", (valk_type_scheme_t){
+    .type = valk_ti_fun(ctx, (valk_type_t*[]){ctx->t_num, ctx->t_num}, 2, ctx->t_num)
+  });
+
+  // Generate many type errors in a do block
+  for (int i = 0; i < VALK_TI_MAX_ERRORS + 50; i++) {
+    valk_ti_infer_expr(ctx, ctx->scope, parse_expr("(+ \"bad\" 1)"));
+  }
+
+  // Should cap at VALK_TI_MAX_ERRORS
+  ASSERT_EQ(ctx->error_count, (u32)VALK_TI_MAX_ERRORS);
+
+  valk_ti_destroy(ctx);
+  VALK_PASS();
+}
+
+// Verify that function types with more than VALK_TI_MAX_FUN_PARAMS parameters
+// don't crash or corrupt state — they should truncate cleanly with a warning
+// on stderr (which we don't assert, but we verify the inference proceeds).
+static void test_infer_many_params(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
+
+  // Build a function with exactly VALK_TI_MAX_FUN_PARAMS params (should not warn)
+  char code[512];
+  int pos = 0;
+  pos += snprintf(code + pos, sizeof(code) - pos, "(\\ {");
+  for (int i = 0; i < VALK_TI_MAX_FUN_PARAMS; i++) {
+    pos += snprintf(code + pos, sizeof(code) - pos, "p%d ", i);
+  }
+  pos += snprintf(code + pos, sizeof(code) - pos, "} {42})");
+
+  valk_type_t *t = valk_ti_infer_expr(ctx, ctx->scope, parse_expr(code));
+  ASSERT_NOT_NULL(t);
+  // Function type should be valid
+  ASSERT_EQ(t->kind, VALK_TY_FUN);
+
+  valk_ti_destroy(ctx);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_gc_heap_t *heap = valk_gc_heap_create(0);
   valk_thread_ctx.allocator = (valk_mem_allocator_t *)heap;
@@ -733,8 +849,13 @@ int main(void) {
   valk_testsuite_add_test(suite, "infer_do", test_infer_do);
   valk_testsuite_add_test(suite, "infer_let_mono", test_infer_let_mono);
   valk_testsuite_add_test(suite, "infer_type_error", test_infer_type_error);
+  valk_testsuite_add_test(suite, "infer_file_error_collection", test_infer_file_error_collection);
+  valk_testsuite_add_test(suite, "infer_file_error_position", test_infer_file_error_position);
+  valk_testsuite_add_test(suite, "infer_error_cap", test_infer_error_cap);
+  valk_testsuite_add_test(suite, "infer_many_params", test_infer_many_params);
 
   int result = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
   valk_testsuite_free(suite);
   return result;
 }

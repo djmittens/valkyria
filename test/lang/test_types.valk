@@ -23,6 +23,17 @@
 ; Parametric type definitions (must be top-level for type transform)
 (type {Item} {:label Str :value Num})
 
+; Types for cross-function field access tests
+(type {PersonWrap} {:inner Person :tag Str})
+(type {InnerV} {:val Num})
+(type {OuterV} {:inner InnerV})
+
+(sig 'wrap-person-test {-> Person PersonWrap})
+(fun {wrap-person-test p} {PersonWrap :inner p :tag "w"})
+
+(sig 'extract-v-test {-> OuterV InnerV})
+(fun {extract-v-test o} {o:inner})
+
 (sig 'get-items {-> Num (List Item)})
 (fun {get-items n} {
   list (Item :label "a" :value n) (Item :label "b" :value (+ n 1))
@@ -435,5 +446,31 @@
       (test/assert (nil? data:z:y) "missing first field returns nil, second is nil")
     })
 
+  ; === Cross-function return type field access ===
+  ; Ensures that when a sig'd function returns a product type,
+  ; the caller can access fields on the return value.
+
+  (test/case "field-access-on-function-return"
+    {do
+      (sig 'make-person {-> Str Num Person})
+      (fun {make-person n a} {Person :name n :age a :email "x@y"})
+      (= {p} (make-person "Alice" 30))
+      (test/assert-eq "Alice" p:name "field access on sig'd function return")
+      (test/assert-eq 30 p:age "field access on sig'd function return (age)")
+    })
+
+  (test/case "field-access-chained-through-function"
+    {do
+      (= {w} (wrap-person-test (Person :name "Bob" :age 25 :email "b@b")))
+      (test/assert-eq "w" w:tag "outer field access")
+      (test/assert-eq "Bob" w:inner:name "chained field access through function return")
+    })
+
+  (test/case "field-access-return-type-mismatch-still-works"
+    {do
+      (= {ov} (OuterV :inner (InnerV :val 42)))
+      (= {iv} (extract-v-test ov))
+      (test/assert-eq 42 iv:val "field access on return from sig'd function")
+    })
 
 ))

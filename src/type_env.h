@@ -61,6 +61,8 @@ valk_constructor_t *valk_type_env_find_constructor(valk_type_env_t *env, const c
 valk_type_decl_t *valk_type_env_type_for_constructor(valk_type_env_t *env, const char *ctor_name);
 
 valk_lval_t *valk_type_env_register(valk_type_env_t *env, valk_lval_t *type_form);
+void valk_type_env_register_sig(valk_type_env_t *env, valk_lval_t *sig_form);
+valk_type_sig_t *valk_type_env_find_sig(valk_type_env_t *env, const char *name);
 
 valk_type_env_t *valk_type_env_global(void);
 void valk_type_env_reset(void);

@@ -39,10 +39,16 @@ typedef struct valk_ti_scope {
   struct {
     const char *name;
     valk_type_scheme_t scheme;
+    const char *resolved_type;
   } *entries;
   u32 count;
   u32 capacity;
   struct valk_ti_scope *parent;
+  struct valk_ti_scope **children;
+  u32 child_count;
+  u32 child_capacity;
+  i32 start_pos;
+  i32 end_pos;
 } valk_ti_scope_t;
 
 typedef struct {
@@ -51,9 +57,13 @@ typedef struct {
   const char *message;
 } valk_ti_error_t;
 
-#define VALK_TI_MAX_ERRORS 256
-#define VALK_TI_PAGE_SIZE (256 * 1024)
-#define VALK_TI_EXPR_SIZE (256 * 1024)
+#define VALK_TI_MAX_ERRORS       256
+#define VALK_TI_PAGE_SIZE        (256 * 1024)
+#define VALK_TI_EXPR_SIZE        (256 * 1024)
+#define VALK_TI_MAX_TYPE_ARITY    16    // max args to a type constructor (List, Dict, etc.)
+#define VALK_TI_MAX_FUN_PARAMS    64    // max function parameters (some builtins have large sigs)
+#define VALK_TI_MAX_SCHEME_VARS  128    // max quantified variables in a type scheme
+#define VALK_TI_MAX_VAR_MAP       16    // max entries in var substitution map
 
 typedef struct valk_ti_page {
   u8 *data;
@@ -89,11 +99,14 @@ typedef struct {
 
   u64 imported_sig_count;
   u64 imported_type_count;
+
+  char lookup_buf[256];
 } valk_ti_ctx_t;
 
 valk_ti_ctx_t *valk_ti_create(valk_type_env_t *type_env);
 void valk_ti_destroy(valk_ti_ctx_t *ctx);
 void valk_ti_reset(valk_ti_ctx_t *ctx);
+void valk_ti_promote_to_base(valk_ti_ctx_t *ctx);
 
 valk_type_t *valk_ti_fresh_var(valk_ti_ctx_t *ctx);
 valk_type_t *valk_ti_con(valk_ti_ctx_t *ctx, const char *name,
@@ -122,8 +135,6 @@ valk_type_scheme_t *valk_ti_scope_lookup(valk_ti_scope_t *scope,
 valk_type_t *valk_ti_parse_sig_str(valk_ti_ctx_t *ctx, const char *s);
 valk_type_t *valk_ti_lookup_binding(valk_ti_ctx_t *ctx, const char *name);
 const char *valk_ti_lookup_type_name(valk_ti_ctx_t *ctx, const char *name);
-void valk_ti_import_sigs(valk_ti_ctx_t *ctx);
-void valk_ti_import_constructors(valk_ti_ctx_t *ctx);
 void valk_ti_import_new(valk_ti_ctx_t *ctx);
 
 valk_type_t *valk_ti_infer_expr(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,

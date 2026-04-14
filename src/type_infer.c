@@ -1,4 +1,5 @@
 #include "type_infer.h"
+#include "type_infer_internal.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -16,7 +17,7 @@ static valk_ti_page_t *ti_page_new(sz cap) {
   return p;
 }
 
-static void *ti_alloc(valk_ti_ctx_t *ctx, sz bytes) {
+void *ti_alloc(valk_ti_ctx_t *ctx, sz bytes) {
   bytes = (bytes + 7) & ~(sz)7;
   if (ctx->use_expr) {
     if (ctx->expr_off + bytes <= ctx->expr_cap) {
@@ -39,7 +40,7 @@ static void *ti_alloc(valk_ti_ctx_t *ctx, sz bytes) {
   return p;
 }
 
-static const char *ti_strdup(valk_ti_ctx_t *ctx, const char *s) {
+const char *ti_strdup(valk_ti_ctx_t *ctx, const char *s) {
   sz len = strlen(s) + 1;
   char *p = ti_alloc(ctx, len);
   if (!p) return s;
@@ -49,7 +50,11 @@ static const char *ti_strdup(valk_ti_ctx_t *ctx, const char *s) {
 
 static void ti_error(valk_ti_ctx_t *ctx, int line, int col,
                      const char *fmt, ...) {
-  if (ctx->error_count >= VALK_TI_MAX_ERRORS) return;
+  if (ctx->error_count >= VALK_TI_MAX_ERRORS) {
+    if (ctx->error_count == VALK_TI_MAX_ERRORS)
+      fprintf(stderr, "[type-infer] warning: max errors (%d) reached, further errors suppressed\n", VALK_TI_MAX_ERRORS);
+    return;
+  }
   char buf[512];
   va_list ap;
   va_start(ap, fmt);
@@ -74,7 +79,7 @@ valk_ti_ctx_t *valk_ti_create(valk_type_env_t *type_env) {
   ctx->t_num = valk_ti_con(ctx, "Num", nullptr, 0);
   ctx->t_str = valk_ti_con(ctx, "Str", nullptr, 0);
   ctx->t_nil = valk_ti_con(ctx, "Nil", nullptr, 0);
-  ctx->t_bool = valk_ti_con(ctx, "Num", nullptr, 0);
+  ctx->t_bool = valk_ti_con(ctx, "Bool", nullptr, 0);
   return ctx;
 }
 
@@ -89,26 +94,6 @@ void valk_ti_destroy(valk_ti_ctx_t *ctx) {
   }
   free(ctx->expr_buf);
   free(ctx);
-}
-
-void valk_ti_promote_to_base(valk_ti_ctx_t *ctx) {
-  if (!ctx->scope || ctx->scope == ctx->base_scope) return;
-  bool was_expr = ctx->use_expr;
-  ctx->use_expr = false;
-  for (u32 i = 0; i < ctx->scope->count; i++) {
-    const char *name = ctx->scope->entries[i].name;
-    valk_type_t *t = valk_type_find(ctx->scope->entries[i].scheme.type);
-    if (!t || t->kind == VALK_TY_VAR) continue;
-    if (valk_ti_scope_lookup(ctx->base_scope, name)) continue;
-    char buf[256];
-    valk_type_to_str(t, buf, sizeof(buf));
-    valk_type_t *pt = valk_ti_parse_sig_str(ctx, buf);
-    if (pt) {
-      valk_type_scheme_t s = {.type = pt};
-      valk_ti_scope_bind(ctx, ctx->base_scope, ti_strdup(ctx, name), s);
-    }
-  }
-  ctx->use_expr = was_expr;
 }
 
 void valk_ti_reset(valk_ti_ctx_t *ctx) {
@@ -273,7 +258,7 @@ valk_type_t *valk_type_unify(valk_ti_ctx_t *ctx, valk_type_t *a,
   return nullptr;
 }
 
-static void collect_free_vars(valk_type_t *t, u32 *vars, u32 *count,
+void collect_free_vars(valk_type_t *t, u32 *vars, u32 *count,
                               u32 cap) {
   t = valk_type_find(t);
   if (!t) return;
@@ -343,8 +328,12 @@ static valk_type_t *instantiate_rec(valk_ti_ctx_t *ctx, valk_type_t *t,
   }
   if (t->kind == VALK_TY_CON) {
     if (t->con.arity == 0) return t;
-    valk_type_t *args[16];
-    u32 arity = t->con.arity < 16 ? t->con.arity : 16;
+    if (t->con.arity > VALK_TI_MAX_TYPE_ARITY) {
+      fprintf(stderr, "[type-infer] warning: type constructor '%s' has arity %u > max %d, truncating during instantiation\n",
+              t->con.name, t->con.arity, VALK_TI_MAX_TYPE_ARITY);
+    }
+    valk_type_t *args[VALK_TI_MAX_TYPE_ARITY];
+    u32 arity = t->con.arity < VALK_TI_MAX_TYPE_ARITY ? t->con.arity : VALK_TI_MAX_TYPE_ARITY;
     bool changed = false;
     for (u32 i = 0; i < arity; i++) {
       args[i] = instantiate_rec(ctx, t->con.args[i], old_ids, new_vars, n);
@@ -354,8 +343,12 @@ static valk_type_t *instantiate_rec(valk_ti_ctx_t *ctx, valk_type_t *t,
     return valk_ti_con(ctx, t->con.name, args, arity);
   }
   if (t->kind == VALK_TY_FUN) {
-    valk_type_t *params[16];
-    u32 pc = t->fun.param_count < 16 ? t->fun.param_count : 16;
+    if (t->fun.param_count > VALK_TI_MAX_TYPE_ARITY) {
+      fprintf(stderr, "[type-infer] warning: function type has %u params > max %d, truncating during instantiation\n",
+              t->fun.param_count, VALK_TI_MAX_TYPE_ARITY);
+    }
+    valk_type_t *params[VALK_TI_MAX_TYPE_ARITY];
+    u32 pc = t->fun.param_count < VALK_TI_MAX_TYPE_ARITY ? t->fun.param_count : VALK_TI_MAX_TYPE_ARITY;
     bool changed = false;
     for (u32 i = 0; i < pc; i++) {
       params[i] = instantiate_rec(ctx, t->fun.params[i], old_ids, new_vars, n);
@@ -372,8 +365,12 @@ static valk_type_t *instantiate_rec(valk_ti_ctx_t *ctx, valk_type_t *t,
 valk_type_t *valk_type_instantiate(valk_ti_ctx_t *ctx,
                                    valk_type_scheme_t *scheme) {
   if (!scheme || scheme->bound_count == 0) return scheme ? scheme->type : nullptr;
-  valk_type_t *new_vars[128];
-  u32 n = scheme->bound_count < 128 ? scheme->bound_count : 128;
+  if (scheme->bound_count > VALK_TI_MAX_SCHEME_VARS) {
+    fprintf(stderr, "[type-infer] warning: scheme has %u bound vars > max %d, truncating\n",
+            scheme->bound_count, VALK_TI_MAX_SCHEME_VARS);
+  }
+  valk_type_t *new_vars[VALK_TI_MAX_SCHEME_VARS];
+  u32 n = scheme->bound_count < VALK_TI_MAX_SCHEME_VARS ? scheme->bound_count : VALK_TI_MAX_SCHEME_VARS;
   for (u32 i = 0; i < n; i++)
     new_vars[i] = valk_ti_fresh_var(ctx);
   return instantiate_rec(ctx, scheme->type, scheme->bound_vars, new_vars, n);
@@ -383,7 +380,7 @@ valk_ti_scope_t *valk_ti_scope_new(valk_ti_ctx_t *ctx,
                                    valk_ti_scope_t *parent) {
   valk_ti_scope_t *s = ti_alloc(ctx, sizeof(valk_ti_scope_t));
   if (!s) return nullptr;
-  *s = (valk_ti_scope_t){.parent = parent};
+  *s = (valk_ti_scope_t){.parent = parent, .start_pos = -1, .end_pos = -1};
   return s;
 }
 
@@ -440,97 +437,7 @@ valk_type_scheme_t *valk_ti_scope_lookup(valk_ti_scope_t *scope,
   return nullptr;
 }
 
-static void skip_ws(const char *s, int *pos) {
-  while (s[*pos] == ' ' || s[*pos] == '\t') (*pos)++;
-}
-
-typedef struct {
-  char names[16];
-  valk_type_t *vars[16];
-  u32 count;
-} ti_var_map_t;
-
-static valk_type_t *get_or_create_var(valk_ti_ctx_t *ctx, ti_var_map_t *vm, char name) {
-  for (u32 i = 0; i < vm->count; i++)
-    if (vm->names[i] == name) return vm->vars[i];
-  if (vm->count < 16) {
-    valk_type_t *v = valk_ti_fresh_var(ctx);
-    vm->names[vm->count] = name;
-    vm->vars[vm->count] = v;
-    vm->count++;
-    return v;
-  }
-  return valk_ti_fresh_var(ctx);
-}
-
-static valk_type_t *parse_type_str_vm(valk_ti_ctx_t *ctx, const char *s,
-                                      int *pos, ti_var_map_t *vm);
-
-static valk_type_t *parse_type_atom_vm(valk_ti_ctx_t *ctx, const char *s,
-                                       int *pos, ti_var_map_t *vm) {
-  skip_ws(s, pos);
-  if (s[*pos] == '(') {
-    (*pos)++;
-    skip_ws(s, pos);
-    char name[128];
-    int ni = 0;
-    while (s[*pos] && s[*pos] != ' ' && s[*pos] != ')' && ni < 126)
-      name[ni++] = s[(*pos)++];
-    name[ni] = 0;
-    bool is_arrow = (strcmp(name, "->") == 0);
-    valk_type_t *parts[16];
-    u32 count = 0;
-    while (count < 16) {
-      skip_ws(s, pos);
-      if (!s[*pos] || s[*pos] == ')') break;
-      parts[count] = parse_type_str_vm(ctx, s, pos, vm);
-      if (parts[count]) count++;
-    }
-    if (s[*pos] == ')') (*pos)++;
-    if (is_arrow && count >= 1) {
-      valk_type_t *ret = parts[count - 1];
-      return valk_ti_fun(ctx, parts, count - 1, ret);
-    }
-    return valk_ti_con(ctx, ti_strdup(ctx, name), parts, count);
-  }
-  char name[128];
-  int ni = 0;
-  while (s[*pos] && s[*pos] != ' ' && s[*pos] != ')' && ni < 126)
-    name[ni++] = s[(*pos)++];
-  name[ni] = 0;
-  if (!ni) return valk_ti_fresh_var(ctx);
-  if (name[0] >= 'a' && name[0] <= 'z')
-    return get_or_create_var(ctx, vm, name[0]);
-  if (name[1] == 0 && name[0] >= 'A' && name[0] <= 'Z')
-    return get_or_create_var(ctx, vm, name[0]);
-  if (strcmp(name, "Num") == 0) return ctx->t_num;
-  if (strcmp(name, "Str") == 0) return ctx->t_str;
-  if (strcmp(name, "Any") == 0) return valk_ti_fresh_var(ctx);
-  return valk_ti_con(ctx, ti_strdup(ctx, name), nullptr, 0);
-}
-
-static valk_type_t *parse_type_str_vm(valk_ti_ctx_t *ctx, const char *s,
-                                      int *pos, ti_var_map_t *vm) {
-  return parse_type_atom_vm(ctx, s, pos, vm);
-}
-
-valk_type_t *valk_ti_parse_sig_str(valk_ti_ctx_t *ctx, const char *s) {
-  if (!s || !*s) return valk_ti_fresh_var(ctx);
-  int pos = 0;
-  ti_var_map_t vm = {0};
-  return parse_type_str_vm(ctx, s, &pos, &vm);
-}
-
-void valk_ti_import_sigs(valk_ti_ctx_t *ctx) {
-  valk_ti_import_new(ctx);
-}
-
-void valk_ti_import_constructors(valk_ti_ctx_t *ctx) {
-  valk_ti_import_new(ctx);
-}
-
 static const char *sym_name(valk_lval_t *v);
-static valk_type_scheme_t ti_scheme_from_type(valk_ti_ctx_t *ctx, valk_type_t *ft);
 
 static valk_type_t *infer_type_qexpr_node(valk_ti_ctx_t *ctx, valk_lval_t *node,
                                           ti_var_map_t *vm) {
@@ -547,20 +454,30 @@ static valk_type_t *infer_type_qexpr_node(valk_ti_ctx_t *ctx, valk_lval_t *node,
     const char *hname = sym_name(node->cons.head);
     if (!hname) return valk_ti_fresh_var(ctx);
     if (strcmp(hname, "->") == 0) {
-      valk_type_t *parts[16];
+      valk_type_t *parts[VALK_TI_MAX_TYPE_ARITY];
       u32 count = 0;
       valk_lval_t *c = node->cons.tail;
-      while (c && LVAL_TYPE(c) == LVAL_CONS && count < 16) {
+      while (c && LVAL_TYPE(c) == LVAL_CONS) {
+        if (count >= VALK_TI_MAX_TYPE_ARITY) {
+          fprintf(stderr, "[type-infer] warning: function type annotation has more than %d parts, truncating\n",
+                  VALK_TI_MAX_TYPE_ARITY);
+          break;
+        }
         parts[count++] = infer_type_qexpr_node(ctx, c->cons.head, vm);
         c = c->cons.tail;
       }
       if (count >= 1) return valk_ti_fun(ctx, parts, count - 1, parts[count - 1]);
       return valk_ti_fresh_var(ctx);
     }
-    valk_type_t *args[16];
+    valk_type_t *args[VALK_TI_MAX_TYPE_ARITY];
     u32 ac = 0;
     valk_lval_t *c = node->cons.tail;
-    while (c && LVAL_TYPE(c) == LVAL_CONS && ac < 16) {
+    while (c && LVAL_TYPE(c) == LVAL_CONS) {
+      if (ac >= VALK_TI_MAX_TYPE_ARITY) {
+        fprintf(stderr, "[type-infer] warning: type constructor '%s' has more than %d args, truncating\n",
+                hname, VALK_TI_MAX_TYPE_ARITY);
+        break;
+      }
       args[ac++] = infer_type_qexpr_node(ctx, c->cons.head, vm);
       c = c->cons.tail;
     }
@@ -573,10 +490,15 @@ static valk_type_t *valk_ti_infer_type_qexpr(valk_ti_ctx_t *ctx, valk_lval_t *qe
   ti_var_map_t vm = {0};
   const char *hname = sym_name(qexpr->cons.head);
   if (hname && strcmp(hname, "->") == 0) {
-    valk_type_t *parts[16];
+    valk_type_t *parts[VALK_TI_MAX_TYPE_ARITY];
     u32 count = 0;
     valk_lval_t *c = qexpr->cons.tail;
-    while (c && LVAL_TYPE(c) == LVAL_CONS && count < 16) {
+    while (c && LVAL_TYPE(c) == LVAL_CONS) {
+      if (count >= VALK_TI_MAX_TYPE_ARITY) {
+        fprintf(stderr, "[type-infer] warning: sig function type has more than %d parts, truncating\n",
+                VALK_TI_MAX_TYPE_ARITY);
+        break;
+      }
       parts[count++] = infer_type_qexpr_node(ctx, c->cons.head, &vm);
       c = c->cons.tail;
     }
@@ -628,7 +550,7 @@ static valk_type_t *infer_lambda(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
                                    const char *fname) {
   valk_ti_scope_t *child = valk_ti_scope_new(ctx, scope);
   if (!child) return ctx->t_nil;
-  valk_type_t *param_types[32];
+  valk_type_t *param_types[VALK_TI_MAX_FUN_PARAMS];
   u32 param_count = 0;
 
   valk_type_scheme_t *sig = fname ? valk_ti_scope_lookup(scope, fname) : nullptr;
@@ -636,7 +558,12 @@ static valk_type_t *infer_lambda(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope,
   if (sig) sig_t = valk_type_find(valk_type_instantiate(ctx, sig));
 
   valk_lval_t *cur = formals;
-  while (cur && LVAL_TYPE(cur) == LVAL_CONS && param_count < 32) {
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+    if (param_count >= VALK_TI_MAX_FUN_PARAMS) {
+      fprintf(stderr, "[type-infer] warning: lambda '%s' has more than %d params, truncating\n",
+              fname ? fname : "<anon>", VALK_TI_MAX_FUN_PARAMS);
+      break;
+    }
     const char *pname = sym_name(cur->cons.head);
     if (pname && strcmp(pname, "&") == 0) {
       cur = cur->cons.tail;
@@ -742,10 +669,15 @@ static valk_type_t *infer_application(valk_ti_ctx_t *ctx,
                                       valk_ti_scope_t *scope,
                                       valk_type_t *fn_type,
                                       valk_lval_t *args, int line) {
-  valk_type_t *arg_types[32];
+  valk_type_t *arg_types[VALK_TI_MAX_FUN_PARAMS];
   u32 argc = 0;
   valk_lval_t *cur = args;
-  while (cur && LVAL_TYPE(cur) == LVAL_CONS && argc < 32) {
+  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+    if (argc >= VALK_TI_MAX_FUN_PARAMS) {
+      fprintf(stderr, "[type-infer] warning: function application has more than %d args, truncating\n",
+              VALK_TI_MAX_FUN_PARAMS);
+      break;
+    }
     arg_types[argc++] = infer_expr(ctx, scope, cur->cons.head);
     cur = cur->cons.tail;
   }
@@ -1023,129 +955,38 @@ valk_type_t *valk_ti_lookup_binding(valk_ti_ctx_t *ctx, const char *name) {
   return NULL;
 }
 
+static void populate_scope_entries(valk_ti_scope_t *s,
+                                   valk_type_scope_t *out_scope) {
+  for (u32 i = 0; i < s->count; i++) {
+    const char *name = s->entries[i].name;
+    valk_type_t *t = valk_type_find(s->entries[i].scheme.type);
+    if (!t) continue;
+    if (t->kind != VALK_TY_CON || t->con.arity != 0) continue;
+    bool found = false;
+    for (u64 j = 0; j < out_scope->count; j++) {
+      if (strcmp(out_scope->entries[j].var, name) == 0) { found = true; break; }
+    }
+    if (found) continue;
+    if (out_scope->count >= out_scope->capacity) {
+      u64 new_cap = out_scope->capacity ? out_scope->capacity * 2 : 16;
+      typeof(out_scope->entries) new_e = realloc(out_scope->entries,
+        sizeof(out_scope->entries[0]) * new_cap);
+      if (!new_e) continue;
+      out_scope->entries = new_e;
+      out_scope->capacity = new_cap;
+    }
+    out_scope->entries[out_scope->count].var = name;
+    out_scope->entries[out_scope->count].type = t->con.name;
+    out_scope->count++;
+  }
+  for (u32 c = 0; c < s->child_count; c++)
+    populate_scope_entries(s->children[c], out_scope);
+}
+
 void valk_ti_populate_type_scope(valk_ti_ctx_t *ctx, valk_ti_scope_t *ti_scope,
-                                valk_type_scope_t *out_scope) {
+                                 valk_type_scope_t *out_scope) {
   UNUSED(ctx);
-  for (valk_ti_scope_t *s = ti_scope; s; s = s->parent) {
-    for (u32 i = 0; i < s->count; i++) {
-      const char *name = s->entries[i].name;
-      valk_type_t *t = valk_type_find(s->entries[i].scheme.type);
-      if (!t) continue;
-      bool found = false;
-      for (u64 j = 0; j < out_scope->count; j++) {
-        if (strcmp(out_scope->entries[j].var, name) == 0) { found = true; break; }
-      }
-      if (found) continue;
-      if (t->kind == VALK_TY_CON && t->con.arity == 0) {
-        if (out_scope->count >= out_scope->capacity) {
-          u64 new_cap = out_scope->capacity ? out_scope->capacity * 2 : 16;
-          typeof(out_scope->entries) new_e = realloc(out_scope->entries,
-            sizeof(out_scope->entries[0]) * new_cap);
-          if (!new_e) continue;
-          out_scope->entries = new_e;
-          out_scope->capacity = new_cap;
-        }
-        out_scope->entries[out_scope->count].var = name;
-        out_scope->entries[out_scope->count].type = t->con.name;
-        out_scope->count++;
-      }
-    }
-  }
+  populate_scope_entries(ti_scope, out_scope);
 }
 
-static valk_type_scheme_t ti_scheme_from_type(valk_ti_ctx_t *ctx, valk_type_t *ft) {
-  u32 vars[128]; u32 vc = 0;
-  collect_free_vars(ft, vars, &vc, 128);
-  u32 *bv = NULL;
-  if (vc > 0) { bv = ti_alloc(ctx, sizeof(u32) * vc); if (bv) memcpy(bv, vars, sizeof(u32) * vc); }
-  return (valk_type_scheme_t){.type = ft, .bound_vars = bv, .bound_count = vc};
-}
 
-void valk_ti_import_new(valk_ti_ctx_t *ctx) {
-  if (!ctx->type_env) return;
-  bool was_expr = ctx->use_expr;
-  ctx->use_expr = false;
-  for (u64 i = ctx->imported_sig_count; i < ctx->type_env->sig_count; i++) {
-    valk_type_sig_t *sig = ctx->type_env->sigs[i];
-    if (valk_ti_scope_lookup(ctx->scope, sig->name)) continue;
-    ti_var_map_t vm = {0};
-    valk_type_t *params[32];
-    for (u64 p = 0; p < sig->param_count && p < 32; p++) {
-      int pos = 0;
-      params[p] = parse_type_str_vm(ctx, sig->param_types[p], &pos, &vm);
-    }
-    { int pos = 0;
-      valk_type_t *ret = parse_type_str_vm(ctx, sig->return_type, &pos, &vm);
-      valk_type_t *ft = valk_ti_fun(ctx, params, (u32)sig->param_count, ret);
-      valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, sig->name), ti_scheme_from_type(ctx, ft));
-    }
-  }
-  ctx->imported_sig_count = ctx->type_env->sig_count;
-  for (u64 i = ctx->imported_type_count; i < ctx->type_env->type_count; i++) {
-    valk_type_decl_t *decl = ctx->type_env->types[i];
-    valk_type_t *parent_type = valk_ti_con(ctx, ti_strdup(ctx, decl->name), nullptr, 0);
-    for (u64 c = 0; c < decl->constructor_count; c++) {
-      valk_constructor_t *ctor = decl->constructors[c];
-      if (valk_ti_scope_lookup(ctx->scope, ctor->name)) continue;
-      const char *short_name = strrchr(ctor->name, ':');
-      short_name = short_name ? short_name + 1 : ctor->name;
-      if (ctor->field_count == 0) {
-        valk_type_scheme_t s = {.type = parent_type};
-        valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, ctor->name), s);
-        if (short_name != ctor->name)
-          valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, short_name), s);
-      } else {
-        valk_type_t *field_types[32];
-        for (u64 f = 0; f < ctor->field_count && f < 32; f++)
-          field_types[f] = valk_ti_parse_sig_str(ctx, ctor->fields[f].type_name);
-        valk_type_t *ct = valk_ti_fun(ctx, field_types, (u32)ctor->field_count, parent_type);
-        valk_type_scheme_t s = ti_scheme_from_type(ctx, ct);
-        valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, ctor->name), s);
-        if (short_name != ctor->name)
-          valk_ti_scope_bind(ctx, ctx->scope, ti_strdup(ctx, short_name), s);
-      }
-    }
-  }
-  ctx->imported_type_count = ctx->type_env->type_count;
-  ctx->base_scope = ctx->scope;
-  ctx->use_expr = was_expr;
-}
-
-const char *valk_ti_lookup_type_name(valk_ti_ctx_t *ctx, const char *name) {
-  if (!ctx || !name) return NULL;
-  valk_type_t *t = valk_ti_lookup_binding(ctx, name);
-
-  if (!t || t->kind != VALK_TY_CON) return NULL;
-  if (t->con.arity == 0) return t->con.name;
-  static char ti_buf[256];
-  valk_type_to_str(t, ti_buf, sizeof(ti_buf));
-  return ti_buf;
-}
-
-sz valk_type_to_str(valk_type_t *t, char *buf, sz buf_size) {
-  t = valk_type_find(t);
-  if (!t) return snprintf(buf, buf_size, "?");
-  if (t->kind == VALK_TY_VAR)
-    return snprintf(buf, buf_size, "?%u", t->var.id);
-  if (t->kind == VALK_TY_CON) {
-    if (t->con.arity == 0) return snprintf(buf, buf_size, "%s", t->con.name);
-    sz off = snprintf(buf, buf_size, "(%s", t->con.name);
-    for (u32 i = 0; i < t->con.arity && off < buf_size; i++) {
-      off += snprintf(buf + off, buf_size - off, " ");
-      off += valk_type_to_str(t->con.args[i], buf + off, buf_size - off);
-    }
-    if (off < buf_size) off += snprintf(buf + off, buf_size - off, ")");
-    return off;
-  }
-  if (t->kind == VALK_TY_FUN) {
-    sz off = snprintf(buf, buf_size, "(-> ");
-    for (u32 i = 0; i < t->fun.param_count && off < buf_size; i++) {
-      off += valk_type_to_str(t->fun.params[i], buf + off, buf_size - off);
-      if (off < buf_size) off += snprintf(buf + off, buf_size - off, " ");
-    }
-    off += valk_type_to_str(t->fun.ret, buf + off, buf_size - off);
-    if (off < buf_size) off += snprintf(buf + off, buf_size - off, ")");
-    return off;
-  }
-  return snprintf(buf, buf_size, "???");
-}
