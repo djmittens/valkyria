@@ -72,586 +72,7 @@
   (reset-captures)
 })
 
-; --- In-memory symdb helper ---
-
-(fun {make-test-db} {do
-  (= {db} (sqlite/open ":memory:"))
-  (sqlite/exec-script db symdb/schema-sql)
-  (= {r} (sqlite/exec db "ALTER TABLE symbols ADD COLUMN sig TEXT"))
-  db
-})
-
-(fun {setup-with-db} {do
-  (reset-state)
-  (def {lsp/db} (make-test-db))
-  (def {lsp/root-path} "/test")
-})
-
-; --- Seed a document into symdb for testing ---
-
-(fun {seed-doc uri text} {do
-  (lsp/doc-store uri text)
-  (if (nil? lsp/db) {}
-    {symdb/sync-document lsp/db uri text})
-})
-
 (test/run (list
-
-  ; =========================================================================
-  ; Pure helper functions
-  ; =========================================================================
-
-  ; --- doc-store / doc-get ---
-
-  (test/case "doc-store-and-get"
-    {do
-      (reset-state)
-      (lsp/doc-store "file:///a.valk" "hello")
-      (test/assert-eq "hello" (lsp/doc-get "file:///a.valk") "should retrieve stored doc")
-    })
-
-  (test/case "doc-get-missing"
-    {do
-      (reset-state)
-      (test/assert (nil? (lsp/doc-get "file:///missing.valk")) "missing doc returns nil")
-    })
-
-  ; --- lsp/get-doc ---
-
-  (test/case "get-doc-found"
-    {do
-      (reset-state)
-      (lsp/doc-store "file:///x.valk" "content")
-      (= {ctx} (lsp/get-doc (DocParams :textDocument (LspTextDoc :uri "file:///x.valk"))))
-      (test/assert (not (nil? ctx)) "should return DocCtx")
-      (test/assert-eq "file:///x.valk" ctx:uri "uri")
-      (test/assert-eq "content" ctx:text "text")
-    })
-
-  (test/case "get-doc-missing"
-    {do
-      (reset-state)
-      (= {result} (lsp/get-doc (DocParams :textDocument (LspTextDoc :uri "file:///nope"))))
-      (test/assert (nil? result) "should return nil for missing doc")
-    })
-
-  ; --- lsp/get-text-pos ---
-
-  (test/case "get-text-pos-found"
-    {do
-      (reset-state)
-      (lsp/doc-store "file:///t.valk" "hello\nworld")
-      (= {params} (TextDocPosParams :textDocument (LspTextDoc :uri "file:///t.valk") :position (LspPosition :line 1 :character 3)))
-      (= {ctx} (lsp/get-text-pos params))
-      (test/assert (not (nil? ctx)) "should return TextPosCtx")
-      (test/assert-eq 1 ctx:line "line")
-      (test/assert-eq 3 ctx:col "col")
-    })
-
-  (test/case "get-text-pos-missing"
-    {do
-      (reset-state)
-      (= {params} (TextDocPosParams :textDocument (LspTextDoc :uri "file:///no") :position (LspPosition :line 0 :character 0)))
-      (test/assert (nil? (lsp/get-text-pos params)) "should return nil")
-    })
-
-  ; --- lsp/get-word-ctx ---
-
-  (test/case "get-word-ctx-found"
-    {do
-      (reset-state)
-      (lsp/doc-store "file:///w.valk" "hello world")
-      (= {params} (TextDocPosParams :textDocument (LspTextDoc :uri "file:///w.valk") :position (LspPosition :line 0 :character 6)))
-      (= {ctx} (lsp/get-word-ctx params))
-      (test/assert (not (nil? ctx)) "should return WordCtx")
-      (test/assert-eq "world" ctx:word "word should be world")
-    })
-
-  (test/case "get-word-ctx-no-word"
-    {do
-      (reset-state)
-      (lsp/doc-store "file:///w.valk" "  ")
-      (= {params} (TextDocPosParams :textDocument (LspTextDoc :uri "file:///w.valk") :position (LspPosition :line 0 :character 0)))
-      (= {result} (lsp/get-word-ctx params))
-      (test/assert (nil? result) "no word at cursor -> nil")
-    })
-
-  ; --- make-lsp-diag ---
-
-  (test/case "make-lsp-diag"
-    {do
-      (= {d} (list :line 5 :col 3 :end-col 10 :severity 1 :message "bad"))
-      (= {lsp-d} (make-lsp-diag d))
-      (= {range} lsp-d:range)
-      (= {start} range:start)
-      (= {end} range:end)
-      (test/assert-eq 5 start:line "start line")
-      (test/assert-eq 3 start:character "start char")
-      (test/assert-eq 10 end:character "end char")
-      (test/assert-eq 1 lsp-d:severity "severity")
-      (test/assert-eq "valk" lsp-d:source "source")
-      (test/assert-eq "bad" lsp-d:message "message")
-    })
-
-  ; --- lsp/invalidate-known-set / lsp/get-known-set ---
-
-  (test/case "invalidate-known-set"
-    {do
-      (reset-state)
-      (def {lsp/known-set-cache} (list "a" "b"))
-      (lsp/invalidate-known-set)
-      (test/assert (nil? lsp/known-set-cache) "cache should be nil after invalidate")
-    })
-
-  ; --- hover/format-markdown ---
-
-  (test/case "hover-format-with-sig"
-    {do
-      (= {info} (SymInfo "add" 1 2 "Adds numbers" "-> Num Num Num" "/test/math.valk" 10 0 "(add a b)"))
-      (= {md} (hover/format-markdown info "add"))
-      (test/assert (str/starts-with? md "```valk") "should start with code block")
-      (test/assert (not (== -1 (str/index-of md "-> Num Num Num"))) "should contain sig")
-      (test/assert (not (== -1 (str/index-of md "Adds numbers"))) "should contain doc")
-      (test/assert (not (== -1 (str/index-of md "math.valk:11"))) "should contain path:line")
-    })
-
-  (test/case "hover-format-minimal"
-    {do
-      (= {info} (SymInfo "x" 0 0 nil nil "/test.valk" 0 0 nil))
-      (= {md} (hover/format-markdown info "x"))
-      (test/assert (not (== -1 (str/index-of md "x"))) "should contain word")
-    })
-
-  (test/case "hover-format-formals-no-sig"
-    {do
-      (= {info} (SymInfo "f" 1 2 nil nil "/test.valk" 0 0 "(f a b)"))
-      (= {md} (hover/format-markdown info "f"))
-      (test/assert (not (== -1 (str/index-of md "(f a b)"))) "should show formals")
-    })
-
-  (test/case "hover-format-path-no-line"
-    {do
-      (= {info} (SymInfo "g" 0 0 nil nil "/a.valk" 0 0 nil))
-      (= {md} (hover/format-markdown info "g"))
-      (test/assert (not (== -1 (str/index-of md "/a.valk"))) "should contain path")
-    })
-
-  ; --- ref->lsp-location ---
-
-  (test/case "ref-to-lsp-location"
-    {do
-      (= {r} (list :offset 6 :name "world"))
-      (= {loc} (ref->lsp-location "file:///a.valk" "hello\nworld" r))
-      (test/assert-eq "file:///a.valk" loc:uri "uri")
-      (= {range} loc:range)
-      (= {start} range:start)
-      (test/assert-eq 1 start:line "line 1")
-      (test/assert-eq 0 start:character "char 0")
-    })
-
-  ; --- make-snippet-item ---
-
-  (test/case "make-snippet-item"
-    {do
-      (= {s} (FormSnippet :label "fun" :detail "(fun {name} {body})"
-                    :snippet "fun {$1}" :sort "00"))
-      (= {item} (make-snippet-item s))
-      (test/assert-eq "fun" item:label "label")
-      (test/assert-eq 15 item:kind "kind=15 snippet")
-      (test/assert-eq 2 item:insertTextFormat "insertTextFormat=2")
-      (test/assert-eq "00" item:sortText "sortText")
-    })
-
-  ; --- filter-snippets ---
-
-  (test/case "filter-snippets-match"
-    {do
-      (= {result} (filter-snippets "fu" lsp/form-snippets))
-      (test/assert (not (nil? result)) "should match 'fun'")
-      (test/assert-eq "fun" (do (= {r} (head result)) r:label) "label should be fun")
-    })
-
-  (test/case "filter-snippets-no-match"
-    {do
-      (= {result} (filter-snippets "zzz" lsp/form-snippets))
-      (test/assert (nil? result) "no snippet starts with zzz")
-    })
-
-  (test/case "filter-snippets-empty-returns-nil"
-    {do
-      (= {result} (filter-snippets "a" nil))
-      (test/assert (nil? result) "empty list returns nil")
-    })
-
-  ; --- symkind->completion-kind ---
-
-  (test/case "symkind-to-completion-kind"
-    {do
-      (test/assert-eq 3 (symkind->completion-kind SYMKIND_FUNCTION) "function=3")
-      (test/assert-eq 6 (symkind->completion-kind SYMKIND_VARIABLE) "variable=6")
-      (test/assert-eq 7 (symkind->completion-kind SYMKIND_TYPE) "type=7")
-      (test/assert-eq 4 (symkind->completion-kind SYMKIND_CONSTRUCTOR) "constructor=4")
-      (test/assert-eq 6 (symkind->completion-kind 999) "unknown=6 default")
-    })
-
-  ; --- make-sym-completion-item ---
-
-  (test/case "make-sym-completion-item-with-sig"
-    {do
-      (= {s} (CompletionRow :name "add" :kind SYMKIND_FUNCTION :sig "-> Num Num" :doc nil))
-      (= {item} (make-sym-completion-item s))
-      (test/assert-eq "add" item:label "label")
-      (test/assert-eq 3 item:kind "function kind")
-      (test/assert-eq "-> Num Num" item:detail "detail is sig")
-      (test/assert-eq "1-add" item:sortText "sortText")
-    })
-
-  (test/case "make-sym-completion-item-with-doc"
-    {do
-      (= {s} (CompletionRow :name "x" :kind SYMKIND_VARIABLE :sig nil :doc "some doc"))
-      (= {item} (make-sym-completion-item s))
-      (= {doc-obj} item:documentation)
-      (test/assert (not (nil? doc-obj)) "should have documentation")
-      (test/assert-eq "markdown" doc-obj:kind "doc kind")
-      (test/assert-eq "some doc" doc-obj:value "doc value")
-    })
-
-  (test/case "make-sym-completion-item-no-sig-no-doc"
-    {do
-      (= {s} (CompletionRow :name "y" :kind SYMKIND_VARIABLE :sig nil :doc nil))
-      (= {item} (make-sym-completion-item s))
-      (test/assert-eq "" item:detail "no sig = empty detail")
-      (test/assert (nil? item:documentation) "no doc field")
-    })
-
-  ; --- ref->lsp-edit ---
-
-  (test/case "ref-to-lsp-edit"
-    {do
-      (= {r} (list :offset 0 :len 5))
-      (= {edit} (ref->lsp-edit "hello world" r "goodbye"))
-      (test/assert-eq "goodbye" edit:newText "newText")
-      (= {range} edit:range)
-      (= {end} range:end)
-      (test/assert-eq 5 end:character "end char = offset + len")
-    })
-
-  ; --- db-ref->lsp-edit ---
-
-  (test/case "db-ref-to-lsp-edit"
-    {do
-      (= {r} (list :line 3 :col 7))
-      (= {edit} (db-ref->lsp-edit r 4 "newname"))
-      (test/assert-eq "newname" edit:newText "newText")
-      (= {re} edit:range)
-      (= {start} re:start)
-      (test/assert-eq 3 start:line "line")
-      (test/assert-eq 7 start:character "col")
-      (= {end} re:end)
-      (test/assert-eq 11 end:character "col + word-len")
-    })
-
-  ; --- rename/group-by-uri ---
-
-  (test/case "rename-group-by-uri"
-    {do
-      (= {locs} (list
-        (list :uri "a" :edit (list :range 1))
-        (list :uri "b" :edit (list :range 2))
-        (list :uri "a" :edit (list :range 3))))
-      (= {grouped} (rename/group-by-uri locs nil))
-      (= {a-edits} (plist/get grouped "a"))
-      (test/assert (not (nil? a-edits)) "should have edits for a")
-      (= {b-edits} (plist/get grouped "b"))
-      (test/assert (not (nil? b-edits)) "should have edits for b")
-    })
-
-  ; --- rename/make-doc-changes ---
-
-  (test/case "rename-make-doc-changes"
-    {do
-      (= {grouped} (list "file:///a" (list (list :range 1 :newText "x"))))
-      (= {changes} (rename/make-doc-changes grouped))
-      (test/assert (not (nil? changes)) "should have changes")
-      (= {first-change} (head changes))
-      (= {td} first-change:textDocument)
-      (test/assert-eq "file:///a" td:uri "uri")
-    })
-
-  ; --- ref->highlight ---
-
-  (test/case "ref-to-highlight-def"
-    {do
-      (= {r} (list :offset 0 :name "hello" :is-def 1))
-      (= {h} (ref->highlight "hello world" r))
-      (test/assert-eq 3 h:kind "definition = kind 3")
-    })
-
-  (test/case "ref-to-highlight-ref"
-    {do
-      (= {r} (list :offset 0 :name "hello" :is-def 0))
-      (= {h} (ref->highlight "hello world" r))
-      (test/assert-eq 2 h:kind "reference = kind 2")
-    })
-
-  ; --- sig/scan-back ---
-
-  (test/case "sig-scan-back-simple"
-    {do
-      (= {pos} (sig/scan-back "(hello x y" 9 0 0))
-      (test/assert-eq 0 pos "should find opening paren at 0")
-    })
-
-  (test/case "sig-scan-back-nested"
-    {do
-      (= {pos} (sig/scan-back "(foo (bar x) y" 13 0 0))
-      (test/assert-eq 0 pos "should find outer paren at 0")
-    })
-
-  (test/case "sig-scan-back-braces"
-    {do
-      (= {pos} (sig/scan-back "(f {a b} x" 9 0 0))
-      (test/assert-eq 0 pos "should skip braces and find paren at 0")
-    })
-
-  (test/case "sig-scan-back-not-found"
-    {do
-      (= {pos} (sig/scan-back "hello" 4 0 0))
-      (test/assert (nil? pos) "no paren -> nil")
-    })
-
-  ; --- sig/extract-name ---
-
-  (test/case "sig-extract-name"
-    {do
-      (= {name} (sig/extract-name "(hello world)" 0))
-      (test/assert-eq "hello" name "should extract function name")
-    })
-
-  (test/case "sig-extract-name-empty"
-    {do
-      (= {name} (sig/extract-name "( )" 0))
-      (test/assert (nil? name) "empty call -> nil")
-    })
-
-  ; --- sig/count-args ---
-
-  (test/case "sig-count-args-simple"
-    {do
-      (= {count} (sig/count-args "(f a b c)" 2 8 0 0 0 0))
-      (test/assert-eq 3 count "three args: a b c")
-    })
-
-  (test/case "sig-count-args-nested"
-    {do
-      (= {count} (sig/count-args "(f (g x) b)" 2 10 0 0 0 0))
-      (test/assert-eq 1 count "b is 1st word-arg seen at depth 0")
-    })
-
-  (test/case "sig-count-args-zero"
-    {do
-      (= {count} (sig/count-args "(f)" 2 2 0 0 0 0))
-      (test/assert-eq 0 count "no args")
-    })
-
-  ; --- lsp/in-string? ---
-
-  (test/case "in-string-outside"
-    {do
-      (test/assert-eq 0 (lsp/in-string? "hello world" 0 3) "not in string")
-    })
-
-  (test/case "in-string-inside"
-    {do
-      (test/assert-eq 1 (lsp/in-string? "(print \"hello\")" 0 9) "inside string")
-    })
-
-  (test/case "in-string-after-close"
-    {do
-      (test/assert-eq 0 (lsp/in-string? "(print \"hi\") x" 0 13) "after close = outside")
-    })
-
-  ; --- lsp/count-quotes ---
-
-  (test/case "count-quotes-none"
-    {do
-      (test/assert-eq 0 (lsp/count-quotes "hello" 5 0 0) "0 quotes = even = false")
-    })
-
-  (test/case "count-quotes-one"
-    {do
-      (test/assert-eq 1 (lsp/count-quotes "a\"b" 3 0 0) "1 quote = odd = true")
-    })
-
-  (test/case "count-quotes-two"
-    {do
-      (test/assert-eq 0 (lsp/count-quotes "a\"b\"c" 5 0 0) "2 quotes = even = false")
-    })
-
-  (test/case "count-quotes-escaped"
-    {do
-      (test/assert-eq 0 (lsp/count-quotes "a\\\"b" 4 0 0) "escaped quote not counted")
-    })
-
-  ; --- lsp/skip-dir? ---
-
-  (test/case "skip-dir-build"
-    {do
-      (test/assert-eq 1 (lsp/skip-dir? "build") "build should be skipped")
-      (test/assert-eq 1 (lsp/skip-dir? "node_modules") "node_modules skipped")
-      (test/assert-eq 1 (lsp/skip-dir? ".git") ".git skipped")
-    })
-
-  (test/case "skip-dir-allowed"
-    {do
-      (test/assert-eq 0 (lsp/skip-dir? "src") "src not skipped")
-      (test/assert-eq 0 (lsp/skip-dir? "test") "test not skipped")
-    })
-
-  ; --- lsp/next-progress-token ---
-
-  (test/case "next-progress-token"
-    {do
-      (reset-state)
-      (= {t1} (lsp/next-progress-token))
-      (= {t2} (lsp/next-progress-token))
-      (test/assert-eq 1 t1 "first token = 1")
-      (test/assert-eq 2 t2 "second token = 2")
-    })
-
-  ; --- fold/collect ---
-
-  (test/case "fold-collect-fun"
-    {do
-      (= {text} "(fun {f x}\n  {+ x 1})")
-      (= {ast} (parse text))
-      (= {ranges} (fold/collect ast text))
-      (test/assert (not (nil? ranges)) "should find foldable fun form")
-      (= {r} (head ranges))
-      (test/assert-eq 0 r:startLine "starts at line 0")
-      (test/assert-eq "region" r:kind "kind is region")
-    })
-
-  (test/case "fold-collect-single-line"
-    {do
-      (= {text} "(fun {f} {1})")
-      (= {ast} (parse text))
-      (= {ranges} (fold/collect ast text))
-      (test/assert (nil? ranges) "single-line fun should not fold")
-    })
-
-  ; --- link/collect-loads ---
-
-  (test/case "link-collect-loads"
-    {do
-      (= {text} "(load \"src/prelude.valk\")\n(fun {f} {1})")
-      (= {ast} (parse text))
-      (= {links} (link/collect-loads ast text "/root"))
-      (test/assert (not (nil? links)) "should find load link")
-      (= {link} (head links))
-      (= {target} link:target)
-      (test/assert (not (== -1 (str/index-of target "prelude.valk"))) "target has filename")
-    })
-
-  (test/case "link-collect-no-loads"
-    {do
-      (= {text} "(fun {f} {1})")
-      (= {ast} (parse text))
-      (= {links} (link/collect-loads ast text "/root"))
-      (test/assert (nil? links) "no loads = no links")
-    })
-
-  ; --- sel/find-ranges ---
-
-  (test/case "sel-find-ranges"
-    {do
-      (= {text} "(fun {f x}\n  (+ x 1))")
-      (= {positions} (list (list :line 1 :character 5)))
-      (= {ranges} (sel/find-ranges text (parse text) positions))
-      (test/assert (not (nil? ranges)) "should return ranges")
-      (= {first-sel} (head ranges))
-      (test/assert (not (nil? first-sel:range)) "should have range")
-    })
-
-  ; --- sel/build-nested ---
-
-  (test/case "sel-build-nested-empty"
-    {do
-      (= {result} (sel/build-nested nil))
-      (test/assert (not (nil? result:range)) "fallback range")
-    })
-
-  (test/case "sel-build-nested-single"
-    {do
-      (= {r} (list :start (list :line 0 :character 0) :end (list :line 0 :character 5)))
-      (= {result} (sel/build-nested (list r)))
-      (= {rng} result:range)
-      (= {start-pos} rng:start)
-      (test/assert-eq 0 start-pos:line "line 0")
-      (test/assert (nil? result:parent) "no parent for single range")
-    })
-
-  (test/case "sel-build-nested-two"
-    {do
-      (= {r1} (list :start (list :line 0 :character 0) :end (list :line 0 :character 10)))
-      (= {r2} (list :start (list :line 0 :character 2) :end (list :line 0 :character 5)))
-      (= {result} (sel/build-nested (list r1 r2)))
-      (test/assert (not (nil? result:parent)) "should have parent")
-    })
-
-  ; --- sem/filter-range ---
-
-  (test/case "sem-filter-range-all-in"
-    {do
-      (= {tokens} (sem/parse-flat (list 0 5 3 1 0  1 2 4 0 0)))
-      (= {filtered} (sem/filter-range tokens 0 10 0 nil))
-      (test/assert-eq 2 (len filtered) "all 2 tokens in range")
-    })
-
-  (test/case "sem-filter-range-partial"
-    {do
-      (= {tokens} (sem/parse-flat (list 0 5 3 1 0  5 2 4 0 0  1 1 2 0 0)))
-      (= {filtered} (sem/filter-range tokens 0 3 0 nil))
-      (test/assert-eq 1 (len filtered) "only first token in range 0-3")
-    })
-
-  (test/case "sem-filter-range-empty"
-    {do
-      (= {tokens} (sem/parse-flat (list 10 5 3 1 0)))
-      (= {filtered} (sem/filter-range tokens 0 3 0 nil))
-      (test/assert (nil? filtered) "token beyond range -> empty")
-    })
-
-  ; --- ca/extract-name-from-msg ---
-
-  (test/case "ca-extract-name"
-    {do
-      (test/assert-eq "foo" (ca/extract-name-from-msg "Symbol 'foo' is not defined")
-        "should extract foo")
-      (test/assert-eq "bar" (ca/extract-name-from-msg "Function 'bar' is not defined")
-        "should extract bar")
-    })
-
-  (test/case "ca-extract-name-short-msg"
-    {do
-      (test/assert (nil? (ca/extract-name-from-msg "no quotes")) "no quotes -> nil")
-    })
-
-  ; --- ca/check-undefined ---
-
-  (test/case "ca-check-undefined-symbol"
-    {do
-      (reset-state)
-      (= {d} (list :message "Symbol 'xyz' is not defined" :range (list :start (list :line 0 :character 0))))
-      (= {actions} (ca/check-undefined "Symbol 'xyz' is not defined" d "file:///a.valk"))
-      (test/assert (nil? actions) "no db = no suggestions")
-    })
-
-  (test/case "ca-check-undefined-non-match"
-    {do
-      (= {actions} (ca/check-undefined "Some other error" nil "file:///a"))
-      (test/assert (nil? actions) "non-matching message -> nil")
-    })
 
   ; =========================================================================
   ; Handler tests (with response capture)
@@ -663,7 +84,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-hover 1 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///x") :position (LspPosition :line 0 :character 0)))
+      (lsp/nav/handle-hover 1 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///x") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should send response")
       (test/assert-eq 1 resp:id "id=1")
@@ -674,7 +95,7 @@
       (reset-state)
       (lsp/doc-store "file:///h.valk" "hello world")
       (reset-captures)
-      (handle-hover 2 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///h.valk") :position (LspPosition :line 0 :character 0)))
+      (lsp/nav/handle-hover 2 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///h.valk") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should send response")
       (= {result} resp:result)
@@ -690,7 +111,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-completion 3 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///c") :position (LspPosition :line 0 :character 0)))
+      (lsp/nav/handle-completion 3 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///c") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
     })
@@ -700,7 +121,7 @@
       (reset-state)
       (lsp/doc-store "file:///c.valk" "(fu")
       (reset-captures)
-      (handle-completion 4 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///c.valk") :position (LspPosition :line 0 :character 3)))
+      (lsp/nav/handle-completion 4 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///c.valk") :position (LspPosition :line 0 :character 3)))
       (= {resp} (last-response))
       (= {result} resp:result)
       (= {items} result:items)
@@ -712,7 +133,7 @@
       (reset-state)
       (lsp/doc-store "file:///s.valk" "(print \"hello\")")
       (reset-captures)
-      (handle-completion 5 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///s.valk") :position (LspPosition :line 0 :character 9)))
+      (lsp/nav/handle-completion 5 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///s.valk") :position (LspPosition :line 0 :character 9)))
       (= {resp} (last-response))
       (= {result} resp:result)
       (= {items} result:items)
@@ -725,7 +146,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-semantic-tokens 6 (DocParams :textDocument (LspTextDoc :uri "file:///s")))
+      (lsp/nav/handle-semantic-tokens 6 (DocParams :textDocument (LspTextDoc :uri "file:///s")))
       (= {resp} (last-response))
       (= {result} resp:result)
       (test/assert (nil? result:data) "no data for missing doc")
@@ -736,7 +157,7 @@
       (reset-state)
       (lsp/doc-store "file:///tok.valk" "(fun {f x} {+ x 1})")
       (reset-captures)
-      (handle-semantic-tokens 7 (DocParams :textDocument (LspTextDoc :uri "file:///tok.valk")))
+      (lsp/nav/handle-semantic-tokens 7 (DocParams :textDocument (LspTextDoc :uri "file:///tok.valk")))
       (= {resp} (last-response))
       (= {result} resp:result)
       (test/assert (not (nil? result:data)) "should have token data")
@@ -749,7 +170,7 @@
       (reset-state)
       (lsp/doc-store "file:///tr.valk" "(fun {f x}\n  (+ x 1))")
       (reset-captures)
-      (handle-semantic-tokens-range 8
+      (lsp/handle-semantic-tokens-range 8
         (RangeParams :textDocument (LspTextDoc :uri "file:///tr.valk")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 99))))
       (= {resp} (last-response))
@@ -763,7 +184,7 @@
       (reset-state)
       (lsp/doc-store "file:///r.valk" "hello world")
       (reset-captures)
-      (handle-prepare-rename 9
+      (lsp/nav/handle-prepare-rename 9
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///r.valk") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -774,7 +195,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-prepare-rename 10
+      (lsp/nav/handle-prepare-rename 10
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///nope") :position (LspPosition :line 0 :character 0)))
       (= {err} (last-error))
       (test/assert (not (nil? err)) "should send error")
@@ -789,7 +210,7 @@
       (def {lsp/root-path} "/project")
       (lsp/doc-store "file:///doc.valk" "(load \"src/prelude.valk\")")
       (reset-captures)
-      (handle-document-link 11
+      (lsp/features/handle-document-link 11
         (DocParams :textDocument (LspTextDoc :uri "file:///doc.valk")))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -800,7 +221,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-document-link 12
+      (lsp/features/handle-document-link 12
         (DocParams :textDocument (LspTextDoc :uri "file:///nope")))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no doc -> nil")
@@ -813,7 +234,7 @@
       (reset-state)
       (lsp/doc-store "file:///fold.valk" "(fun {f x}\n  (+ x 1))")
       (reset-captures)
-      (handle-folding-range 13
+      (lsp/features/handle-folding-range 13
         (DocParams :textDocument (LspTextDoc :uri "file:///fold.valk")))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -824,7 +245,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-folding-range 14
+      (lsp/features/handle-folding-range 14
         (DocParams :textDocument (LspTextDoc :uri "file:///nope")))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no doc -> nil")
@@ -930,7 +351,7 @@
       (reset-state)
       (lsp/doc-store "file:///inc.valk" "(+ 1 2)")
       (reset-captures)
-      (handle-did-change
+      (lsp/workspace/handle-did-change
         (ChangeParams
           :textDocument (LspTextDoc :uri "file:///inc.valk")
           :contentChanges (list
@@ -946,7 +367,7 @@
       (reset-state)
       (lsp/doc-store "file:///full.valk" "old")
       (reset-captures)
-      (handle-did-change
+      (lsp/workspace/handle-did-change
         (ChangeParams
           :textDocument (LspTextDoc :uri "file:///full.valk")
           :contentChanges (list (list :text "new"))))
@@ -959,7 +380,7 @@
       (reset-state)
       (lsp/doc-store "file:///ver.valk" "x")
       (= {v1} lsp/doc-version)
-      (handle-did-change
+      (lsp/workspace/handle-did-change
         (ChangeParams
           :textDocument (LspTextDoc :uri "file:///ver.valk")
           :contentChanges (list (list :text "y"))))
@@ -970,7 +391,7 @@
     {do
       (reset-state)
       (= {v1} lsp/doc-version)
-      (handle-did-open
+      (lsp/workspace/handle-did-open
         (OpenParams :textDocument (LspTextDocText :uri "file:///op.valk" :text "hello")))
       (test/assert (> lsp/doc-version v1) "version should increment on open")
       (test/assert-eq "hello" (lsp/doc-get "file:///op.valk") "text stored")
@@ -982,7 +403,7 @@
       (lsp/doc-store "file:///cl.valk" "text")
       (lsp/get-line-index "file:///cl.valk" "text")
       (reset-captures)
-      (handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
+      (lsp/workspace/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
       (test/assert (nil? (lsp/doc-get "file:///cl.valk")) "doc removed")
       (test/assert (nil? (dict/get lsp/line-index-cache "file:///cl.valk")) "line index removed")
     })
@@ -994,7 +415,7 @@
       (reset-state)
       (lsp/doc-store "file:///sel.valk" "(fun {f x} (+ x 1))")
       (reset-captures)
-      (handle-selection-range 15
+      (lsp/features/handle-selection-range 15
         (SelectionParams :textDocument (LspTextDoc :uri "file:///sel.valk")
               :positions (list (list :line 0 :character 14))))
       (= {resp} (last-response))
@@ -1009,7 +430,7 @@
       (reset-state)
       (lsp/doc-store "file:///ih.valk" "(fun {add a b} {+ a b})\n(add 1 2)")
       (reset-captures)
-      (handle-inlay-hints 16
+      (lsp/features/handle-inlay-hints 16
         (RangeParams :textDocument (LspTextDoc :uri "file:///ih.valk")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 10 :character 0))))
       (= {resp} (last-response))
@@ -1020,7 +441,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-inlay-hints 17
+      (lsp/features/handle-inlay-hints 17
         (RangeParams :textDocument (LspTextDoc :uri "file:///nope")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 0))))
       (= {resp} (last-response))
@@ -1034,7 +455,7 @@
       (reset-state)
       (lsp/doc-store "file:///hl.valk" "(fun {f x} (+ x 1))")
       (reset-captures)
-      (handle-document-highlight 18
+      (lsp/features/handle-document-highlight 18
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///hl.valk") :position (LspPosition :line 0 :character 9)))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -1045,7 +466,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-document-highlight 19
+      (lsp/features/handle-document-highlight 19
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///nope") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no doc -> nil")
@@ -1057,7 +478,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-signature-help 20
+      (lsp/features/handle-signature-help 20
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///nope") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
@@ -1068,7 +489,7 @@
       (reset-state)
       (lsp/doc-store "file:///sig.valk" "(fun {add a b} {+ a b})\n(add 1 ")
       (reset-captures)
-      (handle-signature-help 21
+      (lsp/features/handle-signature-help 21
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///sig.valk") :position (LspPosition :line 1 :character 6)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
@@ -1080,7 +501,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-references 22
+      (lsp/nav/handle-references 22
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///nope") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no doc -> nil")
@@ -1091,7 +512,7 @@
       (reset-state)
       (lsp/doc-store "file:///ref.valk" "(fun {f x}\n  (+ x 1))")
       (reset-captures)
-      (handle-references 23
+      (lsp/nav/handle-references 23
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///ref.valk") :position (LspPosition :line 1 :character 5)))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -1105,7 +526,7 @@
       (reset-state)
       (lsp/doc-store "file:///d.valk" "hello world")
       (reset-captures)
-      (handle-definition 24
+      (lsp/nav/handle-definition 24
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///d.valk") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
@@ -1117,7 +538,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-document-symbols 25
+      (lsp/nav/handle-document-symbols 25
         (DocParams :textDocument (LspTextDoc :uri "file:///ds.valk")))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no db -> nil")
@@ -1129,7 +550,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-workspace-symbols 26 (list :query "test"))
+      (lsp/nav/handle-workspace-symbols 26 (list :query "test"))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no db -> nil")
     })
@@ -1140,7 +561,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-code-lens 27
+      (lsp/features/handle-code-lens 27
         (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no db -> nil")
@@ -1152,7 +573,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-code-action 28
+      (lsp/features/handle-code-action 28
         (CodeActionParams :textDocument (LspTextDoc :uri "file:///ca.valk")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 0))
               :context (CodeActionContext :diagnostics nil)))
@@ -1164,7 +585,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-code-action 29
+      (lsp/features/handle-code-action 29
         (CodeActionParams :textDocument (LspTextDoc :uri "file:///ca.valk")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 5))
               :context (CodeActionContext :diagnostics
@@ -1181,7 +602,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (handle-rename 30
+      (lsp/nav/handle-rename 30
         (RenameParams :textDocument (LspTextDoc :uri "file:///nope")
               :position (LspPosition :line 0 :character 0)
               :newName "renamed"))
@@ -1196,7 +617,7 @@
       (reset-state)
       (lsp/doc-store "file:///close.valk" "text")
       (reset-captures)
-      (handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///close.valk")))
+      (lsp/workspace/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///close.valk")))
       (= {notif} (last-notification))
       (test/assert (not (nil? notif)) "should send notification")
       (test/assert-eq "textDocument/publishDiagnostics" notif:method "method")
@@ -1286,108 +707,6 @@
       (test/assert (nil? (last-error)) "unknown notif -> no error")
     })
 
-  ; =========================================================================
-  ; Tests with in-memory symdb
-  ; =========================================================================
-
-  (test/case "handle-document-symbols-with-db"
-    {do
-      (setup-with-db)
-      (= {text} "(fun {my-func x} {+ x 1})\n(def {MY_VAR} 42)")
-      (seed-doc "file:///test/ds.valk" text)
-      (reset-captures)
-      (handle-document-symbols 31
-        (DocParams :textDocument (LspTextDoc :uri "file:///test/ds.valk")))
-      (= {resp} (last-response))
-      (= {result} resp:result)
-      (test/assert (not (nil? result)) "should have symbols")
-    })
-
-  (test/case "handle-workspace-symbols-with-db"
-    {do
-      (setup-with-db)
-      (seed-doc "file:///test/ws.valk" "(fun {alpha x} {x})\n(fun {beta y} {y})")
-      (reset-captures)
-      (handle-workspace-symbols 32 (list :query "alp"))
-      (= {resp} (last-response))
-      (= {result} resp:result)
-      (test/assert (not (nil? result)) "should find alpha")
-    })
-
-  (test/case "handle-workspace-symbols-empty-query"
-    {do
-      (setup-with-db)
-      (seed-doc "file:///test/ws2.valk" "(fun {gamma} {1})")
-      (reset-captures)
-      (handle-workspace-symbols 33 (list :query ""))
-      (= {resp} (last-response))
-      (= {result} resp:result)
-      (test/assert (not (nil? result)) "empty query -> all symbols")
-    })
-
-  (test/case "handle-definition-with-db"
-    {do
-      (setup-with-db)
-      (= {text} "(fun {target x} {x})\n(target 42)")
-      (seed-doc "file:///test/def.valk" text)
-      (lsp/doc-store "file:///test/def.valk" text)
-      (reset-captures)
-      (handle-definition 34
-        (TextDocPosParams :textDocument (LspTextDoc :uri "file:///test/def.valk") :position (LspPosition :line 1 :character 1)))
-      (= {resp} (last-response))
-      (test/assert (not (nil? resp)) "should respond")
-    })
-
-  (test/case "handle-code-lens-with-db"
-    {do
-      (setup-with-db)
-      (= {text} "(fun {my-fn x} {x})\n(my-fn 42)")
-      (seed-doc "file:///test/cl.valk" text)
-      (reset-captures)
-      (handle-code-lens 35
-        (DocParams :textDocument (LspTextDoc :uri "file:///test/cl.valk")))
-      (= {resp} (last-response))
-      (= {result} resp:result)
-      (test/assert (not (nil? result)) "should have code lenses")
-    })
-
-  (test/case "lens-build-from-syms-empty"
-    {do
-      (test/assert (nil? (lens/build-from-syms nil nil)) "nil syms -> nil lenses")
-    })
-
-  (test/case "handle-completion-with-db"
-    {do
-      (setup-with-db)
-      (= {text} "(fun {my-awesome-fn x} {x})")
-      (seed-doc "file:///test/comp.valk" text)
-      (lsp/doc-store "file:///test/comp.valk" "(my-awe")
-      (reset-captures)
-      (handle-completion 36
-        (TextDocPosParams :textDocument (LspTextDoc :uri "file:///test/comp.valk") :position (LspPosition :line 0 :character 7)))
-      (= {resp} (last-response))
-      (= {result} resp:result)
-      (= {items} result:items)
-      (test/assert (not (nil? items)) "should have completion items from db")
-    })
-
-  (test/case "handle-code-action-with-db"
-    {do
-      (setup-with-db)
-      (seed-doc "file:///test/ca.valk" "(fun {println x} {x})")
-      (reset-captures)
-      (handle-code-action 37
-        (CodeActionParams :textDocument (LspTextDoc :uri "file:///test/ca.valk")
-              :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 6))
-              :context (CodeActionContext :diagnostics
-                (list (list :message "Function 'printl' is not defined"
-                            :range (list :start (list :line 0 :character 0)
-                                         :end (list :line 0 :character 6)))))))
-      (= {resp} (last-response))
-      (= {result} resp:result)
-      (test/assert (not (nil? result)) "should suggest println")
-    })
-
   ; --- handle-rename with scoped refs ---
 
   (test/case "handle-rename-scoped"
@@ -1395,7 +714,7 @@
       (reset-state)
       (lsp/doc-store "file:///rn.valk" "(fun {f x}\n  (+ x 1))")
       (reset-captures)
-      (handle-rename 38
+      (lsp/nav/handle-rename 38
         (RenameParams :textDocument (LspTextDoc :uri "file:///rn.valk")
               :position (LspPosition :line 1 :character 5)
               :newName "y"))
@@ -1475,4 +794,4 @@
       (test/assert-eq :true caps:referencesProvider "references")
     })
 
-) {:suite-name "LSP Handlers" :debug 0})
+) {:suite-name "LSP Handlers Core" :debug 0})

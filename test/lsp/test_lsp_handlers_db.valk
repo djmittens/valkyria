@@ -1,0 +1,202 @@
+(load "stdlib/diag/symdb.valk")
+(load "scripts/lsp/analysis.valk")
+(load "stdlib/diag/validate.valk")
+(load "scripts/lsp/hints.valk")
+(load "scripts/lsp/lsp.valk")
+(load "stdlib/test/test.valk")
+
+; --- Response capture stubs ---
+
+(def {*captured-responses*} nil)
+(def {*captured-errors*} nil)
+(def {*captured-notifications*} nil)
+(def {*aio-stopped*} 0)
+(def {*aio-dispatched*} nil)
+
+(fun {lsp/send-response id result} {do
+  (def {*captured-responses*}
+    (qcons (list :id id :result result) *captured-responses*))
+  nil
+})
+
+(fun {lsp/send-error id code message} {do
+  (def {*captured-errors*}
+    (qcons (list :id id :code code :message message) *captured-errors*))
+  nil
+})
+
+(fun {lsp/send-notification method params} {do
+  (def {*captured-notifications*}
+    (qcons (list :method method :params params) *captured-notifications*))
+  nil
+})
+
+(fun {lsp/send-request id method params} {nil})
+(fun {aio/stop sys} {def {*aio-stopped*} 1})
+(fun {aio/dispatch sys fn arg cb} {do (= {r} (fn arg)) (cb r)})
+
+(fun {reset-captures} {do
+  (def {*captured-responses*} nil)
+  (def {*captured-errors*} nil)
+  (def {*captured-notifications*} nil)
+  (def {*aio-stopped*} 0)
+  (def {*aio-dispatched*} nil)
+})
+
+(fun {last-response} {
+  if (nil? *captured-responses*) {nil}
+  {head *captured-responses*}
+})
+
+(fun {last-error} {
+  if (nil? *captured-errors*) {nil}
+  {head *captured-errors*}
+})
+
+(fun {last-notification} {
+  if (nil? *captured-notifications*) {nil}
+  {head *captured-notifications*}
+})
+
+; --- State reset helper ---
+
+(fun {reset-state} {do
+  (def {lsp/documents} (dict/new))
+  (def {lsp/db} nil)
+  (def {lsp/root-path} nil)
+  (def {lsp/known-set-cache} nil)
+  (def {lsp/progress-token} 0)
+  (def {lsp/doc-version} 0)
+  (def {lsp/line-index-cache} (dict/new))
+  (def {lsp/ast-cache} (dict/new))
+  (reset-captures)
+})
+
+; --- In-memory symdb helper ---
+
+(fun {make-test-db} {do
+  (= {db} (sqlite/open ":memory:"))
+  (sqlite/exec-script db symdb/schema-sql)
+  (= {r} (sqlite/exec db "ALTER TABLE symbols ADD COLUMN sig TEXT"))
+  db
+})
+
+(fun {setup-with-db} {do
+  (reset-state)
+  (def {lsp/db} (make-test-db))
+  (def {lsp/root-path} "/test")
+})
+
+; --- Seed a document into symdb for testing ---
+
+(fun {seed-doc uri text} {do
+  (lsp/doc-store uri text)
+  (if (nil? lsp/db) {}
+    {symdb/sync-document lsp/db uri text})
+})
+
+(test/run (list
+
+  ; =========================================================================
+  ; Tests with in-memory symdb
+  ; =========================================================================
+
+  (test/case "handle-document-symbols-with-db"
+    {do
+      (setup-with-db)
+      (= {text} "(fun {my-func x} {+ x 1})\n(def {MY_VAR} 42)")
+      (seed-doc "file:///test/ds.valk" text)
+      (reset-captures)
+      (lsp/nav/handle-document-symbols 31
+        (DocParams :textDocument (LspTextDoc :uri "file:///test/ds.valk")))
+      (= {resp} (last-response))
+      (= {result} resp:result)
+      (test/assert (not (nil? result)) "should have symbols")
+    })
+
+  (test/case "handle-workspace-symbols-with-db"
+    {do
+      (setup-with-db)
+      (seed-doc "file:///test/ws.valk" "(fun {alpha x} {x})\n(fun {beta y} {y})")
+      (reset-captures)
+      (lsp/nav/handle-workspace-symbols 32 (list :query "alp"))
+      (= {resp} (last-response))
+      (= {result} resp:result)
+      (test/assert (not (nil? result)) "should find alpha")
+    })
+
+  (test/case "handle-workspace-symbols-empty-query"
+    {do
+      (setup-with-db)
+      (seed-doc "file:///test/ws2.valk" "(fun {gamma} {1})")
+      (reset-captures)
+      (lsp/nav/handle-workspace-symbols 33 (list :query ""))
+      (= {resp} (last-response))
+      (= {result} resp:result)
+      (test/assert (not (nil? result)) "empty query -> all symbols")
+    })
+
+  (test/case "handle-definition-with-db"
+    {do
+      (setup-with-db)
+      (= {text} "(fun {target x} {x})\n(target 42)")
+      (seed-doc "file:///test/def.valk" text)
+      (lsp/doc-store "file:///test/def.valk" text)
+      (reset-captures)
+      (lsp/nav/handle-definition 34
+        (TextDocPosParams :textDocument (LspTextDoc :uri "file:///test/def.valk") :position (LspPosition :line 1 :character 1)))
+      (= {resp} (last-response))
+      (test/assert (not (nil? resp)) "should respond")
+    })
+
+  (test/case "handle-code-lens-with-db"
+    {do
+      (setup-with-db)
+      (= {text} "(fun {my-fn x} {x})\n(my-fn 42)")
+      (seed-doc "file:///test/cl.valk" text)
+      (reset-captures)
+      (lsp/features/handle-code-lens 35
+        (DocParams :textDocument (LspTextDoc :uri "file:///test/cl.valk")))
+      (= {resp} (last-response))
+      (= {result} resp:result)
+      (test/assert (not (nil? result)) "should have code lenses")
+    })
+
+  (test/case "lens-build-from-syms-empty"
+    {do
+      (test/assert (nil? (lens/build-from-syms nil nil)) "nil syms -> nil lenses")
+    })
+
+  (test/case "handle-completion-with-db"
+    {do
+      (setup-with-db)
+      (= {text} "(fun {my-awesome-fn x} {x})")
+      (seed-doc "file:///test/comp.valk" text)
+      (lsp/doc-store "file:///test/comp.valk" "(my-awe")
+      (reset-captures)
+      (lsp/nav/handle-completion 36
+        (TextDocPosParams :textDocument (LspTextDoc :uri "file:///test/comp.valk") :position (LspPosition :line 0 :character 7)))
+      (= {resp} (last-response))
+      (= {result} resp:result)
+      (= {items} result:items)
+      (test/assert (not (nil? items)) "should have completion items from db")
+    })
+
+  (test/case "handle-code-action-with-db"
+    {do
+      (setup-with-db)
+      (seed-doc "file:///test/ca.valk" "(fun {println x} {x})")
+      (reset-captures)
+      (lsp/features/handle-code-action 37
+        (CodeActionParams :textDocument (LspTextDoc :uri "file:///test/ca.valk")
+              :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 6))
+              :context (CodeActionContext :diagnostics
+                (list (list :message "Function 'printl' is not defined"
+                            :range (list :start (list :line 0 :character 0)
+                                         :end (list :line 0 :character 6)))))))
+      (= {resp} (last-response))
+      (= {result} resp:result)
+      (test/assert (not (nil? result)) "should suggest println")
+    })
+
+) {:suite-name "LSP Handlers DB" :debug 0})

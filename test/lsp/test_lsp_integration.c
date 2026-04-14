@@ -1,8 +1,10 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -101,6 +103,23 @@ static char *lsp_read_response(lsp_reader_t *r, int id, int timeout_ms) {
   return NULL;
 }
 
+// Read next response matching a string-valued id (JSON-RPC 2.0 allows either
+// number or string IDs). Matches `"id":"<str_id>"` in the response.
+static char *lsp_read_response_str(lsp_reader_t *r, const char *str_id, int timeout_ms) {
+  char id_pattern[64];
+  snprintf(id_pattern, sizeof(id_pattern), "\"id\":\"%s\"", str_id);
+
+  long start = valk_get_millis();
+  while (valk_get_millis() - start < timeout_ms) {
+    int remaining = timeout_ms - (int)(valk_get_millis() - start);
+    char *msg = lsp_reader_next(r, remaining);
+    if (!msg) return NULL;
+    if (strstr(msg, id_pattern)) return msg;
+    free(msg);
+  }
+  return NULL;
+}
+
 // Wait for a notification containing a substring
 static char *lsp_wait_notification(lsp_reader_t *r, const char *match, int timeout_ms) {
   long start = valk_get_millis();
@@ -155,7 +174,9 @@ static void test_timeout_stop(void) {
 }
 
 // Fork LSP process. Closes inherited fds to prevent framework pipe leaks.
-static lsp_t lsp_spawn(void) {
+// If stderr_path is non-NULL, redirects child stderr to that file (for
+// race condition tests that need to inspect stderr after).
+static lsp_t lsp_spawn_with_stderr(const char *stderr_path) {
   int stdin_pipe[2], stdout_pipe[2];
   pipe(stdin_pipe);
   pipe(stdout_pipe);
@@ -172,8 +193,13 @@ static lsp_t lsp_spawn(void) {
     close(stdin_pipe[0]);
     close(stdout_pipe[1]);
 
-    int devnull = open("/dev/null", O_WRONLY);
-    if (devnull >= 0) { dup2(devnull, 2); close(devnull); }
+    int errfd;
+    if (stderr_path) {
+      errfd = open(stderr_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    } else {
+      errfd = open("/dev/null", O_WRONLY);
+    }
+    if (errfd >= 0) { dup2(errfd, 2); close(errfd); }
 
     char valk_path[256];
     snprintf(valk_path, sizeof(valk_path), "%s/valk", VALK_BUILD_DIR);
@@ -187,6 +213,10 @@ static lsp_t lsp_spawn(void) {
   lsp_t lsp = {.pid = pid, .write_fd = stdin_pipe[1], .read_fd = stdout_pipe[0]};
   lsp_reader_init(&lsp.reader, lsp.read_fd);
   return lsp;
+}
+
+static lsp_t lsp_spawn(void) {
+  return lsp_spawn_with_stderr(NULL);
 }
 
 // Initialize + send initialized. Returns init response (caller frees) or NULL.
@@ -386,6 +416,28 @@ static void test_unknown_method_error(VALK_TEST_ARGS()) {
   END_TEST();
 }
 
+// JSON-RPC 2.0 allows string request IDs. Verify the LSP server echoes
+// a string ID back in the response (previously it silently ignored them).
+static void test_string_request_id(VALK_TEST_ARGS()) {
+  BEGIN_TEST();
+  INIT_OR_BAIL();
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":\"req-abc-123\",\"method\":\"bogus/method\","
+    "\"params\":{}}");
+  char *resp = lsp_read_response_str(&lsp.reader, "req-abc-123", MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "should get response with string id");
+  if (!resp) { lsp_kill(&lsp); test_timeout_stop(); return; }
+  VALK_TEST_ASSERT(strstr(resp, "\"error\"") != NULL,
+    "unknown method should produce an error");
+  VALK_TEST_ASSERT(strstr(resp, "\"id\":\"req-abc-123\"") != NULL,
+    "response id should match request id exactly");
+  VALK_TEST_ASSERT(strstr(resp, "-32601") != NULL,
+    "error code should be -32601 (method not found)");
+  free(resp);
+  END_TEST();
+}
+
 static void test_semantic_tokens(VALK_TEST_ARGS()) {
   BEGIN_TEST();
   INIT_OR_BAIL();
@@ -516,6 +568,8 @@ static void test_inlay_hints(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(resp != NULL, "should get inlay hints response");
   if (!resp) { lsp_kill(&lsp); test_timeout_stop(); return; }
   VALK_TEST_ASSERT(strstr(resp, "\"result\"") != NULL, "should have result");
+  VALK_TEST_ASSERT(strstr(resp, "\"result\":[]") == NULL, "hints should not be empty");
+  VALK_TEST_ASSERT(strstr(resp, "\"result\":null") == NULL, "hints should not be null");
   free(resp);
   END_TEST();
 }
@@ -633,6 +687,340 @@ static void test_rapid_incremental_edits(VALK_TEST_ARGS()) {
   END_TEST();
 }
 
+// Create a temporary workspace populated with N small .valk files. The
+// workspace scan must be slow enough for the next didOpen to interleave
+// with scan callbacks (testing the nested-transaction race). Returns a
+// malloc'd path; caller must rmtree.
+static char *make_temp_workspace(int file_count) {
+  char *tmpl = strdup("/tmp/valk-lsp-race-XXXXXX");
+  if (!mkdtemp(tmpl)) { free(tmpl); return NULL; }
+  for (int i = 0; i < file_count; i++) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/file%03d.valk", tmpl, i);
+    FILE *f = fopen(path, "w");
+    if (!f) continue;
+    // Non-trivial content so parsing+indexing takes some time.
+    fprintf(f, "(fun {fn%03d a b c} {do (= {x} (+ a b)) (= {y} (* x c)) y})\n", i);
+    fprintf(f, "(fun {helper%03d x} {if (> x 0) {x} {0}})\n", i);
+    fprintf(f, "(def {const%03d} (+ %d 1))\n", i, i);
+    fclose(f);
+  }
+  return tmpl;
+}
+
+static void rm_workspace(const char *path) {
+  if (!path) return;
+  char cmd[1024];
+  snprintf(cmd, sizeof(cmd), "rm -rf '%s'", path);
+  int rc = system(cmd);
+  (void)rc;
+}
+
+// Initialize with a specific rootUri (forces a workspace scan).
+static char *lsp_initialize_with_root(lsp_t *lsp, const char *root_path) {
+  char msg[1024];
+  snprintf(msg, sizeof(msg),
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+    "\"params\":{\"rootUri\":\"file://%s\",\"capabilities\":{},\"processId\":null}}",
+    root_path);
+  lsp_write(lsp->write_fd, msg);
+  char *resp = lsp_read_response(&lsp->reader, 1, MSG_TIMEOUT_MS);
+  if (!resp) return NULL;
+  lsp_write(lsp->write_fd,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+  return resp;
+}
+
+// Read a file fully into memory. Returns malloc'd content or NULL.
+static char *slurp(const char *path, long *out_size) {
+  FILE *f = fopen(path, "rb");
+  if (!f) return NULL;
+  fseek(f, 0, SEEK_END);
+  long sz = ftell(f);
+  rewind(f);
+  char *buf = malloc(sz + 1);
+  if (!buf) { fclose(f); return NULL; }
+  if (fread(buf, 1, sz, f) != (size_t)sz) { free(buf); fclose(f); return NULL; }
+  buf[sz] = '\0';
+  fclose(f);
+  if (out_size) *out_size = sz;
+  return buf;
+}
+
+// Regression test for the nested-transaction race during workspace scan.
+//
+// The bug: lsp/scan-all used to call BEGIN, then dispatch async file-prepare
+// jobs, then COMMIT in the last callback. Holding the transaction across
+// async dispatch boundaries races with handle-did-open (also runs on the
+// main loop), which tries to start its own BEGIN. SQLite errors with
+// "cannot start a transaction within a transaction".
+//
+// The bug is silent in user-visible responses (errors return as values
+// from sqlite/exec, not crashes), so this test inspects the captured
+// server stderr for SQLite transaction errors.
+//
+// This test:
+//   1. Creates a workspace with many files to slow the scan.
+//   2. Initializes the LSP with rootUri set (triggers scan).
+//   3. Sends a flood of didOpen messages immediately, racing with
+//      the scan callbacks.
+//   4. After shutdown, asserts no SQLite transaction errors in stderr.
+static void test_workspace_scan_didopen_race(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  signal(SIGPIPE, SIG_IGN);
+  test_timeout_start(TEST_TIMEOUT_SEC * 3);
+
+  // Workspace size and didOpen count are tuned so the scan is slow enough
+  // for didOpen to interleave but not so slow the LSP times out servicing
+  // queries afterwards.
+  char *workspace = make_temp_workspace(100);
+  VALK_TEST_ASSERT(workspace != NULL, "create temp workspace");
+  if (!workspace) { test_timeout_stop(); return; }
+
+  char stderr_path[512];
+  snprintf(stderr_path, sizeof(stderr_path), "%s/lsp.stderr", workspace);
+
+  lsp_t lsp = lsp_spawn_with_stderr(stderr_path);
+  alarm_child_pid = lsp.pid;
+
+  char *init = lsp_initialize_with_root(&lsp, workspace);
+  VALK_TEST_ASSERT(init != NULL, "initialize with root");
+  if (!init) { lsp_kill(&lsp); rm_workspace(workspace); free(workspace); test_timeout_stop(); return; }
+  free(init);
+
+  // Open files immediately to interleave with scan callbacks.
+  for (int i = 0; i < 10; i++) {
+    char buf[2048];
+    snprintf(buf, sizeof(buf),
+      "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+      "\"params\":{\"textDocument\":{"
+      "\"uri\":\"file://%s/file%03d.valk\","
+      "\"languageId\":\"valk\",\"version\":1,"
+      "\"text\":\"(fun {fn%03d a b c} {do (= {x} (+ a b)) (= {y} (* x c)) y})\"}}}",
+      workspace, i, i);
+    lsp_write(lsp.write_fd, buf);
+  }
+
+  // Send a hover request and wait for a response — proves the LSP is
+  // still functioning end-to-end after the race.
+  char hover_msg[1024];
+  snprintf(hover_msg, sizeof(hover_msg),
+    "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"textDocument/hover\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file://%s/file000.valk\"},"
+    "\"position\":{\"line\":0,\"character\":7}}}",
+    workspace);
+  lsp_write(lsp.write_fd, hover_msg);
+  char *resp = lsp_read_response(&lsp.reader, 50, MSG_TIMEOUT_MS * 2);
+  VALK_TEST_ASSERT(resp != NULL, "should get hover response after scan race");
+  if (resp) free(resp);
+
+  lsp_shutdown(&lsp);
+
+  // Check stderr for SQLite transaction errors. The bug logs:
+  //   "sqlite/exec: cannot start a transaction within a transaction"
+  //   "sqlite/exec: cannot commit - no transaction is active"
+  long sz = 0;
+  char *errlog = slurp(stderr_path, &sz);
+  if (errlog) {
+    bool nested_begin = strstr(errlog, "cannot start a transaction within a transaction") != NULL;
+    bool no_active_tx = strstr(errlog, "cannot commit - no transaction is active") != NULL;
+    VALK_TEST_ASSERT(!nested_begin,
+      "stderr should not contain nested-BEGIN error");
+    VALK_TEST_ASSERT(!no_active_tx,
+      "stderr should not contain stale-COMMIT error");
+    free(errlog);
+  }
+
+  rm_workspace(workspace);
+  free(workspace);
+  test_timeout_stop();
+  VALK_PASS();
+}
+
+// Regression test: when the user edits a file into a broken state mid-typing,
+// the LSP must:
+//   1. Emit a parse error diagnostic at the right line/column
+//   2. Still return semantic tokens (using the last-known-good AST as a
+//      fallback) so the editor doesn't lose all syntax highlighting
+//
+// Without this fix, neovim shows all text in the default Identifier color
+// (orange in many themes) because the LSP returns 0 tokens while parse fails.
+static void test_partial_edit_keeps_highlighting(VALK_TEST_ARGS()) {
+  BEGIN_TEST();
+  INIT_OR_BAIL();
+
+  // Step 1: open a VALID file. This populates the last-good AST cache.
+  char *diag = lsp_did_open(&lsp,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+    "\"params\":{\"textDocument\":{"
+    "\"uri\":\"file:///tmp/edit.valk\","
+    "\"languageId\":\"valk\","
+    "\"version\":1,"
+    "\"text\":\"(fun {foo x} {+ x 1})\\n(def {y} 42)\"}}}");
+  free(diag);
+
+  // Verify semantic tokens for the valid file
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/semanticTokens/full\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/edit.valk\"}}}");
+  char *resp = lsp_read_response(&lsp.reader, 40, MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "valid file: semantic tokens response");
+  if (resp) {
+    // Tokens come as a flat int array of length 5N. At least one token expected.
+    VALK_TEST_ASSERT(strstr(resp, "\"data\":[") != NULL, "valid file: data array");
+    VALK_TEST_ASSERT(strstr(resp, "\"data\":[]") == NULL, "valid file: non-empty tokens");
+    free(resp);
+  }
+
+  // Step 2: edit the file into a BROKEN state (mid-typing).
+  // The new text has an unclosed paren — exactly what happens during typing.
+  char *change_diag = lsp_did_change(&lsp,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/edit.valk\",\"version\":2},"
+    "\"contentChanges\":[{\"text\":\"(fun {foo x} {+ x\"}]}}");
+  // Diagnostics MUST contain the parse error
+  VALK_TEST_ASSERT(change_diag != NULL, "broken: should publish diagnostics");
+  if (change_diag) {
+    VALK_TEST_ASSERT(strstr(change_diag, "Unexpected end of input") != NULL,
+      "broken: parse error diagnostic should mention EOF");
+    free(change_diag);
+  }
+
+  // Step 3: request semantic tokens for the broken state.
+  // Without the fix this returns 0 tokens → editor falls back to default
+  // coloring → user sees orange text everywhere.
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/semanticTokens/full\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/edit.valk\"}}}");
+  char *broken_resp = lsp_read_response(&lsp.reader, 41, MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(broken_resp != NULL, "broken: semantic tokens response");
+  if (broken_resp) {
+    VALK_TEST_ASSERT(strstr(broken_resp, "\"data\":[]") == NULL,
+      "broken: should NOT return empty tokens (loses highlighting)");
+    VALK_TEST_ASSERT(strstr(broken_resp, "\"data\":[") != NULL,
+      "broken: should still have data array");
+    free(broken_resp);
+  }
+
+  // Step 4: edit back to a valid state. The cache should update and
+  // parse error diagnostics should clear.
+  char *fix_diag = lsp_did_change(&lsp,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/edit.valk\",\"version\":3},"
+    "\"contentChanges\":[{\"text\":\"(fun {foo x} {+ x 1})\"}]}}");
+  if (fix_diag) {
+    // Should not contain a parse error any more
+    VALK_TEST_ASSERT(strstr(fix_diag, "Unexpected end of input") == NULL,
+      "fixed: parse error should be cleared");
+    free(fix_diag);
+  }
+
+  END_TEST();
+}
+
+// Regression test for the "everything turns orange" bug via incremental
+// didChange (range + text), which is what neovim actually sends while typing.
+// Full-document didChange hid this bug — apply-one-change called an unbound
+// symbol `line-col->offset`, str/slice propagated the error, and the document
+// text became an error message string instead of valid source.
+//
+// The test:
+//   1. Opens a valid file
+//   2. Sends a RANGE-based didChange (deletes the final ')')
+//   3. Verifies the document is still syntactically coherent enough for
+//      the LSP to respond with tokens and a parse error diagnostic — not
+//      a gibberish error-string document that breaks everything downstream.
+static void test_incremental_didchange_range(VALK_TEST_ARGS()) {
+  BEGIN_TEST();
+  INIT_OR_BAIL();
+
+  char *diag = lsp_did_open(&lsp,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+    "\"params\":{\"textDocument\":{"
+    "\"uri\":\"file:///tmp/inc.valk\","
+    "\"languageId\":\"valk\","
+    "\"version\":1,"
+    "\"text\":\"(fun {foo x} {+ x 1})\"}}}");
+  free(diag);
+
+  // Delete the closing ')' using an incremental range-based change.
+  // This is exactly what neovim sends when you delete a character.
+  char *cdiag = lsp_did_change(&lsp,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/inc.valk\",\"version\":2},"
+    "\"contentChanges\":[{"
+    "\"range\":{\"start\":{\"line\":0,\"character\":20},\"end\":{\"line\":0,\"character\":21}},"
+    "\"text\":\"\"}]}}");
+  VALK_TEST_ASSERT(cdiag != NULL, "range-based didChange should produce diagnostics");
+  if (cdiag) {
+    // The diagnostic must describe the ACTUAL parse error (EOF), not an
+    // internal str/slice failure from a broken apply-changes.
+    VALK_TEST_ASSERT(strstr(cdiag, "Unexpected end of input") != NULL,
+      "diagnostic should describe parse error, not an internal str/slice failure");
+    VALK_TEST_ASSERT(strstr(cdiag, "str/slice") == NULL,
+      "diagnostic should not contain an str/slice builtin error");
+    VALK_TEST_ASSERT(strstr(cdiag, "builtins_string.c") == NULL,
+      "diagnostic should not contain a C file reference from a builtin error");
+    free(cdiag);
+  }
+
+  // Semantic tokens should fall back to the last-good AST and produce
+  // a non-empty response (the document state is sane).
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":70,\"method\":\"textDocument/semanticTokens/full\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/inc.valk\"}}}");
+  char *resp = lsp_read_response(&lsp.reader, 70, MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "semantic tokens after incremental edit");
+  if (resp) {
+    VALK_TEST_ASSERT(strstr(resp, "\"data\":[]") == NULL,
+      "incremental edit: semantic tokens must not be empty");
+    free(resp);
+  }
+
+  END_TEST();
+}
+
+// Regression test: opening a brand-new broken file (no prior valid state to
+// fall back to) must still return semantic tokens via the lexer fallback.
+// Common case: user creates a new file and the first few keystrokes are
+// always syntactically incomplete.
+static void test_brand_new_broken_file_has_tokens(VALK_TEST_ARGS()) {
+  BEGIN_TEST();
+  INIT_OR_BAIL();
+
+  // Open a file that's broken from the very first byte. No prior valid
+  // parse means no last-good AST cache — must use lexer fallback.
+  char *diag = lsp_did_open(&lsp,
+    "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+    "\"params\":{\"textDocument\":{"
+    "\"uri\":\"file:///tmp/brand.valk\","
+    "\"languageId\":\"valk\","
+    "\"version\":1,"
+    "\"text\":\"(fun {foo x} {+ x\"}}}");
+  // Should publish a parse error diagnostic
+  VALK_TEST_ASSERT(diag != NULL, "brand-new broken: should publish diagnostics");
+  if (diag) {
+    VALK_TEST_ASSERT(strstr(diag, "Unexpected end of input") != NULL,
+      "brand-new broken: should report parse error");
+    free(diag);
+  }
+
+  // Semantic tokens should NOT be empty — the lexer fallback should
+  // identify keywords/variables/operators in the broken text.
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":60,\"method\":\"textDocument/semanticTokens/full\","
+    "\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/brand.valk\"}}}");
+  char *resp = lsp_read_response(&lsp.reader, 60, MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "brand-new broken: semantic tokens response");
+  if (resp) {
+    VALK_TEST_ASSERT(strstr(resp, "\"data\":[]") == NULL,
+      "brand-new broken: lexer fallback should produce non-empty tokens");
+    free(resp);
+  }
+
+  END_TEST();
+}
+
 static void test_startup_race(VALK_TEST_ARGS()) {
   VALK_TEST();
   signal(SIGPIPE, SIG_IGN);
@@ -665,6 +1053,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "lsp_didopen_completion", test_didopen_completion);
   valk_testsuite_add_test(suite, "lsp_not_initialized_error", test_not_initialized_error);
   valk_testsuite_add_test(suite, "lsp_unknown_method_error", test_unknown_method_error);
+  valk_testsuite_add_test(suite, "lsp_string_request_id", test_string_request_id);
   valk_testsuite_add_test(suite, "lsp_semantic_tokens", test_semantic_tokens);
   valk_testsuite_add_test(suite, "lsp_didchange_diagnostics", test_didchange_diagnostics);
   valk_testsuite_add_test(suite, "lsp_signature_help", test_signature_help);
@@ -673,5 +1062,9 @@ int main(void) {
   valk_testsuite_add_test(suite, "lsp_incremental_didchange", test_incremental_didchange);
   valk_testsuite_add_test(suite, "lsp_rapid_incremental_edits", test_rapid_incremental_edits);
   valk_testsuite_add_test(suite, "lsp_startup_race", test_startup_race);
+  valk_testsuite_add_test(suite, "lsp_workspace_scan_didopen_race", test_workspace_scan_didopen_race);
+  valk_testsuite_add_test(suite, "lsp_partial_edit_keeps_highlighting", test_partial_edit_keeps_highlighting);
+  valk_testsuite_add_test(suite, "lsp_brand_new_broken_file_has_tokens", test_brand_new_broken_file_has_tokens);
+  valk_testsuite_add_test(suite, "lsp_incremental_didchange_range", test_incremental_didchange_range);
   return valk_testsuite_run(suite);
 }

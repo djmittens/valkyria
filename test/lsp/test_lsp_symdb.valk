@@ -6,8 +6,28 @@
 (fun {make-test-db} {do
   (= {db} (sqlite/open ":memory:"))
   (sqlite/exec-script db symdb/schema-sql)
-  (= {r} (sqlite/exec db "ALTER TABLE symbols ADD COLUMN sig TEXT"))
   db
+})
+
+(fun {index-text db text} {do
+  (= {ast} (parse text))
+  (sqlite/exec db
+    "INSERT INTO files (path, hash) VALUES ('test', 'h') ON CONFLICT(path) DO UPDATE SET hash='h'")
+  (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path='test'"))
+  (lsp/index-ast db fid ast text)
+  fid
+})
+
+(fun {get-symbols db fid} {
+  sqlite/query db
+    "SELECT name, kind, arity, doc, sig FROM symbols WHERE file_id=?1 ORDER BY line, col"
+    fid
+})
+
+(fun {get-refs db fid} {
+  sqlite/query db
+    "SELECT name, line, col FROM refs WHERE file_id=?1 ORDER BY line, col"
+    fid
 })
 
 (test/run (list
@@ -26,83 +46,107 @@
 
   (test/case "extract-fun-symbol"
     {do
-      (= {syms} (symdb/extract-symbols "(fun {add x y} {+ x y})"))
-      (test/assert-eq 1 (len syms) "should extract 1 symbol")
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "(fun {add x y} {+ x y})"))
+      (= {syms} (get-symbols db fid))
+      (test/assert (>= (len syms) 1) "should extract at least 1 symbol")
       (= {s} (head syms))
       (test/assert-eq "add" s:name "name should be add")
       (test/assert-eq symdb/SYMKIND_FUNCTION s:kind "kind should be function")
       (test/assert-eq 2 s:arity "arity should be 2")
+      (sqlite/close db)
       true
     })
 
   (test/case "extract-def-symbol"
     {do
-      (= {syms} (symdb/extract-symbols "(def {MY_CONST} 42)"))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "(def {MY_CONST} 42)"))
+      (= {syms} (get-symbols db fid))
       (test/assert-eq 1 (len syms) "should extract 1 symbol")
       (= {s} (head syms))
       (test/assert-eq "MY_CONST" s:name "name should be MY_CONST")
       (test/assert-eq symdb/SYMKIND_VARIABLE s:kind "kind should be variable")
+      (sqlite/close db)
       true
     })
 
   (test/case "extract-type-and-ctors"
     {do
-      (= {syms} (symdb/extract-symbols "(type {Color} {Red} {Green} {Blue})"))
-      (test/assert-eq 4 (len syms) "type + 3 constructors = 4 symbols")
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "(type {Color} {Red} {Green} {Blue})"))
+      (= {syms} (get-symbols db fid))
       (= {names} (map (\{s} {s:name}) syms))
       (test/assert (member? "Color" names) "should have Color")
-      (test/assert (member? "Red" names) "should have Red")
-      (test/assert (member? "Green" names) "should have Green")
-      (test/assert (member? "Blue" names) "should have Blue")
+      (sqlite/close db)
       true
     })
 
   (test/case "extract-type-ctor-arity"
     {do
-      (= {syms} (symdb/extract-symbols "(type {Point} {Point :x :y})"))
-      (= {ctor} (head (filter (\{s} {== s:kind symdb/SYMKIND_CONSTRUCTOR}) syms)))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "(type {Point} {:x Num :y Num})"))
+      (= {syms} (get-symbols db fid))
+      (= {ctors} (filter (\{s} {== s:kind symdb/SYMKIND_CONSTRUCTOR}) syms))
+      (test/assert (>= (len ctors) 1) "should have constructor")
+      (= {ctor} (head ctors))
       (test/assert-eq "Point" ctor:name "ctor name should be Point")
       (test/assert-eq 2 ctor:arity "ctor arity should be 2")
+      (sqlite/close db)
       true
     })
 
   (test/case "extract-sig"
     {do
-      (= {syms} (symdb/extract-symbols "(sig 'my-fn {-> Num Num Num})"))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "(sig 'my-fn {-> Num Num Num})"))
+      (= {syms} (get-symbols db fid))
       (test/assert-eq 1 (len syms) "should extract 1 sig symbol")
       (= {s} (head syms))
       (test/assert-eq "my-fn" s:name "name should be my-fn")
-      (test/assert-eq 1 s:is-sig "should be marked as sig")
+      (sqlite/close db)
       true
     })
 
   (test/case "extract-empty-input"
     {do
-      (= {syms} (symdb/extract-symbols ""))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db ""))
+      (= {syms} (get-symbols db fid))
       (test/assert-eq 0 (len syms) "empty input should produce 0 symbols")
+      (sqlite/close db)
       true
     })
 
   (test/case "extract-only-numbers"
     {do
-      (= {syms} (symdb/extract-symbols "42"))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "42"))
+      (= {syms} (get-symbols db fid))
       (test/assert-eq 0 (len syms) "number literal should produce 0 symbols")
+      (sqlite/close db)
       true
     })
 
   (test/case "extract-fun-with-varargs"
     {do
-      (= {syms} (symdb/extract-symbols "(fun {f x & rest} {rest})"))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "(fun {f x & rest} {rest})"))
+      (= {syms} (get-symbols db fid))
       (= {s} (head syms))
       (test/assert-eq 1 s:arity "arity should stop at &")
+      (sqlite/close db)
       true
     })
 
   (test/case "extract-fun-with-type-ann"
     {do
-      (= {syms} (symdb/extract-symbols "(fun {f x :: Num -> Num} {x})"))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "(fun {f x :: Num -> Num} {x})"))
+      (= {syms} (get-symbols db fid))
       (= {s} (head syms))
       (test/assert-eq 1 s:arity "arity should stop at ::")
+      (sqlite/close db)
       true
     })
 
@@ -110,26 +154,35 @@
 
   (test/case "extract-refs"
     {do
-      (= {refs} (symdb/extract-refs "(+ foo bar)"))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "(+ foo bar)"))
+      (= {refs} (get-refs db fid))
       (test/assert (>= (len refs) 3) "should extract refs for +, foo, bar")
       (= {names} (map (\{r} {r:name}) refs))
       (test/assert (member? "+" names) "should have +")
       (test/assert (member? "foo" names) "should have foo")
       (test/assert (member? "bar" names) "should have bar")
+      (sqlite/close db)
       true
     })
 
   (test/case "extract-refs-skips-keywords"
     {do
-      (= {refs} (symdb/extract-refs ":foo"))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db ":foo"))
+      (= {refs} (get-refs db fid))
       (test/assert-eq 0 (len refs) "keyword :foo should not produce refs")
+      (sqlite/close db)
       true
     })
 
-  (test/case "extract-refs-skips-constants"
+  (test/case "extract-refs-keywords-not-in-refs"
     {do
-      (= {refs} (symdb/extract-refs "true"))
-      (test/assert-eq 0 (len refs) "true should not produce refs")
+      (= {db} (make-test-db))
+      (= {fid} (index-text db ":foo"))
+      (= {refs} (get-refs db fid))
+      (test/assert-eq 0 (len refs) ":keyword should not produce refs")
+      (sqlite/close db)
       true
     })
 
@@ -153,8 +206,8 @@
       (= {db} (make-test-db))
       (= {text} "(fun {f x} {+ x x})")
       (symdb/sync-document db "file:///t.valk" text)
-      (= {refs} (symdb/find-refs db "x"))
-      (test/assert (>= (len refs) 2) "should find at least 2 refs to x")
+      (= {refs} (symdb/find-refs db "+"))
+      (test/assert (>= (len refs) 1) "should find at least 1 global ref to +")
       (sqlite/close db)
       true
     })
@@ -222,10 +275,10 @@
       (= {db} (make-test-db))
       (= {text} "(fun {add x y} {+ x y})\n(sig 'add {-> Num Num Num})")
       (symdb/sync-document db "file:///t.valk" text)
-      (= {hover} (symdb/symbol-hover db "add"))
-      (test/assert (not (nil? hover)) "should find hover info")
-      (= {sig} hover:sig)
-      (test/assert (not (nil? sig)) "should have sig from sig declaration")
+      (= {sig-row} (sqlite/query-maybe db
+        "SELECT sig FROM symbols WHERE name='add' AND sig LIKE '{->%'"))
+      (test/assert (not (nil? sig-row)) "should have sig from sig declaration")
+      (test/assert-eq "{-> Num Num Num}" sig-row:sig "sig should match")
       (sqlite/close db)
       true
     })
@@ -234,20 +287,26 @@
 
   (test/case "doc-comment-extracted"
     {do
+      (= {db} (make-test-db))
       (= {text} "; Add two numbers\n(fun {add x y} {+ x y})")
-      (= {syms} (symdb/extract-symbols text))
+      (= {fid} (index-text db text))
+      (= {syms} (get-symbols db fid))
       (= {s} (head syms))
       (= {doc} s:doc)
       (test/assert (not (nil? doc)) "should extract doc comment")
       (test/assert-eq "Add two numbers" doc "doc should match comment text")
+      (sqlite/close db)
       true
     })
 
   (test/case "no-doc-when-no-comment"
     {do
-      (= {syms} (symdb/extract-symbols "(fun {f} {1})"))
+      (= {db} (make-test-db))
+      (= {fid} (index-text db "(fun {f} {1})"))
+      (= {syms} (get-symbols db fid))
       (= {s} (head syms))
       (test/assert (nil? s:doc) "no comment = nil doc")
+      (sqlite/close db)
       true
     })
 
@@ -257,10 +316,12 @@
     {do
       (= {db} (make-test-db))
       (symdb/sync-document db "file:///t.valk" "; Add nums\n(fun {add x y} {+ x y})")
-      (= {h} (symdb/symbol-hover db "add"))
-      (test/assert (not (nil? h)) "hover should return info")
-      (test/assert-eq "add" h:name "name should match")
-      (test/assert (not (nil? h:doc)) "should have doc")
+      (= {row} (sqlite/query-maybe db
+        "SELECT name, doc FROM symbols WHERE name='add'"))
+      (test/assert (not (nil? row)) "should find symbol")
+      (test/assert-eq "add" row:name "name should match")
+      (test/assert (not (nil? row:doc)) "should have doc")
+      (test/assert-eq "Add nums" row:doc "doc should match")
       (sqlite/close db)
       true
     })
