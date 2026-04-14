@@ -457,57 +457,6 @@
     (if (== (str/slice s i (+ i 1)) c) {+ count 1} {count})}
 })
 
-; ---------------------------------------------------------------------------
-; Argument type checking — infer literal types, compare against sig
-; ---------------------------------------------------------------------------
-
-; Type inference functions removed — replaced by C HM engine (type/infer-file)
-
-(sig 'vd/parse-sig-param-types {-> Str List})
-(fun {vd/parse-sig-param-types sig-str} {
-  if (nil? sig-str) {nil}
-  {do
-    (= {stripped} (vd/strip-sig-wrapper sig-str))
-    (if (nil? stripped) {nil}
-      {do
-        (= {parts} (str/split stripped " "))
-        (= {tokens} (vd/tokenize-sig parts 0 "" nil))
-        (if (nil? tokens) {nil}
-          {init (reverse tokens)})})}
-})
-
-(sig 'vd/strip-sig-wrapper {-> Str Str})
-(fun {vd/strip-sig-wrapper s} {
-  if (< (len s) 4) {nil}
-  {do
-    (= {start} (if (str/starts-with? s "{-> ") {4}
-      {if (str/starts-with? s "-> ") {3} {0}}))
-    (if (== start 0) {nil}
-      {do
-        (= {end} (if (str/ends-with? s "}") {- (len s) 1} {(len s)}))
-        (str/slice s start end)})}
-})
-
-(sig 'vd/tokenize-sig {-> List Num Str List List})
-(fun {vd/tokenize-sig parts depth current acc} {
-  if (nil? parts) {
-    if (> (len current) 0) {qcons current acc} {acc}}
-  {do
-    (= {p} (head parts))
-    (if (== p "&") {vd/tokenize-sig (tail parts) depth current acc}
-    {do
-      (= {opens} (vd/count-char p "("))
-      (= {closes} (vd/count-char p ")"))
-      (= {new-depth} (+ (- depth closes) opens))
-      (= {token} (if (> (len current) 0) {str current " " p} {p}))
-      (if (> new-depth 0)
-        {vd/tokenize-sig (tail parts) new-depth token acc}
-        {vd/tokenize-sig (tail parts) 0 "" (qcons token acc)})})}
-})
-
-(sig 'vd/check-arg-types {-> List Str List List List})
-(fun {vd/check-arg-types args name param-types ctx} {ctx})
-
 (sig 'vd/check-arity {-> List Any Str Num List List List})
 (fun {vd/check-arity expr hd name argc tl ctx} {
   if (nil? ctx:db) {ctx}
@@ -524,15 +473,11 @@
             (if (and (>= min-arity 0) (== argc 0) (> min-arity 0))
               {vd/add-diag ctx hd name
                 (str "'" name "' expects at least " min-arity " arguments, got " argc)}
-              {if (nil? sig-str) {ctx}
-                {vd/check-arg-types tl name
-                  (vd/parse-sig-param-types sig-str) ctx}})}
+              {ctx})}
           {if (> argc expected)
             {vd/add-diag ctx hd name
               (str "'" name "' expects " expected " arguments, got " argc)}
-            {if (nil? sig-str) {ctx}
-              {vd/check-arg-types tl name
-                (vd/parse-sig-param-types sig-str) ctx}}})})}
+            {ctx}})})}
 })
 
 ; ---------------------------------------------------------------------------
@@ -730,90 +675,6 @@
     (str "Type '" name "' is not defined")}}}}}}}}
 })
 
-; ---------------------------------------------------------------------------
-; Type resolution — typed scope building, param type checking
-; ---------------------------------------------------------------------------
-
-(sig 'vd/query-fun-sig {-> Ref Str Any})
-(fun {vd/query-fun-sig db name} {
-  if (nil? db) {nil}
-  {sqlite/query-maybe db
-    "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
-    name}
-})
-
-(sig 'vd/drop-last {-> List List})
-(fun {vd/drop-last l} {
-  if (<= (len l) 1) {nil}
-  {qcons (head l) (vd/drop-last (tail l))}
-})
-
-(sig 'vd/extract-sig-params {-> List List})
-(fun {vd/extract-sig-params sig-expr} {
-  if (< (len sig-expr) 2) {nil}
-  {vd/drop-last (tail sig-expr)}
-})
-
-(sig 'vd/parse-sig-types {-> Str List})
-(fun {vd/parse-sig-types sig-str} {
-  if (nil? sig-str) {nil}
-  {vd/parse-sig-types-inner (parse sig-str)}
-})
-
-(sig 'vd/parse-sig-types-inner {-> List List})
-(fun {vd/parse-sig-types-inner parsed} {
-  if (nil? parsed) {nil}
-  {vd/extract-sig-params (head parsed)}
-})
-
-(sig 'vd/zip-one-param {-> Dict Str Any List List Dict})
-(fun {vd/zip-one-param d name type rest-params rest-types} {do
-  (dict/set! d name type)
-  (vd/zip-params-types d rest-params rest-types)
-})
-
-(sig 'vd/zip-params-rest {-> Dict List Dict})
-(fun {vd/zip-params-rest d params} {
-  if (nil? params) {d}
-  {do
-    (dict/set! d (head params) 1)
-    (vd/zip-params-rest d (tail params))}
-})
-
-(sig 'vd/zip-params-types {-> Dict List List Dict})
-(fun {vd/zip-params-types d params types} {
-  if (nil? params) {d}
-  {if (nil? types)
-    {vd/zip-params-rest d params}
-    {vd/zip-one-param d (head params) (head types) (tail params) (tail types)}}
-})
-
-(sig 'vd/build-typed-scope-sig {-> List Str Dict})
-(fun {vd/build-typed-scope-sig param-names sig-str} {do
-  (= {types} (vd/parse-sig-types sig-str))
-  (if (nil? types) {dict/from-keys param-names}
-    {vd/zip-params-types (dict/new) param-names types})
-})
-
-(sig 'vd/build-typed-scope-row {-> List Any Dict})
-(fun {vd/build-typed-scope-row param-names sig-val} {
-  if (nil? sig-val) {dict/from-keys param-names}
-  {vd/build-typed-scope-sig param-names (str sig-val)}
-})
-
-(sig 'vd/build-typed-scope-q {-> Str List Ref Dict})
-(fun {vd/build-typed-scope-q fname param-names db} {do
-  (= {row} (vd/query-fun-sig db fname))
-  (if (nil? row) {dict/from-keys param-names}
-    {vd/build-typed-scope-row param-names row:sig})
-})
-
-(sig 'vd/build-typed-scope {-> Str List Ref Dict})
-(fun {vd/build-typed-scope fname param-names db} {
-  if (nil? db) {dict/from-keys param-names}
-  {vd/build-typed-scope-q fname param-names db}
-})
-
 (sig 'vd/is-ctor-call {-> Str Num})
 (fun {vd/is-ctor-call name} {
   if (<= (len name) 0) {0}
@@ -823,3 +684,4 @@
       {< (str/index-of name ":") 0}
       {0})}
 })
+

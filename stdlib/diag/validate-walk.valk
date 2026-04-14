@@ -211,43 +211,7 @@
   {vd/walk-fun-parts (head formals) (tail formals) body-rest ctx}}
 })
 
-(sig 'vd/check-fun-param-types {-> Any List List List})
-(fun {vd/check-fun-param-types fname params ctx} {
-  if (not (sym? fname)) {ctx}
-  {vd/check-fun-types-named (str fname) params ctx}
-})
 
-(sig 'vd/check-fun-types-named {-> Str List List List})
-(fun {vd/check-fun-types-named name params ctx} {do
-  (= {db} ctx:db)
-  (if (nil? db) {ctx}
-    {do
-      (= {sig-row} (vd/query-fun-sig db name))
-      (if (not (nil? sig-row)) {ctx}
-        {if (vd/in-scope? name ctx:scope) {ctx}
-        {if (dict/has? ctx:globals name) {ctx}
-        {if (dict/has? ctx:known name) {ctx}
-        {if (vd/is-known-by-basename name ctx:known) {ctx}
-          {vd/flag-untyped-params params ctx}}}}})})
-})
-
-(sig 'vd/check-binding-types {-> Any List List List})
-(fun {vd/check-binding-types binding vals ctx} {
-  if (nil? ctx:db) {ctx}
-  {if (not (list? binding)) {ctx}
-  {if (not (== (len binding) 1)) {ctx}
-  {if (nil? vals) {ctx}
-  {vd/check-one-binding (head binding) (head vals) ctx}}}}
-})
-
-(sig 'vd/check-one-binding {-> Any Any List List})
-(fun {vd/check-one-binding name-sym rhs ctx} {
-  if (not (sym? name-sym)) {ctx}
-  {vd/check-one-binding-str name-sym (str name-sym) rhs ctx}
-})
-
-(sig 'vd/check-one-binding-str {-> Any Str Any List List})
-(fun {vd/check-one-binding-str name-sym name rhs ctx} {ctx})
 
 (sig 'vd/walk-fun-parts {-> Any List List List List})
 (fun {vd/walk-fun-parts fname params body-rest ctx} {do
@@ -255,11 +219,10 @@
   (= {ctx2} (if (sym? fname)
     {vd/add-global ctx fname-str}
     {ctx}))
-  (= {ctx2b} (vd/check-fun-param-types fname params ctx2))
   (= {param-names} (vd/collect-param-names params nil))
-  (= {saved-scope} ctx2b:scope)
-  (= {local-dict} (vd/build-typed-scope fname-str (reverse param-names) ctx2b:db))
-  (= {ctx3} (plist/set ctx2b :scope (qcons local-dict saved-scope)))
+  (= {saved-scope} ctx2:scope)
+  (= {local-dict} (dict/from-keys (reverse param-names)))
+  (= {ctx3} (plist/set ctx2 :scope (qcons local-dict saved-scope)))
   (= {ctx4} (vd/walk-annotated-body params body-rest ctx3))
   (plist/set ctx4 :scope saved-scope)
 })
@@ -321,8 +284,7 @@
   (= {ctx2} (if (== form "def")
     {do (vd/dict-add-names ctx:globals names) ctx}
     {do (vd/dict-add-names (head ctx:scope) names) ctx}))
-  (= {ctx3} (vd/check-binding-types binding vals ctx2))
-  (vd/walk-body vals ctx3)
+  (vd/walk-body vals ctx2)
 })
 
 (sig 'vd/collect-binding-names-list {-> Any List List})

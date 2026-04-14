@@ -1,0 +1,12 @@
+; LSP constants — single source of truth for keyword/operator sets
+;
+; These sets are used by analysis.valk and hints.valk.
+; The C equivalent in lsp_index.c must be kept in sync manually.
+
+(def {KEYWORD_SET}
+  (dict/from-keys {"fun" "\\" "def" "=" "if" "match" "select" "case"
+   "do" "let" "type" "sig" "load" "and" "or" "not"
+   "quote" "quasiquote" "unquote" "unquote-splicing"}))
+
+(def {OPERATOR_SET}
+  (dict/from-keys {"+" "-" "*" "/" ">" "<" ">=" "<=" "==" "!=" "%" "ord"}))
