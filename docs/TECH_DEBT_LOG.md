@@ -126,31 +126,70 @@ Baseline: 4102 pass / 18 pre-existing fail / 15.9s.
 
 ---
 
-## [~] 3. `make check` dominates `make test` wall time — PARTIAL via #2
+## [~] 3. `make check` dominates `make test` wall time — IN PROGRESS
 
 **Symptom:** `make test` runs `make check` (valk-check lint over whole tree)
 before the actual test runner. Currently ~45s of the 67s total.
 
-**Status:** parse cache (#2) took this from ~45s to 33–42s (variable). More
-is possible but diminishing returns:
-- `compile/process` (valk-check's per-file workhorse) takes `text + prefix`,
-  not a path, so path-keyed cache doesn't apply. Would need a separate
-  `compile/process-file` that caches fully-processed ASTs by `(path,
-  mtime, prefix)`. ~30 LOC + change in valk-check.valk.
-- The actual cost after parsing is macro-expand + module-rewrite. Both
-  are linear in file size. Not obvious where to shave without caching
-  post-processed ASTs too.
+**Status:** parse cache (#2) took this from ~45s to 33–42s. New builtins
+`parse-file` and `compile/process-file` (3391676) added — path-keyed,
+go through the AST cache. **Not yet wired into valk-check** — initial
+attempt regressed multiple LSP test suites (something about reusing the
+cached AST through the deep-clone path interacts badly with the LSP's
+in-place AST mutations during validation). Need to audit
+`compile_process_ast` mutation semantics before flipping valk-check
+over.
 
-**Files if resumed:** `src/builtins_io.c` (new builtin),
-`scripts/valk-check.valk` (call site).
+**Files if resumed:** `scripts/valk-check.valk` (use `parse-file` and
+`compile/process-file`), maybe more aggressive deep-clone in
+`parse_file_cached`.
 
-**Effort:** ~1 hour.
-
-**Blocks:** nothing.
+**Effort:** 1–2 hours.
 
 ---
 
-## [~] 4. Pre-existing test failures — 14/18 fixed (be41392, 1ac18f7)
+## [x] 4. Pre-existing test failures — fully fixed (be41392, 1ac18f7, 499bc3d)
+
+All 18 original pre-BYOL failures resolved. Net at the BYOL ship-point:
+14 more passes than at the start. (Subsequent BYOL migration introduced
+a new class of failures; see #8.)
+
+---
+
+## [ ] 8. BYOL migration: code that assumed errors-as-values (NEW)
+
+After BYOL shipped (#1), the call-boundary short-circuit surfaced ~85
+tests that depended on errors silently flowing through builtin/user
+function calls. Each failure points at a real bug in user code that was
+masked by the old behavior. The pattern is always one of:
+
+- `(if (cond-fn x) {then} {else})` where `cond-fn` returns an error and
+  pre-BYOL flowed through to `if`'s false branch; under BYOL the error
+  reaches `if`'s condition check and short-circuits the whole if.
+- `(some-fn (maybe-erroring-call x))` where `some-fn` is a user lambda
+  that doesn't check for error and uses the value as if valid.
+- AST-walking code that recurses on `(head x)`/`(tail x)` where x can
+  contain errors as elements.
+
+**Affected suites (count of failures):** test_lsp_handlers_core (2),
+test_lsp_handlers_db, test_lsp_helpers, test_lsp_hints, test_lsp_refs,
+test_lsp_validate, test_async_http_handlers, test_aio_builtins_coverage,
+test_lsp_integration. Total ~85.
+
+**Approach:** read each failing assertion, find the erroring chain, add
+explicit `(if (error? x) {...graceful-fallback...} {...})` guard at the
+right level. Each fix is local and small (5–10 LOC) but there are many.
+
+**Already done in this batch:**
+- `handle?` in `stdlib/aio/handles.valk` — guard around `aio/status`'s
+  result before passing to `exists`.
+
+**Files to audit:** `scripts/lsp/*.valk`, `stdlib/aio/handles.valk`,
+`scripts/valk-check.valk` HM-types path.
+
+**Effort:** ~1 hour per suite, 9 suites = ~1 day total.
+
+**Blocks:** nothing — failures are isolated.
 
 **Original symptoms:**
 - `test/lang/test_json.valk` — 2 `Option::Some`-unwrap tests. **Fixed by
