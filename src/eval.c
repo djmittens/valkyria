@@ -620,21 +620,8 @@ apply_cont:
         }
         
         case CONT_COLLECT_ARG: {
-          // Short-circuit on error args for user-defined lambdas only.
-          // C builtins handle type errors via their own LVAL_ASSERT_TYPE
-          // guards, and pervasive existing code relies on errors flowing
-          // through them as values (print/str/=/def all receive errors).
-          // User lambdas by contrast tend to recurse on list shape
-          // (head/tail/nil?) and infinite-loop when handed an error.
-          if (LVAL_TYPE(value) == LVAL_ERR) {
-            valk_lval_t *f = frame.collect_arg.func;
-            if (LVAL_TYPE(f) == LVAL_FUN && f->fun.builtin == NULL) {
-              free(frame.collect_arg.args);
-              goto apply_cont;  // propagate `value` (the error)
-            }
-          }
           frame.collect_arg.args[frame.collect_arg.count++] = value;
-
+          
           if (valk_lval_list_is_empty(frame.collect_arg.remaining)) {
             valk_lval_t* args_list = valk_lval_list(frame.collect_arg.args, frame.collect_arg.count);
             free(frame.collect_arg.args);
