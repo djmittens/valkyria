@@ -8,7 +8,7 @@ Status legend: `[ ]` open, `[x]` done, `[~]` in progress.
 
 ---
 
-## [ ] 1. Error propagation at call boundary
+## [~] 1. Error propagation at call boundary — DEFERRED after 3 attempts
 
 **Symptom:** functions that recurse on list-shaped input (e.g. `sel/build-nested-walk`)
 infinite-loop when passed an error value. `(nil? error)` returns false,
@@ -37,35 +37,39 @@ into how AST walks propagate — errors live inside lists and get processed
 recursively. Any short-circuit at the call site changes the contract for
 helper lambdas.
 
-**Refined approach for next attempt:**
-- Don't short-circuit at call site. Instead, make the specific *looping
-  primitives* (`tail`, `head`, `nil?`, `len`) return an error when given
-  an error arg. Then the USER lambda that calls `(tail err)` gets back
-  an error, but:
-  - `(nil? err)` returns err → `(if err {then} {else})` propagates err
-    (since if already short-circuits on err condition — verified in
-    CONT_IF_BRANCH)
-  - Loop terminates via if propagation
-- Alternative: make `nil?` return truthy for error (1). Then `(if (nil?
-  err) {base} {recurse})` takes the base branch, loop terminates with
-  the function's graceful fallback value.
+**Attempt 3 (reverted, not committed):** Made `nil?` a C builtin that
+returns 1 for LVAL_ERR in addition to LVAL_NIL, so user lambdas with
+`(if (nil? l) {base} {... (tail l) ...})` terminate when handed an error.
+Passed the repro test. Broke `test_lsp_integration`: LSP code uses
+`(if (nil? doc) {send-no-doc} {process doc})` and now errors route to
+the "no-doc" path instead of being surfaced by downstream processing.
+Same test passed on 5cf0118 (pre-change baseline).
 
-The `nil?` option is more compatible — the existing user code expects nil
-on error inputs, and a truthy `nil?` triggers that path.
+**Summary of problem:** error propagation is not fixable with a single
+local tweak. Three things interact:
+1. `parse` returns a LIST containing errors as elements (not an error
+   itself). AST walkers recurse into these.
+2. Errors flow through C builtins (`=`, `def`, `print`, `str`) as values
+   by design — code relies on this.
+3. User lambdas that recurse on list shape rely on `(nil? x)` being
+   false for non-nil inputs (including errors) to route to their main
+   logic path, and separately handle the error once it shows up.
 
-But `nil?` is user-defined in prelude (`(fun {nil? x} {== x nil})`). To
-change its behavior for errors, either:
-- Convert to C builtin that returns 1 for errors
-- Change `==` to return truthy when comparing error and nil
+Any global flip breaks one of these three. A proper fix requires:
+- Either migrating all AST-walking code to explicit `(error? x)` checks
+  first (invasive refactor), or
+- Designing a distinct "error value" semantic at the evaluator level
+  (e.g. a separate LVAL_EFFECT type that behaves specifically like a
+  monadic failure) and migrating errors to it.
 
-Either change is small but needs careful test-passing verification.
+This is a language-design decision, not a local fix. Deferring until
+the design is settled.
 
-**Files:** `src/lval.c` (`valk_lval_eq`) or new C `nil?` builtin in
-`src/builtins_io.c` or similar.
-
-**Risk:** medium. Either change touches widely-used operators.
-
-**Effort:** ~15 LOC + test run.
+**In the meantime:** the specific `sel/find-ranges` / `sel/build-nested-walk`
+infinite-loop case is already prevented by the module-load fix in
+5cf0118 (the errors that used to flow in as inputs come from a
+now-fixed code path). So the original symptom is gone; the class of
+bug remains latent.
 
 **Blocks:** nothing.
 
