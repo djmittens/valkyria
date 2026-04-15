@@ -8,7 +8,7 @@ Status legend: `[ ]` open, `[x]` done, `[~]` in progress.
 
 ---
 
-## [~] 1. Error propagation at call boundary — DEFERRED after 3 attempts
+## [~] 1. Error propagation at call boundary — DEFERRED after 4 attempts
 
 **Symptom:** functions that recurse on list-shaped input (e.g. `sel/build-nested-walk`)
 infinite-loop when passed an error value. `(nil? error)` returns false,
@@ -45,31 +45,53 @@ Passed the repro test. Broke `test_lsp_integration`: LSP code uses
 the "no-doc" path instead of being surfaced by downstream processing.
 Same test passed on 5cf0118 (pre-change baseline).
 
-**Summary of problem:** error propagation is not fixable with a single
-local tweak. Three things interact:
-1. `parse` returns a LIST containing errors as elements (not an error
-   itself). AST walkers recurse into these.
-2. Errors flow through C builtins (`=`, `def`, `print`, `str`) as values
-   by design — code relies on this.
-3. User lambdas that recurse on list shape rely on `(nil? x)` being
-   false for non-nil inputs (including errors) to route to their main
-   logic path, and separately handle the error once it shows up.
+**Attempt 4 (reverted):** Pure BYOL semantics — unconditional
+short-circuit in `CONT_COLLECT_ARG`, no opt-outs. This IS the correct
+design per Build Your Own Lisp:
 
-Any global flip breaks one of these three. A proper fix requires:
-- Either migrating all AST-walking code to explicit `(error? x)` checks
-  first (invasive refactor), or
-- Designing a distinct "error value" semantic at the evaluator level
-  (e.g. a separate LVAL_EFFECT type that behaves specifically like a
-  monadic failure) and migrating errors to it.
+```c
+/* Error propagation: if any child is an error, return it */
+for (int i = 0; i < v->count; i++) {
+    if (v->cell[i]->type == LVAL_ERR) { return lval_take(v, i); }
+}
+```
 
-This is a language-design decision, not a local fix. Deferring until
-the design is settled.
+The user pointed this out — BYOL was always the answer, the scope of
+regressions is the size of the bug surface, not a reason to back off.
+
+**Scope of required migration:**
+1. Test framework (stdlib/test/test.valk) — `foldl *test-run-one-ctx*
+   ctx tests` needs to explicitly catch errors from each test case so a
+   single failure doesn't abort the foldl chain. Maybe 10 LOC.
+2. LSP code (scripts/lsp/*.valk) — `lsp/get-text-pos`,
+   `lsp/get-word-ctx`, and other walkers assume `parse` returns
+   something list-shaped they can iterate. `parse` of invalid input
+   actually returns `(Error: ...)` nested in a list. Under BYOL, as
+   soon as such an error element propagates to a user lambda through
+   `(head ast)`/`(tail ast)`, the whole call chain fails. Each site
+   needs `(if (error? x) {handle} {continue})` guards. Maybe 30–50
+   sites.
+3. Type transform / macro expansion — needs to handle errors
+   surfacing from `parse` gracefully.
+4. Various small test files that rely on errors flowing through
+   `print` etc.
 
 **In the meantime:** the specific `sel/find-ranges` / `sel/build-nested-walk`
 infinite-loop case is already prevented by the module-load fix in
 5cf0118 (the errors that used to flow in as inputs come from a
 now-fixed code path). So the original symptom is gone; the class of
 bug remains latent.
+
+**Ready-to-apply diff** (when the migration is scheduled) — just
+uncomment in `src/eval.c` `CONT_COLLECT_ARG`:
+```c
+if (LVAL_TYPE(value) == LVAL_ERR) {
+  free(frame.collect_arg.args);
+  goto apply_cont;  // propagate
+}
+```
+
+**Effort for full migration:** 1–2 days dedicated.
 
 **Blocks:** nothing.
 
