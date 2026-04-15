@@ -20,30 +20,52 @@ a runaway evaluator.
 if any evaluated arg is `LVAL_ERR`, return that error immediately — do not
 call the function.
 
-**Attempted 2026-04-14, reverted.** Added `LVAL_FLAG_ACCEPTS_ERR` flag +
-`valk_lenv_put_builtin_err_ok` helper + short-circuit in `CONT_COLLECT_ARG`
-in `src/eval.c`. Marked `error?`, `type-of`, `print`, `printf`, `println`,
-`str`, `=`, `def` as accepts-err. Result: **43 new test failures**,
-`test_lsp_integration` internal 60s timeout fires. The error-as-value
-pattern is pervasive in the codebase — many builtins receive errors today
-and do useful work with them (print them, bind them, pass them through).
-Flipping the default globally requires auditing every builtin and every
-`(...)` call site in prelude+stdlib+scripts.
+**Attempt 1 (reverted):** Added `LVAL_FLAG_ACCEPTS_ERR` + short-circuit for
+all functions at call site. Broke 43 tests — pervasive code flows errors
+through print/str/=/def as values.
 
-**Better approach:**
-- Identify the specific functions that loop on error input (`tail`, `head`,
-  `nil?`, `len` on error) and make *those* propagate errors rather than
-  returning nonsense. That's a local fix in `src/builtins_list.c` for each
-  builtin — check `LVAL_TYPE(arg) == LVAL_ERR` at entry and return the
-  error. Much smaller blast radius.
-- Only those builtins where returning the error is strictly better than
-  looping-on-garbage need to change.
+**Attempt 2 (reverted — efd62bb/086ab19):** Narrower short-circuit only
+for user-defined lambdas (`fun.builtin == NULL`), C builtins untouched.
+Still broke 72 tests. The problem: `parse "(unclosed"` returns a **list
+containing an error as an element** (not an error itself). Code that walks
+ASTs (e.g. `ref/walk-exprs`) recurses into list elements and the embedded
+error hits user lambdas, which now return the error instead of their
+graceful fallback. Existing tests expect `nil` in those cases.
 
-**Files:** `src/builtins_list.c` (head, tail, nil?, len, nth, etc.).
+**Why intuitive approaches keep failing:** "error as value" is deeply baked
+into how AST walks propagate — errors live inside lists and get processed
+recursively. Any short-circuit at the call site changes the contract for
+helper lambdas.
 
-**Risk:** low. Per-builtin change, each independently testable.
+**Refined approach for next attempt:**
+- Don't short-circuit at call site. Instead, make the specific *looping
+  primitives* (`tail`, `head`, `nil?`, `len`) return an error when given
+  an error arg. Then the USER lambda that calls `(tail err)` gets back
+  an error, but:
+  - `(nil? err)` returns err → `(if err {then} {else})` propagates err
+    (since if already short-circuits on err condition — verified in
+    CONT_IF_BRANCH)
+  - Loop terminates via if propagation
+- Alternative: make `nil?` return truthy for error (1). Then `(if (nil?
+  err) {base} {recurse})` takes the base branch, loop terminates with
+  the function's graceful fallback value.
 
-**Effort:** ~30 LOC across a handful of list builtins.
+The `nil?` option is more compatible — the existing user code expects nil
+on error inputs, and a truthy `nil?` triggers that path.
+
+But `nil?` is user-defined in prelude (`(fun {nil? x} {== x nil})`). To
+change its behavior for errors, either:
+- Convert to C builtin that returns 1 for errors
+- Change `==` to return truthy when comparing error and nil
+
+Either change is small but needs careful test-passing verification.
+
+**Files:** `src/lval.c` (`valk_lval_eq`) or new C `nil?` builtin in
+`src/builtins_io.c` or similar.
+
+**Risk:** medium. Either change touches widely-used operators.
+
+**Effort:** ~15 LOC + test run.
 
 **Blocks:** nothing.
 
