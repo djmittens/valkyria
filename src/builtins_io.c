@@ -373,26 +373,21 @@ static valk_lval_t* valk_builtin_parse(valk_lenv_t* e, valk_lval_t* a) {
   return valk_parse_text(valk_lval_list_nth(a, 0)->str);
 }
 
-static valk_lval_t *valk_builtin_compile_process(valk_lenv_t *e,
-                                                  valk_lval_t *a) {
+// Parse a file via the AST cache (mtime-keyed). Skips reparse on hit.
+static valk_lval_t *valk_builtin_parse_file(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
-  u64 argc = valk_lval_list_count(a);
-  if (argc < 1 || argc > 2)
-    LVAL_RAISE(a, "compile/process: expected 1-2 arguments, got %llu", argc);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  const char *path = valk_lval_list_nth(a, 0)->str;
+  char resolved[PATH_MAX];
+  if (!realpath(path, resolved))
+    return valk_lval_err("Could not resolve file (%s)", path);
+  return parse_file_cached(resolved);
+}
 
-  const char *text = valk_lval_list_nth(a, 0)->str;
-  const char *prefix = NULL;
-  if (argc >= 2) {
-    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
-    prefix = valk_lval_list_nth(a, 1)->str;
-    if (prefix[0] == '\0') prefix = NULL;
-  }
-
-  valk_lval_t *ast = valk_parse_text(text);
-  if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
-  VALK_GC_ROOT(ast);
-
+// Shared body: macro-expand + module-tree pre-register + FQN rewrite for
+// an already-parsed AST. Returns the (mutated) ast.
+static valk_lval_t *compile_process_ast(valk_lval_t *ast, const char *prefix) {
   valk_lenv_t *menv = valk_macro_env();
   {
     valk_lval_t *cur = ast;
@@ -442,9 +437,60 @@ static valk_lval_t *valk_builtin_compile_process(valk_lenv_t *e,
 
   valk_module_rewrite(ast, prefix);
   valk_mod_set_current(prev_mod);
-
   return ast;
 }
+
+static valk_lval_t *valk_builtin_compile_process(valk_lenv_t *e,
+                                                  valk_lval_t *a) {
+  UNUSED(e);
+  u64 argc = valk_lval_list_count(a);
+  if (argc < 1 || argc > 2)
+    LVAL_RAISE(a, "compile/process: expected 1-2 arguments, got %llu", argc);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char *text = valk_lval_list_nth(a, 0)->str;
+  const char *prefix = NULL;
+  if (argc >= 2) {
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+    prefix = valk_lval_list_nth(a, 1)->str;
+    if (prefix[0] == '\0') prefix = NULL;
+  }
+
+  valk_lval_t *ast = valk_parse_text(text);
+  if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
+  VALK_GC_ROOT(ast);
+  return compile_process_ast(ast, prefix);
+}
+
+// Like compile/process but takes a path and uses the parse cache. Avoids
+// reparsing files that haven't changed (huge win for valk-check, which
+// processes every .valk file in the project).
+static valk_lval_t *valk_builtin_compile_process_file(valk_lenv_t *e,
+                                                      valk_lval_t *a) {
+  UNUSED(e);
+  u64 argc = valk_lval_list_count(a);
+  if (argc < 1 || argc > 2)
+    LVAL_RAISE(a, "compile/process-file: expected 1-2 arguments, got %llu", argc);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char *path = valk_lval_list_nth(a, 0)->str;
+  const char *prefix = NULL;
+  if (argc >= 2) {
+    LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+    prefix = valk_lval_list_nth(a, 1)->str;
+    if (prefix[0] == '\0') prefix = NULL;
+  }
+
+  char resolved[PATH_MAX];
+  if (!realpath(path, resolved))
+    return valk_lval_err("Could not resolve file (%s)", path);
+
+  valk_lval_t *ast = parse_file_cached(resolved);
+  if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
+  VALK_GC_ROOT(ast);
+  return compile_process_ast(ast, prefix);
+}
+
 
 static valk_lval_t* valk_builtin_src_pos(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -599,6 +645,7 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
   valk_lenv_put_builtin(env, "read", valk_builtin_read);
   valk_lenv_put_builtin(env, "parse", valk_builtin_parse);
+  valk_lenv_put_builtin(env, "parse-file", valk_builtin_parse_file);
   valk_lenv_put_builtin(env, "read-file", valk_builtin_read_file);
   valk_lenv_put_builtin(env, "src-pos", valk_builtin_src_pos);
   valk_lenv_put_builtin(env, "qcons", valk_builtin_qcons);
@@ -610,5 +657,7 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "quoted?", valk_builtin_quoted_p);
   valk_lenv_put_builtin(env, "offset->line-col", valk_builtin_offset_to_line_col);
   valk_lenv_put_builtin(env, "compile/process", valk_builtin_compile_process);
+  valk_lenv_put_builtin(env, "compile/process-file",
+                        valk_builtin_compile_process_file);
   valk_register_file_builtins(env);
 }

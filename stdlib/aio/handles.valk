@@ -7,8 +7,15 @@
 ; Helper: Check if a value is a handle
 ; ============================================================================
 
-(fun {handle? x}
-  {(exists (aio/status x) {:pending :running :completed :failed :cancelled})})
+(fun {handle? x} {do
+  (= {s} (aio/status x))
+  ; aio/status returns an error for non-handles. Under BYOL error
+  ; propagation, that error must be caught here rather than flowing into
+  ; `exists`, which would short-circuit and propagate the error rather
+  ; than returning false.
+  (if (error? s) {0}
+    {(exists s {:pending :running :completed :failed :cancelled})})
+})
 
 ; ============================================================================
 ; aio/delay: Sleep then call continuation
