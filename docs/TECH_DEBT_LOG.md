@@ -8,7 +8,7 @@ Status legend: `[ ]` open, `[x]` done, `[~]` in progress.
 
 ---
 
-## [~] 1. Error propagation at call boundary — DEFERRED after 4 attempts
+## [x] 1. Error propagation at call boundary (a144182)
 
 **Symptom:** functions that recurse on list-shaped input (e.g. `sel/build-nested-walk`)
 infinite-loop when passed an error value. `(nil? error)` returns false,
