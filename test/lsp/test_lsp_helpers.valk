@@ -18,6 +18,12 @@
 (def {filter-snippets}            lsp/nav/filter-snippets)
 (def {symkind->completion-kind}   lsp/nav/symkind->completion-kind)
 (def {make-sym-completion-item}   lsp/nav/make-sym-completion-item)
+; symdb is loaded directly at top-level so its defs land at `symdb/`,
+; not `lsp/symdb/`.
+(def {SYMKIND_FUNCTION}           symdb/SYMKIND_FUNCTION)
+(def {SYMKIND_VARIABLE}           symdb/SYMKIND_VARIABLE)
+(def {SYMKIND_TYPE}               symdb/SYMKIND_TYPE)
+(def {SYMKIND_CONSTRUCTOR}        symdb/SYMKIND_CONSTRUCTOR)
 
 ; --- Response capture stubs ---
 

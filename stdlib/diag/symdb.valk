@@ -242,22 +242,25 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
   {0}}}}}}}}}}}
 })
 
-(sig 'scan-word-start {-> Str Num Num})
-(fun {scan-word-start s col} {
+; Public helpers — qualified at def site so they bind at top level
+; (rewriter leaves names with `/` alone) and are reachable from sibling
+; modules without depending on load order.
+(sig 'symdb/scan-word-start {-> Str Num Num})
+(fun {symdb/scan-word-start s col} {
   if (<= col 0) {0}
     {do
       (= {c} (str/slice s (- col 1) col))
       (if (is-delim c) {col}
-        {scan-word-start s (- col 1)})}
+        {symdb/scan-word-start s (- col 1)})}
 })
 
-(sig 'scan-word-end {-> Str Num Num})
-(fun {scan-word-end s col} {
+(sig 'symdb/scan-word-end {-> Str Num Num})
+(fun {symdb/scan-word-end s col} {
   if (>= col (len s)) {col}
     {do
       (= {c} (str/slice s col (+ col 1)))
       (if (is-delim c) {col}
-        {scan-word-end s (+ col 1)})}
+        {symdb/scan-word-end s (+ col 1)})}
 })
 
 (sig 'word-at-position {-> Str Num Num Str})
@@ -268,8 +271,8 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
       (= {target} (nth (+ line 1) lines))
       (if (> col (len target)) {nil}
         {do
-          (= {start} (scan-word-start target col))
-          (= {end} (scan-word-end target col))
+          (= {start} (symdb/scan-word-start target col))
+          (= {end} (symdb/scan-word-end target col))
           (if (>= start end) {nil}
             {str/slice target start end})})})
 })
@@ -282,8 +285,8 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
       (= {target} (nth (+ line 1) lines))
       (if (> col (len target)) {nil}
         {do
-          (= {start} (scan-word-start target col))
-          (= {end} (scan-word-end target col))
+          (= {start} (symdb/scan-word-start target col))
+          (= {end} (symdb/scan-word-end target col))
           (if (>= start end) {nil}
             {(WordRange :word (str/slice target start end) :start start :end end)})})})
 })

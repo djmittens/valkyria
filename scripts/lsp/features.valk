@@ -48,7 +48,7 @@
 (sig 'sig/extract-name {-> Str Num Any})
 (fun {sig/extract-name text open-pos} {do
   (= {start} (+ open-pos 1))
-  (= {end} (scan-word-end text start))
+  (= {end} (symdb/scan-word-end text start))
   (if (>= start end) {nil}
     {str/slice text start end})
 })
