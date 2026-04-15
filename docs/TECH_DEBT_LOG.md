@@ -8,7 +8,7 @@ Status legend: `[ ]` open, `[x]` done, `[~]` in progress.
 
 ---
 
-## [x] 1. Error propagation at call boundary (efd62bb)
+## [ ] 1. Error propagation at call boundary
 
 **Symptom:** functions that recurse on list-shaped input (e.g. `sel/build-nested-walk`)
 infinite-loop when passed an error value. `(nil? error)` returns false,
@@ -30,12 +30,22 @@ and do useful work with them (print them, bind them, pass them through).
 Flipping the default globally requires auditing every builtin and every
 `(...)` call site in prelude+stdlib+scripts.
 
-**Fix shipped (efd62bb):** narrower than the first attempt — short-circuit
-in `CONT_COLLECT_ARG` only when calling a *user-defined lambda* (`fun.builtin
-== NULL`). C builtins are untouched, so existing error-as-value patterns
-through `print`/`str`/`=`/`def` keep working. User lambdas that recurse on
-list shape now get the error propagated instead of looping. 14 LOC.
-Full suite: 4102 pass / 18 pre-existing fail / 15.9s (unchanged baseline).
+**Better approach:**
+- Identify the specific functions that loop on error input (`tail`, `head`,
+  `nil?`, `len` on error) and make *those* propagate errors rather than
+  returning nonsense. That's a local fix in `src/builtins_list.c` for each
+  builtin — check `LVAL_TYPE(arg) == LVAL_ERR` at entry and return the
+  error. Much smaller blast radius.
+- Only those builtins where returning the error is strictly better than
+  looping-on-garbage need to change.
+
+**Files:** `src/builtins_list.c` (head, tail, nil?, len, nth, etc.).
+
+**Risk:** low. Per-builtin change, each independently testable.
+
+**Effort:** ~30 LOC across a handful of list builtins.
+
+**Blocks:** nothing.
 
 ---
 
