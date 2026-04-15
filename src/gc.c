@@ -448,6 +448,9 @@ void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
   valk_lenv_t *menv = valk_macro_env();
   if (menv) valk_gc_visit_env_roots(menv, visitor, ctx);
 
+  extern void valk_parse_cache_visit_roots(valk_gc_root_visitor_t, void *);
+  valk_parse_cache_visit_roots(visitor, ctx);
+
   for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
     if (valk_sys->threads[i].active && valk_sys->threads[i].ctx != nullptr) {
       valk_thread_context_t *tc = valk_sys->threads[i].ctx;

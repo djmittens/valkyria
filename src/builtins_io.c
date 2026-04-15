@@ -39,21 +39,122 @@ static module_entry_t *module_cache_find(const char *path) {
   return NULL;
 }
 
+// ---------------------------------------------------------------------------
+// Parse cache: stores the raw AST of each file keyed by realpath + mtime.
+// Hits return a deep-clone so callers can mutate freely. File mtime change
+// invalidates. LRU-bounded. Registered as a GC root so cached ASTs survive
+// collections.
+// ---------------------------------------------------------------------------
 
+#define PARSE_CACHE_MAX 256
 
+typedef struct {
+  char *path;          // resolved realpath; NULL slot = empty
+  time_t mtime;
+  valk_lval_t *ast;    // raw parsed AST (pre-macro, pre-rewrite)
+  u64 lru_tick;
+} parse_entry_t;
 
-static char *read_file_text(const char *filename) {
-  FILE *f = fopen(filename, "rb");
-  if (!f) return nullptr;
+static pthread_mutex_t parse_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+static parse_entry_t parse_cache[PARSE_CACHE_MAX];
+static int parse_cache_count = 0;
+static u64 parse_cache_tick = 0;
+
+// Deep-clone an AST: copy every CONS cell recursively; share leaves.
+// Leaves (sym, num, str, err, fun) are effectively immutable — callers mutate
+// the list spine (via pop / head / tail assignment), not leaf contents.
+static valk_lval_t *deep_clone_ast(valk_lval_t *v) {
+  if (!v) return nullptr;
+  if (LVAL_TYPE(v) != LVAL_CONS) return valk_lval_copy(v);
+  valk_lval_t *h = deep_clone_ast(v->cons.head);
+  valk_lval_t *t = deep_clone_ast(v->cons.tail);
+  valk_lval_t *res = (v->flags & LVAL_FLAG_QUOTED)
+    ? valk_lval_qcons(h, t)
+    : valk_lval_cons(h, t);
+  // Preserve src-pos for error reporting.
+  LVAL_SRC_POS_SET(res, LVAL_SRC_POS(v));
+  return res;
+}
+
+static parse_entry_t *parse_cache_alloc(void) {
+  if (parse_cache_count < PARSE_CACHE_MAX)
+    return &parse_cache[parse_cache_count++];
+  // Evict LRU.
+  parse_entry_t *victim = &parse_cache[0];
+  for (int i = 1; i < parse_cache_count; i++)
+    if (parse_cache[i].lru_tick < victim->lru_tick) victim = &parse_cache[i];
+  free(victim->path);
+  victim->path = NULL;
+  victim->ast = NULL;
+  return victim;
+}
+
+// Called from valk_gc_visit_global_roots. Keeps cached ASTs alive across GC.
+void valk_parse_cache_visit_roots(void (*visitor)(valk_lval_t *, void *),
+                                   void *ctx) {
+  pthread_mutex_lock(&parse_cache_lock);
+  for (int i = 0; i < parse_cache_count; i++)
+    if (parse_cache[i].ast) visitor(parse_cache[i].ast, ctx);
+  pthread_mutex_unlock(&parse_cache_lock);
+}
+
+// Return a fresh, mutable deep-clone of the parsed AST for `resolved_path`.
+// Miss: parse from disk, insert. Stale (mtime changed): reparse.
+static valk_lval_t *parse_file_cached(const char *resolved_path) {
+  struct stat st;
+  time_t mtime = (stat(resolved_path, &st) == 0) ? st.st_mtime : 0;
+
+  pthread_mutex_lock(&parse_cache_lock);
+  for (int i = 0; i < parse_cache_count; i++) {
+    parse_entry_t *e = &parse_cache[i];
+    if (e->path && strcmp(e->path, resolved_path) == 0) {
+      if (e->ast && e->mtime == mtime) {
+        e->lru_tick = ++parse_cache_tick;
+        valk_lval_t *clone = deep_clone_ast(e->ast);
+        pthread_mutex_unlock(&parse_cache_lock);
+        return clone;
+      }
+      // Stale — drop and reparse below.
+      e->ast = NULL;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&parse_cache_lock);
+
+  FILE *f = fopen(resolved_path, "rb");
+  if (!f) return valk_lval_err("Could not open file (%s)", resolved_path);
   fseek(f, 0, SEEK_END);
   long flen = ftell(f);
   fseek(f, 0, SEEK_SET);
-  if (flen <= 0) { fclose(f); return nullptr; } // LCOV_EXCL_LINE // LCOV_EXCL_BR_LINE
-  char *text = calloc(flen + 1, 1);
-  fread(text, 1, flen, f);
+  if (flen <= 0) { fclose(f); return valk_lval_err("Empty file (%s)", resolved_path); }
+  char *text = calloc((size_t)flen + 1, 1);
+  fread(text, 1, (size_t)flen, f);
   fclose(f);
-  return text;
+  valk_lval_t *ast = valk_parse_text(text);
+  free(text);
+  if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
+
+  pthread_mutex_lock(&parse_cache_lock);
+  parse_entry_t *slot = NULL;
+  for (int i = 0; i < parse_cache_count; i++) {
+    if (parse_cache[i].path && strcmp(parse_cache[i].path, resolved_path) == 0) {
+      slot = &parse_cache[i];
+      break;
+    }
+  }
+  if (!slot) {
+    slot = parse_cache_alloc();
+    slot->path = strdup(resolved_path);
+  }
+  slot->mtime = mtime;
+  slot->ast = ast;
+  slot->lru_tick = ++parse_cache_tick;
+  valk_lval_t *clone = deep_clone_ast(ast);
+  pthread_mutex_unlock(&parse_cache_lock);
+  return clone;
 }
+
+
 
 static void extract_module_prefix(const char *path, char *out, size_t out_sz) {
   const char *base = strrchr(path, '/');
@@ -67,18 +168,11 @@ static void extract_module_prefix(const char *path, char *out, size_t out_sz) {
 
 
 
-static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
-                                   const char *filename __attribute__((unused)),
-                                   char *text,
-                                   const char *module_prefix) {
-  valk_lval_t *ast = valk_parse_text(text);
-  if (LVAL_TYPE(ast) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
-    valk_lval_println(ast); // LCOV_EXCL_LINE
-    return ast; // LCOV_EXCL_LINE
-  }
-
-
-
+// Caller owns `ast` (must be a freshly-owned copy — this function mutates it
+// via pop/rewrite). Returns the last form's value or the first error.
+static valk_lval_t *eval_loaded_ast(valk_lenv_t *target_env,
+                                    valk_lval_t *ast,
+                                    const char *module_prefix) {
   valk_lenv_t *menv = valk_macro_env();
 
   // Pass 1: expand macros, eval macro defs (so later forms can use them)
@@ -215,10 +309,10 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
   entry->state = MODULE_STATE_LOADING;
   pthread_mutex_unlock(&module_cache_lock);
 
-  char *text = read_file_text(filename);
-  if (!text) {
+  valk_lval_t *ast = parse_file_cached(resolved);
+  if (LVAL_TYPE(ast) == LVAL_ERR) {
     entry->state = 0;
-    return valk_lval_err("Could not open file (%s)", filename);
+    return ast;
   }
 
   valk_module_t *prev_mod = valk_mod_current();
@@ -230,8 +324,7 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
   char fqn[VALK_MOD_PATH_MAX];
   valk_mod_qualified_path(child_mod, fqn, sizeof(fqn));
 
-  valk_lval_t *result = load_eval_file(e, filename, text, fqn);
-  free(text);
+  valk_lval_t *result = eval_loaded_ast(e, ast, fqn);
 
   valk_mod_set_current(prev_mod);
 
@@ -260,11 +353,12 @@ static valk_lval_t* valk_builtin_read(valk_lenv_t* e, valk_lval_t* a) {
 }
 
 valk_lval_t *valk_load_file(valk_lenv_t *env, const char *path) {
-  char *text = read_file_text(path);
-  if (!text) return valk_lval_err("Could not open file (%s)", path);
-  valk_lval_t *result = load_eval_file(env, path, text, NULL);
-  free(text);
-  return result;
+  char resolved[PATH_MAX];
+  if (!realpath(path, resolved))
+    return valk_lval_err("Could not resolve file (%s)", path);
+  valk_lval_t *ast = parse_file_cached(resolved);
+  if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
+  return eval_loaded_ast(env, ast, NULL);
 }
 
 static valk_lval_t* valk_builtin_parse(valk_lenv_t* e, valk_lval_t* a) {
