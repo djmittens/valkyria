@@ -233,22 +233,34 @@ infinite-looping.
 
 ---
 
-## [ ] 7. Test runner throughput / first-batch 4.8s wall times
+## [~] 7. Test runner throughput — partially improved via #2
 
-**Symptom:** under `run-tests.valk`, the first batch of 12 C tests all report
-~4.8s wall time despite completing in milliseconds when run directly. Likely
-VM-level lock contention on `valk_lval_str` or similar during output
-collection — 12 workers allocating simultaneously hit the same lock.
+**Was:** first batch of 12 C tests all reported ~4.8s wall despite
+completing in milliseconds when run directly.
 
-**Fix:** profile where the lock is held. Candidates: GC pause coordination,
-heap allocator lock, macro env lookup during `exec` builtin result
-construction. If it's GC coordination, the fix is probably to run `exec` with
-a scratch arena instead of the heap.
+**Now:** first batch shows some tests at 0.0s, ~4 at 1.1s, one at 4.5s
+(test_llvm_codegen — genuinely heavy). The uniform 4.8s cluster is gone
+but a smaller clustering remains. Parse cache (#2) didn't help child
+subprocesses (caches are per-process) but apparently helped the runner
+itself.
 
-**Depends on:** useful tooling / profile data. Not currently blocking
-progress but is the real answer to "why aren't tests faster."
+**Remaining cost (~1s per test in the first batch):** still likely VM lock
+contention during `exec` output collection. `valk_lval_str` allocates
+through the GC heap (src/lval.c:73 intern-table lock, src/gc_heap.c
+page-list lock). 12 workers reading pipes and allocating strings
+concurrently hit these.
 
-**Risk:** investigation first, then depends on what we find.
+**Fix path:** run `exec` under the scratch arena allocator rather than
+the heap — `VALK_WITH_ALLOC(scratch) { ... exec body ... }` around the
+poll/read loop and `valk_lval_str` calls. Scratch is per-thread, lock-
+free. Then evacuate the result lvals to heap only at return. ~20 LOC.
+
+**Files:** `src/builtins_file.c` (exec builtin).
+
+**Risk:** low-medium — scratch-to-heap evacuation is well-tested in the
+codebase for similar patterns.
+
+**Effort:** 1–2 hours + measure.
 
 ---
 
