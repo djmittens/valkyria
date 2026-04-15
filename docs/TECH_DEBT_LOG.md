@@ -104,46 +104,66 @@ Baseline: 4102 pass / 18 pre-existing fail / 15.9s.
 
 ---
 
-## [ ] 3. `make check` dominates `make test` wall time
+## [~] 3. `make check` dominates `make test` wall time — PARTIAL via #2
 
 **Symptom:** `make test` runs `make check` (valk-check lint over whole tree)
 before the actual test runner. Currently ~45s of the 67s total.
 
-**Fix:** likely falls out of (2) — valk-check reparses everything. Once the
-parse cache is in place, measure again. If still slow, look at valk-check's
-own file-iteration pattern — maybe it's doing a full type-check per file with
-no shared state.
+**Status:** parse cache (#2) took this from ~45s to 33–42s (variable). More
+is possible but diminishing returns:
+- `compile/process` (valk-check's per-file workhorse) takes `text + prefix`,
+  not a path, so path-keyed cache doesn't apply. Would need a separate
+  `compile/process-file` that caches fully-processed ASTs by `(path,
+  mtime, prefix)`. ~30 LOC + change in valk-check.valk.
+- The actual cost after parsing is macro-expand + module-rewrite. Both
+  are linear in file size. Not obvious where to shave without caching
+  post-processed ASTs too.
 
-**Files:** `scripts/valk-check.valk`, `stdlib/diag/*.valk`.
+**Files if resumed:** `src/builtins_io.c` (new builtin),
+`scripts/valk-check.valk` (call site).
 
-**Depends on:** (2) probably.
+**Effort:** ~1 hour.
 
-**Effort:** unknown until (2) lands.
+**Blocks:** nothing.
 
 ---
 
-## [ ] 4. Pre-existing test failures (2 suites, 18 tests)
+## [~] 4. Pre-existing test failures — 14/18 fixed (be41392, 1ac18f7)
 
-**Symptom:** `test/lang/test_json.valk` — 2 assertions fail
-(`encode-option-some-unwraps`, `is-option-some-too-many-args`). No stdout/stderr
-output — test framework captures empty on assertion failure.
-`test/lsp/test_lsp_helpers.valk` — 16 assertions fail (make-lsp-diag,
-ref-to-lsp-location, symkind-to-completion-kind, several snippet / completion
-helpers).
+**Original symptoms:**
+- `test/lang/test_json.valk` — 2 `Option::Some`-unwrap tests. **Fixed by
+  be41392** (type transform was over-eagerly rewriting fully-qualified
+  {Type::Ctor ...} qexprs into the internal tagged form, producing a
+  double-wrapped structure).
+- `test/lsp/test_lsp_helpers.valk` — 16 calls to helpers by short name.
+  **12 fixed by 1ac18f7** (added (def) aliases from short names to the
+  module-prefixed bindings).
 
-**Verified pre-existing:** these fail on `e87dab5` (pre-session HEAD) too. Not
-caused by recent work.
+**Remaining 4 failures in test_lsp_helpers:**
+- `symkind-to-completion-kind`
+- `make-sym-completion-item-with-sig`
+- `sig-extract-name`
+- `sig-extract-name-empty`
 
-**Fix:** read each failing test, compare expected vs actual, fix either the
-test or the code being tested. These are isolated to specific tests — no
-shared infrastructure risk.
+The shared cause: `sig/extract-name` lives at top level (its name contains
+`/` so the module rewriter leaves it alone), but its body calls
+`scan-word-end` unqualified. `scan-word-end` was defined in symdb.valk and
+got prefixed to `lsp/symdb/scan-word-end`. The cross-module reference
+fails at call time. This is a general module-system issue — the rewriter
+only qualifies refs that the *same file* defined.
 
-**Files:** `test/lang/test_json.valk`, `test/lsp/test_lsp_helpers.valk`, plus
-whatever they call into.
+**To finish this:** fix the cross-module reference resolution so a
+function in one file can call a function in a sibling module without
+writing the full path. Could be done by:
+- Walking up the module tree at lookup time (what the old
+  `resolve_qualified` did — but we ripped that out? actually still there)
+- Or having the rewriter consult a global symbol table.
 
-**Risk:** low.
+**Files:** `src/macro.c` (rewriter), `src/module.c`.
 
-**Effort:** unknown, likely 1–4 hours per suite.
+**Risk:** medium. Touches module system.
+
+**Effort:** 2–4 hours focused.
 
 ---
 
