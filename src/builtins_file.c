@@ -6,6 +6,7 @@ extern valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a);
 #include <errno.h>
 #include <limits.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,9 @@ extern valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a);
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 #include "gc.h"
 #include "type_env.h"
@@ -371,6 +375,13 @@ static valk_lval_t* valk_builtin_exec(valk_lenv_t* e, valk_lval_t* a) {
 
   // LCOV_EXCL_START - runs in forked child process, unreachable by coverage instrumentation
   if (pid == 0) {
+#ifdef __linux__
+    // If parent dies (crashes, killed, etc.), receive SIGTERM and exit.
+    // Prevents zombie subprocesses reparenting to init and burning CPU.
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+    // Race: parent may have already died between fork() and prctl().
+    if (getppid() == 1) _exit(143);
+#endif
     close(stdout_pipe[0]);
     close(stderr_pipe[0]);
     dup2(stdout_pipe[1], STDOUT_FILENO);

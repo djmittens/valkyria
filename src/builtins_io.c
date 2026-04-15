@@ -96,7 +96,9 @@ static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
     }
   }
 
-  // Pass 1.5: pre-register child modules from (load ...) calls
+  // Pass 1.5: pre-register child modules from (load ...) calls.
+  // Skip files already cached (loaded elsewhere) — creating an empty child
+  // here would shadow the real module and break FQN resolution.
   if (module_prefix) {
     valk_module_t *cur_mod = valk_mod_current();
     if (cur_mod) {
@@ -112,10 +114,21 @@ static valk_lval_t *load_eval_file(valk_lenv_t *target_env,
             if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
               valk_lval_t *path_arg = rest->cons.head;
               if (LVAL_TYPE(path_arg) == LVAL_STR) {
-                char child_prefix[256];
-                extract_module_prefix(path_arg->str, child_prefix,
-                                      sizeof(child_prefix));
-                valk_mod_find_or_create_child(cur_mod, child_prefix);
+                char child_resolved[PATH_MAX];
+                bool already_loaded = false;
+                if (realpath(path_arg->str, child_resolved)) {
+                  pthread_mutex_lock(&module_cache_lock);
+                  module_entry_t *ce = module_cache_find(child_resolved);
+                  if (ce && ce->state == MODULE_STATE_READY)
+                    already_loaded = true;
+                  pthread_mutex_unlock(&module_cache_lock);
+                }
+                if (!already_loaded) {
+                  char child_prefix[256];
+                  extract_module_prefix(path_arg->str, child_prefix,
+                                        sizeof(child_prefix));
+                  valk_mod_find_or_create_child(cur_mod, child_prefix);
+                }
               }
             }
           }
