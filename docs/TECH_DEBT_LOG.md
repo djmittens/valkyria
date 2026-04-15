@@ -39,7 +39,7 @@ Full suite: 4102 pass / 18 pre-existing fail / 15.9s (unchanged baseline).
 
 ---
 
-## [ ] 2. AST parse cache
+## [x] 2. AST parse cache (6929143)
 
 **Symptom:** every valk subprocess re-parses the entire prelude + stdlib +
 whatever files it loads. `valk-check.valk` over the project (168 files) takes
@@ -52,21 +52,19 @@ LRU-bounded cache keyed by `realpath + st_mtime`. Store the raw parsed AST
 cached AST so callers can mutate freely. Register the cache as a GC root
 visitor so cached ASTs survive collections.
 
-**Gotcha hit in earlier attempt:** GC rooting the cache via
-`valk_gc_visit_global_roots` wasn't enough — something in the load path still
-corrupted cached entries between loads. Probably need the cached AST to be
-truly immutable, or the per-load copy needs to happen under a scratch-arena
-guard. Investigate before trusting this.
+**Fix shipped (6929143):** LRU cache of 256 entries, mtime invalidation,
+GC root visitor. The gotcha from the earlier attempt was solved by deep-
+cloning (not `valk_lval_copy`-shallow) on retrieval — previous approach
+shared CONS-cell children with the cached original, so `valk_lval_pop`
+and in-place rewrites from one load corrupted subsequent loads. Loader
+now goes `load` → `realpath` → `parse_file_cached` → deep-clone → mutate
+freely.
 
-**Files:** `src/builtins_io.c`, `src/gc.c` (register visitor).
+compile/process (used by valk-check) still parses fresh — it takes text,
+not a path, so path-keyed cache doesn't apply. Separate optimization
+opportunity if/when needed.
 
-**Risk:** medium. Caching mutable ASTs is subtle. Worth writing a test that
-loads the same file twice and asserts the second eval produces the same
-results as the first.
-
-**Effort:** 60–100 LOC.
-
-**Blocks:** nothing directly, but probably unblocks perf for (7).
+Baseline: 4102 pass / 18 pre-existing fail / 15.9s.
 
 ---
 
