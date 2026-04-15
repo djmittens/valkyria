@@ -618,10 +618,11 @@ static valk_lval_t* valk_builtin_str_trim_right(valk_lenv_t* e,
 }
 
 void valk_register_string_builtins(valk_lenv_t* env) {
-  valk_lenv_put_builtin(env, "print", valk_builtin_print);
-  valk_lenv_put_builtin(env, "printf", valk_builtin_printf);
-  valk_lenv_put_builtin(env, "println", valk_builtin_println);
-  valk_lenv_put_builtin(env, "str", valk_builtin_str);
+  // Accept errors so user code can serialize/print error values.
+  valk_lenv_put_builtin_err_ok(env, "print", valk_builtin_print);
+  valk_lenv_put_builtin_err_ok(env, "printf", valk_builtin_printf);
+  valk_lenv_put_builtin_err_ok(env, "println", valk_builtin_println);
+  valk_lenv_put_builtin_err_ok(env, "str", valk_builtin_str);
   valk_lenv_put_builtin(env, "make-string", valk_builtin_make_string);
   valk_lenv_put_builtin(env, "str/split", valk_builtin_str_split);
   valk_lenv_put_builtin(env, "str/replace", valk_builtin_str_replace);

@@ -214,16 +214,14 @@
         (= {elapsed} (- end-time start-time))
         (= {captured} (test/capture-stop cap))
 
-        (if (== debug 1)
-          {do
-            (printf "[DEBUG] Result: ")
-            (print result)
-            (if (error? result)
-              {printf "[DEBUG] Result is an ERROR!\n"}
-              {true})}
-          {true})
-
-        (= {passed} (if (== result true) {1} {0}))
+        ; Under BYOL error propagation, an assertion failure inside the test
+        ; body returns LVAL_ERR, and any subsequent function receiving it
+        ; short-circuits. We fork here into `is-err` (failure), `is-true`
+        ; (pass), or `other` (also fail) explicitly so the rest of this
+        ; function never sees an error value as an arg.
+        (= {is-err} (if (error? result) {1} {0}))
+        (= {is-true} (if (== is-err 1) {0} {if (== result true) {1} {0}}))
+        (= {passed} is-true)
         (= {xfail} (if (and (== passed 0) (!= ctx:expected-exit 0)) {1} {0}))
 
         (if (== *test-json-output* 1)

@@ -38,6 +38,9 @@
 #define LVAL_FLAG_QUOTED    (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 1))
 #define LVAL_FLAG_INTERNED  (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 2))
 #define LVAL_FLAG_MACRO     (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 3))
+// Builtin explicitly receives LVAL_ERR args (error?, type-of). Without
+// this flag the evaluator short-circuits error args (BYOL).
+#define LVAL_FLAG_ACCEPTS_ERR (1ULL << (LVAL_GC_GEN_SHIFT + LVAL_GC_GEN_BITS + 4))
 
 #define LVAL_SRC_POS_SHIFT  32
 #define LVAL_SRC_POS_MASK   (0xFFFFFFFFULL << LVAL_SRC_POS_SHIFT)
@@ -287,6 +290,9 @@ void valk_lenv_def(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val);
 
 void valk_lenv_put_builtin(valk_lenv_t *env, char *key,
                            valk_lval_builtin_t *fun);
+// Same but marks the builtin as accepting error args (bypass BYOL short-circuit).
+void valk_lenv_put_builtin_err_ok(valk_lenv_t *env, char *key,
+                                  valk_lval_builtin_t *fun);
 void valk_lenv_builtins(valk_lenv_t *env);
 
 // UTILS

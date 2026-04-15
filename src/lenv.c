@@ -268,13 +268,14 @@ void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   valk_lenv_put(env, key, val);
 }
 
-void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
-                           valk_lval_builtin_t* _fun) {
+static void put_builtin_impl(valk_lenv_t* env, char* key,
+                              valk_lval_builtin_t* _fun, u64 extra_flags) {
   VALK_INFO("install builtin: %s (count=%zu)", key, env->symbols.count);
   VALK_WITH_ALLOC(env->allocator) {
     valk_lval_t* lfun = valk_mem_alloc(sizeof(valk_lval_t));
-    lfun->flags =
-        LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
+    lfun->flags = LVAL_FUN |
+        valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) |
+        extra_flags;
     VALK_SET_ORIGIN_ALLOCATOR(lfun);
     lfun->fun.builtin = _fun;
     lfun->fun.env = nullptr;
@@ -283,4 +284,14 @@ void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
     valk_lenv_put(env, sym, lfun);
     valk_mem_free(sym);
   }
+}
+
+void valk_lenv_put_builtin(valk_lenv_t* env, char* key,
+                           valk_lval_builtin_t* _fun) {
+  put_builtin_impl(env, key, _fun, 0);
+}
+
+void valk_lenv_put_builtin_err_ok(valk_lenv_t* env, char* key,
+                                   valk_lval_builtin_t* _fun) {
+  put_builtin_impl(env, key, _fun, LVAL_FLAG_ACCEPTS_ERR);
 }

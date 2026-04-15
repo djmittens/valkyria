@@ -119,7 +119,7 @@
   (test/case "parse-null"
     {do
     (= {result} (json/parse "null"))
-    (test/assert-eq (head result) (head {Option::None}) "null should parse to Option::None tag")
+    (test/assert-eq (str result) (str {Option::None}) "null should parse to Option::None tag")
     (test/assert-eq 1 (len result) "null should be single-element list")
     true
   })
@@ -211,7 +211,7 @@
     (test/assert-eq 1 (nth 3 result) "true")
     (test/assert-eq 0 (nth 4 result) "false")
     (= {null-val} (nth 5 result))
-    (test/assert-eq (head null-val) (head {Option::None}) "null becomes Option::None")
+    (test/assert-eq (str null-val) (str {Option::None}) "null becomes Option::None")
     true
   })
 
@@ -448,7 +448,7 @@
     {do
     (= {result} (json/parse "{\"x\":null}"))
     (= {val} (:x result))
-    (test/assert-eq (head val) (head {Option::None}) "object null value")
+    (test/assert-eq (str val) (str {Option::None}) "object null value")
     true
   })
 
@@ -509,18 +509,14 @@
   (test/case "parse-empty-input"
     {do
     (= {result} (json/parse ""))
-    (= {tag} (head result))
-    (= {expected} (head {Option::None}))
-    (test/assert-eq tag expected "empty input parses as null")
+    (test/assert-eq (str result) (str {Option::None}) "empty input parses as null")
     true
   })
 
   (test/case "parse-garbage-input"
     {do
     (= {result} (json/parse "xyz"))
-    (= {tag} (head result))
-    (= {expected} (head {Option::None}))
-    (test/assert-eq tag expected "garbage input parses as null")
+    (test/assert-eq (str result) (str {Option::None}) "garbage input parses as null")
     true
   })
 

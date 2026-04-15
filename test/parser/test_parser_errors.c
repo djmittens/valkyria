@@ -2449,8 +2449,9 @@ static void test_print_user_with_lambda(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  // print should handle lambda functions
-  valk_lval_t *result = parse_and_eval("(print (\\ {x} x))");
+  // print should handle lambda functions. Body {x} kept quoted so lambda
+  // creation doesn't eagerly evaluate x in the outer scope.
+  valk_lval_t *result = parse_and_eval("(print (\\ {x} {x}))");
   ASSERT_LVAL_TYPE(result, LVAL_NIL);
 
   VALK_PASS();
@@ -2471,7 +2472,8 @@ static void test_print_user_with_error(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  // print should handle error values by converting to string
+  // print is marked accepts-err so it receives error values and prints
+  // their message, returning NIL.
   valk_lval_t *result = parse_and_eval("(print (error \"test error\"))");
   ASSERT_LVAL_TYPE(result, LVAL_NIL);
 

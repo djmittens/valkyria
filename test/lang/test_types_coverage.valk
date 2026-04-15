@@ -3,6 +3,10 @@
 (type {Coord}
   {:x Num :y Num})
 
+; Color used by redeclare test below — declared at top level so the type
+; transform sees it (eval'd test bodies don't re-run the transform).
+(type {Color} {Red} {Green} {Blue})
+
 (type {Animal}
   {Cat :name Str}
   {Dog :name Str :breed Str}

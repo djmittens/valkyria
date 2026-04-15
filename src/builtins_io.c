@@ -236,7 +236,9 @@ static valk_lval_t *eval_loaded_ast(valk_lenv_t *target_env,
   if (module_prefix)
     valk_module_rewrite(ast, module_prefix);
 
-  // Pass 3: evaluate
+  // Pass 3: evaluate. Errors are printed but do not abort subsequent
+  // forms — a failed assertion in one top-level expression shouldn't
+  // halt loading the rest of the file.
   valk_lval_t *last = nullptr;
   while (valk_lval_list_count(ast)) {
     valk_lval_t *x = valk_lval_pop(ast, 0);
@@ -245,7 +247,7 @@ static valk_lval_t *eval_loaded_ast(valk_lenv_t *target_env,
     if (LVAL_TYPE(x) == LVAL_NIL) continue;
     if (LVAL_TYPE(x) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
       valk_lval_println(x); // LCOV_EXCL_LINE
-      return x; // LCOV_EXCL_LINE
+      continue;             // LCOV_EXCL_LINE
     }
     x = valk_lval_eval(target_env, x);
     if (LVAL_TYPE(x) == LVAL_ERR) {
@@ -591,7 +593,7 @@ static valk_lval_t* valk_builtin_ref_p(valk_lenv_t* e, valk_lval_t* a) {
 
 void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "error", valk_builtin_error);
-  valk_lenv_put_builtin(env, "error?", valk_builtin_error_p);
+  valk_lenv_put_builtin_err_ok(env, "error?", valk_builtin_error_p);
   valk_lenv_put_builtin(env, "list?", valk_builtin_list_p);
   valk_lenv_put_builtin(env, "ref?", valk_builtin_ref_p);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
@@ -600,7 +602,7 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "read-file", valk_builtin_read_file);
   valk_lenv_put_builtin(env, "src-pos", valk_builtin_src_pos);
   valk_lenv_put_builtin(env, "qcons", valk_builtin_qcons);
-  valk_lenv_put_builtin(env, "type-of", valk_builtin_type_of);
+  valk_lenv_put_builtin_err_ok(env, "type-of", valk_builtin_type_of);
   valk_lenv_put_builtin(env, "str?", valk_builtin_str_p);
   valk_lenv_put_builtin(env, "sym?", valk_builtin_sym_p);
   valk_lenv_put_builtin(env, "num?", valk_builtin_num_p);

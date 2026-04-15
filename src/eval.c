@@ -620,8 +620,20 @@ apply_cont:
         }
         
         case CONT_COLLECT_ARG: {
+          // BYOL: error propagation at the call boundary. If any evaluated
+          // arg is an error, return it — do not invoke the function. The
+          // only opt-out is introspection builtins (error?, type-of) that
+          // explicitly mark themselves with LVAL_FLAG_ACCEPTS_ERR.
+          if (LVAL_TYPE(value) == LVAL_ERR) {
+            valk_lval_t *f = frame.collect_arg.func;
+            if (!(LVAL_TYPE(f) == LVAL_FUN &&
+                  (f->flags & LVAL_FLAG_ACCEPTS_ERR))) {
+              free(frame.collect_arg.args);
+              goto apply_cont;
+            }
+          }
           frame.collect_arg.args[frame.collect_arg.count++] = value;
-          
+
           if (valk_lval_list_is_empty(frame.collect_arg.remaining)) {
             valk_lval_t* args_list = valk_lval_list(frame.collect_arg.args, frame.collect_arg.count);
             free(frame.collect_arg.args);

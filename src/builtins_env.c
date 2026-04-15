@@ -231,8 +231,11 @@ static valk_lval_t *valk_builtin_macro(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 void valk_register_env_builtins(valk_lenv_t* env) {
-  valk_lenv_put_builtin(env, "def", valk_builtin_def);
-  valk_lenv_put_builtin(env, "=", valk_builtin_put);
+  // def/= accept errors so user code can bind them for inspection
+  // (error?, match, etc). Without this, BYOL short-circuit makes
+  // errors impossible to catch.
+  valk_lenv_put_builtin_err_ok(env, "def", valk_builtin_def);
+  valk_lenv_put_builtin_err_ok(env, "=", valk_builtin_put);
   valk_lenv_put_builtin(env, "\\", valk_builtin_lambda);
   valk_lenv_put_builtin(env, "macro", valk_builtin_macro);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
