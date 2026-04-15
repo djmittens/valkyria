@@ -417,7 +417,13 @@ valk_lval_t *valk_tt_transform_expr(valk_type_env_t *env, valk_type_scope_t *sco
         }
       }
     }
-    if (LVAL_TYPE(head) == LVAL_SYM && valk_lval_list_count(expr) > 1) {
+    // Rewrite short-name constructor shortcuts inside qexprs ({Some 42} when
+    // Some is a known Option constructor), but leave fully-qualified
+    // {Type::Ctor ...} alone — that form is the literal internal tagged
+    // representation, so rewriting would produce nonsense (wrapping the tag
+    // as though it were another short-name call).
+    if (LVAL_TYPE(head) == LVAL_SYM && valk_lval_list_count(expr) > 1 &&
+        strstr(head->str, "::") == NULL) {
       valk_constructor_t *qctor = valk_type_env_find_constructor(env, head->str);
       if (!qctor) qctor = valk_tt_find_constructor_by_short_name(env, head->str);
       if (qctor && qctor->field_count > 0) {
