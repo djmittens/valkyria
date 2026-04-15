@@ -16,19 +16,34 @@ infinite-loop when passed an error value. `(nil? error)` returns false,
 fills with garbage from the loop; observed as "GC thrashing" but actually just
 a runaway evaluator.
 
-**Fix:** in the argument-evaluation path (before invoking a function), if any
-evaluated arg is `LVAL_ERR`, return that error immediately — do not call the
-function. Opt-outs: `error?`, `error-message`, `do`, `if`, `match`, any
-control-flow form that must see values regardless. Mark those with a flag or
-handle them explicitly in the eval path.
+**Desired fix:** in the argument-evaluation path (before invoking a function),
+if any evaluated arg is `LVAL_ERR`, return that error immediately — do not
+call the function.
 
-**Files:** `src/eval.c` (main call site), possibly `src/builtins_io.c`
-(`valk_lval_eval_call`). Look for where args are reduced before call dispatch.
+**Attempted 2026-04-14, reverted.** Added `LVAL_FLAG_ACCEPTS_ERR` flag +
+`valk_lenv_put_builtin_err_ok` helper + short-circuit in `CONT_COLLECT_ARG`
+in `src/eval.c`. Marked `error?`, `type-of`, `print`, `printf`, `println`,
+`str`, `=`, `def` as accepts-err. Result: **43 new test failures**,
+`test_lsp_integration` internal 60s timeout fires. The error-as-value
+pattern is pervasive in the codebase — many builtins receive errors today
+and do useful work with them (print them, bind them, pass them through).
+Flipping the default globally requires auditing every builtin and every
+`(...)` call site in prelude+stdlib+scripts.
 
-**Risk:** low. This is additive behavior for every function; we're promoting
-silent-corruption paths to early-return errors.
+**Better approach:**
+- Identify the specific functions that loop on error input (`tail`, `head`,
+  `nil?`, `len` on error) and make *those* propagate errors rather than
+  returning nonsense. That's a local fix in `src/builtins_list.c` for each
+  builtin — check `LVAL_TYPE(arg) == LVAL_ERR` at entry and return the
+  error. Much smaller blast radius.
+- Only those builtins where returning the error is strictly better than
+  looping-on-garbage need to change.
 
-**Effort:** ~20 LOC + opt-out marking for ~5 builtins.
+**Files:** `src/builtins_list.c` (head, tail, nil?, len, nth, etc.).
+
+**Risk:** low. Per-builtin change, each independently testable.
+
+**Effort:** ~30 LOC across a handful of list builtins.
 
 **Blocks:** nothing.
 
