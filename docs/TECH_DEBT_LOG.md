@@ -156,7 +156,7 @@ a new class of failures; see #8.)
 
 ---
 
-## [ ] 8. BYOL migration: code that assumed errors-as-values (NEW)
+## [x] 8. BYOL migration (fb2cfb4) — 86/89 fixed, 3 remaining are non-BYOL
 
 After BYOL shipped (#1), the call-boundary short-circuit surfaced ~85
 tests that depended on errors silently flowing through builtin/user
