@@ -324,13 +324,17 @@
 (fun {ref/collect-refs text} {do
   (= {ast} (parse text))
   (if (error? ast) {nil}
-    {ref/walk-exprs ast nil nil})
+    {do
+      (= {r} (ref/walk-exprs ast nil nil))
+      (if (error? r) {nil} {r})})
 })
 
 (sig 'ref/collect-refs-from-ast {-> List List})
-(fun {ref/collect-refs-from-ast ast} {
-  if (error? ast) {nil}
-  {ref/walk-exprs ast nil nil}
+(fun {ref/collect-refs-from-ast ast} {do
+  (if (error? ast) {nil}
+    {do
+      (= {r} (ref/walk-exprs ast nil nil))
+      (if (error? r) {nil} {r})})
 })
 
 (sig 'ref/collect-scopes-from-ast {-> List List})

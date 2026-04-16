@@ -310,17 +310,17 @@
   })
   (test/case "aio/let with single binding"
     {do
-    (= {h} (aio/let ((x (aio/pure 10))) x))
+    (= {h} (aio/let {((x (aio/pure 10)))} {x}))
     (== (aio/status h) :completed)
   })
   (test/case "aio/let with multiple bindings"
     {do
-    (= {h} (aio/let ((a (aio/pure 1)) (b (aio/pure 2))) (+ a b)))
+    (= {h} (aio/let {((a (aio/pure 1)) (b (aio/pure 2)))} {(+ a b)}))
     (== (aio/status h) :completed)
   })
   (test/case "aio/let with then barrier"
     {do
-    (= {h} (aio/let ((x (aio/pure 10)) :then (y (aio/pure (* x 2)))) y))
+    (= {h} (aio/let {((x (aio/pure 10)) :then (y (aio/pure (* x 2))))} {y}))
     (== (aio/status h) :completed)
   })
   (test/case "aio/do with single expression"

@@ -26,6 +26,12 @@
     (= {raw-hints} (hint/walk-exprs ast ctx nil))
     (= {type-hints} (hint/collect-type-hints ast db))
     (= {field-hints} (hint/collect-field-hints ast db))
+    ; BYOL: any pass returning an error (e.g. field-hints walker hitting
+    ; an untyped binding) should degrade to "no hints from that pass"
+    ; rather than propagate up.
+    (= {raw-hints}   (if (error? raw-hints)   {nil} {raw-hints}))
+    (= {type-hints}  (if (error? type-hints)  {nil} {type-hints}))
+    (= {field-hints} (if (error? field-hints) {nil} {field-hints}))
     (hint/format-hints (join raw-hints (join type-hints field-hints)) text range)}
 })
 

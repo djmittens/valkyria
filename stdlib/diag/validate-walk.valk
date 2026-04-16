@@ -577,5 +577,9 @@
                   :text text
                   :diags nil))
   (= {result} (vd/walk-body ast ctx))
-  (reverse result:diags)
+  ; Under BYOL, an internal assertion/type check inside the walker can
+  ; produce an LVAL_ERR that propagates out. Treat that as "validator
+  ; itself crashed, no diagnostics to report" rather than passing an
+  ; error upward.
+  (if (error? result) {nil} {reverse result:diags})
 })

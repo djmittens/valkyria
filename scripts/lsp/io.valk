@@ -264,19 +264,26 @@
 (fun {lsp/get-text-pos params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
-  (= {text} (lsp/doc-get uri))
-  (= {pos} params:position)
-  (if (nil? text) {nil}
-    {list :uri uri :text text :ast (lsp/get-ast-for-display uri text)
-          :line pos:line :col pos:character})
+  (if (or (error? uri) (nil? uri)) {nil}
+    {do
+      (= {text} (lsp/doc-get uri))
+      (= {pos} params:position)
+      (if (or (nil? text) (error? text)) {nil}
+        {do
+          ; Parse can fail on broken source; the AST field holds the raw
+          ; parse result (list-of-errors is fine, a bare Error is not).
+          (= {ast-val} (lsp/get-ast-for-display uri text))
+          (= {ast-val} (if (error? ast-val) {nil} {ast-val}))
+          (list :uri uri :text text :ast ast-val
+                :line pos:line :col pos:character)})})
 })
 
 (fun {lsp/get-word-ctx params} {do
   (= {ctx} (lsp/get-text-pos params))
-  (if (nil? ctx) {nil}
+  (if (or (nil? ctx) (error? ctx)) {nil}
     {do
       (= {w} (symdb/word-at-position ctx:text ctx:line ctx:col))
-      (if (nil? w) {nil}
+      (if (or (nil? w) (error? w)) {nil}
         {list :uri ctx:uri :text ctx:text :ast ctx:ast :line ctx:line :col ctx:col :word w})})
 })
 
