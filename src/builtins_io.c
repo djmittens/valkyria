@@ -130,7 +130,20 @@ static valk_lval_t *parse_file_cached(const char *resolved_path) {
   char *text = calloc((size_t)flen + 1, 1);
   fread(text, 1, (size_t)flen, f);
   fclose(f);
-  valk_lval_t *ast = valk_parse_text(text);
+
+  // Allocate the cached AST on the GC heap so it is stable across scratch
+  // arena resets. The eval loop rolls back scratch offsets at continuation
+  // boundaries; any scratch pointer stored in the cache would dangle after
+  // the next rollback, causing valk_parse_cache_visit_roots to crash.
+  valk_gc_heap_t *heap = valk_thread_ctx.heap
+                           ? (valk_gc_heap_t *)valk_thread_ctx.heap
+                           : (valk_sys ? valk_sys->heap : NULL);
+  valk_lval_t *ast;
+  if (heap) {
+    VALK_WITH_ALLOC((void *)heap) { ast = valk_parse_text(text); }
+  } else {
+    ast = valk_parse_text(text);
+  }
   free(text);
   if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
 
