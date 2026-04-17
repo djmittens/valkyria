@@ -205,7 +205,6 @@ set(VALKYRIA_SOURCES
   src/metrics_delta.c
   src/metrics_builtins.c
   src/macro.c
-  src/module.c
   src/aio/aio_diagnostics_builtins.c
   src/aio/aio_request_ctx.c
   src/aio/aio_ctx_builtins.c

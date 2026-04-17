@@ -41,7 +41,7 @@
         {if (and (lsp/ast-has-error ctx:ast) (lsp/no-display-ast? ctx:uri))
           {sem/lex-tokenize ctx:text}
           {sem/tokenize-ast ctx:ast ctx:text}}
-        {sem/encode-deltas ctx:text (symdb/rows-to-token-groups rows)}))
+        {sem/encode-deltas ctx:text (nav/rows-to-token-groups rows)}))
       (= {typed} (sem/parse-flat data))
       (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
       (lsp/send-response id (list :data (sem/flatten filtered)))})

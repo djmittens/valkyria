@@ -464,18 +464,18 @@
         {if (and (lsp/ast-has-error ctx:ast) (lsp/no-display-ast? ctx:uri))
           {sem/lex-tokenize ctx:text}
           {sem/tokenize-ast ctx:ast ctx:text}}
-        {sem/encode-deltas ctx:text (symdb/rows-to-token-groups rows)}))
+        {sem/encode-deltas ctx:text (nav/rows-to-token-groups rows)}))
       (lsp/send-response id (list :data data))})
 })
 
-(sig 'symdb/rows-to-token-groups {-> List List})
-(fun {symdb/rows-to-token-groups rows} {
+(sig 'nav/rows-to-token-groups {-> List List})
+(fun {nav/rows-to-token-groups rows} {
   if (nil? rows) {nil}
   {do
     (= {r} (head rows))
     (qcons (list (plist/get r :pos) (plist/get r :length)
                  (plist/get r :token_type) (plist/get r :modifiers))
-      (symdb/rows-to-token-groups (tail rows)))}
+      (nav/rows-to-token-groups (tail rows)))}
 })
 
 ; ---------------------------------------------------------------------------

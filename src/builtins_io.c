@@ -13,7 +13,6 @@
 #include "diag.h"
 #include "gc.h"
 #include "macro.h"
-#include "module.h"
 #include "type_env.h"
 
 extern void valk_register_file_builtins(valk_lenv_t *env);
@@ -179,6 +178,11 @@ static void extract_module_prefix(const char *path, char *out, size_t out_sz) {
   out[len] = '\0';
 }
 
+// Tracks the currently-loading module's prefix so nested (load ...) calls
+// can compose child prefixes: parent/basename. Thread-local so parallel
+// loaders don't stomp each other.
+static _Thread_local const char *current_load_prefix = NULL;
+
 
 
 // Caller owns `ast` (must be a freshly-owned copy — this function mutates it
@@ -203,51 +207,9 @@ static valk_lval_t *eval_loaded_ast(valk_lenv_t *target_env,
     }
   }
 
-  // Pass 1.5: pre-register child modules from (load ...) calls.
-  // Skip files already cached (loaded elsewhere) — creating an empty child
-  // here would shadow the real module and break FQN resolution.
-  if (module_prefix) {
-    valk_module_t *cur_mod = valk_mod_current();
-    if (cur_mod) {
-      valk_lval_t *scan = ast;
-      while (scan && LVAL_TYPE(scan) == LVAL_CONS) {
-        valk_lval_t *form = scan->cons.head;
-        if (form && LVAL_TYPE(form) == LVAL_CONS &&
-            !(form->flags & LVAL_FLAG_QUOTED)) {
-          valk_lval_t *head = form->cons.head;
-          if (head && LVAL_TYPE(head) == LVAL_SYM &&
-              strcmp(head->str, "load") == 0) {
-            valk_lval_t *rest = form->cons.tail;
-            if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
-              valk_lval_t *path_arg = rest->cons.head;
-              if (LVAL_TYPE(path_arg) == LVAL_STR) {
-                char child_resolved[PATH_MAX];
-                bool already_loaded = false;
-                if (realpath(path_arg->str, child_resolved)) {
-                  pthread_mutex_lock(&module_cache_lock);
-                  module_entry_t *ce = module_cache_find(child_resolved);
-                  if (ce && ce->state == MODULE_STATE_READY)
-                    already_loaded = true;
-                  pthread_mutex_unlock(&module_cache_lock);
-                }
-                if (!already_loaded) {
-                  char child_prefix[256];
-                  extract_module_prefix(path_arg->str, child_prefix,
-                                        sizeof(child_prefix));
-                  valk_mod_find_or_create_child(cur_mod, child_prefix);
-                }
-              }
-            }
-          }
-        }
-        scan = scan->cons.tail;
-      }
-    }
-  }
-
-  // Pass 2: rewrite names with FQN prefix
+  // Pass 2: qualify unqualified def/sig/type names with the module prefix
   if (module_prefix)
-    valk_module_rewrite(ast, module_prefix);
+    valk_module_apply_prefix(ast, module_prefix);
 
   // Pass 3: evaluate. Errors are printed but do not abort subsequent
   // forms — a failed assertion in one top-level expression shouldn't
@@ -315,7 +277,13 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
   module_entry_t *entry = &module_cache[module_cache_count++];
   char auto_prefix[256];
   extract_module_prefix(resolved, auto_prefix, sizeof(auto_prefix));
+  char composed_prefix[512];
   const char *prefix = auto_prefix;
+  if (current_load_prefix) {
+    snprintf(composed_prefix, sizeof(composed_prefix), "%s/%s",
+             current_load_prefix, auto_prefix);
+    prefix = composed_prefix;
+  }
   if (argc > 1)
     prefix = valk_lval_list_nth(a, 1)->str;
 
@@ -330,18 +298,11 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
     return ast;
   }
 
-  valk_module_t *prev_mod = valk_mod_current();
-  valk_module_t *parent = prev_mod ? prev_mod : valk_mod_root();
-  valk_module_t *child_mod = valk_mod_find_or_create_child(parent, prefix);
-  child_mod->resolved_path = strdup(resolved);
-  valk_mod_set_current(child_mod);
-
-  char fqn[VALK_MOD_PATH_MAX];
-  valk_mod_qualified_path(child_mod, fqn, sizeof(fqn));
-
-  valk_lval_t *result = eval_loaded_ast(e, ast, fqn);
-
-  valk_mod_set_current(prev_mod);
+  const char *prev_prefix = current_load_prefix;
+  current_load_prefix = entry->prefix;
+  valk_mod_registry_add(entry->prefix);
+  valk_lval_t *result = eval_loaded_ast(e, ast, entry->prefix);
+  current_load_prefix = prev_prefix;
 
   if (LVAL_TYPE(result) == LVAL_ERR) {
     entry->state = 0;
@@ -398,8 +359,8 @@ static valk_lval_t *valk_builtin_parse_file(valk_lenv_t *e, valk_lval_t *a) {
   return parse_file_cached(resolved);
 }
 
-// Shared body: macro-expand + module-tree pre-register + FQN rewrite for
-// an already-parsed AST. Returns the (mutated) ast.
+// Shared body: macro-expand + module-prefix application for an already-parsed
+// AST. Returns the (mutated) ast.
 static valk_lval_t *compile_process_ast(valk_lval_t *ast, const char *prefix) {
   valk_lenv_t *menv = valk_macro_env();
   {
@@ -416,40 +377,7 @@ static valk_lval_t *compile_process_ast(valk_lval_t *ast, const char *prefix) {
     }
   }
 
-  if (!prefix) return ast;
-
-  valk_module_t *prev_mod = valk_mod_current();
-  valk_module_t *parent = prev_mod ? prev_mod : valk_mod_root();
-  valk_module_t *child_mod = valk_mod_find_or_create_child(parent, prefix);
-  valk_mod_set_current(child_mod);
-
-  {
-    valk_lval_t *scan = ast;
-    while (scan && LVAL_TYPE(scan) == LVAL_CONS) {
-      valk_lval_t *form = scan->cons.head;
-      if (form && LVAL_TYPE(form) == LVAL_CONS &&
-          !(form->flags & LVAL_FLAG_QUOTED)) {
-        valk_lval_t *head = form->cons.head;
-        if (head && LVAL_TYPE(head) == LVAL_SYM &&
-            strcmp(head->str, "load") == 0) {
-          valk_lval_t *rest = form->cons.tail;
-          if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
-            valk_lval_t *path_arg = rest->cons.head;
-            if (LVAL_TYPE(path_arg) == LVAL_STR) {
-              char child_prefix[256];
-              extract_module_prefix(path_arg->str, child_prefix,
-                                    sizeof(child_prefix));
-              valk_mod_find_or_create_child(child_mod, child_prefix);
-            }
-          }
-        }
-      }
-      scan = scan->cons.tail;
-    }
-  }
-
-  valk_module_rewrite(ast, prefix);
-  valk_mod_set_current(prev_mod);
+  valk_module_apply_prefix(ast, prefix);
   return ast;
 }
 
