@@ -126,25 +126,28 @@ Baseline: 4102 pass / 18 pre-existing fail / 15.9s.
 
 ---
 
-## [~] 3. `make check` dominates `make test` wall time — IN PROGRESS
+## [x] 3. `make check` dominates `make test` wall time — PARALLELIZED
 
 **Symptom:** `make test` runs `make check` (valk-check lint over whole tree)
-before the actual test runner. Currently ~45s of the 67s total.
+before the actual test runner. Was ~32s (pre-optimization), now ~4.7s.
 
-**Status:** parse cache (#2) took this from ~45s to 33–42s. New builtins
-`parse-file` and `compile/process-file` (3391676) added — path-keyed,
-go through the AST cache. **Not yet wired into valk-check** — initial
-attempt regressed multiple LSP test suites (something about reusing the
-cached AST through the deep-clone path interacts badly with the LSP's
-in-place AST mutations during validation). Need to audit
-`compile_process_ast` mutation semantics before flipping valk-check
-over.
+**Status (2026-04-17):** Shipped option (a) — parallelize validation via
+`aio/pmap`. Phase 2 (validation) now runs 4 workers over all files; each
+worker has its own scratch arena so per-thread GC pressure is 1/4 of the
+single-threaded case. DB is read once in the master thread into preloaded
+caches (`known-set`, `symdb-type-keys`, `arity-cache`) passed as closure
+captures — workers do zero sqlite IO, sidestepping the single-threaded
+sqlite handle constraint.
 
-**Files if resumed:** `scripts/valk-check.valk` (use `parse-file` and
-`compile/process-file`), maybe more aggressive deep-clone in
-`parse_file_cached`.
+**Result:** `time make check` = 4.7s wall / 11.6s user @ 248% CPU (from 32s).
+7× faster; full test suite still at 190 suites / 4143 tests / 0 failures.
 
-**Effort:** 1–2 hours.
+**Key pieces:**
+- `stdlib/diag/validate-walk.valk` — added `vd/validate-preloaded` taking
+  caches as args instead of looking up in DB.
+- `scripts/valk-check.valk` — added `check/validate-file-parallel` (worker),
+  `check/aggregate-results` (serial reducer), `check/validate-all-parallel`
+  (pmap orchestrator). Main starts aio system with 4 threads.
 
 ---
 
@@ -156,7 +159,7 @@ a new class of failures; see #8.)
 
 ---
 
-## [x] 8. BYOL migration (fb2cfb4) — 86/89 fixed, 3 remaining are non-BYOL
+## [x] 8. BYOL migration — fully resolved (all 189 suites pass)
 
 After BYOL shipped (#1), the call-boundary short-circuit surfaced ~85
 tests that depended on errors silently flowing through builtin/user
@@ -171,21 +174,16 @@ masked by the old behavior. The pattern is always one of:
 - AST-walking code that recurses on `(head x)`/`(tail x)` where x can
   contain errors as elements.
 
-**Affected suites (count of failures):** test_lsp_handlers_core (2),
-test_lsp_handlers_db, test_lsp_helpers, test_lsp_hints, test_lsp_refs,
-test_lsp_validate, test_async_http_handlers, test_aio_builtins_coverage,
-test_lsp_integration. Total ~85.
+**Final state:** All 189 suites pass, 4138 tests, 0 failures.
 
-**Approach:** read each failing assertion, find the erroring chain, add
-explicit `(if (error? x) {...graceful-fallback...} {...})` guard at the
-right level. Each fix is local and small (5–10 LOC) but there are many.
-
-**Already done in this batch:**
-- `handle?` in `stdlib/aio/handles.valk` — guard around `aio/status`'s
-  result before passing to `exists`.
-
-**Files to audit:** `scripts/lsp/*.valk`, `stdlib/aio/handles.valk`,
-`scripts/valk-check.valk` HM-types path.
+The last two failures were in `test_lsp_hints`:
+- `field-access-hint-from-ctor` and `field-access-from-function-return-type`
+- Root cause: two mismatched bracket sequences in `scripts/lsp/hints-fields.valk`
+  introduced when adding field-access hint support. An extra `}` in
+  `hint/vt-scan-binding` (offset 6849) and a swapped `})` vs `)}` in
+  `hint/fa-try-binding` (offset 13817) caused those functions and all
+  subsequent definitions to silently fail to load. Fixed by correcting
+  the closing sequences on lines 208 and 416.
 
 **Effort:** ~1 hour per suite, 9 suites = ~1 day total.
 
@@ -228,33 +226,38 @@ writing the full path. Could be done by:
 
 ---
 
-## [ ] 5. Async exec / worker thread exhaustion
+## [x] 5. Async exec / worker thread exhaustion — `aio/exec` shipped
 
-**Symptom:** `valk_builtin_exec` is synchronous — `poll(fds, 2, -1)` and
-`waitpid` block the worker thread until the child produces output and exits.
-With 12 aio workers, 12 blocked in exec means zero throughput. Steady-state
-CPU during `run-tests.valk` hits ~2–3 cores of 12 despite having 189 tasks to
-dispatch. Shell-forked parallel test binaries complete in 28ms; same 12 via
-the runner take ~1.3s each — suggests VM-level lock contention during output
-collection (GC/alloc serialization on `valk_lval_str`).
+**Was:** `valk_builtin_exec` is synchronous — `poll(fds, 2, -1)` and `waitpid`
+block the worker thread until the child produces output and exits. With 12
+aio workers, 12 blocked in exec means zero throughput.
 
-**Fix options:**
-- (a) `uv_spawn` + `uv_read_start` — proper async through libuv. Worker
-      returns immediately after dispatch, callback completes the task. Big
-      refactor, integrates with aio combinator infrastructure.
-- (b) Quick win: run `waitpid` / `poll` in a detached pthread, return a
-      pending handle, let aio mechanism poll. Less invasive but still
-      blocks a kernel thread per exec.
+**Fix:** Added `aio/exec` builtin in `src/builtins_file.c` — `uv_spawn` +
+`uv_read_start` on loop 0. Returns an async handle immediately; subprocess
+output is accumulated by libuv read callbacks, and the handle completes when
+the process exits AND both pipes hit EOF. Five test cases (simple echo,
+non-zero exit, stderr capture, spawn failure, 10-way parallel) in
+`test/aio/test_aio_exec.valk`, all pass.
 
-**Files:** `src/builtins_file.c` (the `exec` builtin).
+**Subtle bugs squashed:**
+- `LVAL_ASSERT_TYPE` macro expands with an internal `for (u64 i = 0; ...)`
+  that shadows the caller's `i`. Re-evaluating `valk_lval_list_nth(a, i)`
+  inside the macro fetches element 0 of arg list. Fix: extract arg to a
+  local var before the macro call. Applies wherever a caller uses `i` at
+  the macro call site and passes an index-dependent expression.
+- `uv_spawn` failure path leaves the `uv_process_t` handle *initialized and
+  registered in the loop* even though spawn didn't succeed. Must close the
+  process handle alongside the pipes, otherwise loop shutdown walks a stale
+  handle whose `data` points to freed memory → SEGV in `__aio_uv_walk_close`
+  when a later test stresses the same loop.
 
-**Risk:** medium-high — threading + subprocess + GC interaction.
-
-**Effort:** option (a) ~1 day, option (b) a few hours.
+**Note:** the original sync `exec` is unchanged — existing users keep the
+blocking semantics. The call site in the parallel test runner can be
+migrated to `aio/exec` separately.
 
 ---
 
-## [ ] 6. Module system simplification
+## [~] 6. Module system simplification — **prereqs done; implementation deferred**
 
 **Symptom:** `src/module.c`, `valk_module_rewrite`, pre-registration pass,
 module cache keyed on tree — all working together to implement auto-prefixing
@@ -263,38 +266,52 @@ by an interaction: cache hit skipped child-module creation but the FQN
 rewriter had pre-registered an empty child, which then shadowed the real
 module during name resolution.
 
-**Root design question:** the user wants this reimplemented as a macro — the
-loader sets a per-file `*module-prefix*` var, the `fun`/`def` macros consume
-it. C side becomes trivial.
+**Prereq status (2026-04-17):** all three prereqs from the original entry
+are now complete; spec lives at `docs/MODULE_SYSTEM_REFACTOR.md`. Key
+findings:
 
-**Gotcha hit in earlier attempt:** internal refs within a file require either
-(a) the rewriter knowing all defs in the file, or (b) a file-scoped local env
-so `(fun {foo ...})` creates both a local `foo` binding (for internal calls)
-and a global `prefix/foo` binding. Pure C simplification (keep rewriter, drop
-tree) broke `test_lsp_integration` — a C test that exec's a child valk LSP
-server — didn't finish diagnosing.
+- **Hang hypothesis (stdin-blocking) REFUTED.** Actual mechanism is
+  *silent handler failure*: when rewrite misses a prefix, the handler
+  symbol is unbound, LSP reader callback returns `LVAL_ERR`, error is
+  logged to stderr but never propagated as a JSON-RPC response. Parent's
+  `MSG_TIMEOUT_MS = 5000` fires. Fix is independent of the refactor — a
+  ~5-line change in `src/builtins_pipe.c` around line 341 to emit a
+  `window/logMessage` notification would make failures loud during
+  development.
 
-**Prerequisites before touching this again:**
-1. Read every file that uses `valk_module_t`, `valk_mod_*`, `valk_module_rewrite`,
-   `resolve_qualified`, `compile/process`. End-to-end data-flow trace.
-2. Understand why `test_lsp_integration`'s child hangs when load semantics
-   change. This is probably a stdin-blocking issue for the LSP server's main
-   loop, but needs verification.
-3. Write a spec doc covering the semantic model: local vs global, nested
-   prefixes (lsp/nav vs lsp + nav), what `(type ...)`, `(sig ...)`, `(macro ...)`
-   each expand to, how unqualified refs resolve.
+- **Pure-macro approach hits two HIGH-risk walls:**
+  1. **Sibling resolution.** `scripts/lsp/nav.valk` calls
+     `(analysis/line-col->offset …)`. Today the rewriter walks up the module
+     tree from `lsp/nav` → `lsp` → finds child `analysis`. Without the tree,
+     a `*module-prefix*` var alone cannot resolve siblings. Options: force
+     full-qualification everywhere (breaking ~30 sites), or keep a flat
+     path→prefix map at the Valk level (rebuilding half the system).
+  2. **Macro scope isolation.** Macros evaluate in the global macro env
+     (`src/builtins_io.c:195-198`), *before* module rewrite. `fun` in
+     prelude generates `def` forms without access to `*module-prefix*`.
+     Threading the prefix through the macro env means either a special
+     evaluator mode or a post-expansion rewrite pass — at which point the
+     C simplification vanishes.
 
-**Depends on:** (1) would prevent the old bug class from mattering during
-migration — errors from unresolved symbols would propagate cleanly instead of
-infinite-looping.
+**Options from spec doc:**
+- A. Breaking change: require full-qualification at every cross-file
+  reference. Ship a codemod for `scripts/lsp/*.valk`.
+- B. Flat path→prefix registry + macro-accessible. Reduces C code
+  modestly but not trivially.
+- C. Defer the refactor; ship only the LSP error-propagation fix.
+
+**Recommendation:** Option C. The module system works today (all 190
+suites pass); this refactor is architectural, not correctness. Attempting
+it without a chosen path (A or B) risks the same class of regression that
+derailed the 2026-04-14 attempt.
 
 **Risk:** high. Big blast radius, many consumers.
 
-**Effort:** 1–2 days focused.
+**Effort:** 1–2 days focused — once Option A/B is decided.
 
 ---
 
-## [~] 7. Test runner throughput — partially improved via #2
+## [x] 7. Test runner throughput — scratch-arena refactor applied
 
 **Was:** first batch of 12 C tests all reported ~4.8s wall despite
 completing in milliseconds when run directly.
@@ -305,23 +322,23 @@ but a smaller clustering remains. Parse cache (#2) didn't help child
 subprocesses (caches are per-process) but apparently helped the runner
 itself.
 
-**Remaining cost (~1s per test in the first batch):** still likely VM lock
-contention during `exec` output collection. `valk_lval_str` allocates
-through the GC heap (src/lval.c:73 intern-table lock, src/gc_heap.c
-page-list lock). 12 workers reading pipes and allocating strings
-concurrently hit these.
+**What shipped:** exec builtin's result-building phase now explicitly wraps
+lval allocation in `VALK_WITH_ALLOC((void*)scratch)` and evacuates the
+returned qlist to heap. Also switched to `valk_lval_str_n` so subprocess
+output containing embedded NULs is preserved (was previously truncated by
+`valk_lval_str`'s internal strlen). Removed the now-redundant null-
+termination of the read buffers.
 
-**Fix path:** run `exec` under the scratch arena allocator rather than
-the heap — `VALK_WITH_ALLOC(scratch) { ... exec body ... }` around the
-poll/read loop and `valk_lval_str` calls. Scratch is per-thread, lock-
-free. Then evacuate the result lvals to heap only at return. ~20 LOC.
+**Measured impact:** 16.1s test-suite wall time — same as baseline. In the
+aio pmap path, exec was already running under scratch (via
+`aio_task_queue.c`'s `__run_task_in_scratch`), so the refactor is
+effectively a no-op on the hot path. It's defensive correctness: ensures
+exec's return is heap-allocated regardless of caller, and handles binary
+subprocess output correctly.
 
-**Files:** `src/builtins_file.c` (exec builtin).
-
-**Risk:** low-medium — scratch-to-heap evacuation is well-tested in the
-codebase for similar patterns.
-
-**Effort:** 1–2 hours + measure.
+**Remaining throughput ceiling:** workers still block in `poll(fds, 2, -1)`
+and `waitpid` — that's item #5 (uv_spawn), the real fix for parallel
+throughput.
 
 ---
 
