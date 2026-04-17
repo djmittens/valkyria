@@ -196,7 +196,8 @@
     {if (nil? formals) {acc}
     {do
       (= {var-name} (str (head formals)))
-      (= {inferred} (if (not (list? val)) {nil}
+      (= {inferred} (if (error? val) {nil}
+        {if (not (list? val)) {nil}
         {if (nil? val) {nil}
         {do
           (= {hn} (ast/head-name val))
@@ -204,7 +205,7 @@
           {if (hint/is-ctor-name hn) {hn}
           {do
             (= {ret} (hint/query-inferred-ret db hn))
-            (if (nil? ret) {hint/infer-call-return-type hn db} {ret})}})}}))
+            (if (nil? ret) {hint/infer-call-return-type hn db} {ret})}})}}}))
       (if (nil? inferred) {acc}
         {qcons (list :var var-name :type inferred) acc})}})}
 })
@@ -313,10 +314,10 @@
       {hint/fa-lookup-field var-type field-name type-defs})})
 })
 
-(sig 'hint/fa-binding {-> List Str Str List List List List})
-(fun {hint/fa-binding tl val-str func-name var-types type-defs acc} {do
-  (= {field-type} (hint/fa-resolve val-str func-name var-types type-defs))
-  (if (or (nil? field-type) (== field-type "Any")) {acc}
+(sig 'hint/fa-emit-field-hint {-> List Any List List})
+(fun {hint/fa-emit-field-hint tl field-type acc} {
+  if (nil? field-type) {acc}
+  {if (== field-type "Any") {acc}
   {do
     (= {formals} (head tl))
     (if (not (list? formals)) {acc}
@@ -326,7 +327,36 @@
       (= {ns} (str (head formals)))
       (if (< pos 0) {acc}
         {qcons (list :offset (+ pos (len ns))
-                     :label (str ":: " field-type) :kind 1) acc})}})})
+                     :label (str ":: " field-type) :kind 1) acc})}})}}
+})
+
+; fields list is in reverse definition order (qcons-accumulated).
+; idx is 0-based original order.
+(sig 'hint/fa-get-field-by-idx {-> Num List Any})
+(fun {hint/fa-get-field-by-idx idx fields} {
+  (= {n} (len fields))
+  (if (< idx 0) {nil}
+  {if (>= idx n) {nil}
+  {do
+    (= {f} (nth (- n idx) fields))
+    (if (nil? f) {nil} {f:type})}})
+})
+
+(sig 'hint/fa-lookup-field-by-idx {-> Str Num List Any})
+(fun {hint/fa-lookup-field-by-idx ctor-name idx type-defs} {
+  if (nil? type-defs) {nil}
+  {do
+    (= {td} (head type-defs))
+    (if (== td:ctor ctor-name)
+      {hint/fa-get-field-by-idx idx td:fields}
+      {hint/fa-lookup-field-by-idx ctor-name idx (tail type-defs)})}
+})
+
+(sig 'hint/fa-binding {-> List Str Str List List List List})
+(fun {hint/fa-binding tl val-str func-name var-types type-defs acc} {
+  hint/fa-emit-field-hint tl
+    (hint/fa-resolve val-str func-name var-types type-defs)
+    acc
 })
 
 (sig 'hint/fa-one {-> Any Str List List List List})
@@ -349,8 +379,41 @@
   if (< (len tl) 2) {acc}
   {do
     (= {rhs-name} (ast/nth-name 3 expr))
-    (if (== rhs-name "") {acc}
-      {hint/fa-binding tl rhs-name func-name var-types type-defs acc})}
+    (if (not (== rhs-name ""))
+      {hint/fa-binding tl rhs-name func-name var-types type-defs acc}
+    {do
+      ; RHS is a type-transformed field access: (plist/get var :field) or (nth N var)
+      (= {rhs} (nth 2 tl))
+      (if (error? rhs) {acc}
+      {if (not (list? rhs)) {acc}
+      {do
+        (= {rhs-head} (ast/head-name rhs))
+        (if (== rhs-head "plist/get")
+          {do
+            ; Unknown-type: (plist/get var :field) -> reconstruct "var:field"
+            (= {var-nm} (ast/nth-name 2 rhs))
+            (= {field-key} (ast/nth-name 3 rhs))
+            (if (== var-nm "") {acc}
+            {if (== field-key "") {acc}
+            {if (not (== (str/slice field-key 0 1) ":")) {acc}
+            {hint/fa-binding tl
+              (str var-nm (str/slice field-key 1 (len field-key)))
+              func-name var-types type-defs acc}}})}
+        {if (== rhs-head "nth")
+          {do
+            ; Known-type: (nth N var) -> look up field by index
+            (= {var-nm} (ast/nth-name 3 rhs))
+            (= {nth-idx} (nth 2 rhs))
+            (if (== var-nm "") {acc}
+            {if (error? nth-idx) {acc}
+            {if (not (num? nth-idx)) {acc}
+            {do
+              (= {vt} (hint/fa-lookup-var var-nm func-name var-types))
+              (if (nil? vt) {acc}
+              {hint/fa-emit-field-hint tl
+                (hint/fa-lookup-field-by-idx vt (- nth-idx 2) type-defs)
+                acc})}}})}
+        {acc}})}})})}
 })
 
 (sig 'hint/fa-fun {-> List List List List List})

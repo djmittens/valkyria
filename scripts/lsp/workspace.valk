@@ -204,21 +204,15 @@
 (sig 'lsp/publish-diagnostics {-> Str Str Nil})
 (fun {lsp/publish-diagnostics uri text} {do
   (= {ast} (lsp/get-ast uri text))
-  (stderr/write (str "[DBG publish] uri=" uri " text-len=" (len text) " ast-len=" (len ast) "\n"))
   (= {parse-err} (lsp/ast-find-error ast))
-  (if (not (nil? parse-err))
-    {do (stderr/write (str "[DBG publish] parse-err: " parse-err "\n"))
-        (lsp/send-notification "textDocument/publishDiagnostics"
-          (list :uri uri :diagnostics
-            (list (lsp/parse-error->diag parse-err text))))}
+  (if (error? parse-err)
+    {lsp/send-notification "textDocument/publishDiagnostics"
+      (list :uri uri :diagnostics
+        (list (lsp/parse-error->diag (str parse-err) text)))}
     {do
       (lsp/ensure-loads-indexed ast)
       (= {known} (lsp/get-known-set))
-      (stderr/write (str "[DBG publish] known-set keys=" (len (dict/keys known)) "\n"))
-      (stderr/write (str "[DBG publish] fuck in known? " (dict/has? known "fuck") "\n"))
       (= {diags} (vd/validate-with-known lsp/db ast text known))
-      (stderr/write (str "[DBG publish] diags=" (if (error? diags) {"ERR"} {len diags}) "\n"))
-      (if (error? diags) {stderr/write (str "[DBG publish] err: " diags "\n")} {})
       (= {lsp-diags} (if (error? diags)
         {do (stderr/write (str "[lsp] validate error: " diags "\n")) nil}
         {map make-lsp-diag diags}))
@@ -231,11 +225,11 @@
 (fun {lsp/publish-diagnostics-fast uri text} {do
   (= {ast} (lsp/get-ast uri text))
   (= {parse-err} (lsp/ast-find-error ast))
-  (if (not (nil? parse-err))
+  (if (error? parse-err)
     {lsp/send-notification "textDocument/publishDiagnostics"
       (list :uri uri :diagnostics
-        (list (lsp/parse-error->diag parse-err text)))}
-     {lsp/send-notification "textDocument/publishDiagnostics"
+        (list (lsp/parse-error->diag (str parse-err) text)))}
+    {lsp/send-notification "textDocument/publishDiagnostics"
       (list :uri uri :diagnostics nil)})})
 
 ; ---------------------------------------------------------------------------
@@ -246,8 +240,8 @@
 (fun {lsp/compute-diagnostics uri text} {do
   (= {ast} (lsp/get-ast uri text))
   (= {parse-err} (lsp/ast-find-error ast))
-  (if (not (nil? parse-err))
-    {list (lsp/parse-error->diag parse-err text)}
+  (if (error? parse-err)
+    {list (lsp/parse-error->diag (str parse-err) text)}
     {do
       (lsp/ensure-loads-indexed ast)
       (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
@@ -698,7 +692,7 @@
   (dict/remove! lsp/line-index-cache uri)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
   (lsp/cache-ast uri text)
-  (lsp/sync-doc uri text)
+  (= {_} (lsp/sync-doc uri text))
   (lsp/publish-diagnostics uri text)})
 
 (sig 'handle-did-change {-> ChangeParams Nil})
@@ -754,7 +748,7 @@
       (def {lsp/doc-version} (+ lsp/doc-version 1))
       (aio/dispatch lsp/sys
         (\ {_} {do (lsp/cache-ast uri save-text)
-                   (lsp/sync-doc uri save-text)
+                   (= {_} (lsp/sync-doc uri save-text))
                    (lsp/publish-diagnostics uri save-text)
                    nil})
         nil lsp/noop-cb)})})

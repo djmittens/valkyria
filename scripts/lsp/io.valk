@@ -119,7 +119,7 @@
 })
 
 (sig 'lsp/ast-has-error {-> List Num})
-(fun {lsp/ast-has-error ast} {not (nil? (lsp/ast-find-error ast))})
+(fun {lsp/ast-has-error ast} {error? (lsp/ast-find-error ast)})
 
 (sig 'lsp/cache-ast {-> Str Str List})
 (fun {lsp/cache-ast uri text} {do
@@ -191,8 +191,9 @@
 ; Returns 0 when line is out of range.
 (sig 'lsp/lc->offset {-> List Num Num Num})
 (fun {lsp/lc->offset line-index line col} {do
-  (= {line-start} (nth (+ line 1) line-index))
-  (if (or (nil? line-start) (error? line-start)) {0} {+ line-start col})
+  (= {idx} (+ line 1))
+  (if (> idx (len line-index)) {0}
+    {+ (nth idx line-index) col})
 })
 
 ; O(log n) byte offset to line-col using line index (binary search)

@@ -29,9 +29,11 @@
 (sig 'hint/params-walk {-> List List List})
 (fun {hint/params-walk exprs params} {
   if (nil? exprs) {params}
-  {hint/params-walk (tail exprs)
-    (hint/params-one (head exprs) params)}
-})
+  {do
+    (= {h} (head exprs))
+    (hint/params-walk (tail exprs)
+      (if (error? h) {params}
+        {hint/params-one h params}))}})
 
 (sig 'hint/params-one {-> Any List List})
 (fun {hint/params-one expr params} {

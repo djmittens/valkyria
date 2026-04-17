@@ -1066,5 +1066,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "lsp_partial_edit_keeps_highlighting", test_partial_edit_keeps_highlighting);
   valk_testsuite_add_test(suite, "lsp_brand_new_broken_file_has_tokens", test_brand_new_broken_file_has_tokens);
   valk_testsuite_add_test(suite, "lsp_incremental_didchange_range", test_incremental_didchange_range);
-  return valk_testsuite_run(suite);
+  int result = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
+  return result;
 }
