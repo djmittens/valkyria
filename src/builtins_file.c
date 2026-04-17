@@ -17,9 +17,13 @@ extern valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a);
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
+#include <uv.h>
 
 #include "gc.h"
 #include "type_env.h"
+#include "aio/aio.h"
+#include "aio/aio_async.h"
+#include "aio/aio_internal.h"
 
 static valk_lval_t* valk_builtin_list_dir(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -433,20 +437,10 @@ static valk_lval_t* valk_builtin_exec(valk_lenv_t* e, valk_lval_t* a) {
   }
   if (fds[0].fd >= 0) close(fds[0].fd);
   if (fds[1].fd >= 0) close(fds[1].fd);
-
-  if (out_len >= out_cap) { out_cap = out_len + 1; out_buf = realloc(out_buf, out_cap); }
-  out_buf[out_len] = '\0';
-  if (err_len >= err_cap) { err_cap = err_len + 1; err_buf = realloc(err_buf, err_cap); }
-  err_buf[err_len] = '\0';
   // LCOV_EXCL_BR_STOP
 
   int status = 0;
   waitpid(pid, &status, 0);
-
-  valk_lval_t* out_str = valk_lval_str(out_buf);
-  valk_lval_t* err_str = valk_lval_str(err_buf);
-  free(out_buf);
-  free(err_buf);
 
   // LCOV_EXCL_BR_START - process exit status: WIFEXITED/WIFSIGNALED macro branches
   long exit_code;
@@ -459,13 +453,218 @@ static valk_lval_t* valk_builtin_exec(valk_lenv_t* e, valk_lval_t* a) {
   }
   // LCOV_EXCL_BR_STOP
 
-  valk_lval_t* fields[6] = {
-    valk_lval_sym(":exit-code"), valk_lval_num(exit_code),
-    valk_lval_sym(":stdout"),    out_str,
-    valk_lval_sym(":stderr"),    err_str,
-  };
-  return valk_lval_qlist(fields, 6);
+  valk_lval_t* result;
+  valk_mem_arena_t* scratch = valk_thread_ctx.scratch;
+  if (scratch) {
+    VALK_WITH_ALLOC((void*)scratch) {
+      valk_lval_t* fields[6] = {
+        valk_lval_sym(":exit-code"), valk_lval_num(exit_code),
+        valk_lval_sym(":stdout"),    valk_lval_str_n(out_buf, out_len),
+        valk_lval_sym(":stderr"),    valk_lval_str_n(err_buf, err_len),
+      };
+      result = valk_lval_qlist(fields, 6);
+    }
+    result = valk_evacuate_to_heap(result);
+  } else { // LCOV_EXCL_START - scratch always present in aio/REPL contexts
+    valk_lval_t* fields[6] = {
+      valk_lval_sym(":exit-code"), valk_lval_num(exit_code),
+      valk_lval_sym(":stdout"),    valk_lval_str_n(out_buf, out_len),
+      valk_lval_sym(":stderr"),    valk_lval_str_n(err_buf, err_len),
+    };
+    result = valk_lval_qlist(fields, 6);
+  } // LCOV_EXCL_STOP
+  free(out_buf);
+  free(err_buf);
+  return result;
 }
+
+// --- async exec via uv_spawn --------------------------------------------
+// aio/exec dispatches the subprocess through libuv on loop 0. Output is
+// accumulated by uv_read_start callbacks until both pipes hit EOF and the
+// process exits. Result qlist is built in the close callback of the last
+// handle to close; handle transitions to COMPLETED at that point.
+// LCOV_EXCL_START - aio/exec: test coverage via Valk-level tests
+typedef struct valk_aio_exec_ctx {
+  valk_async_handle_t *handle;
+  uv_process_t process;
+  uv_pipe_t stdout_pipe;
+  uv_pipe_t stderr_pipe;
+  char *out_buf; size_t out_len, out_cap;
+  char *err_buf; size_t err_len, err_cap;
+  bool process_exited;
+  bool stdout_closed;
+  bool stderr_closed;
+  bool spawn_failed;
+  int close_pending;
+  int64_t exit_status;
+  int term_signal;
+  char *spawn_err_msg;
+  char **argv;
+  int argc;
+} valk_aio_exec_ctx_t;
+
+static void __aio_exec_free_ctx(valk_aio_exec_ctx_t *ctx) {
+  if (!ctx) return;
+  free(ctx->out_buf);
+  free(ctx->err_buf);
+  if (ctx->argv) {
+    for (int i = 0; i < ctx->argc; i++) free(ctx->argv[i]);
+    free(ctx->argv);
+  }
+  free(ctx->spawn_err_msg);
+  free(ctx);
+}
+
+static void __aio_exec_try_finalize(valk_aio_exec_ctx_t *ctx) {
+  if (ctx->close_pending > 0) return;
+  if (!ctx->spawn_failed &&
+      (!ctx->process_exited || !ctx->stdout_closed || !ctx->stderr_closed)) return;
+
+  if (ctx->spawn_failed) {
+    valk_lval_t *err;
+    VALK_WITH_ALLOC((void*)valk_thread_ctx.heap) {
+      err = valk_lval_err("aio/exec: uv_spawn failed: %s",
+                          ctx->spawn_err_msg ? ctx->spawn_err_msg : "unknown");
+    }
+    valk_async_handle_fail(ctx->handle, err);
+    __aio_exec_free_ctx(ctx);
+    return;
+  }
+
+  long exit_code = (ctx->term_signal != 0) ? -(long)ctx->term_signal
+                                           : (long)ctx->exit_status;
+  valk_lval_t *result;
+  VALK_WITH_ALLOC((void*)valk_thread_ctx.heap) {
+    valk_lval_t *fields[6] = {
+      valk_lval_sym(":exit-code"), valk_lval_num(exit_code),
+      valk_lval_sym(":stdout"),    valk_lval_str_n(ctx->out_buf ? ctx->out_buf : "", ctx->out_len),
+      valk_lval_sym(":stderr"),    valk_lval_str_n(ctx->err_buf ? ctx->err_buf : "", ctx->err_len),
+    };
+    result = valk_lval_qlist(fields, 6);
+  }
+  valk_async_handle_complete(ctx->handle, result);
+  __aio_exec_free_ctx(ctx);
+}
+
+static void __aio_exec_uv_close_cb(uv_handle_t *h) {
+  valk_aio_exec_ctx_t *ctx = h->data;
+  ctx->close_pending--;
+  __aio_exec_try_finalize(ctx);
+}
+
+static void __aio_exec_alloc_cb(uv_handle_t *h, size_t suggested, uv_buf_t *buf) {
+  (void)h; (void)suggested;
+  buf->base = malloc(4096);
+  buf->len = 4096;
+}
+
+static void __aio_exec_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
+  VALK_GC_SAFE_POINT();
+  valk_aio_exec_ctx_t *ctx = stream->data;
+  bool is_stdout = (stream == (uv_stream_t*)&ctx->stdout_pipe);
+  char **dst = is_stdout ? &ctx->out_buf : &ctx->err_buf;
+  size_t *len = is_stdout ? &ctx->out_len : &ctx->err_len;
+  size_t *cap = is_stdout ? &ctx->out_cap : &ctx->err_cap;
+
+  if (nread > 0) {
+    if (*len + (size_t)nread > *cap) {
+      *cap = (*len + (size_t)nread) * 2;
+      *dst = realloc(*dst, *cap);
+    }
+    memcpy(*dst + *len, buf->base, (size_t)nread);
+    *len += (size_t)nread;
+    free(buf->base);
+    return;
+  }
+  free(buf->base);
+  bool *closed_flag = is_stdout ? &ctx->stdout_closed : &ctx->stderr_closed;
+  if (*closed_flag) return;
+  *closed_flag = true;
+  uv_close((uv_handle_t*)stream, __aio_exec_uv_close_cb);
+}
+
+static void __aio_exec_exit_cb(uv_process_t *proc, int64_t exit_status, int term_signal) {
+  valk_aio_exec_ctx_t *ctx = proc->data;
+  ctx->process_exited = true;
+  ctx->exit_status = exit_status;
+  ctx->term_signal = term_signal;
+  uv_close((uv_handle_t*)&ctx->process, __aio_exec_uv_close_cb);
+}
+
+static void __aio_exec_spawn_on_loop(void *arg) {
+  VALK_GC_SAFE_POINT();
+  valk_aio_exec_ctx_t *ctx = arg;
+  valk_aio_system_t *sys = ctx->handle->sys;
+  uv_loop_t *loop = sys->loops[0].uv_loop;
+
+  uv_pipe_init(loop, &ctx->stdout_pipe, 0);
+  uv_pipe_init(loop, &ctx->stderr_pipe, 0);
+  ctx->stdout_pipe.data = ctx;
+  ctx->stderr_pipe.data = ctx;
+  ctx->process.data = ctx;
+
+  uv_stdio_container_t stdio[3] = {
+    { .flags = UV_IGNORE },
+    { .flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE, .data.stream = (uv_stream_t*)&ctx->stdout_pipe },
+    { .flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE, .data.stream = (uv_stream_t*)&ctx->stderr_pipe },
+  };
+  uv_process_options_t options = {
+    .file = ctx->argv[0],
+    .args = ctx->argv,
+    .stdio_count = 3,
+    .stdio = stdio,
+    .exit_cb = __aio_exec_exit_cb,
+  };
+
+  int r = uv_spawn(loop, &ctx->process, &options);
+  if (r != 0) {
+    ctx->spawn_failed = true;
+    ctx->spawn_err_msg = strdup(uv_strerror(r));
+    ctx->close_pending = 3;
+    uv_close((uv_handle_t*)&ctx->process, __aio_exec_uv_close_cb);
+    uv_close((uv_handle_t*)&ctx->stdout_pipe, __aio_exec_uv_close_cb);
+    uv_close((uv_handle_t*)&ctx->stderr_pipe, __aio_exec_uv_close_cb);
+    return;
+  }
+
+  ctx->close_pending = 3;
+  uv_read_start((uv_stream_t*)&ctx->stdout_pipe, __aio_exec_alloc_cb, __aio_exec_read_cb);
+  uv_read_start((uv_stream_t*)&ctx->stderr_pipe, __aio_exec_alloc_cb, __aio_exec_read_cb);
+}
+
+static valk_lval_t* valk_builtin_aio_exec(valk_lenv_t *e, valk_lval_t *a) {
+  // LCOV_EXCL_BR_START - arg validation
+  LVAL_ASSERT_COUNT_GE(a, a, 2);
+  LVAL_ASSERT_AIO_SYSTEM(a, valk_lval_list_nth(a, 0));
+  u64 nargs = valk_lval_list_count(a);
+  for (u64 i = 1; i < nargs; i++) {
+    valk_lval_t *arg_i = valk_lval_list_nth(a, i);
+    LVAL_ASSERT_TYPE(a, arg_i, LVAL_STR);
+  }
+  // LCOV_EXCL_BR_STOP
+
+  valk_aio_system_t *sys = valk_lval_list_nth(a, 0)->ref.ptr;
+  int argc = (int)(nargs - 1);
+
+  valk_aio_exec_ctx_t *ctx = calloc(1, sizeof(valk_aio_exec_ctx_t));
+  ctx->argc = argc;
+  ctx->argv = calloc((size_t)argc + 1, sizeof(char*));
+  for (int i = 0; i < argc; i++) {
+    ctx->argv[i] = strdup(valk_lval_list_nth(a, i + 1)->str);
+  }
+  ctx->argv[argc] = NULL;
+
+  ctx->handle = valk_async_handle_new(sys, e);
+  if (!ctx->handle) {
+    __aio_exec_free_ctx(ctx);
+    LVAL_RAISE(a, "aio/exec: handle alloc failed");
+  }
+  atomic_store_explicit(&ctx->handle->status, VALK_ASYNC_RUNNING, memory_order_release);
+
+  valk_aio_enqueue_task(sys, __aio_exec_spawn_on_loop, ctx);
+  return valk_lval_handle(ctx->handle);
+}
+// LCOV_EXCL_STOP
 
 // LCOV_EXCL_START - GC destructor: called non-deterministically during garbage collection
 static void file_handle_free(void *ptr) {
@@ -647,6 +846,7 @@ void valk_register_file_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "env/set", valk_builtin_env_set);
   valk_lenv_put_builtin(env, "realpath", valk_builtin_realpath);
   valk_lenv_put_builtin(env, "exec", valk_builtin_exec);
+  valk_lenv_put_builtin(env, "aio/exec", valk_builtin_aio_exec);
   valk_lenv_put_builtin(env, "for-each-line", valk_builtin_for_each_line);
   valk_lenv_put_builtin(env, "file/open", valk_builtin_file_open);
   valk_lenv_put_builtin(env, "file/write", valk_builtin_file_write_str);

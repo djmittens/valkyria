@@ -1,0 +1,49 @@
+; Test aio/exec - async subprocess spawn via uv_spawn
+
+(load "stdlib/test/test.valk")
+
+(def {aio} (aio/await (aio/start {:num-threads 2})))
+
+(test/run (list
+
+  (test/case "aio/exec simple echo"
+    {do
+    (def {h} (aio/exec aio "echo" "hello"))
+    (def {result} (aio/await h))
+    (and (== (plist/get result :exit-code) 0)
+         (and (== (plist/get result :stdout) "hello\n")
+              (== (plist/get result :stderr) "")))
+  })
+
+  (test/case "aio/exec non-zero exit code"
+    {do
+    (def {h} (aio/exec aio "false"))
+    (def {result} (aio/await h))
+    (== (plist/get result :exit-code) 1)
+  })
+
+  (test/case "aio/exec captures stderr"
+    {do
+    (def {h} (aio/exec aio "sh" "-c" "echo err >&2"))
+    (def {result} (aio/await h))
+    (and (== (plist/get result :exit-code) 0)
+         (== (plist/get result :stderr) "err\n"))
+  })
+
+  (test/case "aio/exec spawn failure for missing binary"
+    {do
+    (def {h} (aio/exec aio "no-such-binary-xyz-123"))
+    (error? (aio/await h))
+  })
+
+  (test/case "aio/exec many subprocesses in parallel"
+    {do
+    (def {handles} (map (\ {n} {(aio/exec aio "echo" (str n))}) (range 1 11)))
+    (def {results} (map aio/await handles))
+    (def {code-sum} (foldl + 0 (map (\ {r} {(plist/get r :exit-code)}) results)))
+    (and (== (len results) 10) (== code-sum 0))
+  })
+
+) {:suite-name "aio/exec Tests"})
+
+(aio/stop aio)
