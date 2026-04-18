@@ -284,40 +284,6 @@
     {head args}}
 })
 
-; === Run-summary cache ===
-; We stash the last Phase-2 result in a tiny key-value table so that
-; a re-run with zero changed files can skip Phase 2 entirely.
-
-(fun {check/ensure-runs-table db}
-  {sqlite/exec db
-    "CREATE TABLE IF NOT EXISTS runs (key TEXT PRIMARY KEY, value TEXT)"})
-
-(fun {check/save-summary db report with-types} {do
-  (check/ensure-runs-table db)
-  (= {v} (str report:lines "|" report:errors "|" report:warnings "|"
-              (if with-types {"t"} {"f"})))
-  (sqlite/exec db
-    "INSERT INTO runs (key, value) VALUES ('last-summary', ?1)
-     ON CONFLICT(key) DO UPDATE SET value=?1" v)
-})
-
-(fun {check/load-summary db with-types} {do
-  (check/ensure-runs-table db)
-  (= {raw} (sqlite/query-value db "SELECT value FROM runs WHERE key='last-summary'"))
-  (= {v} (if (error? raw) {nil} {raw}))
-  (if (nil? v) {nil}
-    {do
-      (= {parts} (str/split v "|"))
-      (if (!= (len parts) 4) {nil}
-        {do
-          (= {prev-types} (== (head (tail (tail (tail parts)))) "t"))
-          ; Only reuse if the --types flag matches last run.
-          (if (!= prev-types (if with-types {1} {0})) {nil}
-            {list :lines (str->num (head parts))
-                  :errors (str->num (head (tail parts)))
-                  :warnings (str->num (head (tail (tail parts))))})})})
-})
-
 ; === Main ===
 
 (fun {check/main} {do
@@ -340,21 +306,12 @@
   (eprintln (str "  phase 1: " p1-ms " ms (" changed " changed)"))
 
   ; Phase 2: validate each file using full LSP checks.
-  ; Short-circuit when nothing changed and last run was cached.
-  (= {cached} (if (== changed 0) {check/load-summary db with-types} {nil}))
-  (= {report}
-    (if (nil? cached)
-      {do
-        (eprintln (str "valk-check: validating " n " files"
-          (if with-types {" (with HM type warnings)"} {""})))
-        (= {p2-start} (time-us {}))
-        (= {r} (check/validate-all db files with-types))
-        (= {p2-ms} (/ (- (time-us {}) p2-start) 1000))
-        (eprintln (str "  phase 2: " p2-ms " ms"))
-        (check/save-summary db r with-types)
-        r}
-      {do (eprintln "  phase 2: skipped (no changes, cached)")
-          cached}))
+  (eprintln (str "valk-check: validating " n " files"
+    (if with-types {" (with HM type warnings)"} {""})))
+  (= {p2-start} (time-us {}))
+  (= {report} (check/validate-all db files with-types))
+  (= {p2-ms} (/ (- (time-us {}) p2-start) 1000))
+  (eprintln (str "  phase 2: " p2-ms " ms"))
 
   (symdb/close db)
 
