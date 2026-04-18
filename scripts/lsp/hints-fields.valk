@@ -8,6 +8,8 @@
 
 (load "scripts/lsp/hints.valk")
 
+(module hints-fields)
+
 ; ---------------------------------------------------------------------------
 ; Public API — combines parameter hints, type hints, and field-access hints
 ; ---------------------------------------------------------------------------

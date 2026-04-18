@@ -6,6 +6,8 @@
 ;
 ; Provides: sem/tokenize text -> flat integer list (LSP delta-encoded)
 
+(module analysis)
+
 ; ---------------------------------------------------------------------------
 ; Token type indices (must match legend in lsp.valk capabilities)
 ; ---------------------------------------------------------------------------

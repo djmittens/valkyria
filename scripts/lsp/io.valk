@@ -7,7 +7,7 @@
 ;   null         -> (None) (Option type from prelude)
 ;   nil          -> []     (nil = empty list, always)
 
-
+(module io)
 
 ; ---------------------------------------------------------------------------
 ; Typed contexts — replace ad-hoc plists with var:field access

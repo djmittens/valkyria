@@ -257,7 +257,34 @@ migrated to `aio/exec` separately.
 
 ---
 
-## [~] 6. Module system simplification — **prereqs done; implementation deferred**
+## [x] 6. Module system simplification — **DONE 2026-04-18**
+
+**Final shape:** flat single-segment module prefixes via `(module X)` macro
+in `stdlib/prelude.valk`. Each file declares its prefix explicitly; files
+without `(module X)` load with no prefix. All cross-file references use
+fully-qualified names (`analysis/foo`, `nav/handle-hover`, …). 190 suites,
+4141 tests green.
+
+**Shipped:**
+- Macro env unified with main env (`src/macro.c`, `src/parser.c` auto-init).
+  `valk_macro_env()` aliases the caller's env; macros def into the same env
+  as regular defs. `src/eval.c` macro-lookup uses `cur_env` for lexical scope.
+- `(module X)` macro in `stdlib/prelude.valk`, backed by `set-module-prefix!`
+  thread-local in `src/builtins_io.c`. Script-entry path (`src/repl.c`) and
+  library-load path (`eval_loaded_ast`) both honor it.
+- Migrated 17 `.valk` files (scripts/lsp, stdlib/diag, stdlib/ast) to
+  explicit `(module X)` declarations.
+- Flattened `lsp/<seg>/` references in 3 LSP test files to `<seg>/`.
+- **Deleted:** filename-based auto-prefix composition
+  (`current_load_prefix`, `extract_module_prefix`), module registry
+  (`g_loaded_prefixes`, `valk_mod_registry_add/has`), sibling rewrite
+  (`try_sibling_rewrite`, `find_anchor_parent`, `predict_load_prefix`,
+  `collect_local_load_prefixes`). `entry->prefix` removed from
+  `module_entry_t`. `eval_loaded_ast` is now a 2-arg function.
+
+---
+
+## [~] 6-historical. Module system simplification — **prereqs done; implementation deferred**
 
 **Symptom:** `src/module.c`, `valk_module_rewrite`, pre-registration pass,
 module cache keyed on tree — all working together to implement auto-prefixing

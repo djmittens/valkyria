@@ -3,6 +3,8 @@
 ; Depends on lsp-validate-checks.valk for all check/lookup primitives.
 ; This file owns the ctx plist (scope, globals, known, diags, etc.)
 
+(module validate-walk)
+
 (load "stdlib/diag/validate-checks.valk")
 
 ; ---------------------------------------------------------------------------

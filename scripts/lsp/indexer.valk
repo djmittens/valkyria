@@ -1,5 +1,7 @@
 ; LSP indexer operation — plugs into ast/walk to produce symbols + refs.
 
+(module indexer)
+
 (sig 'idx/make-op {-> Ref Num Str Ref List})
 (fun {idx/make-op db file-id text ref-stmt} {
   list

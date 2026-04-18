@@ -3,6 +3,8 @@
 ;
 ; Usage: build/valk --quality-snapshot [dir]
 
+(module quality)
+
 (load "stdlib/diag/symdb.valk")
 
 ; === File discovery ===

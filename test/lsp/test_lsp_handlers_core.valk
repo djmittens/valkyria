@@ -84,7 +84,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/nav/handle-hover 1 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///x") :position (LspPosition :line 0 :character 0)))
+      (nav/handle-hover 1 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///x") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should send response")
       (test/assert-eq 1 resp:id "id=1")
@@ -95,7 +95,7 @@
       (reset-state)
       (lsp/doc-store "file:///h.valk" "hello world")
       (reset-captures)
-      (lsp/nav/handle-hover 2 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///h.valk") :position (LspPosition :line 0 :character 0)))
+      (nav/handle-hover 2 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///h.valk") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should send response")
       (= {result} resp:result)
@@ -111,7 +111,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/nav/handle-completion 3 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///c") :position (LspPosition :line 0 :character 0)))
+      (nav/handle-completion 3 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///c") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
     })
@@ -121,7 +121,7 @@
       (reset-state)
       (lsp/doc-store "file:///c.valk" "(fu")
       (reset-captures)
-      (lsp/nav/handle-completion 4 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///c.valk") :position (LspPosition :line 0 :character 3)))
+      (nav/handle-completion 4 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///c.valk") :position (LspPosition :line 0 :character 3)))
       (= {resp} (last-response))
       (= {result} resp:result)
       (= {items} result:items)
@@ -133,7 +133,7 @@
       (reset-state)
       (lsp/doc-store "file:///s.valk" "(print \"hello\")")
       (reset-captures)
-      (lsp/nav/handle-completion 5 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///s.valk") :position (LspPosition :line 0 :character 9)))
+      (nav/handle-completion 5 (TextDocPosParams :textDocument (LspTextDoc :uri "file:///s.valk") :position (LspPosition :line 0 :character 9)))
       (= {resp} (last-response))
       (= {result} resp:result)
       (= {items} result:items)
@@ -146,7 +146,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/nav/handle-semantic-tokens 6 (DocParams :textDocument (LspTextDoc :uri "file:///s")))
+      (nav/handle-semantic-tokens 6 (DocParams :textDocument (LspTextDoc :uri "file:///s")))
       (= {resp} (last-response))
       (= {result} resp:result)
       (test/assert (nil? result:data) "no data for missing doc")
@@ -157,7 +157,7 @@
       (reset-state)
       (lsp/doc-store "file:///tok.valk" "(fun {f x} {+ x 1})")
       (reset-captures)
-      (lsp/nav/handle-semantic-tokens 7 (DocParams :textDocument (LspTextDoc :uri "file:///tok.valk")))
+      (nav/handle-semantic-tokens 7 (DocParams :textDocument (LspTextDoc :uri "file:///tok.valk")))
       (= {resp} (last-response))
       (= {result} resp:result)
       (test/assert (not (nil? result:data)) "should have token data")
@@ -184,7 +184,7 @@
       (reset-state)
       (lsp/doc-store "file:///r.valk" "hello world")
       (reset-captures)
-      (lsp/nav/handle-prepare-rename 9
+      (nav/handle-prepare-rename 9
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///r.valk") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -195,7 +195,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/nav/handle-prepare-rename 10
+      (nav/handle-prepare-rename 10
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///nope") :position (LspPosition :line 0 :character 0)))
       (= {err} (last-error))
       (test/assert (not (nil? err)) "should send error")
@@ -210,7 +210,7 @@
       (def {lsp/root-path} "/project")
       (lsp/doc-store "file:///doc.valk" "(load \"src/prelude.valk\")")
       (reset-captures)
-      (lsp/features/handle-document-link 11
+      (features/handle-document-link 11
         (DocParams :textDocument (LspTextDoc :uri "file:///doc.valk")))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -221,7 +221,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/features/handle-document-link 12
+      (features/handle-document-link 12
         (DocParams :textDocument (LspTextDoc :uri "file:///nope")))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no doc -> nil")
@@ -234,7 +234,7 @@
       (reset-state)
       (lsp/doc-store "file:///fold.valk" "(fun {f x}\n  (+ x 1))")
       (reset-captures)
-      (lsp/features/handle-folding-range 13
+      (features/handle-folding-range 13
         (DocParams :textDocument (LspTextDoc :uri "file:///fold.valk")))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -245,7 +245,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/features/handle-folding-range 14
+      (features/handle-folding-range 14
         (DocParams :textDocument (LspTextDoc :uri "file:///nope")))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no doc -> nil")
@@ -351,7 +351,7 @@
       (reset-state)
       (lsp/doc-store "file:///inc.valk" "(+ 1 2)")
       (reset-captures)
-      (lsp/workspace/handle-did-change
+      (workspace/handle-did-change
         (ChangeParams
           :textDocument (LspTextDoc :uri "file:///inc.valk")
           :contentChanges (list
@@ -367,7 +367,7 @@
       (reset-state)
       (lsp/doc-store "file:///full.valk" "old")
       (reset-captures)
-      (lsp/workspace/handle-did-change
+      (workspace/handle-did-change
         (ChangeParams
           :textDocument (LspTextDoc :uri "file:///full.valk")
           :contentChanges (list (list :text "new"))))
@@ -380,7 +380,7 @@
       (reset-state)
       (lsp/doc-store "file:///ver.valk" "x")
       (= {v1} lsp/doc-version)
-      (lsp/workspace/handle-did-change
+      (workspace/handle-did-change
         (ChangeParams
           :textDocument (LspTextDoc :uri "file:///ver.valk")
           :contentChanges (list (list :text "y"))))
@@ -391,7 +391,7 @@
     {do
       (reset-state)
       (= {v1} lsp/doc-version)
-      (lsp/workspace/handle-did-open
+      (workspace/handle-did-open
         (OpenParams :textDocument (LspTextDocText :uri "file:///op.valk" :text "hello")))
       (test/assert (> lsp/doc-version v1) "version should increment on open")
       (test/assert-eq "hello" (lsp/doc-get "file:///op.valk") "text stored")
@@ -403,7 +403,7 @@
       (lsp/doc-store "file:///cl.valk" "text")
       (lsp/get-line-index "file:///cl.valk" "text")
       (reset-captures)
-      (lsp/workspace/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
+      (workspace/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
       (test/assert (nil? (lsp/doc-get "file:///cl.valk")) "doc removed")
       (test/assert (nil? (dict/get lsp/line-index-cache "file:///cl.valk")) "line index removed")
     })
@@ -415,7 +415,7 @@
       (reset-state)
       (lsp/doc-store "file:///sel.valk" "(fun {f x} (+ x 1))")
       (reset-captures)
-      (lsp/features/handle-selection-range 15
+      (features/handle-selection-range 15
         (SelectionParams :textDocument (LspTextDoc :uri "file:///sel.valk")
               :positions (list (list :line 0 :character 14))))
       (= {resp} (last-response))
@@ -430,7 +430,7 @@
       (reset-state)
       (lsp/doc-store "file:///ih.valk" "(fun {add a b} {+ a b})\n(add 1 2)")
       (reset-captures)
-      (lsp/features/handle-inlay-hints 16
+      (features/handle-inlay-hints 16
         (RangeParams :textDocument (LspTextDoc :uri "file:///ih.valk")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 10 :character 0))))
       (= {resp} (last-response))
@@ -441,7 +441,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/features/handle-inlay-hints 17
+      (features/handle-inlay-hints 17
         (RangeParams :textDocument (LspTextDoc :uri "file:///nope")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 0))))
       (= {resp} (last-response))
@@ -455,7 +455,7 @@
       (reset-state)
       (lsp/doc-store "file:///hl.valk" "(fun {f x} (+ x 1))")
       (reset-captures)
-      (lsp/features/handle-document-highlight 18
+      (features/handle-document-highlight 18
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///hl.valk") :position (LspPosition :line 0 :character 9)))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -466,7 +466,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/features/handle-document-highlight 19
+      (features/handle-document-highlight 19
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///nope") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no doc -> nil")
@@ -478,7 +478,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/features/handle-signature-help 20
+      (features/handle-signature-help 20
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///nope") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
@@ -489,7 +489,7 @@
       (reset-state)
       (lsp/doc-store "file:///sig.valk" "(fun {add a b} {+ a b})\n(add 1 ")
       (reset-captures)
-      (lsp/features/handle-signature-help 21
+      (features/handle-signature-help 21
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///sig.valk") :position (LspPosition :line 1 :character 6)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
@@ -501,7 +501,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/nav/handle-references 22
+      (nav/handle-references 22
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///nope") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no doc -> nil")
@@ -512,7 +512,7 @@
       (reset-state)
       (lsp/doc-store "file:///ref.valk" "(fun {f x}\n  (+ x 1))")
       (reset-captures)
-      (lsp/nav/handle-references 23
+      (nav/handle-references 23
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///ref.valk") :position (LspPosition :line 1 :character 5)))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -526,7 +526,7 @@
       (reset-state)
       (lsp/doc-store "file:///d.valk" "hello world")
       (reset-captures)
-      (lsp/nav/handle-definition 24
+      (nav/handle-definition 24
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///d.valk") :position (LspPosition :line 0 :character 0)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
@@ -538,7 +538,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/nav/handle-document-symbols 25
+      (nav/handle-document-symbols 25
         (DocParams :textDocument (LspTextDoc :uri "file:///ds.valk")))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no db -> nil")
@@ -550,7 +550,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/nav/handle-workspace-symbols 26 (list :query "test"))
+      (nav/handle-workspace-symbols 26 (list :query "test"))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no db -> nil")
     })
@@ -561,7 +561,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/features/handle-code-lens 27
+      (features/handle-code-lens 27
         (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
       (= {resp} (last-response))
       (test/assert (nil? resp:result) "no db -> nil")
@@ -573,7 +573,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/features/handle-code-action 28
+      (features/handle-code-action 28
         (CodeActionParams :textDocument (LspTextDoc :uri "file:///ca.valk")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 0))
               :context (CodeActionContext :diagnostics nil)))
@@ -585,7 +585,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/features/handle-code-action 29
+      (features/handle-code-action 29
         (CodeActionParams :textDocument (LspTextDoc :uri "file:///ca.valk")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 5))
               :context (CodeActionContext :diagnostics
@@ -602,7 +602,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/nav/handle-rename 30
+      (nav/handle-rename 30
         (RenameParams :textDocument (LspTextDoc :uri "file:///nope")
               :position (LspPosition :line 0 :character 0)
               :newName "renamed"))
@@ -617,7 +617,7 @@
       (reset-state)
       (lsp/doc-store "file:///close.valk" "text")
       (reset-captures)
-      (lsp/workspace/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///close.valk")))
+      (workspace/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///close.valk")))
       (= {notif} (last-notification))
       (test/assert (not (nil? notif)) "should send notification")
       (test/assert-eq "textDocument/publishDiagnostics" notif:method "method")
@@ -714,7 +714,7 @@
       (reset-state)
       (lsp/doc-store "file:///rn.valk" "(fun {f x}\n  (+ x 1))")
       (reset-captures)
-      (lsp/nav/handle-rename 38
+      (nav/handle-rename 38
         (RenameParams :textDocument (LspTextDoc :uri "file:///rn.valk")
               :position (LspPosition :line 1 :character 5)
               :newName "y"))

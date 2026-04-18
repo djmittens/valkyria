@@ -107,7 +107,7 @@
       (= {text} "(fun {my-func x} {+ x 1})\n(def {MY_VAR} 42)")
       (seed-doc "file:///test/ds.valk" text)
       (reset-captures)
-      (lsp/nav/handle-document-symbols 31
+      (nav/handle-document-symbols 31
         (DocParams :textDocument (LspTextDoc :uri "file:///test/ds.valk")))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -119,7 +119,7 @@
       (setup-with-db)
       (seed-doc "file:///test/ws.valk" "(fun {alpha x} {x})\n(fun {beta y} {y})")
       (reset-captures)
-      (lsp/nav/handle-workspace-symbols 32 (list :query "alp"))
+      (nav/handle-workspace-symbols 32 (list :query "alp"))
       (= {resp} (last-response))
       (= {result} resp:result)
       (test/assert (not (nil? result)) "should find alpha")
@@ -130,7 +130,7 @@
       (setup-with-db)
       (seed-doc "file:///test/ws2.valk" "(fun {gamma} {1})")
       (reset-captures)
-      (lsp/nav/handle-workspace-symbols 33 (list :query ""))
+      (nav/handle-workspace-symbols 33 (list :query ""))
       (= {resp} (last-response))
       (= {result} resp:result)
       (test/assert (not (nil? result)) "empty query -> all symbols")
@@ -143,7 +143,7 @@
       (seed-doc "file:///test/def.valk" text)
       (lsp/doc-store "file:///test/def.valk" text)
       (reset-captures)
-      (lsp/nav/handle-definition 34
+      (nav/handle-definition 34
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///test/def.valk") :position (LspPosition :line 1 :character 1)))
       (= {resp} (last-response))
       (test/assert (not (nil? resp)) "should respond")
@@ -155,7 +155,7 @@
       (= {text} "(fun {my-fn x} {x})\n(my-fn 42)")
       (seed-doc "file:///test/cl.valk" text)
       (reset-captures)
-      (lsp/features/handle-code-lens 35
+      (features/handle-code-lens 35
         (DocParams :textDocument (LspTextDoc :uri "file:///test/cl.valk")))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -174,7 +174,7 @@
       (seed-doc "file:///test/comp.valk" text)
       (lsp/doc-store "file:///test/comp.valk" "(my-awe")
       (reset-captures)
-      (lsp/nav/handle-completion 36
+      (nav/handle-completion 36
         (TextDocPosParams :textDocument (LspTextDoc :uri "file:///test/comp.valk") :position (LspPosition :line 0 :character 7)))
       (= {resp} (last-response))
       (= {result} resp:result)
@@ -187,7 +187,7 @@
       (setup-with-db)
       (seed-doc "file:///test/ca.valk" "(fun {println x} {x})")
       (reset-captures)
-      (lsp/features/handle-code-action 37
+      (features/handle-code-action 37
         (CodeActionParams :textDocument (LspTextDoc :uri "file:///test/ca.valk")
               :range (LspRange :start (LspPosition :line 0 :character 0) :end (LspPosition :line 0 :character 6))
               :context (CodeActionContext :diagnostics

@@ -1,6 +1,7 @@
 ; Valkyria Symbol Database — Valk library using sqlite/* builtins
 ; Assumes prelude.valk is already loaded.
 
+(module symdb)
 
 (type {WordRange}
   {:word Str :start Num :end Num})

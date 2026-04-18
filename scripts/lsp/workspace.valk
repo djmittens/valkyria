@@ -12,6 +12,7 @@
 ;   - lsp/sync-doc:       called by did-open/did-change/did-save (text from editor)
 ;   - lsp/seed-from-disk: called by workspace scan (text from disk)
 
+(module workspace)
 
 ; ---------------------------------------------------------------------------
 ; Transaction helper

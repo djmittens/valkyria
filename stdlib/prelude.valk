@@ -6,6 +6,14 @@
 (macro {fun _fn _body}
   {`(def {,(head _fn)} (\ ,(tail _fn) ,_body))})
 
+; Declare the current file's module prefix. Top-level (module foo/bar)
+; at the start of a file overrides the filename-derived auto-prefix, so
+; all bare defs inside get qualified as `foo/bar/name`. The macro runs
+; `set-module-prefix!` as a side effect during expansion (before the
+; per-file prefix-application pass) and expands to nil.
+(macro {module _name}
+  {do (set-module-prefix! _name) ()})
+
 ;(error "And this is an error n stuff")
 ; Atoms
 (def {nil} {})

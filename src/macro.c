@@ -6,36 +6,19 @@
 
 static valk_lenv_t *g_macro_env = NULL;
 
-// Thread-local registry of module prefixes loaded so far. Used by the
-// sibling rewriter to decide whether `X/Y` in a file with prefix `P`
-// should be rewritten to `A/X/Y` for some ancestor `A` of `P`.
-typedef struct prefix_node_s {
-  char *prefix;
-  struct prefix_node_s *next;
-} prefix_node_t;
-static _Thread_local prefix_node_t *g_loaded_prefixes = NULL;
-
-bool valk_mod_registry_has(const char *prefix) {
-  for (prefix_node_t *n = g_loaded_prefixes; n; n = n->next)
-    if (strcmp(n->prefix, prefix) == 0) return true;
-  return false;
-}
-
-void valk_mod_registry_add(const char *prefix) {
-  if (!prefix || !*prefix) return;
-  if (valk_mod_registry_has(prefix)) return;
-  prefix_node_t *n = malloc(sizeof(*n));
-  n->prefix = strdup(prefix);
-  n->next = g_loaded_prefixes;
-  g_loaded_prefixes = n;
-}
-
 valk_lenv_t *valk_macro_env(void) {
   if (!g_macro_env) {
     g_macro_env = valk_lenv_empty();
     valk_lenv_builtins(g_macro_env);
   }
   return g_macro_env;
+}
+
+// Unify the macro env with the caller's target env. After this call, macros
+// defined via `(macro ...)` live in the same env as regular defs, and macro
+// expansion looks up in the unified env. Call once after valk_lenv_builtins.
+void valk_macro_env_init(valk_lenv_t *env) {
+  g_macro_env = env;
 }
 
 void valk_macro_env_set(const char *key, valk_lval_t *val) {
@@ -80,31 +63,26 @@ valk_lval_t *valk_macro_expand_one(valk_lenv_t *menv, valk_lval_t *expr) {
 }
 
 valk_lval_t *valk_eval_form(valk_lenv_t *env, valk_lval_t *form) {
-  valk_lenv_t *menv = valk_macro_env();
-  if (valk_macro_is_def(form))
-    return valk_lval_eval(menv, form);
-  form = valk_macro_expand_one(menv, form);
+  form = valk_macro_expand_one(env, form);
   return valk_lval_eval(env, form);
 }
 
 // ---------------------------------------------------------------------------
-// Module prefix application (replaces the old module-tree FQN rewriter).
+// Module prefix application.
 //
-// For each top-level form in `ast`:
-//   - Qualify unqualified def/sig/type names by prepending `prefix/`.
-// Then walk the whole AST with shadow tracking and rewrite bare symbol
-// references to locally-defined names into their qualified form — so code
-// like `(foo 1)` inside a file that defines `(fun {foo x} ...)` keeps
-// working without manual qualification.
+// For a file that declared `(module X)`:
+//   1. Qualify each top-level unqualified `(def {name} ...)` form's name to
+//      `X/name`. Same for `(sig 'name ...)` paired with a local def.
+//   2. Walk the whole AST with shadow tracking and rewrite bare references
+//      to those local defs into their qualified form — so `(foo 1)` inside
+//      a file that defines `(fun {foo x} ...)` keeps working.
 //
-// No module tree, no sibling resolution, no pre-registration. Cross-file
-// references must already be fully qualified (e.g. `nav/handle-hover`);
-// simple env lookup handles them.
+// Already-qualified names (containing `/`) are left untouched. Cross-file
+// references must be written fully qualified (e.g. `nav/handle-hover`) —
+// plain env lookup handles them.
 // ---------------------------------------------------------------------------
 
 #define VALK_MOD_PATH_MAX 512
-
-// --- Local-defs set: flat growable string array with O(n) lookup. ---
 
 typedef struct {
   char **names;
@@ -133,8 +111,6 @@ static void name_set_free(name_set_t *s) {
   free(s->names);
 }
 
-// --- Name qualification helpers. ---
-
 static valk_lval_t *qualify_sym(const char *prefix, const char *name,
                                 i32 src_pos) {
   char buf[VALK_MOD_PATH_MAX];
@@ -144,9 +120,8 @@ static valk_lval_t *qualify_sym(const char *prefix, const char *name,
   return sym;
 }
 
-// Returns the def form's name (with possible `/` inside) or NULL if the
-// form isn't a `def` or the name is invalid. Used by Pass 1a to collect
-// local bare-name defs that feed intra-file reference rewriting.
+// Returns the def form's bare name or NULL if the form isn't a `def` with
+// an unqualified name.
 static const char *extract_unqualified_def_name(valk_lval_t *form) {
   if (!form || LVAL_TYPE(form) != LVAL_CONS) return NULL;
   if (form->flags & LVAL_FLAG_QUOTED) return NULL;
@@ -169,47 +144,8 @@ static const char *extract_unqualified_def_name(valk_lval_t *form) {
   return name;
 }
 
-// If `name` is `X/...` and some ancestor of `prefix` ends in `/X` or
-// equals `X`, return the ancestor that matches (with its last segment
-// stripped, i.e. the parent). Returns "" (empty) if X is at the top.
-// Returns NULL if no ancestor matches — caller should leave the def
-// name alone (self-namespaced).
-static bool find_anchor_parent(const char *name, const char *prefix,
-                               char *out, size_t out_sz) {
-  const char *slash = strchr(name, '/');
-  if (!slash) return false;
-  size_t first_len = (size_t)(slash - name);
-  if (!prefix || !*prefix) return false;
-
-  char ancestor[VALK_MOD_PATH_MAX];
-  snprintf(ancestor, sizeof(ancestor), "%s", prefix);
-  while (ancestor[0]) {
-    const char *last = strrchr(ancestor, '/');
-    const char *last_seg = last ? last + 1 : ancestor;
-    if (strlen(last_seg) == first_len &&
-        memcmp(last_seg, name, first_len) == 0) {
-      if (last) {
-        size_t plen = (size_t)(last - ancestor);
-        if (plen >= out_sz) plen = out_sz - 1;
-        memcpy(out, ancestor, plen);
-        out[plen] = '\0';
-      } else {
-        out[0] = '\0';
-      }
-      return true;
-    }
-    if (!last) break;
-    *(char *)last = '\0';
-  }
-  return false;
-}
-
-// Mutate the name cell in a top-level def form to its qualified form.
-// Bare names gain a `prefix/` prefix. `/`-containing names whose first
-// segment duplicates an ancestor of `prefix` get the ancestor prepended
-// (e.g. `symdb/foo` in module `lsp/symdb` → `lsp/symdb/foo`). Other
-// `/`-containing names (e.g. `lsp/find-local-def` in module `lsp/nav`)
-// self-namespace and stay unchanged.
+// Mutate the name cell in a top-level def form: if bare, prepend prefix.
+// Already-qualified names (containing `/`) are left alone.
 static void qualify_def_name(valk_lval_t *form, const char *prefix) {
   valk_lval_t *rest = form->cons.tail;
   if (!rest || LVAL_TYPE(rest) != LVAL_CONS) return;
@@ -227,115 +163,9 @@ static void qualify_def_name(valk_lval_t *form, const char *prefix) {
   }
   if (!sym || !slot) return;
   if (sym->str[0] == ':') return;
+  if (strchr(sym->str, '/')) return;
 
-  if (!strchr(sym->str, '/')) {
-    *slot = qualify_sym(prefix, sym->str, LVAL_SRC_POS(sym));
-    return;
-  }
-
-  char parent[VALK_MOD_PATH_MAX];
-  if (!find_anchor_parent(sym->str, prefix, parent, sizeof(parent))) return;
-
-  char buf[VALK_MOD_PATH_MAX];
-  if (*parent)
-    snprintf(buf, sizeof(buf), "%s/%s", parent, sym->str);
-  else
-    snprintf(buf, sizeof(buf), "%s", sym->str);
-  if (strcmp(buf, sym->str) == 0) return; // no-op
-  valk_lval_t *qs = valk_lval_sym(buf);
-  if (LVAL_SRC_POS(sym) >= 0) LVAL_SRC_POS_SET(qs, LVAL_SRC_POS(sym));
-  *slot = qs;
-}
-
-// --- Sibling-module rewriting: `X/Y` → `A/X/Y` for ancestor `A` of prefix. ---
-
-// Compute the would-be module prefix for `(load "path" [sym])`, given the
-// current module's prefix `cur_prefix`. Writes into `out` (up to out_sz).
-// Mirrors the composition rule in builtins_io.c's valk_builtin_load.
-static void predict_load_prefix(valk_lval_t *load_form, const char *cur_prefix,
-                                char *out, size_t out_sz) {
-  out[0] = '\0';
-  valk_lval_t *args = load_form->cons.tail;
-  if (!args || LVAL_TYPE(args) != LVAL_CONS) return;
-  valk_lval_t *path = args->cons.head;
-  if (!path || LVAL_TYPE(path) != LVAL_STR) return;
-
-  valk_lval_t *rest = args->cons.tail;
-  if (rest && LVAL_TYPE(rest) == LVAL_CONS && rest->cons.head &&
-      LVAL_TYPE(rest->cons.head) == LVAL_SYM) {
-    snprintf(out, out_sz, "%s", rest->cons.head->str);
-    return;
-  }
-
-  const char *base = strrchr(path->str, '/');
-  base = base ? base + 1 : path->str;
-  const char *dot = strrchr(base, '.');
-  size_t blen = dot ? (size_t)(dot - base) : strlen(base);
-  char bname[256];
-  if (blen >= sizeof(bname)) blen = sizeof(bname) - 1;
-  memcpy(bname, base, blen);
-  bname[blen] = '\0';
-
-  if (cur_prefix && *cur_prefix)
-    snprintf(out, out_sz, "%s/%s", cur_prefix, bname);
-  else
-    snprintf(out, out_sz, "%s", bname);
-}
-
-// Scan top-level forms for `(load ...)` and collect their predicted prefixes.
-static void collect_local_load_prefixes(valk_lval_t *ast, const char *prefix,
-                                        name_set_t *out) {
-  valk_lval_t *cur = ast;
-  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-    valk_lval_t *form = cur->cons.head;
-    if (form && LVAL_TYPE(form) == LVAL_CONS &&
-        !(form->flags & LVAL_FLAG_QUOTED)) {
-      valk_lval_t *head = form->cons.head;
-      if (head && LVAL_TYPE(head) == LVAL_SYM &&
-          strcmp(head->str, "load") == 0) {
-        char buf[VALK_MOD_PATH_MAX];
-        predict_load_prefix(form, prefix, buf, sizeof(buf));
-        if (buf[0]) name_set_add(out, buf);
-      }
-    }
-    cur = cur->cons.tail;
-  }
-}
-
-// For `sym_str` of form `X/Y/...`, try rewriting to `A/X/Y/...` where `A`
-// is an ancestor prefix (including `prefix` itself) such that `A/X` is a
-// known sibling module (either loaded globally or predicted by pre-scan).
-// Returns a newly-allocated replacement symbol, or NULL if no rewrite.
-static valk_lval_t *try_sibling_rewrite(const char *sym_str, const char *prefix,
-                                        name_set_t *local_loads, i32 src_pos) {
-  const char *slash = strchr(sym_str, '/');
-  if (!slash) return NULL;
-  size_t first_len = (size_t)(slash - sym_str);
-  if (first_len == 0 || first_len >= 128) return NULL;
-  char first_seg[128];
-  memcpy(first_seg, sym_str, first_len);
-  first_seg[first_len] = '\0';
-
-  char ancestor[VALK_MOD_PATH_MAX];
-  if (!prefix || !*prefix) return NULL;
-  snprintf(ancestor, sizeof(ancestor), "%s", prefix);
-
-  while (ancestor[0]) {
-    char candidate[VALK_MOD_PATH_MAX];
-    snprintf(candidate, sizeof(candidate), "%s/%s", ancestor, first_seg);
-    if (name_set_has(local_loads, candidate) ||
-        valk_mod_registry_has(candidate)) {
-      char out[VALK_MOD_PATH_MAX];
-      snprintf(out, sizeof(out), "%s/%s", ancestor, sym_str);
-      valk_lval_t *s = valk_lval_sym(out);
-      if (src_pos >= 0) LVAL_SRC_POS_SET(s, src_pos);
-      return s;
-    }
-    char *last = strrchr(ancestor, '/');
-    if (!last) break;
-    *last = '\0';
-  }
-  return NULL;
+  *slot = qualify_sym(prefix, sym->str, LVAL_SRC_POS(sym));
 }
 
 // --- Shadow-aware rewriter for intra-file call sites. ---
@@ -350,38 +180,28 @@ static void push_formals(valk_lval_t *formals, name_set_t *shadows) {
 }
 
 static void rewrite_node(valk_lval_t *cell, const char *prefix,
-                         name_set_t *locals, name_set_t *shadows,
-                         name_set_t *local_loads);
+                         name_set_t *locals, name_set_t *shadows);
 
 static void rewrite_list(valk_lval_t *list, const char *prefix,
-                         name_set_t *locals, name_set_t *shadows,
-                         name_set_t *local_loads) {
+                         name_set_t *locals, name_set_t *shadows) {
   valk_lval_t *cur = list;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-    rewrite_node(cur, prefix, locals, shadows, local_loads);
+    rewrite_node(cur, prefix, locals, shadows);
     cur = cur->cons.tail;
   }
 }
 
 static void rewrite_node(valk_lval_t *cell, const char *prefix,
-                         name_set_t *locals, name_set_t *shadows,
-                         name_set_t *local_loads) {
+                         name_set_t *locals, name_set_t *shadows) {
   valk_lval_t *expr = cell->cons.head;
   if (!expr) return;
 
   if (LVAL_TYPE(expr) == LVAL_SYM) {
     if (expr->str[0] == ':') return;
     if (name_set_has(shadows, expr->str)) return;
-    if (strchr(expr->str, '/')) {
-      valk_lval_t *rewritten = try_sibling_rewrite(expr->str, prefix,
-                                                   local_loads,
-                                                   LVAL_SRC_POS(expr));
-      if (rewritten) cell->cons.head = rewritten;
-      return;
-    }
-    if (name_set_has(locals, expr->str)) {
+    if (strchr(expr->str, '/')) return;
+    if (name_set_has(locals, expr->str))
       cell->cons.head = qualify_sym(prefix, expr->str, LVAL_SRC_POS(expr));
-    }
     return;
   }
 
@@ -408,7 +228,7 @@ static void rewrite_node(valk_lval_t *cell, const char *prefix,
         name_set_add(&inner, shadows->names[i]);
       push_formals(rest->cons.head, &inner);
       if (rest->cons.tail && LVAL_TYPE(rest->cons.tail) == LVAL_CONS)
-        rewrite_list(rest->cons.tail, prefix, locals, &inner, local_loads);
+        rewrite_list(rest->cons.tail, prefix, locals, &inner);
       name_set_free(&inner);
     }
     return;
@@ -422,7 +242,7 @@ static void rewrite_node(valk_lval_t *cell, const char *prefix,
         if (LVAL_TYPE(bind) == LVAL_SYM) name_set_add(shadows, bind->str);
         else if (LVAL_TYPE(bind) == LVAL_CONS) push_formals(bind, shadows);
         if (rest->cons.tail && LVAL_TYPE(rest->cons.tail) == LVAL_CONS)
-          rewrite_list(rest->cons.tail, prefix, locals, shadows, local_loads);
+          rewrite_list(rest->cons.tail, prefix, locals, shadows);
       }
       return;
     }
@@ -433,7 +253,7 @@ static void rewrite_node(valk_lval_t *cell, const char *prefix,
       valk_lval_t *rest = expr->cons.tail;
       if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
         if (rest->cons.tail && LVAL_TYPE(rest->cons.tail) == LVAL_CONS)
-          rewrite_list(rest->cons.tail, prefix, locals, shadows, local_loads);
+          rewrite_list(rest->cons.tail, prefix, locals, shadows);
       }
       return;
     }
@@ -446,13 +266,11 @@ static void rewrite_node(valk_lval_t *cell, const char *prefix,
       return;
   }
 
-  rewrite_list(expr, prefix, locals, shadows, local_loads);
+  rewrite_list(expr, prefix, locals, shadows);
 }
 
-// Qualify a top-level (sig 'name ...) form to match the qualification its
-// paired def got. Bare names are qualified if in `locals`. `/`-containing
-// names use the same ancestor strip-dup rule as qualify_def_name so the
-// sig matches the canonical def name.
+// If `form` is a top-level (sig 'name ...) whose name matches a local bare
+// def, qualify its name to `prefix/name` so it pairs with the qualified def.
 static void qualify_sig_if_local(valk_lval_t *form, const char *prefix,
                                  name_set_t *locals) {
   if (!form || LVAL_TYPE(form) != LVAL_CONS) return;
@@ -477,31 +295,16 @@ static void qualify_sig_if_local(valk_lval_t *form, const char *prefix,
   }
   if (!sym || !slot) return;
   if (sym->str[0] == ':') return;
+  if (strchr(sym->str, '/')) return;
+  if (!name_set_has(locals, sym->str)) return;
 
-  if (!strchr(sym->str, '/')) {
-    if (!name_set_has(locals, sym->str)) return;
-    *slot = qualify_sym(prefix, sym->str, LVAL_SRC_POS(sym));
-    return;
-  }
-
-  char parent[VALK_MOD_PATH_MAX];
-  if (!find_anchor_parent(sym->str, prefix, parent, sizeof(parent))) return;
-
-  char buf[VALK_MOD_PATH_MAX];
-  if (*parent)
-    snprintf(buf, sizeof(buf), "%s/%s", parent, sym->str);
-  else
-    snprintf(buf, sizeof(buf), "%s", sym->str);
-  if (strcmp(buf, sym->str) == 0) return;
-  valk_lval_t *qs = valk_lval_sym(buf);
-  if (LVAL_SRC_POS(sym) >= 0) LVAL_SRC_POS_SET(qs, LVAL_SRC_POS(sym));
-  *slot = qs;
+  *slot = qualify_sym(prefix, sym->str, LVAL_SRC_POS(sym));
 }
 
 void valk_module_apply_prefix(valk_lval_t *ast, const char *prefix) {
   if (!prefix || !*prefix) return;
 
-  // Pass 1a: collect unqualified def names.
+  // Pass 1a: collect local bare-name defs.
   name_set_t locals = {0};
   {
     valk_lval_t *cur = ast;
@@ -512,8 +315,7 @@ void valk_module_apply_prefix(valk_lval_t *ast, const char *prefix) {
     }
   }
 
-  // Pass 1b: qualify def names (bare and `/`-containing) and any sig
-  // forms paired with them.
+  // Pass 1b: qualify top-level def and paired sig names.
   {
     valk_lval_t *cur = ast;
     while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
@@ -529,23 +331,15 @@ void valk_module_apply_prefix(valk_lval_t *ast, const char *prefix) {
     }
   }
 
-  // Pre-scan top-level (load ...) forms to predict child module prefixes —
-  // these are siblings that will be loaded by this file but aren't yet in
-  // the global registry during Pass 2.
-  name_set_t local_loads = {0};
-  collect_local_load_prefixes(ast, prefix, &local_loads);
-
-  // Pass 2: walk the whole AST, qualifying bare references to `locals` that
-  // aren't shadowed by a lambda param or `=` binding. Also rewrites
-  // qualified cross-sibling references via try_sibling_rewrite.
+  // Pass 2: rewrite bare references to `locals` throughout the AST, with
+  // shadow tracking for lambda params and `=` bindings.
   name_set_t shadows = {0};
   valk_lval_t *cur = ast;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-    rewrite_node(cur, prefix, &locals, &shadows, &local_loads);
+    rewrite_node(cur, prefix, &locals, &shadows);
     cur = cur->cons.tail;
   }
 
   name_set_free(&shadows);
   name_set_free(&locals);
-  name_set_free(&local_loads);
 }

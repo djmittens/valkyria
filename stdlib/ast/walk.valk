@@ -15,6 +15,8 @@
 ;   :on-param (fn name pos)          — parameter
 ;   :on-ref (fn name pos len scope)  — reference with scope
 
+(module walk)
+
 (sig 'ast/walk {-> List List Str Nil})
 (fun {ast/walk ast ops text} {
   ast/visit ast ops

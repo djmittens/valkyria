@@ -8,18 +8,18 @@
 ; Short-name aliases so tests can call helpers directly. Names without `/`
 ; get module-prefixed at load time (lsp/<file>/<name>); names with `/`
 ; stay at their literal value (sig/extract-name is already top-level-bound).
-(def {make-lsp-diag}              lsp/workspace/make-lsp-diag)
-(def {ref->lsp-location}          lsp/nav/ref->lsp-location)
-(def {ref->lsp-edit}              lsp/nav/ref->lsp-edit)
-(def {db-ref->lsp-edit}           lsp/nav/db-ref->lsp-edit)
-(def {ref->highlight}             lsp/features/ref->highlight)
-(def {ref->highlight-db}          lsp/features/ref->highlight-db)
-(def {make-snippet-item}          lsp/nav/make-snippet-item)
-(def {filter-snippets}            lsp/nav/filter-snippets)
-(def {symkind->completion-kind}   lsp/nav/symkind->completion-kind)
-(def {make-sym-completion-item}   lsp/nav/make-sym-completion-item)
+(def {make-lsp-diag}              workspace/make-lsp-diag)
+(def {ref->lsp-location}          nav/ref->lsp-location)
+(def {ref->lsp-edit}              nav/ref->lsp-edit)
+(def {db-ref->lsp-edit}           nav/db-ref->lsp-edit)
+(def {ref->highlight}             features/ref->highlight)
+(def {ref->highlight-db}          features/ref->highlight-db)
+(def {make-snippet-item}          nav/make-snippet-item)
+(def {filter-snippets}            nav/filter-snippets)
+(def {symkind->completion-kind}   nav/symkind->completion-kind)
+(def {make-sym-completion-item}   nav/make-sym-completion-item)
 ; symdb is loaded directly at top-level so its defs land at `symdb/`,
-; not `lsp/symdb/`.
+; not `symdb/`.
 (def {SYMKIND_FUNCTION}           symdb/SYMKIND_FUNCTION)
 (def {SYMKIND_VARIABLE}           symdb/SYMKIND_VARIABLE)
 (def {SYMKIND_TYPE}               symdb/SYMKIND_TYPE)

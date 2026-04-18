@@ -1,5 +1,6 @@
 ; Valkyria LSP Server — hover, definition, references, completion, symbols, rename
 
+(module nav)
 
 ; ---------------------------------------------------------------------------
 ; Hover — format and describe symbols

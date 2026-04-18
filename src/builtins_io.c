@@ -23,7 +23,6 @@ extern void valk_register_file_builtins(valk_lenv_t *env);
 
 typedef struct {
   char *resolved_path;
-  char *prefix;
   int state;
 } module_entry_t;
 
@@ -168,48 +167,69 @@ static valk_lval_t *parse_file_cached(const char *resolved_path) {
 
 
 
-static void extract_module_prefix(const char *path, char *out, size_t out_sz) {
-  const char *base = strrchr(path, '/');
-  base = base ? base + 1 : path;
-  const char *dot = strrchr(base, '.');
-  size_t len = dot ? (size_t)(dot - base) : strlen(base);
-  if (len >= out_sz) len = out_sz - 1;
-  memcpy(out, base, len);
-  out[len] = '\0';
+// Set by the (module X) macro at expansion time. Files without a (module X)
+// declaration load with no prefix — their top-level defs land in the env as
+// bare names. Cleared at end of each eval_loaded_ast call.
+static _Thread_local char *pending_module_prefix = NULL;
+
+// Take ownership of any pending module prefix set via (module X) during
+// macro expansion, clearing the slot. Returns NULL if none was set.
+// Caller must free the returned pointer.
+char *valk_take_pending_module_prefix(void) {
+  char *p = pending_module_prefix;
+  pending_module_prefix = NULL;
+  return p;
 }
 
-// Tracks the currently-loading module's prefix so nested (load ...) calls
-// can compose child prefixes: parent/basename. Thread-local so parallel
-// loaders don't stomp each other.
-static _Thread_local const char *current_load_prefix = NULL;
+static valk_lval_t *valk_builtin_set_module_prefix(valk_lenv_t *e,
+                                                    valk_lval_t *a) {
+  (void)e;
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t *arg = valk_lval_list_nth(a, 0);
+  const char *name = NULL;
+  if (LVAL_TYPE(arg) == LVAL_SYM || LVAL_TYPE(arg) == LVAL_STR) name = arg->str;
+  if (!name || !*name)
+    return valk_lval_err("set-module-prefix!: expected non-empty sym or str");
+  if (pending_module_prefix) free(pending_module_prefix);
+  pending_module_prefix = strdup(name);
+  return valk_lval_nil();
+}
 
 
 
 // Caller owns `ast` (must be a freshly-owned copy — this function mutates it
 // via pop/rewrite). Returns the last form's value or the first error.
 static valk_lval_t *eval_loaded_ast(valk_lenv_t *target_env,
-                                    valk_lval_t *ast,
-                                    const char *module_prefix) {
-  valk_lenv_t *menv = valk_macro_env();
-
-  // Pass 1: expand macros, eval macro defs (so later forms can use them)
+                                    valk_lval_t *ast) {
+  // Pass 1: expand macros and eval macro defs into target_env. Macros and
+  // regular defs live in the same env now, so (macro ...) just evals like
+  // any other top-level form. A top-level `(module X)` macro here sets
+  // `pending_module_prefix` as a side effect.
+  char *prev_pending = pending_module_prefix;
+  pending_module_prefix = NULL;
   {
     valk_lval_t *cur = ast;
     while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
       if (valk_macro_is_def(cur->cons.head)) {
-        valk_lval_t *r = valk_lval_eval(menv, cur->cons.head);
+        valk_lval_t *r = valk_lval_eval(target_env, cur->cons.head);
         if (LVAL_TYPE(r) == LVAL_ERR) valk_lval_println(r);
         cur->cons.head = valk_lval_nil();
       } else {
-        cur->cons.head = valk_macro_expand_one(menv, cur->cons.head);
+        cur->cons.head = valk_macro_expand_one(target_env, cur->cons.head);
       }
       cur = cur->cons.tail;
     }
   }
 
-  // Pass 2: qualify unqualified def/sig/type names with the module prefix
-  if (module_prefix)
-    valk_module_apply_prefix(ast, module_prefix);
+  // Pass 2: if (module X) was declared, qualify this file's def/sig/type
+  // names with that prefix. Files without (module X) load with no prefix.
+  if (pending_module_prefix)
+    valk_module_apply_prefix(ast, pending_module_prefix);
+  if (pending_module_prefix) {
+    free(pending_module_prefix);
+    pending_module_prefix = NULL;
+  }
+  pending_module_prefix = prev_pending;
 
   // Pass 3: evaluate. Errors are printed but do not abort subsequent
   // forms — a failed assertion in one top-level expression shouldn't
@@ -275,20 +295,7 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
     return valk_lval_err("Module cache full"); // LCOV_EXCL_LINE
   }
   module_entry_t *entry = &module_cache[module_cache_count++];
-  char auto_prefix[256];
-  extract_module_prefix(resolved, auto_prefix, sizeof(auto_prefix));
-  char composed_prefix[512];
-  const char *prefix = auto_prefix;
-  if (current_load_prefix) {
-    snprintf(composed_prefix, sizeof(composed_prefix), "%s/%s",
-             current_load_prefix, auto_prefix);
-    prefix = composed_prefix;
-  }
-  if (argc > 1)
-    prefix = valk_lval_list_nth(a, 1)->str;
-
   entry->resolved_path = strdup(resolved);
-  entry->prefix = strdup(prefix);
   entry->state = MODULE_STATE_LOADING;
   pthread_mutex_unlock(&module_cache_lock);
 
@@ -298,11 +305,7 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
     return ast;
   }
 
-  const char *prev_prefix = current_load_prefix;
-  current_load_prefix = entry->prefix;
-  valk_mod_registry_add(entry->prefix);
-  valk_lval_t *result = eval_loaded_ast(e, ast, entry->prefix);
-  current_load_prefix = prev_prefix;
+  valk_lval_t *result = eval_loaded_ast(e, ast);
 
   if (LVAL_TYPE(result) == LVAL_ERR) {
     entry->state = 0;
@@ -334,7 +337,7 @@ valk_lval_t *valk_load_file(valk_lenv_t *env, const char *path) {
     return valk_lval_err("Could not resolve file (%s)", path);
   valk_lval_t *ast = parse_file_cached(resolved);
   if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
-  return eval_loaded_ast(env, ast, NULL);
+  return eval_loaded_ast(env, ast);
 }
 
 static valk_lval_t* valk_builtin_parse(valk_lenv_t* e, valk_lval_t* a) {
@@ -584,6 +587,8 @@ void valk_register_io_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "list?", valk_builtin_list_p);
   valk_lenv_put_builtin(env, "ref?", valk_builtin_ref_p);
   valk_lenv_put_builtin(env, "load", valk_builtin_load);
+  valk_lenv_put_builtin(env, "set-module-prefix!",
+                        valk_builtin_set_module_prefix);
   valk_lenv_put_builtin(env, "read", valk_builtin_read);
   valk_lenv_put_builtin(env, "parse", valk_builtin_parse);
   valk_lenv_put_builtin(env, "parse-file", valk_builtin_parse_file);

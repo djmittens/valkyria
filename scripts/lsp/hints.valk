@@ -6,6 +6,8 @@
 ; IMPORTANT: AST nodes must never be stored via = or def.
 ; Pass through function arguments only.
 
+(module hints)
+
 (def {HINT_SKIP_FORMS}
   (dict/from-keys {"fun" "\\" "def" "=" "if" "do" "match" "select" "case"
    "type" "sig" "load" "let" "and" "or" "not" "quote"

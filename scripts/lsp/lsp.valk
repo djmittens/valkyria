@@ -1,5 +1,7 @@
 ; Valkyria LSP Server — dispatch, main loop
 
+(module lsp)
+
 (load "stdlib/diag/symdb.valk")
 (load "stdlib/diag/validate.valk")
 (load "stdlib/ast/walk.valk")

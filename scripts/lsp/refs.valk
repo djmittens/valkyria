@@ -4,6 +4,8 @@
 ; scope-id = -1 for global, or byte offset of enclosing fun/lambda for local
 ; Scope chain: list of {:id OFFSET :names {n1 n2 ...}}
 
+(module refs)
+
 (def {REF_KEYWORD_SET}
   (dict/from-keys {"fun" "\\" "def" "=" "if" "match" "select" "case"
    "do" "let" "and" "or" "not" "load" "sig" "type"

@@ -3,6 +3,8 @@
 ; Pure analysis functions — no AST walking or scope mutation.
 ; Used by lsp-validate-walk.valk which does the actual tree traversal.
 
+(module validate-checks)
+
 (load "stdlib/diag/symdb.valk")
 
 ; ---------------------------------------------------------------------------

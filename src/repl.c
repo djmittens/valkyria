@@ -78,6 +78,7 @@ int main(int argc, char* argv[]) {
   
   valk_lenv_t* env = valk_lenv_empty();
   valk_lenv_builtins(env);
+  valk_macro_env_init(env);
 
   VALK_WITH_ALLOC((void*)gc_heap) {
     valk_lval_t** argv_items = malloc(argc * sizeof(valk_lval_t*));
@@ -187,15 +188,34 @@ int main(int argc, char* argv[]) {
         valk_lval_println(res);
       } else {
         valk_gc_root_push(res);
+
+        // Pass 1: macro-expand top-level forms. (macro ...) defs eval into
+        // env; other forms get their macro calls expanded. A top-level
+        // (module X) macro here sets the pending prefix via side effect.
+        VALK_WITH_ALLOC((void*)gc_heap) {
+          valk_lval_t *cur = res;
+          while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+            if (valk_macro_is_def(cur->cons.head)) {
+              valk_lval_t *r = valk_lval_eval(env, cur->cons.head);
+              if (LVAL_TYPE(r) == LVAL_ERR) valk_lval_println(r);
+              cur->cons.head = valk_lval_nil();
+            } else {
+              cur->cons.head = valk_macro_expand_one(env, cur->cons.head);
+            }
+            cur = cur->cons.tail;
+          }
+        }
+
+        // Pass 2: apply module prefix if (module X) was declared.
+        char *script_prefix = valk_take_pending_module_prefix();
+        if (script_prefix)
+          valk_module_apply_prefix(res, script_prefix);
+
+        // Pass 3: type-transform + eval each form.
         while (valk_lval_list_count(res) > 0) {
           valk_lval_t* x;
           VALK_WITH_ALLOC((void*)gc_heap) {
             x = valk_lval_pop(res, 0);
-            if (valk_macro_is_def(x)) {
-              x = valk_lval_eval(valk_macro_env(), x);
-              continue;
-            }
-            x = valk_macro_expand_one(valk_macro_env(), x);
             x = valk_type_transform_expr(x);
           }
           if (LVAL_TYPE(x) == LVAL_NIL) continue;
@@ -220,6 +240,7 @@ int main(int argc, char* argv[]) {
             valk_gc_heap_collect(gc_heap);
           }
         }
+        if (script_prefix) free(script_prefix);
         valk_gc_root_pop();
       }
     }
