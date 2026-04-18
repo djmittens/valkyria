@@ -175,11 +175,11 @@ endif
 TEST_RUN_BASE = $(TEST_RUN_FILTER) $(TEST_RUN_ONLY)
 TEST_RUN_ARGS = $(TEST_RUN_BASE)
 
-# Default test target — fast path: skips stress tests and `make check`.
-# For the full sweep (including stress + static check), use `make test-all`.
+# Default test target (all C + Valk + stress)
 .PHONY: test
 test: build
-	$(TEST_RUN) --build-dir build --no-stress $(TEST_RUN_ARGS)
+	-@$(MAKE) check 2>&1 | tail -3
+	$(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
 
 # C tests only
 .PHONY: test-c
@@ -228,10 +228,9 @@ test-examples-asan: build-asan
 	$(TEST_RUN) --build-dir build-asan --examples --filter "^example/" \
 		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt
 
-# Comprehensive: all tests (incl. stress) + ASAN + examples + static check
+# Comprehensive: all tests + ASAN + examples
 .PHONY: test-all
 test-all: build build-asan
-	-@$(MAKE) check 2>&1 | tail -3
 	$(TEST_RUN) --build-dir build --examples $(TEST_RUN_ARGS)
 	$(TEST_RUN) --build-dir build-asan --examples \
 		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt \

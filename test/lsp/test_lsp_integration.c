@@ -773,7 +773,7 @@ static void test_workspace_scan_didopen_race(VALK_TEST_ARGS()) {
   // Workspace size and didOpen count are tuned so the scan is slow enough
   // for didOpen to interleave but not so slow the LSP times out servicing
   // queries afterwards.
-  char *workspace = make_temp_workspace(30);
+  char *workspace = make_temp_workspace(100);
   VALK_TEST_ASSERT(workspace != NULL, "create temp workspace");
   if (!workspace) { test_timeout_stop(); return; }
 
