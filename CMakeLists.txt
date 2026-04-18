@@ -212,6 +212,7 @@ set(VALKYRIA_SOURCES
   src/event_loop_metrics.c
   src/json.c
   src/validate.c
+  src/image.c
   vendor/sqlite3/sqlite3.c
 )
 
@@ -353,6 +354,9 @@ include_directories(${PROJECT_SOURCE_DIR}/test ${PROJECT_SOURCE_DIR}/src)
 
 add_executable(test_std test/lang/test_std.c test/testing.c)
 target_link_libraries(test_std PRIVATE "-lc" valkyria)
+
+add_executable(test_image test/lang/test_image.c test/testing.c)
+target_link_libraries(test_image PRIVATE "-lc" valkyria)
 
 add_executable(test_regression test/lang/test_regression.c test/testing.c)
 target_link_libraries(test_regression PRIVATE "-lc" valkyria)
