@@ -605,5 +605,11 @@ if(VALK_LLVM)
   target_include_directories(test_vir SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
   target_compile_options(test_vir PRIVATE -Wno-pedantic)
   include_directories(test_vir src/)
+
+  add_executable(test_image_jit test/lang/test_image_jit.c test/testing.c)
+  target_link_libraries(test_image_jit PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
+  target_include_directories(test_image_jit SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_compile_options(test_image_jit PRIVATE -Wno-pedantic)
+  include_directories(test_image_jit src/)
 endif()
 
