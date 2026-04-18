@@ -129,8 +129,12 @@
 
 ; === Phase 2: Validate all files ===
 
-(fun {check/validate-all db files with-types} {
-  check/validate-walk db files with-types 0 0 0
+(fun {check/validate-all db files with-types} {do
+  ; Preload db-derived caches once; reuse across all files.
+  ; Without this, known-set (~26s) and arity-cache (~6s) re-query the symdb
+  ; for every file — the bulk of phase-2 wall time on large workspaces.
+  (= {cache} (vd/preload-caches db))
+  (check/validate-walk db files with-types cache 0 0 0)
 })
 
 ; Collect HM type inference errors for a single file as warnings.
@@ -163,38 +167,38 @@
     {join a b}}
 })
 
-(fun {check/validate-walk db files with-types total-lines total-errors total-warnings} {
+(fun {check/validate-walk db files with-types cache total-lines total-errors total-warnings} {
   if (nil? files) {list :lines total-lines :errors total-errors
                         :warnings total-warnings}
   {do
     (= {path} (head files))
     (if (check/ignored? path)
-      {check/validate-walk db (tail files) with-types total-lines total-errors total-warnings}
+      {check/validate-walk db (tail files) with-types cache total-lines total-errors total-warnings}
       {do
         (= {text} (read-file path))
         (if (error? text)
-          {check/validate-walk db (tail files) with-types total-lines total-errors total-warnings}
+          {check/validate-walk db (tail files) with-types cache total-lines total-errors total-warnings}
           {do
             (= {lines} (+ 1 (len (str/split text "\n"))))
             (= {ast} (parse text))
             (if (error? ast)
               {do (eprintln (str path ":1:1: error: " ast))
-                  (check/validate-walk db (tail files) with-types (+ total-lines lines)
+                  (check/validate-walk db (tail files) with-types cache (+ total-lines lines)
                     (+ total-errors 1) total-warnings)}
               {do
-                (= {vd-diags} (vd/validate db ast text))
+                (= {vd-diags} (vd/validate-cached db ast text cache))
                 (= {hm-diags} (if with-types {check/hm-errors text ast} {nil}))
                 (= {diags} (if (error? vd-diags) {hm-diags}
                                {check/merge-diags vd-diags hm-diags}))
                 (if (error? diags)
                   {do (eprintln (str path ": internal error: " diags))
-                      (check/validate-walk db (tail files) with-types (+ total-lines lines)
+                      (check/validate-walk db (tail files) with-types cache (+ total-lines lines)
                         (+ total-errors 1) total-warnings)}
                   {do
                     (= {errs} (check/count-severity diags 1))
                     (= {warns} (check/count-severity diags 2))
                     (if (> (len diags) 0) {check/print-diags path diags} {nil})
-                    (check/validate-walk db (tail files) with-types (+ total-lines lines)
+                    (check/validate-walk db (tail files) with-types cache (+ total-lines lines)
                       (+ total-errors errs) (+ total-warnings warns))})})})})}
 })
 

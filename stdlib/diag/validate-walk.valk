@@ -544,6 +544,35 @@
   vd/validate-with-known db ast text (vd/load-known-set db)
 })
 
+; Preload the db-derived caches that are stable across many files.
+; Reuse across a batch to avoid re-querying the symdb for every call.
+; Returned plist has `:known` and `:arity-cache`. Types-set is cheap per
+; file, so we leave it in the per-file path.
+(sig 'vd/preload-caches {-> Ref List})
+(fun {vd/preload-caches db} {
+  list :known (vd/load-known-set db)
+       :arity-cache (vd/preload-arity-cache db)
+})
+
+; Like vd/validate, but reuses a pre-loaded cache (see vd/preload-caches)
+; instead of re-querying the symdb per file. Intended for batch tools
+; (valk-check) that validate many files against a stable db.
+(sig 'vd/validate-cached {-> Ref List Str List List})
+(fun {vd/validate-cached db ast text cache} {do
+  (= {globals-set} (dict/from-keys (vd/collect-globals ast)))
+  (= {types-set} (vd/build-types-set db ast))
+  (= {ctx} (list :scope (list (dict/new))
+                  :globals globals-set
+                  :known (plist/get cache :known)
+                  :types types-set
+                  :db db
+                  :arity-cache (plist/get cache :arity-cache)
+                  :text text
+                  :diags nil))
+  (= {result} (vd/walk-body ast ctx))
+  (if (error? result) {nil} {reverse result:diags})
+})
+
 (sig 'vd/preload-arity-cache {-> Ref Dict})
 (fun {vd/preload-arity-cache db} {
   if (nil? db) {(dict/new)}
