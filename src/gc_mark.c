@@ -31,6 +31,9 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
 }
 static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx) {
   if (lval == nullptr) return;
+  // Immortal lvals (image buffers, singletons, num cache) live outside the
+  // GC heap and reference only other immortals, so there's nothing to mark.
+  if (lval->flags & LVAL_FLAG_IMMORTAL) return;
 
   valk_gc_ptr_location_t loc;
   bool in_heap = valk_gc_ptr_to_location(ctx->heap, lval, &loc);

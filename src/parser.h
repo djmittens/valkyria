@@ -98,6 +98,12 @@ const char *valk_ltype_name(valk_ltype_e type);
 
 typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 
+// Env flag bits (stored in valk_lenv_t::flags).
+// FROZEN: this env is read-only; valk_lenv_def will not descend into it.
+// Used by image-loaded envs so overlay-level defs don't attempt to mutate
+// the immortal image buffer.
+#define LENV_FLAG_FROZEN (1ULL << 0)
+
 struct valk_lenv_t {
   _Atomic u64 flags;
   // Dynamic array of symbol names (char*)
@@ -234,6 +240,7 @@ typedef struct {
 
 void valk_lval_init_singletons(void);
 u64 valk_sym_intern_count(void);
+const char *valk_sym_intern(const char *name);
 
 #ifdef VALK_COVERAGE
 

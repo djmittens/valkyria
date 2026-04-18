@@ -260,7 +260,10 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
 }
 
 void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
+  // Walk up to the outermost mutable env, stopping before any frozen
+  // ancestor (e.g. an image-loaded env).
   while (env->parent) {
+    if (atomic_load(&env->parent->flags) & LENV_FLAG_FROZEN) break;
     env = env->parent;
   }
   if (val && LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH)
@@ -279,6 +282,12 @@ static void put_builtin_impl(valk_lenv_t* env, char* key,
     VALK_SET_ORIGIN_ALLOCATOR(lfun);
     lfun->fun.builtin = _fun;
     lfun->fun.env = nullptr;
+    lfun->fun.formals = nullptr;
+    lfun->fun.body = nullptr;
+    lfun->fun.arity = 0;
+    u64 klen = strlen(key) + 1;
+    lfun->fun.name = valk_mem_alloc(klen);
+    memcpy(lfun->fun.name, key, klen);
     valk_lval_set_immortal(lfun);
     valk_lval_t* sym = valk_lval_sym(key);
     valk_lenv_put(env, sym, lfun);

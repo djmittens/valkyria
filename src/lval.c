@@ -98,6 +98,11 @@ u64 valk_sym_intern_count(void) {
   return __sym_table.count;
 }
 
+const char *valk_sym_intern(const char *name) {
+  if (!__valk_singletons_initialized) return name;
+  return sym_intern_str(name);
+}
+
 void valk_lval_init_singletons(void) {
   if (__valk_singletons_initialized) return;
   __valk_singletons_initialized = true;
