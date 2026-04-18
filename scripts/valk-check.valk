@@ -99,9 +99,8 @@
 
 ; === Phase 1: Sync all files into symdb (using compiler pipeline) ===
 
-(fun {check/sync-light db uri text ast} {do
+(fun {check/sync-light db uri text hash ast} {do
   (= {path} (symdb/uri->path uri))
-  (= {hash} (str "check:" (len text)))
   (sqlite/exec db
     "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
     path hash)
@@ -109,22 +108,69 @@
   (if (not (nil? file-id)) {lsp/index-ast db file-id ast text 1} {})
 })
 
-(fun {check/sync-all db files} {
-  if (nil? files) {nil}
+; 80 spaces — used to pad progress lines so partial \r overwrites don't leave
+; tails of previous longer messages behind.
+(def {check/SPACES80}
+  "                                                                                ")
+
+(fun {check/spaces n} {
+  if (<= n 0) {""}
+    {if (>= n 80) {check/SPACES80}
+      {str/slice check/SPACES80 0 n}}
+})
+
+; Progress line. Pad to 80 chars so partial overwrites via \r don't leave
+; tails of the previous longer message behind. Truncate long paths to fit.
+(fun {check/progress label i total path} {do
+  (= {short} (if (> (len path) 50) {str "…" (str/slice path (- (len path) 49) (len path))} {path}))
+  (= {msg} (str "\r  [" i "/" total "] " label " " short))
+  (= {pad} (- 80 (len msg)))
+  (stderr/write (str msg (check/spaces pad)))
+})
+
+(fun {check/progress-clear} {do
+  (stderr/write "\r")
+  (stderr/write check/SPACES80)
+  (stderr/write "\r")
+})
+
+; Returns the stored hash for a file, or nil if not present.
+; sqlite/query-value raises on 0 rows; swallow that to nil.
+(fun {check/stored-hash db path} {do
+  (= {r} (sqlite/query-value db "SELECT hash FROM files WHERE path=?1" path))
+  (if (error? r) {nil} {r})
+})
+
+; Walk files; skip indexing work when fingerprint matches stored hash.
+; Returns count of files that actually changed (needed re-indexing).
+(fun {check/sync-walk db files total idx changed} {
+  if (nil? files) {changed}
   {do
     (= {path} (head files))
-    (= {text} (read-file path))
-    (if (not (error? text))
+    (check/progress "indexing" (+ idx 1) total path)
+    (= {fp} (file/fingerprint path))
+    (= {stored} (check/stored-hash db path))
+    (if (and (not (nil? stored)) (== stored fp))
+      {check/sync-walk db (tail files) total (+ idx 1) changed}
       {do
-        (= {prefix} (check/module-prefix path))
-        (= {ast} (compile/process text prefix))
-        (if (error? ast) {nil}
+        (= {text} (read-file path))
+        (if (not (error? text))
           {do
-            (sqlite/exec db "BEGIN")
-            (check/sync-light db (str "file://" path) text ast)
-            (sqlite/exec db "COMMIT")})}
-      {nil})
-    (check/sync-all db (tail files))}
+            (= {prefix} (check/module-prefix path))
+            (= {ast} (compile/process text prefix))
+            (if (error? ast) {nil}
+              {do
+                (sqlite/exec db "BEGIN")
+                (check/sync-light db (str "file://" path) text fp ast)
+                (sqlite/exec db "COMMIT")})}
+          {nil})
+        (check/sync-walk db (tail files) total (+ idx 1) (+ changed 1))})}
+})
+
+(fun {check/sync-all db files} {do
+  (= {changed} (check/sync-walk db files (len files) 0 0))
+  (check/progress-clear)
+  changed
 })
 
 ; === Phase 2: Validate all files ===
@@ -134,7 +180,9 @@
   ; Without this, known-set (~26s) and arity-cache (~6s) re-query the symdb
   ; for every file — the bulk of phase-2 wall time on large workspaces.
   (= {cache} (vd/preload-caches db))
-  (check/validate-walk db files with-types cache 0 0 0)
+  (= {r} (check/validate-walk db files with-types cache (len files) 0 0 0 0))
+  (check/progress-clear)
+  r
 })
 
 ; Collect HM type inference errors for a single file as warnings.
@@ -167,39 +215,46 @@
     {join a b}}
 })
 
-(fun {check/validate-walk db files with-types cache total-lines total-errors total-warnings} {
+(fun {check/validate-walk db files with-types cache total idx total-lines total-errors total-warnings} {
   if (nil? files) {list :lines total-lines :errors total-errors
                         :warnings total-warnings}
   {do
     (= {path} (head files))
+    (check/progress "validating" (+ idx 1) total path)
     (if (check/ignored? path)
-      {check/validate-walk db (tail files) with-types cache total-lines total-errors total-warnings}
+      {check/validate-walk db (tail files) with-types cache total (+ idx 1)
+        total-lines total-errors total-warnings}
       {do
         (= {text} (read-file path))
         (if (error? text)
-          {check/validate-walk db (tail files) with-types cache total-lines total-errors total-warnings}
+          {check/validate-walk db (tail files) with-types cache total (+ idx 1)
+            total-lines total-errors total-warnings}
           {do
             (= {lines} (+ 1 (len (str/split text "\n"))))
             (= {ast} (parse text))
             (if (error? ast)
-              {do (eprintln (str path ":1:1: error: " ast))
-                  (check/validate-walk db (tail files) with-types cache (+ total-lines lines)
-                    (+ total-errors 1) total-warnings)}
+              {do (check/progress-clear)
+                  (eprintln (str path ":1:1: error: " ast))
+                  (check/validate-walk db (tail files) with-types cache total (+ idx 1)
+                    (+ total-lines lines) (+ total-errors 1) total-warnings)}
               {do
                 (= {vd-diags} (vd/validate-cached db ast text cache))
                 (= {hm-diags} (if with-types {check/hm-errors text ast} {nil}))
                 (= {diags} (if (error? vd-diags) {hm-diags}
                                {check/merge-diags vd-diags hm-diags}))
                 (if (error? diags)
-                  {do (eprintln (str path ": internal error: " diags))
-                      (check/validate-walk db (tail files) with-types cache (+ total-lines lines)
-                        (+ total-errors 1) total-warnings)}
+                  {do (check/progress-clear)
+                      (eprintln (str path ": internal error: " diags))
+                      (check/validate-walk db (tail files) with-types cache total (+ idx 1)
+                        (+ total-lines lines) (+ total-errors 1) total-warnings)}
                   {do
                     (= {errs} (check/count-severity diags 1))
                     (= {warns} (check/count-severity diags 2))
-                    (if (> (len diags) 0) {check/print-diags path diags} {nil})
-                    (check/validate-walk db (tail files) with-types cache (+ total-lines lines)
-                      (+ total-errors errs) (+ total-warnings warns))})})})})}
+                    (if (> (len diags) 0)
+                      {do (check/progress-clear) (check/print-diags path diags)}
+                      {nil})
+                    (check/validate-walk db (tail files) with-types cache total (+ idx 1)
+                      (+ total-lines lines) (+ total-errors errs) (+ total-warnings warns))})})})})}
 })
 
 ; === Arg parsing ===
@@ -229,6 +284,40 @@
     {head args}}
 })
 
+; === Run-summary cache ===
+; We stash the last Phase-2 result in a tiny key-value table so that
+; a re-run with zero changed files can skip Phase 2 entirely.
+
+(fun {check/ensure-runs-table db}
+  {sqlite/exec db
+    "CREATE TABLE IF NOT EXISTS runs (key TEXT PRIMARY KEY, value TEXT)"})
+
+(fun {check/save-summary db report with-types} {do
+  (check/ensure-runs-table db)
+  (= {v} (str report:lines "|" report:errors "|" report:warnings "|"
+              (if with-types {"t"} {"f"})))
+  (sqlite/exec db
+    "INSERT INTO runs (key, value) VALUES ('last-summary', ?1)
+     ON CONFLICT(key) DO UPDATE SET value=?1" v)
+})
+
+(fun {check/load-summary db with-types} {do
+  (check/ensure-runs-table db)
+  (= {raw} (sqlite/query-value db "SELECT value FROM runs WHERE key='last-summary'"))
+  (= {v} (if (error? raw) {nil} {raw}))
+  (if (nil? v) {nil}
+    {do
+      (= {parts} (str/split v "|"))
+      (if (!= (len parts) 4) {nil}
+        {do
+          (= {prev-types} (== (head (tail (tail (tail parts)))) "t"))
+          ; Only reuse if the --types flag matches last run.
+          (if (!= prev-types (if with-types {1} {0})) {nil}
+            {list :lines (str->num (head parts))
+                  :errors (str->num (head (tail parts)))
+                  :warnings (str->num (head (tail (tail parts))))})})})
+})
+
 ; === Main ===
 
 (fun {check/main} {do
@@ -245,12 +334,27 @@
   (= {db-path} ".valk/check.sqlite")
   (= {db} (symdb/init db-path))
   (eprintln (str "valk-check: indexing " n " files"))
-  (check/sync-all db files)
+  (= {p1-start} (time-us {}))
+  (= {changed} (check/sync-all db files))
+  (= {p1-ms} (/ (- (time-us {}) p1-start) 1000))
+  (eprintln (str "  phase 1: " p1-ms " ms (" changed " changed)"))
 
-  ; Phase 2: validate each file using full LSP checks
-  (eprintln (str "valk-check: validating " n " files"
-    (if with-types {" (with HM type warnings)"} {""})))
-  (= {report} (check/validate-all db files with-types))
+  ; Phase 2: validate each file using full LSP checks.
+  ; Short-circuit when nothing changed and last run was cached.
+  (= {cached} (if (== changed 0) {check/load-summary db with-types} {nil}))
+  (= {report}
+    (if (nil? cached)
+      {do
+        (eprintln (str "valk-check: validating " n " files"
+          (if with-types {" (with HM type warnings)"} {""})))
+        (= {p2-start} (time-us {}))
+        (= {r} (check/validate-all db files with-types))
+        (= {p2-ms} (/ (- (time-us {}) p2-start) 1000))
+        (eprintln (str "  phase 2: " p2-ms " ms"))
+        (check/save-summary db r with-types)
+        r}
+      {do (eprintln "  phase 2: skipped (no changes, cached)")
+          cached}))
 
   (symdb/close db)
 
