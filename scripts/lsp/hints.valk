@@ -592,11 +592,20 @@
     (= {type-str} (hint/infer-val-type val db))
     (if (nil? type-str) {acc}
       {do
-        (= {pos} (src-pos name-sym))
+        ; Anchor the hint to the value expression so it lands BETWEEN the
+        ; closing `}` of the formals and the value — "{name} :: Type val"
+        ; rather than "{name :: Type} val", which looks like it's inside
+        ; the identifier. Fall back to the end of the name-sym only if the
+        ; value has no source position (synthesized AST).
+        (= {vpos} (src-pos val))
+        (= {npos} (src-pos name-sym))
         (= {ns} (str name-sym))
-        (if (< pos 0) {acc}
-          {qcons (list :offset (+ pos (len ns)) :label (str ":: " type-str) :kind 1
-                       :paddingLeft :true) acc})})}
+        (if (>= vpos 0)
+          {qcons (list :offset vpos :label (str ":: " type-str) :kind 1
+                       :paddingRight :true) acc}
+          {if (< npos 0) {acc}
+            {qcons (list :offset (+ npos (len ns)) :label (str ":: " type-str) :kind 1
+                         :paddingLeft :true) acc}})})}
 })
 
 (sig 'hint/type-from-fun {-> List Ref List List})

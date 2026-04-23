@@ -496,13 +496,13 @@
       true
     })
 
-  (test/case "type-hint-has-padding-left"
+  (test/case "type-hint-has-padding-right"
     {do
       (= {text} "(def {x} 42)")
       (= {hints} (hint/collect text nil nil))
       (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (= {h} (head type-hints))
-      (test/assert (not (nil? h:paddingLeft)) "type hint has paddingLeft")
+      (test/assert (not (nil? h:paddingRight)) "type hint has paddingRight")
       true
     })
 

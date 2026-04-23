@@ -59,6 +59,7 @@
 ; ---------------------------------------------------------------------------
 
 (def {lsp/sys} nil)
+(def {lsp/idx-sys} nil)
 (def {lsp/out} nil)
 (def {lsp/initialized} 0)
 
@@ -82,12 +83,32 @@
   {lsp/write-message
     (list :jsonrpc "2.0" :method method :params params)})
 
+; Monotonic counter for server->client request IDs. Must not collide with
+; progress-token IDs (which start at 100000), so we allocate at 200000+.
+(def {lsp/server-req-counter} 0)
+
+(sig 'lsp/next-server-req-id {-> Num})
+(fun {lsp/next-server-req-id} {do
+  (def {lsp/server-req-counter} (+ lsp/server-req-counter 1))
+  (+ 200000 lsp/server-req-counter)})
+
+; Tells the client to re-request semantic tokens. Call this once per document
+; sync after the AST + symdb are populated, so the initial lex-tokens paint
+; gets upgraded to full AST-based tokens. Uses lsp/send-request (defined in
+; workspace.valk and resolved at call-time) so test stubs can intercept it.
+(sig 'lsp/refresh-semantic-tokens {-> Nil})
+(fun {lsp/refresh-semantic-tokens}
+  {lsp/send-request (lsp/next-server-req-id)
+    "workspace/semanticTokens/refresh" (None)})
+
 ; ---------------------------------------------------------------------------
 ; State
 ; ---------------------------------------------------------------------------
 
 (def {lsp/documents} (dict/new))
 (def {lsp/db} nil)
+(def {lsp/idx-db} nil)
+(def {lsp/idx-db-own} 0)
 (def {lsp/root-path} nil)
 (def {lsp/doc-version} 0)
 
@@ -105,6 +126,16 @@
 ; for semantic tokens during in-progress edits when the current AST has
 ; parse errors. Stale offsets are better than no highlighting.
 (def {lsp/last-good-ast-cache} (dict/new))
+; Cache of the last semantic-token data array computed from a clean parse.
+; Returned instantly when the current parse is broken, avoiding the latency
+; of re-lexing or re-walking the AST on every keystroke — which on large
+; files produced a visible orange flash between didChange and response.
+(def {lsp/last-good-tokens-cache} (dict/new))
+; Same idea for inlay hints: returning nil on broken parse encodes as an
+; empty array which tells the client to clear all hints visibly, so
+; during typing hints disappear until parse recovers. Keeping the last
+; clean set around and re-serving it keeps the display stable.
+(def {lsp/last-good-hints-cache} (dict/new))
 
 ; Returns the first parse error in an AST list, or nil if there are none.
 ; Parse errors are now preserved in the AST list as LVAL_ERR elements
@@ -121,21 +152,50 @@
 (sig 'lsp/ast-has-error {-> List Num})
 (fun {lsp/ast-has-error ast} {error? (lsp/ast-find-error ast)})
 
+; Cache entries are stored as (text ast) so readers can verify the cached
+; AST was parsed from the exact text they're about to render against.
+; Without this pairing, an async cache-ast(vN) write could land after the
+; document has moved to vN+1, and a subsequent get-ast would hand back
+; vN's AST offsets applied to vN+1's text — producing tokens/hints at
+; wrong columns (the "jumpy colors, ::A mid-word" visual bug).
 (sig 'lsp/cache-ast {-> Str Str List})
 (fun {lsp/cache-ast uri text} {do
   (= {ast} (parse text))
-  (dict/set! lsp/ast-cache uri ast)
+  (dict/set! lsp/ast-cache uri (list text ast))
   ; Only cache as "last good" if the AST has no parse errors. This lets
   ; semantic tokens fall back to a stale-but-valid AST during edits.
   (if (not (lsp/ast-has-error ast))
-    {dict/set! lsp/last-good-ast-cache uri ast}
+    {dict/set! lsp/last-good-ast-cache uri (list text ast)}
     {})
   ast})
 
+; Parses `text` when the ast-cache entry is missing or stale (different text).
+; Side-effects: populates lsp/last-good-ast-cache when the parse is clean so
+; subsequent broken edits have a fallback AST for semantic tokens. Without
+; this, a brand-new file whose first request triggers a fresh parse has
+; no last-good snapshot when the next edit breaks the syntax.
 (sig 'lsp/get-ast {-> Str Str List})
 (fun {lsp/get-ast uri text} {do
   (= {cached} (dict/get lsp/ast-cache uri))
-  (if (nil? cached) {parse text} {cached})})
+  (if (nil? cached) {lsp/parse-and-remember uri text}
+    {if (== (head cached) text) {head (tail cached)}
+      {lsp/parse-and-remember uri text}})})
+
+(sig 'lsp/parse-and-remember {-> Str Str List})
+(fun {lsp/parse-and-remember uri text} {do
+  (= {ast} (parse text))
+  (if (not (lsp/ast-has-error ast))
+    {dict/set! lsp/last-good-ast-cache uri (list text ast)}
+    {})
+  ast})
+
+; Returns the cached AST or nil without forcing a parse. Used by the
+; semantic-tokens handlers so they can emit lexer-only tokens before the
+; background parse has populated the cache (instant-highlight on open).
+(sig 'lsp/get-cached-ast {-> Str Any})
+(fun {lsp/get-cached-ast uri} {do
+  (= {cached} (dict/get lsp/ast-cache uri))
+  (if (nil? cached) {nil} {head (tail cached)})})
 
 ; Returns the AST suitable for semantic tokens / hover / etc. Prefers the
 ; current AST if it parsed cleanly; otherwise falls back to the most recent
@@ -146,7 +206,7 @@
   (= {current} (lsp/get-ast uri text))
   (if (lsp/ast-has-error current)
     {do (= {last-good} (dict/get lsp/last-good-ast-cache uri))
-        (if (nil? last-good) {current} {last-good})}
+        (if (nil? last-good) {current} {head (tail last-good)})}
     {current})})
 
 ; Returns true if the AST returned by get-ast-for-display is the original

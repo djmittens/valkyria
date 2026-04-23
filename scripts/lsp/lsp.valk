@@ -22,28 +22,26 @@
 
 (sig 'handle-semantic-tokens-range {-> Num RangeParams Nil})
 (fun {handle-semantic-tokens-range id params} {do
-  (= {ctx} (lsp/get-doc params))
-  (if (nil? ctx) {lsp/send-response id (list :data nil)}
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id (list :data nil)}
     {do
       (= {start-line} params:range:start:line)
       (= {end-line} params:range:end:line)
-      (= {path} (symdb/uri->path ctx:uri))
-      (= {line-idx} (lsp/get-line-index ctx:uri ctx:text))
-      (= {text-len} (len ctx:text))
-      (= {start-raw} (lsp/lc->offset line-idx start-line 0))
-      (= {end-raw} (lsp/lc->offset line-idx (+ end-line 1) 0))
-      (= {start-offset} (if (> start-raw 0) {start-raw}
-                            {if (== start-line 0) {0} {text-len}}))
-      (= {end-offset} (if (> end-raw 0) {end-raw} {text-len}))
-      (= {rows} (if (nil? lsp/db) {nil}
-        {symdb/get-semantic-tokens-range lsp/db path start-offset end-offset}))
-      ; ctx:ast is the last-known-good AST when current parse failed.
-      ; If no last-good AST exists either, fall back to lexer-only tokens.
-      (= {data} (if (nil? rows)
-        {if (and (lsp/ast-has-error ctx:ast) (lsp/no-display-ast? ctx:uri))
-          {sem/lex-tokenize ctx:text}
-          {sem/tokenize-ast ctx:ast ctx:text}}
-        {sem/encode-deltas ctx:text (nav/rows-to-token-groups rows)}))
+      ; Same caching strategy as handle-semantic-tokens (see nav.valk):
+      ; clean parse → tokenize + cache; broken parse → return cached
+      ; tokens to avoid orange flicker from re-lexing latency.
+      (= {ast} (lsp/get-ast uri text))
+      (= {data}
+        (if (or (nil? ast) (lsp/ast-has-error ast))
+          {do
+            (= {cached} (dict/get lsp/last-good-tokens-cache uri))
+            (if (nil? cached) {sem/lex-tokenize text} {cached})}
+          {do
+            (= {fresh} (sem/tokenize-ast ast text))
+            (dict/set! lsp/last-good-tokens-cache uri fresh)
+            fresh}))
       (= {typed} (sem/parse-flat data))
       (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
       (lsp/send-response id (list :data (sem/flatten filtered)))})
@@ -205,12 +203,20 @@
                               (workspace/handle-initialize id (InitParams (plist/get params :rootUri)))
                               (def {lsp/initialized} 1))}
             {"initialized" (do
-              (if (not (nil? lsp/db))
-                {do
-                  (= {files} (lsp/collect-workspace-files lsp/root-path))
-                  (= {tok} (lsp/next-progress-token))
-                  (lsp/progress-begin tok "Indexing workspace" (len files))
-                  (lsp/scan-all lsp/db files tok)}
+              ; Dispatch workspace scan to lsp/idx-sys, not lsp/sys. All
+              ; done-callbacks (including sqlite writes) land on idx-sys
+              ; loop 0 — completely separated from lsp/sys loop 0, which
+              ; keeps handling interactive LSP traffic (semanticTokens,
+              ; hover, diagnostics) with zero backlog from indexing.
+              (if (not (nil? lsp/idx-db))
+                {aio/dispatch lsp/idx-sys
+                  (\ {_} {lsp/collect-workspace-files lsp/root-path})
+                  nil
+                  (\ {files} {if (or (nil? files) (error? files)) {}
+                    {do
+                      (= {tok} (lsp/next-progress-token))
+                      (lsp/progress-begin tok "Indexing workspace" (len files))
+                      (lsp/scan-all lsp/idx-db files tok)}})}
                 {}))}
             {"shutdown" (lsp/send-response id (None))}
             {"exit" (aio/stop lsp/sys)}
@@ -232,9 +238,16 @@
 (fun {lsp/start} {do
   (stderr/write "[valk-lsp] starting (threaded)\n")
   (def {lsp/sys} (aio/await (aio/start {:num-threads 0})))
+  ; Dedicated aio system for workspace indexing. Its loop 0 absorbs all
+  ; scan-dispatch done-callbacks + sqlite writes so lsp/sys loop 0 stays
+  ; clear for interactive LSP traffic (semanticTokens, diagnostics, etc.).
+  (def {lsp/idx-sys} (aio/await (aio/start {:num-threads 2})))
   (= {stdin-pipe} (pipe/stdin-open lsp/sys))
   (def {lsp/out} (pipe/stdout-open lsp/sys))
   (pipe/lsp-reader stdin-pipe (\ {body} {lsp/on-message body}))
   (aio/run lsp/sys)
+  (aio/stop lsp/idx-sys)
+  (if (and (not (nil? lsp/idx-db)) (== lsp/idx-db-own 1))
+    {symdb/close lsp/idx-db} {})
   (if (not (nil? lsp/db)) {symdb/close lsp/db} {})
   (stderr/write "[valk-lsp] shutdown\n")})

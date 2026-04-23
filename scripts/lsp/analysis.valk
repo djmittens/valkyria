@@ -521,8 +521,11 @@
   if (nil? tokens) {nil}
    {do
     (= {t} (head tokens))
-    (qcons t:dl (qcons t:dc (qcons t:len (qcons t:ttype
-      (qcons t:mods (sem/flatten (tail tokens)))))))}
+    (qcons (SemToken:dl t)
+    (qcons (SemToken:dc t)
+    (qcons (SemToken:len t)
+    (qcons (SemToken:ttype t)
+    (qcons (SemToken:mods t) (sem/flatten (tail tokens)))))))}
 })
 
 ; ---------------------------------------------------------------------------

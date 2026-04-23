@@ -46,16 +46,14 @@
     "SELECT hash FROM files WHERE path=?1" path))
   (if (if (not (nil? existing)) {== existing:hash hash} {0}) {0}
     {do
-      (symdb/sync-file-symbols db uri text hash)
+      ; Single-parse path: get-ast hits the ast-cache for open documents,
+      ; falls back to parse otherwise. Then sync-file-with-ast does
+      ; strip-errors + file-insert + index-ast in one shot. Previously
+      ; this function parsed twice and called index-ast twice — kept the
+      ; main loop busy during workspace scan.
       (= {ast} (lsp/get-ast uri text))
-      (if (not (error? ast))
-        {do
-          (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
-          (if (not (nil? fid))
-            {lsp/index-ast db fid ast text}
-            {})}
-        {})
-      1})
+      (if (error? ast) {0}
+        {do (symdb/sync-file-with-ast db uri text hash ast) 1})})
 })
 
 (sig 'lsp/index-file-with-hints {-> Ref Str Str Str Num})
@@ -126,14 +124,14 @@
     :source "valk"
     :message d:message})
 
-(sig 'lsp/ensure-loads-indexed {-> List Nil})
-(fun {lsp/ensure-loads-indexed ast} {
-  if (nil? lsp/db) {}
-  {lsp/ensure-loads-walk ast}
+(sig 'lsp/ensure-loads-indexed {-> Ref List Nil})
+(fun {lsp/ensure-loads-indexed db ast} {
+  if (nil? db) {}
+  {lsp/ensure-loads-walk db ast}
 })
 
-(sig 'lsp/ensure-loads-walk {-> List Nil})
-(fun {lsp/ensure-loads-walk exprs} {
+(sig 'lsp/ensure-loads-walk {-> Ref List Nil})
+(fun {lsp/ensure-loads-walk db exprs} {
   if (nil? exprs) {}
   {do
     (= {e} (head exprs))
@@ -145,11 +143,11 @@
             {if (nil? (tail e)) {}
               {do
                 (= {path} (str (head (tail e))))
-                (lsp/seed-from-disk lsp/db (if (str/starts-with? path "/") {path}
+                (lsp/seed-from-disk db (if (str/starts-with? path "/") {path}
                   {str lsp/root-path "/" path}))}}
             {})}}
       {})
-    (lsp/ensure-loads-walk (tail exprs))}
+    (lsp/ensure-loads-walk db (tail exprs))}
 })
 
 (sig 'lsp/republish-all-diagnostics {-> Nil})
@@ -165,7 +163,7 @@
     (= {uri} (head uris))
     (= {text} (lsp/doc-get uri))
     (if (nil? text) {}
-      {lsp/publish-diagnostics uri text})
+      {lsp/publish-diagnostics lsp/db uri text})
     (lsp/republish-loop (tail uris))}
 })
 
@@ -202,18 +200,22 @@
     :message (str err))
 })
 
-(sig 'lsp/publish-diagnostics {-> Str Str Nil})
-(fun {lsp/publish-diagnostics uri text} {do
-  (= {ast} (lsp/get-ast uri text))
+; Takes db as an arg so callers can route the DB work to lsp/idx-db on
+; lsp/idx-sys (keeping lsp/sys loop-0 free to flush pipe writes). Parses
+; text directly rather than consulting lsp/ast-cache because the cache
+; is written by concurrent lsp/sys workers.
+(sig 'lsp/publish-diagnostics {-> Ref Str Str Nil})
+(fun {lsp/publish-diagnostics db uri text} {do
+  (= {ast} (parse text))
   (= {parse-err} (lsp/ast-find-error ast))
   (if (error? parse-err)
     {lsp/send-notification "textDocument/publishDiagnostics"
       (list :uri uri :diagnostics
         (list (lsp/parse-error->diag (str parse-err) text)))}
     {do
-      (lsp/ensure-loads-indexed ast)
-      (= {known} (lsp/get-known-set))
-      (= {diags} (vd/validate-with-known lsp/db ast text known))
+      (lsp/ensure-loads-indexed db ast)
+      (= {known} (vd/load-known-set db))
+      (= {diags} (vd/validate-with-known db ast text known))
       (= {lsp-diags} (if (error? diags)
         {do (stderr/write (str "[lsp] validate error: " diags "\n")) nil}
         {map make-lsp-diag diags}))
@@ -244,7 +246,7 @@
   (if (error? parse-err)
     {list (lsp/parse-error->diag (str parse-err) text)}
     {do
-      (lsp/ensure-loads-indexed ast)
+      (lsp/ensure-loads-indexed lsp/db ast)
       (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
       (if (error? diags)
         {do (stderr/write (str "[lsp] validate error: " diags "\n"))
@@ -271,15 +273,37 @@
 ; Sync document to symdb
 ; ---------------------------------------------------------------------------
 
-(sig 'lsp/sync-doc {-> Str Str Nil})
-(fun {lsp/sync-doc uri text} {do
-  (lsp/doc-store uri text)
-  (if (nil? lsp/db) {}
+; Takes an explicit db ref so callers can choose lsp/db (main connection,
+; used on loop 0) or lsp/idx-db (secondary connection, used by dispatched
+; workers). Routing DB writes through lsp/idx-db on lsp/idx-sys keeps
+; lsp/sys loop-0 free to flush pipe/writes promptly after a didOpen, so
+; semantic-tokens responses don't queue behind a long index transaction.
+; Parses text directly (native ~5ms) instead of relying on lsp/ast-cache,
+; because the cache is written by a concurrent lsp/sys worker and racy
+; to read from idx-sys.
+(sig 'lsp/sync-doc {-> Ref Str Str Nil})
+(fun {lsp/sync-doc db uri text} {do
+  (if (nil? db) {}
     {do
       (= {hash} (str "mem:" (len text)))
-      (= {changed} (lsp/with-tx lsp/db
-        (\ {} {lsp/index-file-with-hints lsp/db uri text hash})))
-      (if (and (num? changed) (> changed 0)) {lsp/invalidate-known-set} {})})})
+      (= {path} (symdb/uri->path uri))
+      (= {existing} (sqlite/query-maybe db
+        "SELECT hash FROM files WHERE path=?1" path))
+      (if (if (not (nil? existing)) {== existing:hash hash} {0}) {}
+        {do
+          (= {ast} (parse text))
+          ; `parse` returns a list of top-level forms and appends parse
+          ; errors as LVAL_ERR elements, so `(error? ast)` is always
+          ; false; scan the list for any error element instead. Skipping
+          ; the symdb write on broken parses keeps highlighting/inlays
+          ; stable on the last-good snapshot while the user is mid-edit,
+          ; rather than flickering between partial new data and stale
+          ; old data.
+          (if (lsp/ast-has-error ast) {}
+            {lsp/with-tx db
+              (\ {} {do
+                (symdb/sync-file-with-ast db uri text hash ast)
+                (lsp/precompute-file-data db uri ast text)})})})})})
 
 
 
@@ -606,7 +630,11 @@
     {do
       (lsp/progress-end tok "up to date")
       (stderr/write "[valk-lsp] scan complete: 0 indexed\n")
-      (lsp/cleanup-stale-files)}
+      ; Bounce to lsp/sys loop 0 — see comment in scan-handle-result.
+      (aio/dispatch lsp/sys
+        (\ {_} nil)
+        nil
+        (\ {_} {lsp/cleanup-stale-files}))}
      {do
       (= {total} (len changed))
       (= {state} (dict/new))
@@ -620,43 +648,92 @@
       (lsp/dispatch-all db changed state tok)})
 })
 
-; Dispatch ALL files at once across worker threads.
-; Workers do read+parse (CPU). Callbacks do index+SQLite (IO, sequential on loop 0).
+; Max number of file-scans in-flight concurrently. Kept small so main-loop
+; handling of didOpen/didChange/etc. isn't starved by a flood of indexing
+; done-callbacks (which do SQLite writes sequentially on loop 0).
+(def {lsp/scan-concurrency} 4)
+
+; Sliding-window dispatch: start up to lsp/scan-concurrency scans; each
+; done-cb pulls the next file from the queue. Keeps at most K done-cbs
+; queued on the main loop at any moment, so incoming LSP messages can
+; interleave with indexing instead of waiting behind N done-cbs.
 (sig 'lsp/dispatch-all {-> Ref List Dict Num Nil})
-(fun {lsp/dispatch-all db files state tok} {
-  if (nil? files) {}
+(fun {lsp/dispatch-all db files state tok} {do
+  (dict/set! state :queue files)
+  (dict/set! state :db db)
+  (dict/set! state :tok tok)
+  (lsp/scan-start-workers state lsp/scan-concurrency)})
+
+(sig 'lsp/scan-start-workers {-> Dict Num Nil})
+(fun {lsp/scan-start-workers state n} {
+  if (<= n 0) {}
   {do
-    (= {path} (head files))
-    (aio/dispatch lsp/sys
-      (\ {_} {lsp/prepare-file path})
-      nil
-       (\ {result} {do
-        ; Each callback wraps its own writes in a self-contained transaction.
-        ; This avoids holding a tx across async dispatch boundaries, which
-        ; would race with concurrent handle-did-open / handle-did-change.
-        (= {did-raw} (if (nil? result) {0}
-          {lsp/with-tx db
-            (\ {} {lsp/index-file-full db (str "file://" result:path) result:text result:fp})}))
-        (= {did} (if (num? did-raw) {did-raw} {0}))
-        (dict/set! state :indexed (+ (dict/get state :indexed) did))
-        (dict/set! state :done (+ (dict/get state :done) 1))
-        (= {done-count} (dict/get state :done))
-        (= {total} (dict/get state :total))
-        (if (or (== (mod done-count 10) 0) (== done-count total))
-          {lsp/progress-report tok (str done-count " / " total " files")
-            (/ (* done-count 100) total)}
-          {})
-        (if (== done-count total)
-          {do
-            (lsp/invalidate-known-set)
-            (= {indexed} (dict/get state :indexed))
-            (lsp/progress-end tok (if (== indexed 0) {"up to date"} {str "indexed " indexed " files"}))
-             (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
-             (lsp/cleanup-stale-files)
-             (lsp/republish-all-diagnostics)}
-          {})}))
-    (lsp/dispatch-all db (tail files) state tok)}
+    (lsp/scan-try-dispatch state)
+    (lsp/scan-start-workers state (- n 1))}
 })
+
+(sig 'lsp/scan-try-dispatch {-> Dict Nil})
+(fun {lsp/scan-try-dispatch state} {do
+  (= {queue} (dict/get state :queue))
+  (if (nil? queue) {}
+    {do
+      (= {path} (head queue))
+      (dict/set! state :queue (tail queue))
+      ; Dispatch on lsp/idx-sys — parse on one of idx-sys's worker loops,
+      ; done-cb (sqlite write + queue advance) on idx-sys loop 0. lsp/sys
+      ; loop 0 never sees any of this.
+      (aio/dispatch lsp/idx-sys
+        (\ {_} {lsp/prepare-file path})
+        nil
+        (\ {result} {lsp/scan-handle-result state result}))})})
+
+(sig 'lsp/scan-handle-result {-> Dict Any Nil})
+(fun {lsp/scan-handle-result state result} {do
+  (= {db} (dict/get state :db))
+  (= {tok} (dict/get state :tok))
+  ; Each callback wraps its own writes in a self-contained transaction.
+  ; This avoids holding a tx across async dispatch boundaries, which
+  ; would race with concurrent handle-did-open / handle-did-change.
+  ;
+  ; Pre-parsed AST comes from prepare-file (worker thread). Calling
+  ; sync-file-with-ast directly — rather than routing through
+  ; lsp/index-file-full — skips the redundant hash re-check
+  ; (filter-changed already did it) and avoids any re-parse on the main
+  ; loop. Single index-ast call per file.
+  (= {did-raw} (if (nil? result) {0}
+    {lsp/with-tx db
+      (\ {} {do
+        (symdb/sync-file-with-ast db (str "file://" result:path)
+                                  result:text result:fp result:ast)
+        1})}))
+  (= {did} (if (num? did-raw) {did-raw} {0}))
+  (dict/set! state :indexed (+ (dict/get state :indexed) did))
+  (dict/set! state :done (+ (dict/get state :done) 1))
+  (= {done-count} (dict/get state :done))
+  (= {total} (dict/get state :total))
+  (if (or (== (mod done-count 10) 0) (== done-count total))
+    {lsp/progress-report tok (str done-count " / " total " files")
+      (/ (* done-count 100) total)}
+    {})
+  (if (== done-count total)
+    {do
+      (= {indexed} (dict/get state :indexed))
+      (lsp/progress-end tok (if (== indexed 0) {"up to date"} {str "indexed " indexed " files"}))
+      (stderr/write (str "[valk-lsp] scan complete: " indexed " indexed\n"))
+      ; invalidate-known-set / cleanup-stale-files / republish-all-diagnostics
+      ; all touch in-memory valk state (dict caches) and send LSP
+      ; notifications via pipe/write. They must run on lsp/sys loop 0 to
+      ; stay coherent with interactive handlers (hover/completion) that
+      ; read the same caches. Bounce via aio/dispatch with a noop worker
+      ; so the done-cb fires on lsp/sys loop 0.
+      (aio/dispatch lsp/sys
+        (\ {_} nil)
+        nil
+        (\ {_} {do
+          (lsp/invalidate-known-set)
+          (lsp/cleanup-stale-files)
+          (lsp/republish-all-diagnostics)}))}
+    {(lsp/scan-try-dispatch state)})})
 
 ; ---------------------------------------------------------------------------
 ; Method handlers — notifications
@@ -674,27 +751,77 @@
       (= {result} (symdb/init db-path))
       (if (error? result)
         {do (stderr/write (str "[valk-lsp] symdb file init failed, using :memory:\n"))
-            (def {lsp/db} (symdb/init ":memory:"))}
+            (def {lsp/db} (symdb/init ":memory:"))
+            ; :memory: can't be shared across connections; reuse the same
+            ; handle and mark it NOT owned by the idx slot.
+            (def {lsp/idx-db} lsp/db)
+            (def {lsp/idx-db-own} 0)}
         {do (def {lsp/db} result)
+            ; Separate sqlite handle for the indexing system. WAL mode
+            ; (set in symdb/schema-sql) + per-connection tx state means
+            ; idx-sys can run BEGIN/COMMIT without racing lsp/sys's own
+            ; writes. Both point at the same on-disk file.
+            (def {lsp/idx-db} (symdb/init db-path))
+            (def {lsp/idx-db-own} 1)
             (lsp/seed-builtins lsp/db lsp/root-path)})}
     {do
       (def {lsp/root-path} "")
-      (def {lsp/db} (symdb/init ":memory:"))})
+      (def {lsp/db} (symdb/init ":memory:"))
+      (def {lsp/idx-db} lsp/db)
+      (def {lsp/idx-db-own} 0)})
   (lsp/send-response id lsp/capabilities)})
 
 (def {lsp/noop-cb} (\ {_} {}))
 
+; Dispatches:
+;   - lsp/sys worker: lsp/cache-ast to populate the in-process AST cache
+;     (used by semantic-tokens workers on lsp/sys)
+;   - lsp/idx-sys worker: lsp/sync-doc to write to the DB via lsp/idx-db,
+;     off lsp/sys loop-0. Keeping the DB write off loop-0 lets pipe/write
+;     responses (semantic tokens, diagnostics) flush promptly — the old
+;     layout's 1-2s loop-0 index transaction was the single largest source
+;     of latency on file open. lsp/idx-db is a separate sqlite connection
+;     from lsp/db so there's no nested-BEGIN conflict.
+;   - lsp/sys worker: publish-diagnostics (on a done-cb). This still reads
+;     lsp/db from loop-0; worth investigating moving too.
+;
+; Known-set cache freshness: we invalidate synchronously here on loop-0
+; before dispatching, so any subsequent get-known-set call reloads from
+; the current DB state.
 (sig 'handle-did-open {-> OpenParams Nil})
 (fun {handle-did-open params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} td:text)
   (lsp/doc-store uri text)
+  (dict/remove! lsp/ast-cache uri)
   (dict/remove! lsp/line-index-cache uri)
+  (lsp/invalidate-known-set)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
-  (lsp/cache-ast uri text)
-  (= {_} (lsp/sync-doc uri text))
-  (lsp/publish-diagnostics uri text)})
+  (= {v} lsp/doc-version)
+  (aio/dispatch lsp/sys
+    (\ {_} {if (not (== lsp/doc-version v)) {nil}
+      {do (lsp/cache-ast uri text) nil}})
+    nil
+    (\ {_} {if (not (== lsp/doc-version v)) {}
+      ; AST is now cached. Tell the client to re-request so the initial
+      ; lex/token paint upgrades to full AST-based tokens immediately —
+      ; DB-backed tokens will land on a later refresh once sync-doc
+      ; commits.
+      {lsp/refresh-semantic-tokens}}))
+  (aio/dispatch lsp/idx-sys
+    (\ {_} {if (not (== lsp/doc-version v)) {nil}
+      {do (lsp/sync-doc lsp/idx-db uri text) nil}})
+    nil
+    (\ {_} {if (not (== lsp/doc-version v)) {}
+      {lsp/refresh-semantic-tokens}}))
+  (def {lsp/diag-version} (+ lsp/diag-version 1))
+  (= {dv} lsp/diag-version)
+  (aio/dispatch lsp/idx-sys
+    (\ {_} {if (not (== lsp/diag-version dv)) {nil}
+      {do (lsp/publish-diagnostics lsp/idx-db uri text) nil}})
+    nil
+    lsp/noop-cb)})
 
 (sig 'handle-did-change {-> ChangeParams Nil})
 (fun {handle-did-change params} {do
@@ -710,20 +837,28 @@
       (lsp/doc-store uri text)
       (dict/remove! lsp/ast-cache uri)
       (dict/remove! lsp/line-index-cache uri)
+      (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
       (= {v} lsp/doc-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/doc-version v)) {nil}
-          {do (lsp/cache-ast uri text)
-              (lsp/sync-doc uri text)
-              nil}})
-        nil lsp/noop-cb)
+          {do (lsp/cache-ast uri text) nil}})
+        nil
+        (\ {_} {if (not (== lsp/doc-version v)) {}
+          {lsp/refresh-semantic-tokens}}))
+      (aio/dispatch lsp/idx-sys
+        (\ {_} {if (not (== lsp/doc-version v)) {nil}
+          {do (lsp/sync-doc lsp/idx-db uri text) nil}})
+        nil
+        (\ {_} {if (not (== lsp/doc-version v)) {}
+          {lsp/refresh-semantic-tokens}}))
       (def {lsp/diag-version} (+ lsp/diag-version 1))
       (= {dv} lsp/diag-version)
-      (aio/dispatch lsp/sys
+      (aio/dispatch lsp/idx-sys
         (\ {_} {if (not (== lsp/diag-version dv)) {nil}
-          {do (lsp/publish-diagnostics uri text) nil}})
-        nil lsp/noop-cb)})})
+          {do (lsp/publish-diagnostics lsp/idx-db uri text) nil}})
+        nil
+        lsp/noop-cb)})})
 
 (sig 'handle-did-close {-> DocParams Nil})
 (fun {handle-did-close params} {do
@@ -746,11 +881,26 @@
     {do
       (lsp/doc-store uri save-text)
       (dict/remove! lsp/line-index-cache uri)
+      (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
+      (= {v} lsp/doc-version)
       (aio/dispatch lsp/sys
-        (\ {_} {do (lsp/cache-ast uri save-text)
-                   (= {_} (lsp/sync-doc uri save-text))
-                   (lsp/publish-diagnostics uri save-text)
-                   nil})
-        nil lsp/noop-cb)})})
+        (\ {_} {if (not (== lsp/doc-version v)) {nil}
+          {do (lsp/cache-ast uri save-text) nil}})
+        nil
+        (\ {_} {if (not (== lsp/doc-version v)) {}
+          {lsp/refresh-semantic-tokens}}))
+      (aio/dispatch lsp/idx-sys
+        (\ {_} {if (not (== lsp/doc-version v)) {nil}
+          {do (lsp/sync-doc lsp/idx-db uri save-text) nil}})
+        nil
+        (\ {_} {if (not (== lsp/doc-version v)) {}
+          {lsp/refresh-semantic-tokens}}))
+      (def {lsp/diag-version} (+ lsp/diag-version 1))
+      (= {dv} lsp/diag-version)
+      (aio/dispatch lsp/idx-sys
+        (\ {_} {if (not (== lsp/diag-version dv)) {nil}
+          {do (lsp/publish-diagnostics lsp/idx-db uri save-text) nil}})
+        nil
+        lsp/noop-cb)})})
 

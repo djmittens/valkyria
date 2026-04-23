@@ -63,6 +63,7 @@
 (fun {reset-state} {do
   (def {lsp/documents} (dict/new))
   (def {lsp/db} nil)
+  (def {lsp/idx-db} nil)
   (def {lsp/root-path} nil)
   (def {lsp/known-set-cache} nil)
   (def {lsp/progress-token} 0)
@@ -730,7 +731,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/publish-diagnostics "file:///err.valk" "(undefined-symbol-xyz 42)")
+      (lsp/publish-diagnostics nil "file:///err.valk" "(undefined-symbol-xyz 42)")
       (= {notif} (last-notification))
       (test/assert-eq "textDocument/publishDiagnostics" notif:method "method")
       (= {params} notif:params)
@@ -742,7 +743,7 @@
     {do
       (reset-state)
       (reset-captures)
-      (lsp/publish-diagnostics "file:///ok.valk" "(+ 1 2)")
+      (lsp/publish-diagnostics nil "file:///ok.valk" "(+ 1 2)")
       (= {notif} (last-notification))
       (test/assert-eq "textDocument/publishDiagnostics" notif:method "method")
     })

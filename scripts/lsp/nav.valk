@@ -454,18 +454,28 @@
 
 (sig 'handle-semantic-tokens {-> Num DocParams Nil})
 (fun {handle-semantic-tokens id params} {do
-  (= {ctx} (lsp/get-doc params))
-  (if (nil? ctx) {lsp/send-response id (list :data nil)}
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id (list :data nil)}
     {do
-      (= {path} (symdb/uri->path ctx:uri))
-      (= {rows} (if (nil? lsp/db) {nil} {symdb/get-semantic-tokens lsp/db path}))
-      ; ctx:ast is the last-known-good AST when current parse failed.
-      ; If no last-good AST exists either, fall back to lexer-only tokens.
-      (= {data} (if (nil? rows)
-        {if (and (lsp/ast-has-error ctx:ast) (lsp/no-display-ast? ctx:uri))
-          {sem/lex-tokenize ctx:text}
-          {sem/tokenize-ast ctx:ast ctx:text}}
-        {sem/encode-deltas ctx:text (nav/rows-to-token-groups rows)}))
+      ; On clean parse, tokenize the AST, cache the result, and return it.
+      ; On broken parse (mid-edit), return the last-good cached tokens
+      ; instantly — re-lexing on every keystroke is too slow to avoid
+      ; a visible orange flash between didChange and response. Stale
+      ; token positions drift slightly during edits but recover as soon
+      ; as parse succeeds again. Only fall back to lex-tokenize when no
+      ; clean parse has ever landed (first open with broken content).
+      (= {ast} (lsp/get-ast uri text))
+      (= {data}
+        (if (or (nil? ast) (lsp/ast-has-error ast))
+          {do
+            (= {cached} (dict/get lsp/last-good-tokens-cache uri))
+            (if (nil? cached) {sem/lex-tokenize text} {cached})}
+          {do
+            (= {fresh} (sem/tokenize-ast ast text))
+            (dict/set! lsp/last-good-tokens-cache uri fresh)
+            fresh}))
       (lsp/send-response id (list :data data))})
 })
 

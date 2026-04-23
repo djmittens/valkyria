@@ -7,20 +7,27 @@
 ; ---------------------------------------------------------------------------
 
 (sig 'handle-inlay-hints {-> Num RangeParams Nil})
-(sig 'handle-inlay-hints {-> Num RangeParams Nil})
 (fun {handle-inlay-hints id params} {do
   (= {range} params:range)
   (= {dp} (DocParams params:textDocument))
   (= {ctx} (lsp/get-doc dp))
   (if (nil? ctx) {lsp/send-response id nil}
     {do
-      (= {path} (symdb/uri->path ctx:uri))
-      (= {rows} (if (nil? lsp/db) {nil}
-        {symdb/get-inlay-hints lsp/db path 0 999999}))
-      (= {hints} (if (or (nil? rows) (== (len rows) 0))
-        {hint/collect-from-ast ctx:ast ctx:text lsp/db range}
-        {hint/format-db-rows rows ctx:text range}))
-      (lsp/send-response id hints)})
+      ; Clean parse: recompute from current AST, cache, return.
+      ; Broken parse: return the cached hints so they stay visible
+      ; during typing instead of blinking out when `nil` encodes as
+      ; `[]` and tells the client to clear all hints. Offsets drift
+      ; slightly mid-edit but recover on the next clean parse, which
+      ; is strictly better UX than hints vanishing every keystroke.
+      ; Returning `nil` when there is no cache yet (broken-on-open)
+      ; still clears, but that matches the nothing-to-show state.
+      (= {current-ast} (lsp/get-ast ctx:uri ctx:text))
+      (if (or (nil? current-ast) (lsp/ast-has-error current-ast))
+        {lsp/send-response id (dict/get lsp/last-good-hints-cache ctx:uri)}
+        {do
+          (= {hints} (hint/collect-from-ast current-ast ctx:text lsp/db range))
+          (dict/set! lsp/last-good-hints-cache ctx:uri hints)
+          (lsp/send-response id hints)})})
 })
 
 ; ---------------------------------------------------------------------------
