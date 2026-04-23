@@ -233,6 +233,13 @@ static valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
   __attribute__((unused)) int saved_line = ctx->line;
   __attribute__((unused)) int saved_col = ctx->pos - ctx->line_start + 1;
 
+  // Was this expression's opener at column 0? Only top-level forms start
+  // at column 0 in idiomatic Valkyria code, so this is the signal we use
+  // to gate the "missing close paren" recovery heuristic below. Nested
+  // forms routinely have column-0 content inside them (e.g. under
+  // `{do ...}`) and must not trigger recovery.
+  bool opener_at_col0 = (saved_pos == 0) || (ctx->source[saved_pos - 1] == '\n');
+
   char end;
   bool is_quoted = false;
   if (ctx->source[ctx->pos++] == '{') {
@@ -252,6 +259,20 @@ static valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
           "[offset: %d] Unexpected end of input reading expr, while looking "
           "for `%c`",
           ctx->pos, end);
+    }
+    // Recovery heuristic: if this expression's opener was itself at
+    // column 0 (i.e. a top-level form) and we now see a `(` or `{` at
+    // column 0, the user almost certainly deleted a closing `)` / `}`
+    // and the new column-0 char is the start of the next top-level form.
+    // Bail out so the outer loop can resume there instead of consuming
+    // the rest of the file. Gated on opener_at_col0 so that valid nested
+    // code with column-0 content (e.g. `{do (a)\n(b)}`) keeps parsing.
+    if (opener_at_col0 &&
+        (ctx->source[ctx->pos] == '(' || ctx->source[ctx->pos] == '{') &&
+        ctx->pos == ctx->line_start) {
+      return valk_lval_err(
+          "[offset: %d] Missing `%c`; next top-level form started here",
+          saved_pos, end);
     }
     valk_lval_t *x = valk_lval_read_ctx(ctx);
     if (LVAL_TYPE(x) == LVAL_ERR) return x;
@@ -397,15 +418,20 @@ valk_lval_t* valk_parse_text(const char* text) {
 
   // LCOV_EXCL_BR_START - parse error handling and da_add branches
   while (ctx.source[ctx.pos] != '\0') {
+    int before = ctx.pos;
     valk_lval_t* expr = valk_lval_read_ctx(&ctx);
-    if (LVAL_TYPE(expr) == LVAL_ERR) {
-      // Preserve all parse errors, including EOF, so callers (especially
-      // the LSP) can produce diagnostics for in-progress edits. The error
-      // already carries source position info via [offset: N].
-      da_add(&tmp, expr);
-      break;
-    }
     da_add(&tmp, expr);
+    if (LVAL_TYPE(expr) == LVAL_ERR) {
+      // "End of input" errors mean we've consumed everything — no recovery
+      // possible. Everything else (unclosed paren, unexpected char) should
+      // let subsequent top-level forms still parse, so the LSP can keep
+      // validating the rest of the file while the user fixes the broken
+      // region. The error carries [offset: N] for diagnostics.
+      if (expr->str && strstr(expr->str, "end of input")) break;
+      // Force forward progress if the reader didn't advance; prevents an
+      // infinite loop on pathological inputs.
+      if (ctx.pos == before && ctx.source[ctx.pos] != '\0') ctx.pos++;
+    }
   }
   // LCOV_EXCL_BR_STOP
 

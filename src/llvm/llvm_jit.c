@@ -11,10 +11,24 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+typedef valk_lval_t *(*jit_expr_fn_t)(valk_lenv_t *);
+
+typedef struct {
+  char *source;              // strdup'd key
+  jit_expr_fn_t fn;          // compiled entry
+  LLVMOrcResourceTrackerRef rt;  // owns the module; released at jit_free
+} jit_cache_entry_t;
 
 struct valk_jit_t {
   LLVMOrcLLJITRef lljit;
   u64 module_counter;
+  jit_cache_entry_t *cache;
+  u64 cache_len;
+  u64 cache_cap;
+  u64 cache_hits;             // diagnostics / test introspection
+  u64 cache_misses;
 };
 
 static bool llvm_initialized = false;
@@ -70,6 +84,14 @@ valk_jit_t *valk_jit_new(void) {
 
 void valk_jit_free(valk_jit_t *jit) {
   if (!jit) return;
+  for (u64 i = 0; i < jit->cache_len; i++) {
+    if (jit->cache[i].rt) {
+      LLVMOrcResourceTrackerRemove(jit->cache[i].rt);
+      LLVMOrcReleaseResourceTracker(jit->cache[i].rt);
+    }
+    free(jit->cache[i].source);
+  }
+  free(jit->cache);
   if (jit->lljit) {
     LLVMErrorRef err = LLVMOrcDisposeLLJIT(jit->lljit);
     if (err) check_error(err, "LLVMOrcDisposeLLJIT");
@@ -77,16 +99,43 @@ void valk_jit_free(valk_jit_t *jit) {
   free(jit);
 }
 
-typedef valk_lval_t *(*jit_expr_fn_t)(valk_lenv_t *);
+static jit_cache_entry_t *jit_cache_lookup(valk_jit_t *jit, const char *src) {
+  for (u64 i = 0; i < jit->cache_len; i++) {
+    if (strcmp(jit->cache[i].source, src) == 0) return &jit->cache[i];
+  }
+  return NULL;
+}
+
+static void jit_cache_insert(valk_jit_t *jit, const char *src,
+                             jit_expr_fn_t fn, LLVMOrcResourceTrackerRef rt) {
+  if (jit->cache_len == jit->cache_cap) {
+    u64 ncap = jit->cache_cap ? jit->cache_cap * 2 : 8;
+    jit->cache = realloc(jit->cache, ncap * sizeof(jit_cache_entry_t));
+    jit->cache_cap = ncap;
+  }
+  jit->cache[jit->cache_len].source = strdup(src);
+  jit->cache[jit->cache_len].fn = fn;
+  jit->cache[jit->cache_len].rt = rt;
+  jit->cache_len++;
+}
+
+u64 valk_jit_cache_hits(valk_jit_t *jit) {
+  return jit ? jit->cache_hits : 0;
+}
+u64 valk_jit_cache_misses(valk_jit_t *jit) {
+  return jit ? jit->cache_misses : 0;
+}
 
 static void init_codegen_decls(valk_llvm_ctx_t *c) {
   valk_llvm_declare_runtime_fns(c);
 }
 
-valk_lval_t *valk_jit_eval(valk_jit_t *jit, valk_lenv_t *env,
-                           valk_lval_t *expr) {
-  if (!jit || !expr) return valk_lval_err("JIT: null argument");
-
+// Codegen core: set up a fresh LLVMContext/Module and an entry function
+// (ptr -> ptr). Caller supplies body_emit to fill in the function body.
+static bool jit_emit_module(valk_jit_t *jit, bool is_program,
+                            valk_lval_t *ast,
+                            LLVMContextRef *ctx_out, LLVMModuleRef *mod_out,
+                            char *fn_name_out, size_t fn_name_cap) {
   LLVMContextRef llvm_ctx = LLVMContextCreate();
 
   char mod_name[64];
@@ -105,20 +154,36 @@ valk_lval_t *valk_jit_eval(valk_jit_t *jit, valk_lenv_t *env,
 
   init_codegen_decls(&codegen);
 
-  char fn_name[64];
-  snprintf(fn_name, sizeof(fn_name), "__jit_eval_%llu",
+  snprintf(fn_name_out, fn_name_cap, "__jit_eval_%llu",
     (unsigned long long)jit->module_counter++);
 
   LLVMTypeRef fn_type = LLVMFunctionType(codegen.ptr_type,
     (LLVMTypeRef[]){codegen.ptr_type}, 1, 0);
-  LLVMValueRef fn = LLVMAddFunction(codegen.module, fn_name, fn_type);
+  LLVMValueRef fn = LLVMAddFunction(codegen.module, fn_name_out, fn_type);
   LLVMSetLinkage(fn, LLVMExternalLinkage);
 
   LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(llvm_ctx, fn, "entry");
   LLVMPositionBuilderAtEnd(codegen.builder, entry);
-
   LLVMValueRef env_param = LLVMGetParam(fn, 0);
-  LLVMValueRef result = valk_llvm_compile_expr(&codegen, expr, env_param);
+
+  LLVMValueRef result = NULL;
+  if (is_program) {
+    // ast is a parser-returned cons list of top-level forms. Emit each
+    // inline; the return value is the last form's value.
+    valk_lval_t *cur = ast;
+    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+      result = valk_llvm_compile_expr(&codegen, cur->cons.head, env_param);
+      cur = cur->cons.tail;
+    }
+    if (!result) {
+      // Empty program: return nil.
+      LLVMTypeRef nil_type = LLVMFunctionType(codegen.ptr_type, NULL, 0, 0);
+      result = LLVMBuildCall2(codegen.builder, nil_type,
+        codegen.fn_lval_nil, NULL, 0, "nil");
+    }
+  } else {
+    result = valk_llvm_compile_expr(&codegen, ast, env_param);
+  }
   LLVMBuildRet(codegen.builder, result);
 
   char *verify_err = NULL;
@@ -132,16 +197,27 @@ valk_lval_t *valk_jit_eval(valk_jit_t *jit, valk_lenv_t *env,
     LLVMDisposeBuilder(codegen.builder);
     LLVMDisposeModule(codegen.module);
     LLVMContextDispose(llvm_ctx);
-    return valk_lval_err("JIT: module verification failed");
+    return false;
   }
   if (verify_err) LLVMDisposeMessage(verify_err);
 
   LLVMDisposeBuilder(codegen.builder);
+  *ctx_out = llvm_ctx;
+  *mod_out = codegen.module;
+  return true;
+}
 
+// Install a freshly-emitted module into the JIT under a new ResourceTracker.
+// Returns the compiled fn + rt. Ownership of the context/module is transferred
+// to the JIT on success; on failure they are disposed here.
+static bool jit_install_module(valk_jit_t *jit, LLVMContextRef llvm_ctx,
+                               LLVMModuleRef module, const char *fn_name,
+                               jit_expr_fn_t *fn_out,
+                               LLVMOrcResourceTrackerRef *rt_out) {
   LLVMOrcThreadSafeContextRef ts_ctx =
     LLVMOrcCreateNewThreadSafeContextFromLLVMContext(llvm_ctx);
   LLVMOrcThreadSafeModuleRef tsm =
-    LLVMOrcCreateNewThreadSafeModule(codegen.module, ts_ctx);
+    LLVMOrcCreateNewThreadSafeModule(module, ts_ctx);
   LLVMOrcDisposeThreadSafeContext(ts_ctx);
 
   LLVMOrcJITDylibRef main_dylib = LLVMOrcLLJITGetMainJITDylib(jit->lljit);
@@ -152,7 +228,7 @@ valk_lval_t *valk_jit_eval(valk_jit_t *jit, valk_lenv_t *env,
   if (err) {
     check_error(err, "AddLLVMIRModule");
     LLVMOrcReleaseResourceTracker(rt);
-    return valk_lval_err("JIT: failed to add module");
+    return false;
   }
 
   LLVMOrcExecutorAddress addr = 0;
@@ -161,33 +237,62 @@ valk_lval_t *valk_jit_eval(valk_jit_t *jit, valk_lenv_t *env,
     check_error(err, "LLVMOrcLLJITLookup");
     LLVMOrcResourceTrackerRemove(rt);
     LLVMOrcReleaseResourceTracker(rt);
-    return valk_lval_err("JIT: symbol lookup failed");
+    return false;
   }
 
-  jit_expr_fn_t compiled = (jit_expr_fn_t)addr;
-  valk_lval_t *result_val = compiled(env);
+  *fn_out = (jit_expr_fn_t)addr;
+  *rt_out = rt;
+  return true;
+}
 
+valk_lval_t *valk_jit_eval(valk_jit_t *jit, valk_lenv_t *env,
+                           valk_lval_t *expr) {
+  if (!jit || !expr) return valk_lval_err("JIT: null argument");
+
+  LLVMContextRef llvm_ctx = NULL;
+  LLVMModuleRef module = NULL;
+  char fn_name[64];
+  if (!jit_emit_module(jit, false, expr, &llvm_ctx, &module,
+                       fn_name, sizeof(fn_name)))
+    return valk_lval_err("JIT: module verification failed");
+
+  jit_expr_fn_t compiled;
+  LLVMOrcResourceTrackerRef rt;
+  if (!jit_install_module(jit, llvm_ctx, module, fn_name, &compiled, &rt))
+    return valk_lval_err("JIT: install failed");
+
+  valk_lval_t *result_val = compiled(env);
   LLVMOrcResourceTrackerRemove(rt);
   LLVMOrcReleaseResourceTracker(rt);
-
   return result_val;
 }
 
 valk_lval_t *valk_jit_eval_string(valk_jit_t *jit, valk_lenv_t *env,
                                   const char *code) {
+  if (!jit || !code) return valk_lval_err("JIT: null argument");
+
+  jit_cache_entry_t *hit = jit_cache_lookup(jit, code);
+  if (hit) {
+    jit->cache_hits++;
+    return hit->fn(env);
+  }
+  jit->cache_misses++;
+
   valk_lval_t *ast = valk_parse_text(code);
   if (!ast || LVAL_TYPE(ast) == LVAL_ERR) return ast;
 
-  if (LVAL_TYPE(ast) == LVAL_CONS) {
-    valk_lval_t *result = NULL;
-    valk_lval_t *cur = ast;
-    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-      result = valk_jit_eval(jit, env, cur->cons.head);
-      if (LVAL_TYPE(result) == LVAL_ERR) return result;
-      cur = cur->cons.tail;
-    }
-    return result;
-  }
+  LLVMContextRef llvm_ctx = NULL;
+  LLVMModuleRef module = NULL;
+  char fn_name[64];
+  if (!jit_emit_module(jit, true, ast, &llvm_ctx, &module,
+                       fn_name, sizeof(fn_name)))
+    return valk_lval_err("JIT: module verification failed");
 
-  return valk_jit_eval(jit, env, ast);
+  jit_expr_fn_t compiled;
+  LLVMOrcResourceTrackerRef rt;
+  if (!jit_install_module(jit, llvm_ctx, module, fn_name, &compiled, &rt))
+    return valk_lval_err("JIT: install failed");
+
+  jit_cache_insert(jit, code, compiled, rt);
+  return compiled(env);
 }

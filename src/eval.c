@@ -319,12 +319,21 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
       partial->fun.env = call_env;
       partial->fun.formals = formal_iter;
       partial->fun.body = func->fun.body;
+      partial->fun.native_fn = func->fun.native_fn;
+      partial->fun.native_name = func->fun.native_name;
       valk_thread_ctx.call_depth--;
       atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
       return valk_eval_value(partial);
     }
   }
   // LCOV_EXCL_BR_STOP
+
+  if (func->fun.native_fn) {
+    valk_lval_t* result = func->fun.native_fn(call_env);
+    valk_thread_ctx.call_depth--;
+    atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
+    return valk_eval_value(result);
+  }
 
   valk_lval_t* body = func->fun.body;
   if (LVAL_TYPE(body) == LVAL_CONS && (body->flags & LVAL_FLAG_QUOTED)) {

@@ -8,6 +8,7 @@
 
 #include <limits.h>
 
+#include "build.h"
 #include "coverage.h"
 #include "gc.h"
 #include "log.h"
@@ -166,6 +167,25 @@ int main(int argc, char* argv[]) {
         }
         valk_gc_root_pop();
         continue;
+      }
+      if (strcmp(argv[i], "--build") == 0) {
+        const char *src = (i + 1 < argc) ? argv[++i] : NULL;
+        const char *out = NULL;
+        if (src && i + 1 < argc && strcmp(argv[i + 1], "-o") == 0 &&
+            i + 2 < argc) {
+          out = argv[i + 2];
+          i += 2;
+        }
+        if (!src || !out) {
+          fprintf(stderr, "usage: valk --build SRC -o OUT\n");
+          return 1;
+        }
+        int rc = valk_build(env, src, out);
+        valk_system_unregister_thread(sys);
+        free(scratch);
+        valk_system_shutdown(sys, 5000);
+        valk_system_destroy(sys);
+        return rc;
       }
       if (strcmp(argv[i], "--script") == 0) {
         script_mode = true;

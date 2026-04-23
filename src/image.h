@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 #include "parser.h"
 
 // Phase 1: image dump/load for lvals and environments.
@@ -31,6 +32,35 @@ valk_lenv_t *valk_image_load_env(const char *path, valk_lenv_t *registry);
 valk_lenv_t *valk_image_load_overlay(const char *path, valk_lenv_t *registry);
 void valk_image_load_free_overlay(valk_lenv_t *overlay);
 
+// Memory-buffer variants — used by --build'd binaries that embed the image
+// as an .incbin'd blob. `bytes` must stay valid for the life of the returned
+// env (typically the whole process, since the binary embeds it).
+valk_lenv_t *valk_image_load_env_bytes(const unsigned char *bytes, size_t len,
+                                      valk_lenv_t *registry);
+valk_lenv_t *valk_image_load_overlay_bytes(const unsigned char *bytes,
+                                           size_t len,
+                                           valk_lenv_t *registry);
+
 // Release a loaded image. Invalidates every object reachable from the root.
 void valk_image_load_free(valk_lval_t *root);
 void valk_image_load_free_env(valk_lenv_t *root);
+
+// AOT dispatch entry: maps a name that was serialized into the image's
+// LVAL_FUN.native_name field to a native C function emitted by --build.
+typedef struct {
+  const char *name;
+  valk_lval_t *(*fn)(valk_lenv_t *);
+} valk_aot_entry_t;
+
+// Walk `env` and its parent chain; for every LVAL_FUN whose native_name
+// matches an entry in `table`, set its native_fn pointer so the interpreter
+// dispatches to compiled code instead of walking the body.
+void valk_image_resolve_aot(valk_lenv_t *env,
+                            const valk_aot_entry_t *table,
+                            size_t count);
+
+// Root env pointer set by the --build shim after image load. Compiled
+// lambdas that direct-call other compiled lambdas use this as the parent
+// of the freshly-allocated call_env (matches what the tree walker does via
+// func->fun.env, which is the same image env).
+extern valk_lenv_t *valk_aot_root_env;

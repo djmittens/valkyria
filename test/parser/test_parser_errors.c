@@ -221,6 +221,150 @@ static void test_comment_then_expr(VALK_TEST_ARGS()) {
 }
 
 // ============================================================================
+// valk_parse_text error-recovery tests
+// ============================================================================
+// These exercise the LSP-facing entrypoint which, unlike valk_lval_read,
+// tries to continue parsing past errors so mid-edit files still produce
+// useful ASTs for the validator/semantic-token pipeline.
+
+static void test_parse_text_missing_close_paren_recovers(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Missing `)` on line 1 — column-0 `(` on line 2 should trigger recovery
+  // so the second top-level form still parses.
+  valk_lval_t *result = valk_parse_text("(a b\n(c d)\n");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_TRUE(valk_lval_list_count(result) >= 2);
+  valk_lval_t *first = valk_lval_list_nth(result, 0);
+  valk_lval_t *second = valk_lval_list_nth(result, 1);
+  ASSERT_LVAL_ERROR(first);
+  ASSERT_STR_CONTAINS(first->str, "Missing");
+  ASSERT_LVAL_TYPE(second, LVAL_CONS);
+
+  VALK_PASS();
+}
+
+static void test_parse_text_missing_close_brace_at_top_recovers(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Top-level `{...}` form with missing `}`. Because the outer form's
+  // opener IS at column 0, the column-0 `(` on a later line is treated
+  // as a recovery point so the second top-level form still parses.
+  valk_lval_t *result = valk_parse_text("{a b c\n(d)\n");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_TRUE(valk_lval_list_count(result) >= 2);
+  valk_lval_t *first = valk_lval_list_nth(result, 0);
+  valk_lval_t *second = valk_lval_list_nth(result, 1);
+  ASSERT_LVAL_ERROR(first);
+  ASSERT_STR_CONTAINS(first->str, "Missing");
+  ASSERT_LVAL_TYPE(second, LVAL_CONS);
+
+  VALK_PASS();
+}
+
+static void test_parse_text_missing_close_brace_nested_no_recovery(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // `{a` is NESTED inside `(fun` (opener not at col 0), so column-0
+  // `(g)` on a later line is treated as valid nested content, not a
+  // recovery signal — same way we handle `{do (x)\n(y)}`. The only
+  // way out is an "end of input" error once the file ends without
+  // ever closing `{a`. Recovery is intentionally skipped here; the
+  // alternative (eager recovery) would misfire on legitimate code.
+  valk_lval_t *result = valk_parse_text("(fun {a\n(g)\n");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_TRUE(valk_lval_list_count(result) >= 1);
+  valk_lval_t *last = valk_lval_list_nth(result,
+      valk_lval_list_count(result) - 1);
+  ASSERT_LVAL_ERROR(last);
+  ASSERT_STR_CONTAINS(last->str, "end of input");
+
+  VALK_PASS();
+}
+
+static void test_parse_text_trailing_unclosed_is_eof(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // No column-0 form follows — expect a single "end of input" error,
+  // no further recovery attempts.
+  valk_lval_t *result = valk_parse_text("(ok)\n(broken\n");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  u64 n = valk_lval_list_count(result);
+  ASSERT_TRUE(n >= 2);
+  valk_lval_t *first = valk_lval_list_nth(result, 0);
+  valk_lval_t *last = valk_lval_list_nth(result, n - 1);
+  ASSERT_LVAL_TYPE(first, LVAL_CONS);
+  ASSERT_LVAL_ERROR(last);
+  ASSERT_STR_CONTAINS(last->str, "end of input");
+
+  VALK_PASS();
+}
+
+static void test_parse_text_unexpected_char_continues(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Unexpected `#` between two valid forms — recovery should let the
+  // second form still parse.
+  valk_lval_t *result = valk_parse_text("(a)\n#\n(b)\n");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  u64 n = valk_lval_list_count(result);
+  ASSERT_TRUE(n >= 3);
+  ASSERT_LVAL_TYPE(valk_lval_list_nth(result, 0), LVAL_CONS);
+  bool saw_err = false;
+  bool saw_second_form = false;
+  for (u64 i = 1; i < n; i++) {
+    valk_lval_t *x = valk_lval_list_nth(result, i);
+    if (LVAL_TYPE(x) == LVAL_ERR) saw_err = true;
+    else if (LVAL_TYPE(x) == LVAL_CONS) saw_second_form = true;
+  }
+  ASSERT_TRUE(saw_err);
+  ASSERT_TRUE(saw_second_form);
+
+  VALK_PASS();
+}
+
+static void test_parse_text_valid_unchanged(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Well-formed input must still produce exactly the expected forms with
+  // no spurious error entries.
+  valk_lval_t *result = valk_parse_text("(a)\n(b)\n(c)\n");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_TRUE(valk_lval_list_count(result) == 3);
+  for (u64 i = 0; i < 3; i++) {
+    ASSERT_LVAL_TYPE(valk_lval_list_nth(result, i), LVAL_CONS);
+  }
+
+  VALK_PASS();
+}
+
+static void test_parse_text_col0_inside_nested_is_fine(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  setup_env();
+
+  // Idiomatic but unconventional: column-0 `(` inside a nested `{do ...}`.
+  // The recovery heuristic must NOT fire here because the immediate
+  // enclosing form's opener is not at column 0. The outer `(outer` spans
+  // multiple lines with a column-0 child inside its body — still a
+  // syntactically valid single top-level form.
+  valk_lval_t *result = valk_parse_text(
+      "(outer {do\n"
+      "(a)\n"
+      "(b)})\n");
+  ASSERT_LVAL_TYPE(result, LVAL_CONS);
+  ASSERT_TRUE(valk_lval_list_count(result) == 1);
+  ASSERT_LVAL_TYPE(valk_lval_list_nth(result, 0), LVAL_CONS);
+
+  VALK_PASS();
+}
+
+// ============================================================================
 // Quote Syntax Error Tests
 // ============================================================================
 
@@ -3023,6 +3167,14 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_whitespace_only", test_whitespace_only);
   valk_testsuite_add_test(suite, "test_comment_only", test_comment_only);
   valk_testsuite_add_test(suite, "test_comment_then_expr", test_comment_then_expr);
+
+  valk_testsuite_add_test(suite, "test_parse_text_missing_close_paren_recovers", test_parse_text_missing_close_paren_recovers);
+  valk_testsuite_add_test(suite, "test_parse_text_missing_close_brace_at_top_recovers", test_parse_text_missing_close_brace_at_top_recovers);
+  valk_testsuite_add_test(suite, "test_parse_text_missing_close_brace_nested_no_recovery", test_parse_text_missing_close_brace_nested_no_recovery);
+  valk_testsuite_add_test(suite, "test_parse_text_trailing_unclosed_is_eof", test_parse_text_trailing_unclosed_is_eof);
+  valk_testsuite_add_test(suite, "test_parse_text_unexpected_char_continues", test_parse_text_unexpected_char_continues);
+  valk_testsuite_add_test(suite, "test_parse_text_valid_unchanged", test_parse_text_valid_unchanged);
+  valk_testsuite_add_test(suite, "test_parse_text_col0_inside_nested_is_fine", test_parse_text_col0_inside_nested_is_fine);
 
   valk_testsuite_add_test(suite, "test_quote_no_arg", test_quote_no_arg);
   valk_testsuite_add_test(suite, "test_quasiquote_no_arg", test_quasiquote_no_arg);

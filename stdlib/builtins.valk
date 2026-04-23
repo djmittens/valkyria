@@ -72,6 +72,8 @@
 (sig 'read {-> Str QExpr})
 ; Parse a string into a list of all top-level expressions.
 (sig 'parse {-> Str (List QExpr)})
+; Set the current file's module prefix. Called by the (module X) macro.
+(sig 'set-module-prefix! {-> A Nil})
 ; Validate a parsed AST against its source text. Returns list of diagnostic plists.
 (sig 'validate {-> (List QExpr) Str (List QExpr)})
 

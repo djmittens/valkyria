@@ -285,6 +285,8 @@ static void put_builtin_impl(valk_lenv_t* env, char* key,
     lfun->fun.formals = nullptr;
     lfun->fun.body = nullptr;
     lfun->fun.arity = 0;
+    lfun->fun.native_fn = nullptr;
+    lfun->fun.native_name = nullptr;
     u64 klen = strlen(key) + 1;
     lfun->fun.name = valk_mem_alloc(klen);
     memcpy(lfun->fun.name, key, klen);

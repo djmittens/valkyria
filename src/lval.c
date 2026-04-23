@@ -412,6 +412,8 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   res->fun.env = env;
   res->fun.formals = formals;
   res->fun.body = body;
+  res->fun.native_fn = nullptr;
+  res->fun.native_name = nullptr;
 
 #ifdef VALK_COVERAGE
   valk_coverage_mark_tree(body);
@@ -595,6 +597,8 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
         res->fun.body = lval->fun.body;
         res->fun.formals = lval->fun.formals;
       }
+      res->fun.native_fn = lval->fun.native_fn;
+      res->fun.native_name = lval->fun.native_name;
       break;
     case LVAL_CONS:
       res->cons.head = lval->cons.head;

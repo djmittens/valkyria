@@ -1,16 +1,8 @@
 #include "builtins_internal.h"
 
-#include "coverage.h"
+#include <string.h>
 
-static inline valk_lval_t* valk_resolve_symbol(valk_lenv_t* e, valk_lval_t* v) {
-  if (LVAL_TYPE(v) == LVAL_SYM) {
-    if (v->str[0] == ':') {
-      return v;
-    }
-    return valk_lenv_get(e, v);
-  }
-  return v;
-}
+#include "coverage.h"
 
 static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_START - request context guard: only triggers in HTTP handler
@@ -44,7 +36,7 @@ static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
 
   for (u64 i = 0; i < valk_lval_list_count(syms); i++) {
     valk_lval_t* sym = valk_lval_list_nth(syms, i);
-    valk_lval_t* val = valk_resolve_symbol(e, valk_lval_list_nth(a, i + 1));
+    valk_lval_t* val = valk_lval_list_nth(a, i + 1);
     if (LVAL_TYPE(val) == LVAL_ERR) { // LCOV_EXCL_BR_LINE
       return val;
     }
@@ -71,8 +63,7 @@ static valk_lval_t* valk_builtin_put(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_COUNT_EQ(a, syms, (valk_lval_list_count(a) - 1));
 
   for (u64 i = 0; i < valk_lval_list_count(syms); i++) {
-    valk_lval_t* val = valk_resolve_symbol(e, valk_lval_list_nth(a, i + 1));
-
+    valk_lval_t* val = valk_lval_list_nth(a, i + 1);
     valk_lval_t* sym = valk_lval_list_nth(syms, i);
     valk_lenv_put(e, sym, val);
   }

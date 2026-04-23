@@ -142,6 +142,15 @@ struct valk_lval_t {
       // For tree-walker lambdas
       valk_lval_t *formals;
       valk_lval_t *body;
+      // AOT-compiled body (nullptr if tree-walker). When set, caller binds
+      // formals into a new env, then invokes this fn with that env; it
+      // returns the body's result directly without going through the
+      // interpreter. Used by --build'd binaries.
+      valk_lval_t *(*native_fn)(valk_lenv_t *);
+      // Symbolic name for the native function — serialized into the image;
+      // resolved back to native_fn on image load via a compiled-in dispatch
+      // table. Nullptr when no native code is associated with this lambda.
+      char *native_name;
     } fun;
     struct {
       valk_lval_t *head;  // First element

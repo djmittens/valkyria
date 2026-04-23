@@ -472,7 +472,7 @@
         (if is-varargs
           {do
             (= {min-arity} (vd/sig-min-arity sig-str))
-            (if (and (>= min-arity 0) (== argc 0) (> min-arity 0))
+            (if (and (> min-arity 0) (== argc 0))
               {vd/add-diag ctx hd name
                 (str "'" name "' expects at least " min-arity " arguments, got " argc)}
               {ctx})}

@@ -167,13 +167,14 @@
   {if (== name "type")   {vd/walk-type tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "sig")    {vd/walk-sig tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "quote")  {ctx}
+  {if (== name "module") {ctx}
   {if (== name "quasiquote") {vd/walk-quasiquote-body tl ctx}
   {if (== name "match")  {vd/walk-match tl (vd/check-special-arity name tl ctx hd)}
   {if (== name "aio/do") {vd/walk-aio-do tl ctx}
   {if (== name "aio/let") {vd/walk-aio-let tl ctx}
   {if (dict/has? vd/VALIDATE_SPECIAL_FORMS name)
     {vd/walk-body tl (vd/check-special-arity name tl ctx hd)}
-  {vd/walk-call expr hd name tl ctx}}}}}}}}}}}}}}
+  {vd/walk-call expr hd name tl ctx}}}}}}}}}}}}}}}
 })
 
 ; ---------------------------------------------------------------------------
@@ -612,5 +613,7 @@
   ; produce an LVAL_ERR that propagates out. Treat that as "validator
   ; itself crashed, no diagnostics to report" rather than passing an
   ; error upward.
-  (if (error? result) {nil} {reverse result:diags})
+  (if (error? result)
+    {nil}
+    {reverse result:diags})
 })

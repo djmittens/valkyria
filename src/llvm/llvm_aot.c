@@ -1,8 +1,10 @@
 #include "llvm_aot.h"
 
 #include <llvm-c/Core.h>
+#include <llvm-c/Error.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
+#include <llvm-c/Transforms/PassBuilder.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,6 +87,34 @@ int valk_aot_emit_ir(valk_llvm_ctx_t *ctx, const char *output_path) {
   if (LLVMPrintModuleToFile(ctx->module, output_path, &error)) {
     fprintf(stderr, "AOT emit IR failed: %s\n", error ? error : "unknown");
     if (error) LLVMDisposeMessage(error);
+    return -1;
+  }
+  return 0;
+}
+
+int valk_aot_optimize(valk_llvm_ctx_t *ctx) {
+  char *err = NULL;
+  LLVMTargetMachineRef tm = create_target_machine(&err);
+  if (!tm) {
+    fprintf(stderr, "AOT optimize: %s\n", err ? err : "unknown error");
+    free(err);
+    return -1;
+  }
+
+  char *triple = LLVMGetDefaultTargetTriple();
+  LLVMSetTarget(ctx->module, triple);
+  LLVMSetModuleDataLayout(ctx->module, LLVMCreateTargetDataLayout(tm));
+  LLVMDisposeMessage(triple);
+
+  LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
+  LLVMErrorRef perr = LLVMRunPasses(ctx->module, "default<O2>", tm, opts);
+  LLVMDisposePassBuilderOptions(opts);
+  LLVMDisposeTargetMachine(tm);
+
+  if (perr) {
+    char *msg = LLVMGetErrorMessage(perr);
+    fprintf(stderr, "AOT optimize: %s\n", msg ? msg : "unknown");
+    LLVMDisposeErrorMessage(msg);
     return -1;
   }
   return 0;

@@ -2,6 +2,10 @@
 ; Default program to be parsed and loaded
 ; Valkyria Standard Prelude
 
+; Type signatures for C builtins. Loaded first so the rest of the prelude
+; (and user code) can rely on sig declarations for the primitive functions.
+(load "stdlib/builtins.valk")
+
 ; Function Definitions
 (macro {fun _fn _body}
   {`(def {,(head _fn)} (\ ,(tail _fn) ,_body))})

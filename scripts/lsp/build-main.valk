@@ -1,0 +1,7 @@
+; Entry point for `valk --build`.
+; `--build` treats the script's last value as the entry and requires it to be
+; a lambda. We can't reuse main.valk because its last form is `(lsp/start)`,
+; which would execute the server at build time instead of at runtime.
+
+(load "scripts/lsp/lsp.valk")
+(\ {argv} {do (lsp/start) 0})

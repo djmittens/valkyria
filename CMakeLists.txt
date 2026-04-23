@@ -213,6 +213,7 @@ set(VALKYRIA_SOURCES
   src/json.c
   src/validate.c
   src/image.c
+  src/build.c
   vendor/sqlite3/sqlite3.c
 )
 
@@ -285,6 +286,7 @@ if(VALK_LLVM)
     src/llvm/llvm_codegen.c
     src/llvm/llvm_jit.c
     src/llvm/llvm_aot.c
+    src/llvm/build_aot.c
     src/llvm/vir_to_llvm.c
     src/vir/vir.c
     src/vir/vir_print.c
@@ -328,6 +330,19 @@ add_executable(valk
   "src/repl.c"
 )
 target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
+if(VALK_LLVM)
+  # Link valk_llvm so --build can use LLVM AOT compilation of user lambdas.
+  # The weak extern `valk_build_emit_aot` in src/build.c resolves to the
+  # impl in src/llvm/build_aot.c when valk_llvm is linked.
+  #
+  # -Wl,-u forces the linker to treat the symbol as undefined so it pulls
+  # build_aot.o out of the static archive even though the only reference
+  # from valkyria.so is a weak one.
+  target_link_libraries(valk PRIVATE
+    "-Wl,-u,valk_build_emit_aot"
+    valk_llvm
+    ${LLVM_LIBS_LIST})
+endif()
 
 target_include_directories(valk SYSTEM PRIVATE
   # vendor/editline/include/
@@ -357,6 +372,9 @@ target_link_libraries(test_std PRIVATE "-lc" valkyria)
 
 add_executable(test_image test/lang/test_image.c test/testing.c)
 target_link_libraries(test_image PRIVATE "-lc" valkyria)
+
+add_executable(test_build test/lang/test_build.c test/testing.c)
+target_link_libraries(test_build PRIVATE "-lc" valkyria)
 
 add_executable(test_regression test/lang/test_regression.c test/testing.c)
 target_link_libraries(test_regression PRIVATE "-lc" valkyria)
@@ -458,6 +476,11 @@ target_link_libraries(test_pipe_builtins PRIVATE "-lc" valkyria ${LIBUV_LIBRARIE
 
 add_executable(test_lsp_integration test/lsp/test_lsp_integration.c test/testing.c)
 target_link_libraries(test_lsp_integration PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+
+add_executable(test_lsp_profile test/lsp/test_lsp_profile.c test/testing.c)
+target_link_libraries(test_lsp_profile PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
+
+add_executable(lsp_proxy test/lsp/lsp_proxy.c)
 
 add_executable(test_aio_backpressure test/unit/test_aio_backpressure.c test/testing.c)
 target_link_libraries(test_aio_backpressure PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
@@ -611,5 +634,23 @@ if(VALK_LLVM)
   target_include_directories(test_image_jit SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
   target_compile_options(test_image_jit PRIVATE -Wno-pedantic)
   include_directories(test_image_jit src/)
+
+  add_executable(test_jit_cache test/lang/test_jit_cache.c test/testing.c)
+  target_link_libraries(test_jit_cache PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
+  target_include_directories(test_jit_cache SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_compile_options(test_jit_cache PRIVATE -Wno-pedantic)
+  include_directories(test_jit_cache src/)
+
+  add_executable(test_jit_numeric test/lang/test_jit_numeric.c test/testing.c)
+  target_link_libraries(test_jit_numeric PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
+  target_include_directories(test_jit_numeric SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_compile_options(test_jit_numeric PRIVATE -Wno-pedantic)
+  include_directories(test_jit_numeric src/)
+
+  add_executable(bench_jit test/lang/bench_jit.c)
+  target_link_libraries(bench_jit PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
+  target_include_directories(bench_jit SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+  target_compile_options(bench_jit PRIVATE -Wno-pedantic -O2)
+  include_directories(bench_jit src/)
 endif()
 

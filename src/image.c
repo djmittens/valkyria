@@ -1,4 +1,5 @@
 #include "image.h"
+#include "dict.h"
 #include "gc.h"
 
 #include <stdio.h>
@@ -144,6 +145,52 @@ static u64 img_dump_cstr(valk_image_builder_t *b, const char *s) {
 
 static u64 img_dump_lval(valk_image_builder_t *b, valk_lval_t *v);
 static u64 img_dump_lenv(valk_image_builder_t *b, valk_lenv_t *env);
+static void img_store_ptr(valk_image_builder_t *b, u64 field_off, u64 dst_off);
+
+// Round the current tail of the build buffer up to `align`, zero-padding
+// any bytes skipped. Dict blocks contain u64 hash fields (inside cells)
+// and u64 strings_* fields in the header, so callers must align to 8
+// before reserving a dict block.
+static void img_align(valk_image_builder_t *b, u64 align) {
+  u64 next = (b->len + align - 1) & ~(align - 1);
+  if (next > b->len) {
+    u64 pad = next - b->len;
+    u64 off = img_reserve(b, pad);
+    memset(b->buf + off, 0, pad);
+  }
+}
+
+// Dump a valk_dict_t block as a single contiguous blob. After copying the
+// raw bytes, walk the bucket → cell chains and serialize each live cell's
+// `value` pointer (via img_store_ptr so load-time fixups relocate them).
+// Returns the offset of the dict header.
+static u64 img_dump_dict(valk_image_builder_t *b, valk_dict_t *d) {
+  if (!d) return 0;
+  void *existing = valk_ptr_map_get(&b->pm, d);
+  if (existing) return (u64)(uintptr_t)existing - 1;
+
+  u64 total = dict_block_size(d->num_buckets, d->capacity, d->strings_cap);
+  img_align(b, 8);
+  u64 off = img_reserve(b, total);
+  valk_ptr_map_put(&b->pm, d, (void*)(uintptr_t)(off + 1));
+  memcpy(b->buf + off, d, total);
+
+  u64 cells_off_rel = dict_cells_offset(d->num_buckets);
+  valk_dict_cell_t *src_cells = dict_cells(d);
+  u32 *src_buckets = dict_buckets(d);
+  for (u32 bkt = 0; bkt < d->num_buckets; bkt++) {
+    u32 ci = src_buckets[bkt];
+    while (ci != DICT_EMPTY) {
+      valk_lval_t *val = src_cells[ci].value;
+      u64 val_off = img_dump_lval(b, val);
+      u64 cell_off = off + cells_off_rel + (u64)ci * sizeof(valk_dict_cell_t);
+      img_store_ptr(b,
+        cell_off + offsetof(valk_dict_cell_t, value), val_off);
+      ci = src_cells[ci].next;
+    }
+  }
+  return off;
+}
 
 // Record a pointer field: at buf offset `field_off`, store the destination
 // offset, and register this slot for load-time fixup.
@@ -196,9 +243,19 @@ static u64 img_dump_lval(valk_image_builder_t *b, valk_lval_t *v) {
       break;
     }
 
+    case LVAL_DICT: {
+      u64 dict_off = img_dump_dict(b, v->dict.data);
+      img_store_ptr(b, off + offsetof(valk_lval_t, dict.data), dict_off);
+      break;
+    }
+
     case LVAL_FUN: {
       u64 name_off = img_dump_cstr(b, v->fun.name);
       img_store_ptr(b, off + offsetof(valk_lval_t, fun.name), name_off);
+      // native_fn is a live function pointer — never portable across process
+      // loads. Zero it out in both builtin and lambda branches; the lambda
+      // branch below serializes native_name so it can be re-resolved at load.
+      *(u64*)(b->buf + off + offsetof(valk_lval_t, fun.native_fn)) = 0;
       if (v->fun.builtin != nullptr) {
         // Builtin stub: zero the function pointer and lambda-only fields.
         valk_lval_t *dst2 = (valk_lval_t*)(b->buf + off);
@@ -206,6 +263,7 @@ static u64 img_dump_lval(valk_image_builder_t *b, valk_lval_t *v) {
         *(u64*)(b->buf + off + offsetof(valk_lval_t, fun.env)) = 0;
         *(u64*)(b->buf + off + offsetof(valk_lval_t, fun.formals)) = 0;
         *(u64*)(b->buf + off + offsetof(valk_lval_t, fun.body)) = 0;
+        *(u64*)(b->buf + off + offsetof(valk_lval_t, fun.native_name)) = 0;
         if (!v->fun.name) {
           fprintf(stderr, "valk_image_dump: builtin has no fun.name\n");
           b->error = true;
@@ -213,13 +271,15 @@ static u64 img_dump_lval(valk_image_builder_t *b, valk_lval_t *v) {
         }
         img_add_stub(b, off);
       } else {
-        // Lambda: serialize closure env, formals, body.
+        // Lambda: serialize closure env, formals, body, native_name.
         u64 env_off = v->fun.env ? img_dump_lenv(b, v->fun.env) : 0;
         u64 formals_off = img_dump_lval(b, v->fun.formals);
         u64 body_off = img_dump_lval(b, v->fun.body);
+        u64 nname_off = img_dump_cstr(b, v->fun.native_name);
         img_store_ptr(b, off + offsetof(valk_lval_t, fun.env), env_off);
         img_store_ptr(b, off + offsetof(valk_lval_t, fun.formals), formals_off);
         img_store_ptr(b, off + offsetof(valk_lval_t, fun.body), body_off);
+        img_store_ptr(b, off + offsetof(valk_lval_t, fun.native_name), nname_off);
       }
       break;
     }
@@ -370,15 +430,25 @@ typedef struct {
   u64 sym_count;
 } valk_image_loaded_t;
 
-static bool img_read_all(const char *path, valk_image_loaded_t *out) {
+// Copy `n` bytes from a memory cursor into `dst`, bounds-checked. Returns
+// false if the image buffer is truncated.
+static bool img_mem_read(const u8 **cur, const u8 *end, void *dst, size_t n) {
+  if ((size_t)(end - *cur) < n) return false;
+  memcpy(dst, *cur, n);
+  *cur += n;
+  return true;
+}
+
+static bool img_read_bytes(const u8 *bytes, size_t len,
+                           valk_image_loaded_t *out) {
   memset(out, 0, sizeof(*out));
-  FILE *f = fopen(path, "rb");
-  if (!f) return false;
+  const u8 *cur = bytes;
+  const u8 *end = bytes + len;
 
   valk_image_header_t hdr;
-  if (fread(&hdr, sizeof(hdr), 1, f) != 1) goto fail;
+  if (!img_mem_read(&cur, end, &hdr, sizeof(hdr))) return false;
   if (memcmp(hdr.magic, VALK_IMAGE_MAGIC, 8) != 0 ||
-      hdr.version != VALK_IMAGE_VERSION) goto fail;
+      hdr.version != VALK_IMAGE_VERSION) return false;
 
   out->buf_size = hdr.buf_size;
   out->root_offset = hdr.root_offset;
@@ -388,35 +458,52 @@ static bool img_read_all(const char *path, valk_image_loaded_t *out) {
   out->sym_count = hdr.sym_count;
 
   out->buf = malloc(hdr.buf_size);
-  if (hdr.buf_size && fread(out->buf, 1, hdr.buf_size, f) != hdr.buf_size)
+  if (hdr.buf_size && !img_mem_read(&cur, end, out->buf, hdr.buf_size))
     goto fail;
 
   out->fixups = malloc(hdr.fixup_count * sizeof(u64));
   if (hdr.fixup_count &&
-      fread(out->fixups, sizeof(u64), hdr.fixup_count, f) != hdr.fixup_count)
+      !img_mem_read(&cur, end, out->fixups, hdr.fixup_count * sizeof(u64)))
     goto fail;
 
   out->stubs = malloc(hdr.stub_count * sizeof(u64));
   if (hdr.stub_count &&
-      fread(out->stubs, sizeof(u64), hdr.stub_count, f) != hdr.stub_count)
+      !img_mem_read(&cur, end, out->stubs, hdr.stub_count * sizeof(u64)))
     goto fail;
 
   out->syms = malloc(hdr.sym_count * sizeof(u64));
   if (hdr.sym_count &&
-      fread(out->syms, sizeof(u64), hdr.sym_count, f) != hdr.sym_count)
+      !img_mem_read(&cur, end, out->syms, hdr.sym_count * sizeof(u64)))
     goto fail;
 
-  fclose(f);
   return true;
 
 fail:
-  fclose(f);
   free(out->buf);
   free(out->fixups);
   free(out->stubs);
   free(out->syms);
   memset(out, 0, sizeof(*out));
   return false;
+}
+
+static bool img_read_all(const char *path, valk_image_loaded_t *out) {
+  memset(out, 0, sizeof(*out));
+  FILE *f = fopen(path, "rb");
+  if (!f) return false;
+  if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+  long sz = ftell(f);
+  if (sz < 0) { fclose(f); return false; }
+  rewind(f);
+  u8 *buf = malloc((size_t)sz);
+  if (!buf) { fclose(f); return false; }
+  if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
+    free(buf); fclose(f); return false;
+  }
+  fclose(f);
+  bool ok = img_read_bytes(buf, (size_t)sz, out);
+  free(buf);
+  return ok;
 }
 
 // Resolve each builtin stub against `registry` and fill rep[i] with the
@@ -574,10 +661,70 @@ valk_lenv_t *valk_image_load_overlay(const char *path, valk_lenv_t *registry) {
   return overlay;
 }
 
+valk_lenv_t *valk_image_load_env_bytes(const unsigned char *bytes, size_t len,
+                                      valk_lenv_t *registry) {
+  valk_image_loaded_t ld;
+  if (!img_read_bytes(bytes, len, &ld)) return nullptr;
+  if (ld.root_kind != VALK_IMAGE_ROOT_ENV) {
+    free(ld.buf); free(ld.fixups); free(ld.stubs); free(ld.syms);
+    return nullptr;
+  }
+  void *root = nullptr;
+  if (!img_finalize(&ld, registry, &root)) {
+    free(ld.buf); free(ld.fixups); free(ld.stubs); free(ld.syms);
+    return nullptr;
+  }
+  free(ld.fixups); free(ld.stubs); free(ld.syms);
+  return (valk_lenv_t *)root;
+}
+
+valk_lenv_t *valk_image_load_overlay_bytes(const unsigned char *bytes,
+                                           size_t len,
+                                           valk_lenv_t *registry) {
+  valk_lenv_t *dumped = valk_image_load_env_bytes(bytes, len, registry);
+  if (!dumped) return nullptr;
+
+  valk_lenv_t *overlay = valk_lenv_empty();
+  overlay->parent = dumped;
+  return overlay;
+}
+
 void valk_image_load_free_overlay(valk_lenv_t *overlay) {
   if (!overlay) return;
   valk_lenv_t *parent = overlay->parent;
   overlay->parent = nullptr;
   valk_lenv_free(overlay);
   valk_image_load_free_env(parent);
+}
+
+// ============================================================================
+// AOT dispatch resolution
+// ============================================================================
+
+static valk_lval_t *(*aot_lookup(const valk_aot_entry_t *table, size_t count,
+                                 const char *name))(valk_lenv_t *) {
+  if (!table || !name) return nullptr;
+  for (size_t i = 0; i < count; i++) {
+    if (table[i].name && strcmp(table[i].name, name) == 0) return table[i].fn;
+  }
+  return nullptr;
+}
+
+valk_lenv_t *valk_aot_root_env = nullptr;
+
+void valk_image_resolve_aot(valk_lenv_t *env,
+                            const valk_aot_entry_t *table,
+                            size_t count) {
+  if (!env || !table || count == 0) return;
+  for (valk_lenv_t *e = env; e != nullptr; e = e->parent) {
+    if (!e->vals.items) continue;
+    for (u64 i = 0; i < e->vals.count; i++) {
+      valk_lval_t *v = e->vals.items[i];
+      if (!v || LVAL_TYPE(v) != LVAL_FUN) continue;
+      if (!v->fun.native_name) continue;
+      valk_lval_t *(*fn)(valk_lenv_t *) =
+          aot_lookup(table, count, v->fun.native_name);
+      if (fn) v->fun.native_fn = fn;
+    }
+  }
 }
