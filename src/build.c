@@ -1,12 +1,17 @@
 #define _POSIX_C_SOURCE 200809L
 #include "build.h"
 
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <libgen.h>
 #include <limits.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "gc.h"
@@ -16,11 +21,8 @@
 #include "parser.h"
 #include "type_env.h"
 
-// The shim C source. Compiled along with a generated .S stub that uses
-// .incbin to pull the image bytes into the final executable. References to
-// `valk_build_image_start` / `valk_build_image_end` come from the .S file.
-// The AOT dispatch table (`valk_aot_table` / `valk_aot_table_count`) is
-// always-defined externals provided by the generated aot.c.
+extern char **environ;
+
 static const char SHIM_C_TEMPLATE[] =
     "#define _POSIX_C_SOURCE 200809L\n"
     "#include <stddef.h>\n"
@@ -44,7 +46,17 @@ static const char SHIM_C_TEMPLATE[] =
     "  valk_lval_init_singletons();\n"
     "\n"
     "  size_t scratch_bytes = 128ULL * 1024 * 1024;\n"
+    "  const char *env_scratch = getenv(\"VALK_SCRATCH_BYTES\");\n"
+    "  if (env_scratch) {\n"
+    "    char *end = NULL;\n"
+    "    unsigned long long v = strtoull(env_scratch, &end, 10);\n"
+    "    if (end && *end == 0 && v >= 1024ULL * 1024) scratch_bytes = (size_t)v;\n"
+    "  }\n"
     "  valk_mem_arena_t *scratch = malloc(scratch_bytes);\n"
+    "  if (!scratch) {\n"
+    "    fprintf(stderr, \"valk: scratch arena malloc failed (%zu bytes)\\n\", scratch_bytes);\n"
+    "    return 1;\n"
+    "  }\n"
     "  valk_mem_arena_init(scratch, scratch_bytes - sizeof(*scratch));\n"
     "  valk_thread_ctx.allocator = (void*)sys->heap;\n"
     "  valk_thread_ctx.scratch = scratch;\n"
@@ -112,15 +124,21 @@ static const char SHIM_C_TEMPLATE[] =
     "}\n";
 
 static int write_file(const char *path, const char *content, size_t len) {
-  FILE *f = fopen(path, "w");
-  if (!f) { perror(path); return -1; }
-  if (fwrite(content, 1, len, f) != len) { perror(path); fclose(f); return -1; }
-  fclose(f);
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+  if (fd < 0) { perror(path); return -1; }
+  ssize_t off = 0;
+  while ((size_t)off < len) {
+    ssize_t n = write(fd, content + off, len - (size_t)off);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      perror(path); close(fd); return -1;
+    }
+    off += n;
+  }
+  close(fd);
   return 0;
 }
 
-// Resolve the absolute directory of the currently-running valk binary.
-// Used to find libvalkyria.so (linked at build time) and src/ headers.
 static int resolve_exe_dir(char *out, size_t cap) {
   char buf[PATH_MAX];
   ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
@@ -132,9 +150,6 @@ static int resolve_exe_dir(char *out, size_t cap) {
   return 0;
 }
 
-// Parse + eval the script against the given env, returning the last
-// non-nil, non-error value (deep-copied onto the GC heap so it survives
-// past this function). Returns NULL on eval error (already printed).
 static valk_lval_t *eval_script_capture_last(valk_lenv_t *env,
                                              const char *script_path) {
   valk_gc_heap_t *heap = (valk_gc_heap_t *)valk_thread_ctx.allocator;
@@ -144,7 +159,6 @@ static valk_lval_t *eval_script_capture_last(valk_lenv_t *env,
   if (LVAL_TYPE(res) == LVAL_ERR) { valk_lval_println(res); return NULL; }
   valk_gc_root_push(res);
 
-  // Macro-expand pass (mirrors repl.c script mode).
   VALK_WITH_ALLOC((void *)heap) {
     valk_lval_t *cur = res;
     while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
@@ -195,12 +209,76 @@ static valk_lval_t *eval_script_capture_last(valk_lenv_t *env,
   return last;
 }
 
-// Weak extern: resolved by valk_llvm when VALK_LLVM is ON and the valk
-// executable links against valk_llvm; otherwise the symbol address is
-// NULL and we skip AOT (fall back to a pure tree-walker image).
 __attribute__((weak))
 int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
                         const char *c_path, size_t *out_count);
+
+#define MAX_TMP_FILES 8
+typedef struct {
+  char *paths[MAX_TMP_FILES];
+  int count;
+} tmp_set_t;
+
+static int tmp_set_add(tmp_set_t *s, const char *p) {
+  if (s->count >= MAX_TMP_FILES) return -1;
+  s->paths[s->count] = strdup(p);
+  if (!s->paths[s->count]) return -1;
+  s->count++;
+  return 0;
+}
+
+static void tmp_set_cleanup(tmp_set_t *s) {
+  for (int i = 0; i < s->count; i++) {
+    if (s->paths[i]) { unlink(s->paths[i]); free(s->paths[i]); }
+  }
+  s->count = 0;
+}
+
+static int mkstemp_named(char *template, const char *suffix, char *out, size_t cap) {
+  size_t tlen = strlen(template);
+  size_t slen = strlen(suffix);
+  if (tlen + slen + 1 > cap) return -1;
+  memcpy(out, template, tlen);
+  memcpy(out + tlen, suffix, slen + 1);
+  int fd = mkstemps(out, (int)slen);
+  if (fd < 0) { perror("mkstemps"); return -1; }
+  close(fd);
+  return 0;
+}
+
+static int run_cc(char *const argv[]) {
+  pid_t pid = 0;
+  posix_spawn_file_actions_t actions;
+  if (posix_spawn_file_actions_init(&actions) != 0) return -1;
+  int rc = posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  if (rc != 0) {
+    fprintf(stderr, "valk --build: posix_spawnp(%s) failed: %s\n",
+            argv[0], strerror(rc));
+    return -1;
+  }
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno == EINTR) continue;
+    perror("waitpid");
+    return -1;
+  }
+  if (WIFSIGNALED(status)) {
+    fprintf(stderr, "valk --build: %s killed by signal %d\n",
+            argv[0], WTERMSIG(status));
+    return -1;
+  }
+  if (!WIFEXITED(status)) {
+    fprintf(stderr, "valk --build: %s exited abnormally\n", argv[0]);
+    return -1;
+  }
+  int code = WEXITSTATUS(status);
+  if (code != 0) {
+    fprintf(stderr, "valk --build: %s exited with status %d\n", argv[0], code);
+    return -1;
+  }
+  return 0;
+}
 
 int valk_build(valk_lenv_t *env, const char *script_path,
                const char *out_path) {
@@ -221,16 +299,24 @@ int valk_build(valk_lenv_t *env, const char *script_path,
     valk_lenv_def(env, valk_lval_sym("__entry__"), entry);
   }
 
-  // AOT: compile user lambdas into an ELF .o + write a dispatch .c. Must
-  // run BEFORE the image dump so native_name fields are populated on
-  // lambdas that compiled successfully.
+  tmp_set_t tmps = {0};
+  char tmp_template[PATH_MAX];
+  const char *tmpdir = getenv("TMPDIR");
+  if (!tmpdir || !*tmpdir) tmpdir = "/tmp";
+  snprintf(tmp_template, sizeof(tmp_template), "%s/valk-build-XXXXXX", tmpdir);
+
   char aot_o[PATH_MAX] = "";
-  char aot_c[PATH_MAX];
+  char aot_c[PATH_MAX] = "";
   size_t aot_count = 0;
   bool aot_ok = false;
   if (&valk_build_emit_aot != nullptr) {
-    snprintf(aot_o, sizeof(aot_o), "%s.aot.o", out_path);
-    snprintf(aot_c, sizeof(aot_c), "%s.aot.c", out_path);
+    if (mkstemp_named(tmp_template, ".o", aot_o, sizeof(aot_o)) != 0 ||
+        mkstemp_named(tmp_template, ".c", aot_c, sizeof(aot_c)) != 0) {
+      tmp_set_cleanup(&tmps);
+      return 1;
+    }
+    tmp_set_add(&tmps, aot_o);
+    tmp_set_add(&tmps, aot_c);
     if (valk_build_emit_aot(env, aot_o, aot_c, &aot_count) == 0) {
       aot_ok = true;
     } else {
@@ -240,59 +326,64 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   }
 
   char img_path[PATH_MAX];
-  snprintf(img_path, sizeof(img_path), "%s.img.tmp", out_path);
+  if (mkstemp_named(tmp_template, ".img", img_path, sizeof(img_path)) != 0) {
+    tmp_set_cleanup(&tmps); return 1;
+  }
+  tmp_set_add(&tmps, img_path);
   if (valk_image_dump_env(env, img_path) != 0) {
     fprintf(stderr, "valk --build: image dump failed\n");
-    if (aot_ok) { unlink(aot_o); unlink(aot_c); }
-    return 1;
+    tmp_set_cleanup(&tmps); return 1;
   }
 
   char exe_dir[PATH_MAX];
   if (resolve_exe_dir(exe_dir, sizeof(exe_dir)) != 0) {
     fprintf(stderr, "valk --build: could not resolve /proc/self/exe\n");
-    unlink(img_path);
-    if (aot_ok) { unlink(aot_o); unlink(aot_c); }
-    return 1;
+    tmp_set_cleanup(&tmps); return 1;
   }
   char src_dir[PATH_MAX];
   snprintf(src_dir, sizeof(src_dir), "%s/../src", exe_dir);
 
-  // If the AOT hook wasn't available, we still need to satisfy the shim's
-  // extern references to valk_aot_table / valk_aot_table_count by writing
-  // a stub dispatch .c with a NULL table.
   if (!aot_ok) {
-    snprintf(aot_c, sizeof(aot_c), "%s.aot.c", out_path);
+    if (aot_c[0] == 0 &&
+        mkstemp_named(tmp_template, ".c", aot_c, sizeof(aot_c)) != 0) {
+      tmp_set_cleanup(&tmps); return 1;
+    }
+    if (aot_c[0] != 0 && tmps.count > 0 &&
+        strcmp(tmps.paths[tmps.count-1], aot_c) != 0) {
+      tmp_set_add(&tmps, aot_c);
+    }
     const char *stub =
         "#include <stddef.h>\n"
         "#include \"image.h\"\n"
         "const valk_aot_entry_t *const valk_aot_table = NULL;\n"
         "const size_t valk_aot_table_count = 0;\n";
     if (write_file(aot_c, stub, strlen(stub)) != 0) {
-      unlink(img_path);
-      return 1;
+      tmp_set_cleanup(&tmps); return 1;
     }
   }
 
   char shim_c[PATH_MAX], shim_s[PATH_MAX];
-  snprintf(shim_c, sizeof(shim_c), "%s.shim.c", out_path);
-  snprintf(shim_s, sizeof(shim_s), "%s.shim.S", out_path);
+  if (mkstemp_named(tmp_template, ".c", shim_c, sizeof(shim_c)) != 0 ||
+      mkstemp_named(tmp_template, ".S", shim_s, sizeof(shim_s)) != 0) {
+    tmp_set_cleanup(&tmps); return 1;
+  }
+  tmp_set_add(&tmps, shim_c);
+  tmp_set_add(&tmps, shim_s);
 
   if (write_file(shim_c, SHIM_C_TEMPLATE, sizeof(SHIM_C_TEMPLATE) - 1) != 0) {
-    unlink(img_path);
-    unlink(aot_c);
-    if (aot_ok && aot_count > 0) unlink(aot_o);
-    return 1;
+    tmp_set_cleanup(&tmps); return 1;
   }
 
-  // Resolve image path to absolute (.incbin needs an unambiguous path).
   char img_abs[PATH_MAX];
   if (!realpath(img_path, img_abs)) {
     fprintf(stderr, "valk --build: cannot resolve image path\n");
-    unlink(img_path);
-    unlink(shim_c);
-    unlink(aot_c);
-    if (aot_ok && aot_count > 0) unlink(aot_o);
-    return 1;
+    tmp_set_cleanup(&tmps); return 1;
+  }
+  for (const char *p = img_abs; *p; p++) {
+    if (*p == '"' || *p == '\\' || *p == '\n') {
+      fprintf(stderr, "valk --build: image path contains unsafe character\n");
+      tmp_set_cleanup(&tmps); return 1;
+    }
   }
 
   char shim_s_content[PATH_MAX + 256];
@@ -305,34 +396,49 @@ int valk_build(valk_lenv_t *env, const char *script_path,
            "valk_build_image_end:\n",
            img_abs);
   if (write_file(shim_s, shim_s_content, strlen(shim_s_content)) != 0) {
-    unlink(img_path);
-    unlink(shim_c);
-    unlink(aot_c);
-    if (aot_ok && aot_count > 0) unlink(aot_o);
-    return 1;
+    tmp_set_cleanup(&tmps); return 1;
   }
 
-  char cmd[8192];
-  char aot_o_arg[PATH_MAX + 1] = "";
-  if (aot_ok && aot_count > 0) snprintf(aot_o_arg, sizeof(aot_o_arg), "%s", aot_o);
-  snprintf(cmd, sizeof(cmd),
-           "cc -std=gnu2x -O1 "
-           "-I%s -I%s/aio -I%s/aio/system -I%s/aio/http2 "
-           "-I%s/aio/http2/overload -I%s/aio/http2/stream "
-           "%s %s %s %s -L%s -Wl,-rpath,%s -lvalkyria -lpthread -lm -o %s",
-           src_dir, src_dir, src_dir, src_dir, src_dir, src_dir,
-           shim_c, shim_s, aot_c, aot_o_arg, exe_dir, exe_dir, out_path);
-  int rc = system(cmd);
+  char inc_src[PATH_MAX], inc_aio[PATH_MAX], inc_sys[PATH_MAX];
+  char inc_h2[PATH_MAX], inc_ovl[PATH_MAX], inc_strm[PATH_MAX];
+  char lib_arg[PATH_MAX + 8], rpath_arg[PATH_MAX + 16];
+  snprintf(inc_src, sizeof(inc_src), "-I%s", src_dir);
+  snprintf(inc_aio, sizeof(inc_aio), "-I%s/aio", src_dir);
+  snprintf(inc_sys, sizeof(inc_sys), "-I%s/aio/system", src_dir);
+  snprintf(inc_h2, sizeof(inc_h2), "-I%s/aio/http2", src_dir);
+  snprintf(inc_ovl, sizeof(inc_ovl), "-I%s/aio/http2/overload", src_dir);
+  snprintf(inc_strm, sizeof(inc_strm), "-I%s/aio/http2/stream", src_dir);
+  snprintf(lib_arg, sizeof(lib_arg), "-L%s", exe_dir);
+  snprintf(rpath_arg, sizeof(rpath_arg), "-Wl,-rpath,%s", exe_dir);
 
-  unlink(img_path);
-  unlink(shim_c);
-  unlink(shim_s);
-  unlink(aot_c);
-  if (aot_ok && aot_count > 0) unlink(aot_o);
+  const char *cc = getenv("CC");
+  if (!cc || !*cc) cc = "cc";
 
-  if (rc != 0) {
-    fprintf(stderr, "valk --build: cc failed (exit %d)\n", rc);
-    return 1;
-  }
-  return 0;
+  char *argv_cc[24];
+  int ai = 0;
+  argv_cc[ai++] = (char *)cc;
+  argv_cc[ai++] = (char *)"-std=gnu2x";
+  argv_cc[ai++] = (char *)"-O1";
+  argv_cc[ai++] = inc_src;
+  argv_cc[ai++] = inc_aio;
+  argv_cc[ai++] = inc_sys;
+  argv_cc[ai++] = inc_h2;
+  argv_cc[ai++] = inc_ovl;
+  argv_cc[ai++] = inc_strm;
+  argv_cc[ai++] = shim_c;
+  argv_cc[ai++] = shim_s;
+  argv_cc[ai++] = aot_c;
+  if (aot_ok && aot_count > 0) argv_cc[ai++] = aot_o;
+  argv_cc[ai++] = lib_arg;
+  argv_cc[ai++] = rpath_arg;
+  argv_cc[ai++] = (char *)"-lvalkyria";
+  argv_cc[ai++] = (char *)"-lpthread";
+  argv_cc[ai++] = (char *)"-lm";
+  argv_cc[ai++] = (char *)"-o";
+  argv_cc[ai++] = (char *)out_path;
+  argv_cc[ai] = NULL;
+
+  int rc = run_cc(argv_cc);
+  tmp_set_cleanup(&tmps);
+  return rc == 0 ? 0 : 1;
 }

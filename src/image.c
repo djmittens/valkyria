@@ -1,6 +1,7 @@
 #include "image.h"
 #include "dict.h"
 #include "gc.h"
+#include "log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,21 +25,30 @@
 // ============================================================================
 
 #define VALK_IMAGE_MAGIC "VALKIMG\0"
-#define VALK_IMAGE_VERSION 2u
+#define VALK_IMAGE_VERSION 3u
 
 #define VALK_IMAGE_ROOT_LVAL 0u
 #define VALK_IMAGE_ROOT_ENV  1u
 
+#define VALK_IMAGE_ENDIAN_TAG 0x0123456789ABCDEFULL
+
 typedef struct {
   char magic[8];
   u32 version;
-  u32 root_kind;         // 0 = lval, 1 = env
+  u32 root_kind;
+  u64 endian_tag;
+  u32 lval_size;
+  u32 lenv_size;
+  u32 ptr_size;
+  u32 reserved;
   u64 buf_size;
   u64 root_offset;
   u64 fixup_count;
   u64 stub_count;
   u64 sym_count;
 } valk_image_header_t;
+
+#define IMG_MAX_TABLE_BYTES (((size_t)1) << 30)
 
 // ============================================================================
 // Builder
@@ -68,7 +78,7 @@ typedef struct {
   bool error;
 } valk_image_builder_t;
 
-static void img_builder_init(valk_image_builder_t *b) {
+static bool img_builder_init(valk_image_builder_t *b) {
   memset(b, 0, sizeof(*b));
   b->cap = 1024;
   b->buf = malloc(b->cap);
@@ -78,7 +88,13 @@ static void img_builder_init(valk_image_builder_t *b) {
   b->stubs = malloc(b->st_cap * sizeof(u64));
   b->sy_cap = 64;
   b->syms = malloc(b->sy_cap * sizeof(u64));
+  if (!b->buf || !b->fixups || !b->stubs || !b->syms) {
+    free(b->buf); free(b->fixups); free(b->stubs); free(b->syms);
+    memset(b, 0, sizeof(*b));
+    return false;
+  }
   valk_ptr_map_init(&b->pm);
+  return true;
 }
 
 static void img_builder_free(valk_image_builder_t *b) {
@@ -91,8 +107,11 @@ static void img_builder_free(valk_image_builder_t *b) {
 
 static u64 img_reserve(valk_image_builder_t *b, u64 size) {
   while (b->len + size > b->cap) {
-    b->cap *= 2;
-    b->buf = realloc(b->buf, b->cap);
+    u64 ncap = b->cap * 2;
+    u8 *nbuf = realloc(b->buf, ncap);
+    if (!nbuf) { b->error = true; return 0; }
+    b->buf = nbuf;
+    b->cap = ncap;
   }
   u64 off = b->len;
   b->len += size;
@@ -107,24 +126,30 @@ static u64 img_copy_bytes(valk_image_builder_t *b, const void *src, u64 size) {
 
 static void img_add_fixup(valk_image_builder_t *b, u64 field_offset) {
   if (b->fx_len >= b->fx_cap) {
-    b->fx_cap *= 2;
-    b->fixups = realloc(b->fixups, b->fx_cap * sizeof(u64));
+    u64 ncap = b->fx_cap * 2;
+    u64 *na = realloc(b->fixups, ncap * sizeof(u64));
+    if (!na) { b->error = true; return; }
+    b->fixups = na; b->fx_cap = ncap;
   }
   b->fixups[b->fx_len++] = field_offset;
 }
 
 static void img_add_stub(valk_image_builder_t *b, u64 stub_offset) {
   if (b->st_len >= b->st_cap) {
-    b->st_cap *= 2;
-    b->stubs = realloc(b->stubs, b->st_cap * sizeof(u64));
+    u64 ncap = b->st_cap * 2;
+    u64 *na = realloc(b->stubs, ncap * sizeof(u64));
+    if (!na) { b->error = true; return; }
+    b->stubs = na; b->st_cap = ncap;
   }
   b->stubs[b->st_len++] = stub_offset;
 }
 
 static void img_add_sym(valk_image_builder_t *b, u64 sym_offset) {
   if (b->sy_len >= b->sy_cap) {
-    b->sy_cap *= 2;
-    b->syms = realloc(b->syms, b->sy_cap * sizeof(u64));
+    u64 ncap = b->sy_cap * 2;
+    u64 *na = realloc(b->syms, ncap * sizeof(u64));
+    if (!na) { b->error = true; return; }
+    b->syms = na; b->sy_cap = ncap;
   }
   b->syms[b->sy_len++] = sym_offset;
 }
@@ -147,10 +172,10 @@ static u64 img_dump_lval(valk_image_builder_t *b, valk_lval_t *v);
 static u64 img_dump_lenv(valk_image_builder_t *b, valk_lenv_t *env);
 static void img_store_ptr(valk_image_builder_t *b, u64 field_off, u64 dst_off);
 
-// Round the current tail of the build buffer up to `align`, zero-padding
-// any bytes skipped. Dict blocks contain u64 hash fields (inside cells)
-// and u64 strings_* fields in the header, so callers must align to 8
-// before reserving a dict block.
+// Round the build buffer to `align`, zero-padding the gap. Required
+// before reserving a dict block: dict cells contain u64 hash fields and
+// the dict header has u64 strings_* fields, both of which require
+// 8-byte alignment on stricter ISAs.
 static void img_align(valk_image_builder_t *b, u64 align) {
   u64 next = (b->len + align - 1) & ~(align - 1);
   if (next > b->len) {
@@ -160,10 +185,13 @@ static void img_align(valk_image_builder_t *b, u64 align) {
   }
 }
 
-// Dump a valk_dict_t block as a single contiguous blob. After copying the
-// raw bytes, walk the bucket → cell chains and serialize each live cell's
-// `value` pointer (via img_store_ptr so load-time fixups relocate them).
-// Returns the offset of the dict header.
+// Dump a valk_dict_t block as a single contiguous blob.
+//
+// The dict layout is self-contained: keys live inside the dict's own
+// `strings` buffer at u32 offsets (see dict.h), so there are no raw
+// pointers to char keys to relocate. The only intra-buffer pointers are
+// the per-cell `value` field (valk_lval_t*), which is registered with
+// img_store_ptr so load-time fixups relocate them.
 static u64 img_dump_dict(valk_image_builder_t *b, valk_dict_t *d) {
   if (!d) return 0;
   void *existing = valk_ptr_map_get(&b->pm, d);
@@ -265,7 +293,7 @@ static u64 img_dump_lval(valk_image_builder_t *b, valk_lval_t *v) {
         *(u64*)(b->buf + off + offsetof(valk_lval_t, fun.body)) = 0;
         *(u64*)(b->buf + off + offsetof(valk_lval_t, fun.native_name)) = 0;
         if (!v->fun.name) {
-          fprintf(stderr, "valk_image_dump: builtin has no fun.name\n");
+          VALK_ERROR("valk_image_dump: builtin has no fun.name");
           b->error = true;
           break;
         }
@@ -285,7 +313,7 @@ static u64 img_dump_lval(valk_image_builder_t *b, valk_lval_t *v) {
     }
 
     default:
-      fprintf(stderr, "valk_image_dump: unsupported lval type %d\n", type);
+      VALK_ERROR("valk_image_dump: unsupported lval type %d", (int)type);
       b->error = true;
       break;
   }
@@ -357,6 +385,11 @@ static int img_write_file(valk_image_builder_t *b, u64 root_off, u32 root_kind,
   valk_image_header_t hdr = {
     .version = VALK_IMAGE_VERSION,
     .root_kind = root_kind,
+    .endian_tag = VALK_IMAGE_ENDIAN_TAG,
+    .lval_size = (u32)sizeof(valk_lval_t),
+    .lenv_size = (u32)sizeof(valk_lenv_t),
+    .ptr_size = (u32)sizeof(void *),
+    .reserved = 0,
     .buf_size = b->len,
     .root_offset = root_off,
     .fixup_count = b->fx_len,
@@ -385,7 +418,7 @@ static int img_write_file(valk_image_builder_t *b, u64 root_off, u32 root_kind,
 
 int valk_image_dump(valk_lval_t *val, const char *path) {
   valk_image_builder_t b;
-  img_builder_init(&b);
+  if (!img_builder_init(&b)) return -1;
 
   u64 root_off = img_dump_lval(&b, val);
   if (b.error) {
@@ -400,7 +433,7 @@ int valk_image_dump(valk_lval_t *val, const char *path) {
 
 int valk_image_dump_env(valk_lenv_t *env, const char *path) {
   valk_image_builder_t b;
-  img_builder_init(&b);
+  if (!img_builder_init(&b)) return -1;
 
   u64 root_off = img_dump_lenv(&b, env);
   if (b.error) {
@@ -439,6 +472,24 @@ static bool img_mem_read(const u8 **cur, const u8 *end, void *dst, size_t n) {
   return true;
 }
 
+static bool img_check_table_size(u64 count, size_t elem) {
+  if (count == 0) return true;
+  if (count > IMG_MAX_TABLE_BYTES / elem) return false;
+  return true;
+}
+
+static bool img_alloc_and_read(const u8 **cur, const u8 *end,
+                               void **out, u64 count, size_t elem) {
+  if (count == 0) { *out = nullptr; return true; }
+  if (!img_check_table_size(count, elem)) return false;
+  size_t bytes = (size_t)count * elem;
+  void *p = malloc(bytes);
+  if (!p) return false;
+  if (!img_mem_read(cur, end, p, bytes)) { free(p); return false; }
+  *out = p;
+  return true;
+}
+
 static bool img_read_bytes(const u8 *bytes, size_t len,
                            valk_image_loaded_t *out) {
   memset(out, 0, sizeof(*out));
@@ -447,8 +498,38 @@ static bool img_read_bytes(const u8 *bytes, size_t len,
 
   valk_image_header_t hdr;
   if (!img_mem_read(&cur, end, &hdr, sizeof(hdr))) return false;
-  if (memcmp(hdr.magic, VALK_IMAGE_MAGIC, 8) != 0 ||
-      hdr.version != VALK_IMAGE_VERSION) return false;
+  if (memcmp(hdr.magic, VALK_IMAGE_MAGIC, 8) != 0) {
+    VALK_ERROR("valk_image_load: bad magic");
+    return false;
+  }
+  if (hdr.version != VALK_IMAGE_VERSION) {
+    VALK_ERROR("valk_image_load: version mismatch (file=%u expected=%u)",
+               hdr.version, VALK_IMAGE_VERSION);
+    return false;
+  }
+  if (hdr.endian_tag != VALK_IMAGE_ENDIAN_TAG) {
+    VALK_ERROR("valk_image_load: endian or word-size mismatch");
+    return false;
+  }
+  if (hdr.lval_size != sizeof(valk_lval_t) ||
+      hdr.lenv_size != sizeof(valk_lenv_t) ||
+      hdr.ptr_size != sizeof(void *)) {
+    VALK_ERROR("valk_image_load: struct layout mismatch "
+               "(lval=%u/%zu lenv=%u/%zu ptr=%u/%zu)",
+               hdr.lval_size, sizeof(valk_lval_t),
+               hdr.lenv_size, sizeof(valk_lenv_t),
+               hdr.ptr_size, sizeof(void *));
+    return false;
+  }
+  if (hdr.buf_size > IMG_MAX_TABLE_BYTES) {
+    VALK_ERROR("valk_image_load: buffer too large (%llu)",
+               (unsigned long long)hdr.buf_size);
+    return false;
+  }
+  if (hdr.root_offset > hdr.buf_size) {
+    VALK_ERROR("valk_image_load: root_offset out of range");
+    return false;
+  }
 
   out->buf_size = hdr.buf_size;
   out->root_offset = hdr.root_offset;
@@ -457,24 +538,42 @@ static bool img_read_bytes(const u8 *bytes, size_t len,
   out->stub_count = hdr.stub_count;
   out->sym_count = hdr.sym_count;
 
-  out->buf = malloc(hdr.buf_size);
-  if (hdr.buf_size && !img_mem_read(&cur, end, out->buf, hdr.buf_size))
-    goto fail;
+  if (hdr.buf_size > 0) {
+    out->buf = malloc(hdr.buf_size);
+    if (!out->buf) goto fail;
+    if (!img_mem_read(&cur, end, out->buf, hdr.buf_size)) goto fail;
+  }
 
-  out->fixups = malloc(hdr.fixup_count * sizeof(u64));
-  if (hdr.fixup_count &&
-      !img_mem_read(&cur, end, out->fixups, hdr.fixup_count * sizeof(u64)))
-    goto fail;
+  if (!img_alloc_and_read(&cur, end, (void **)&out->fixups,
+                          hdr.fixup_count, sizeof(u64))) goto fail;
+  if (!img_alloc_and_read(&cur, end, (void **)&out->stubs,
+                          hdr.stub_count, sizeof(u64))) goto fail;
+  if (!img_alloc_and_read(&cur, end, (void **)&out->syms,
+                          hdr.sym_count, sizeof(u64))) goto fail;
 
-  out->stubs = malloc(hdr.stub_count * sizeof(u64));
-  if (hdr.stub_count &&
-      !img_mem_read(&cur, end, out->stubs, hdr.stub_count * sizeof(u64)))
-    goto fail;
-
-  out->syms = malloc(hdr.sym_count * sizeof(u64));
-  if (hdr.sym_count &&
-      !img_mem_read(&cur, end, out->syms, hdr.sym_count * sizeof(u64)))
-    goto fail;
+  for (u64 i = 0; i < out->fixup_count; i++) {
+    if (out->fixups[i] > out->buf_size ||
+        out->fixups[i] + sizeof(u64) > out->buf_size) {
+      VALK_ERROR("valk_image_load: fixup[%llu]=%llu out of range",
+                 (unsigned long long)i,
+                 (unsigned long long)out->fixups[i]);
+      goto fail;
+    }
+  }
+  for (u64 i = 0; i < out->stub_count; i++) {
+    if (out->stubs[i] > out->buf_size ||
+        out->stubs[i] + sizeof(valk_lval_t) > out->buf_size) {
+      VALK_ERROR("valk_image_load: stub[%llu] out of range", (unsigned long long)i);
+      goto fail;
+    }
+  }
+  for (u64 i = 0; i < out->sym_count; i++) {
+    if (out->syms[i] > out->buf_size ||
+        out->syms[i] + sizeof(valk_lval_t) > out->buf_size) {
+      VALK_ERROR("valk_image_load: sym[%llu] out of range", (unsigned long long)i);
+      goto fail;
+    }
+  }
 
   return true;
 
@@ -493,11 +592,13 @@ static bool img_read_all(const char *path, valk_image_loaded_t *out) {
   if (!f) return false;
   if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
   long sz = ftell(f);
-  if (sz < 0) { fclose(f); return false; }
+  if (sz < 0 || (size_t)sz > IMG_MAX_TABLE_BYTES) {
+    fclose(f); return false;
+  }
   rewind(f);
-  u8 *buf = malloc((size_t)sz);
-  if (!buf) { fclose(f); return false; }
-  if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
+  u8 *buf = (sz > 0) ? malloc((size_t)sz) : nullptr;
+  if (sz > 0 && !buf) { fclose(f); return false; }
+  if (sz > 0 && fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
     free(buf); fclose(f); return false;
   }
   fclose(f);
@@ -512,16 +613,15 @@ static bool img_resolve_stubs(valk_image_loaded_t *ld, valk_lenv_t *registry,
                               valk_lval_t **rep) {
   if (ld->stub_count == 0) return true;
   if (!registry) {
-    fprintf(stderr,
-            "valk_image_load: image contains %llu builtin stubs but no "
-            "registry was provided\n",
-            (unsigned long long)ld->stub_count);
+    VALK_ERROR("valk_image_load: image contains %llu builtin stubs but no "
+               "registry was provided",
+               (unsigned long long)ld->stub_count);
     return false;
   }
   for (u64 i = 0; i < ld->stub_count; i++) {
     valk_lval_t *stub = (valk_lval_t*)(ld->buf + ld->stubs[i]);
     if (!stub->fun.name) {
-      fprintf(stderr, "valk_image_load: stub missing fun.name\n");
+      VALK_ERROR("valk_image_load: stub missing fun.name");
       return false;
     }
     valk_lval_t key = {0};
@@ -529,9 +629,8 @@ static bool img_resolve_stubs(valk_image_loaded_t *ld, valk_lenv_t *registry,
     key.str = stub->fun.name;
     valk_lval_t *live = valk_lenv_get(registry, &key);
     if (!live || LVAL_TYPE(live) == LVAL_ERR) {
-      fprintf(stderr,
-              "valk_image_load: builtin `%s` not found in registry\n",
-              stub->fun.name);
+      VALK_ERROR("valk_image_load: builtin `%s` not found in registry",
+                 stub->fun.name);
       return false;
     }
     rep[i] = live;
@@ -539,20 +638,34 @@ static bool img_resolve_stubs(valk_image_loaded_t *ld, valk_lenv_t *registry,
   return true;
 }
 
+typedef struct { uintptr_t addr; valk_lval_t *rep; } img_stub_pair_t;
+
+static int img_stub_pair_cmp(const void *a, const void *b) {
+  uintptr_t aa = ((const img_stub_pair_t *)a)->addr;
+  uintptr_t bb = ((const img_stub_pair_t *)b)->addr;
+  return (aa < bb) ? -1 : (aa > bb) ? 1 : 0;
+}
+
 // Rewrite any fixup slot whose value equals a stub address with the
-// corresponding live pointer from `rep`.
+// corresponding live pointer. Sorted bsearch is O(F log S) instead of
+// O(F * S) — meaningful once a prelude image has hundreds of builtins.
 static void img_apply_stub_map(valk_image_loaded_t *ld, valk_lval_t **rep) {
   if (ld->stub_count == 0) return;
+  img_stub_pair_t *pairs = malloc(ld->stub_count * sizeof(*pairs));
+  if (!pairs) return;
+  for (u64 s = 0; s < ld->stub_count; s++) {
+    pairs[s].addr = (uintptr_t)(ld->buf + ld->stubs[s]);
+    pairs[s].rep = rep[s];
+  }
+  qsort(pairs, ld->stub_count, sizeof(*pairs), img_stub_pair_cmp);
   for (u64 i = 0; i < ld->fixup_count; i++) {
     void **slot = (void**)(ld->buf + ld->fixups[i]);
-    void *p = *slot;
-    for (u64 s = 0; s < ld->stub_count; s++) {
-      if (p == (void*)(ld->buf + ld->stubs[s])) {
-        *slot = rep[s];
-        break;
-      }
-    }
+    img_stub_pair_t key = { .addr = (uintptr_t)*slot, .rep = nullptr };
+    img_stub_pair_t *m = bsearch(&key, pairs, ld->stub_count,
+                                 sizeof(*pairs), img_stub_pair_cmp);
+    if (m) *slot = m->rep;
   }
+  free(pairs);
 }
 
 static void img_reintern_syms(valk_image_loaded_t *ld) {
@@ -574,7 +687,7 @@ static void img_reintern_syms(valk_image_loaded_t *ld) {
 static bool img_finalize(valk_image_loaded_t *ld, valk_lenv_t *registry,
                          void **root_out) {
   if (ld->root_offset != 0) {
-    fprintf(stderr, "valk_image_load: unexpected non-zero root_offset\n");
+    VALK_ERROR("valk_image_load: unexpected non-zero root_offset");
     return false;
   }
 
@@ -587,6 +700,7 @@ static bool img_finalize(valk_image_loaded_t *ld, valk_lenv_t *registry,
   valk_lval_t **rep = nullptr;
   if (ld->stub_count > 0) {
     rep = malloc(ld->stub_count * sizeof(valk_lval_t*));
+    if (!rep) return false;
     if (!img_resolve_stubs(ld, registry, rep)) {
       free(rep);
       return false;
@@ -601,6 +715,32 @@ static bool img_finalize(valk_image_loaded_t *ld, valk_lenv_t *registry,
   return true;
 }
 
+static void img_loaded_free_tables(valk_image_loaded_t *ld) {
+  free(ld->fixups); free(ld->stubs); free(ld->syms);
+  ld->fixups = nullptr; ld->stubs = nullptr; ld->syms = nullptr;
+}
+
+static void img_loaded_free_all(valk_image_loaded_t *ld) {
+  free(ld->buf);
+  img_loaded_free_tables(ld);
+  ld->buf = nullptr;
+}
+
+static void *img_finalize_root(valk_image_loaded_t *ld, valk_lenv_t *registry,
+                               u32 expect_kind) {
+  if (ld->root_kind != expect_kind) {
+    img_loaded_free_all(ld);
+    return nullptr;
+  }
+  void *root = nullptr;
+  if (!img_finalize(ld, registry, &root)) {
+    img_loaded_free_all(ld);
+    return nullptr;
+  }
+  img_loaded_free_tables(ld);
+  return root;
+}
+
 // ============================================================================
 // Public: load
 // ============================================================================
@@ -608,18 +748,7 @@ static bool img_finalize(valk_image_loaded_t *ld, valk_lenv_t *registry,
 valk_lval_t *valk_image_load_ex(const char *path, valk_lenv_t *registry) {
   valk_image_loaded_t ld;
   if (!img_read_all(path, &ld)) return nullptr;
-  if (ld.root_kind != VALK_IMAGE_ROOT_LVAL) {
-    free(ld.buf); free(ld.fixups); free(ld.stubs); free(ld.syms);
-    return nullptr;
-  }
-  void *root = nullptr;
-  if (!img_finalize(&ld, registry, &root)) {
-    free(ld.buf); free(ld.fixups); free(ld.stubs); free(ld.syms);
-    return nullptr;
-  }
-  free(ld.fixups); free(ld.stubs); free(ld.syms);
-  // Keep ld.buf alive; root points into it (or into registry for stub-root).
-  return (valk_lval_t*)root;
+  return (valk_lval_t *)img_finalize_root(&ld, registry, VALK_IMAGE_ROOT_LVAL);
 }
 
 valk_lval_t *valk_image_load(const char *path) {
@@ -629,17 +758,7 @@ valk_lval_t *valk_image_load(const char *path) {
 valk_lenv_t *valk_image_load_env(const char *path, valk_lenv_t *registry) {
   valk_image_loaded_t ld;
   if (!img_read_all(path, &ld)) return nullptr;
-  if (ld.root_kind != VALK_IMAGE_ROOT_ENV) {
-    free(ld.buf); free(ld.fixups); free(ld.stubs); free(ld.syms);
-    return nullptr;
-  }
-  void *root = nullptr;
-  if (!img_finalize(&ld, registry, &root)) {
-    free(ld.buf); free(ld.fixups); free(ld.stubs); free(ld.syms);
-    return nullptr;
-  }
-  free(ld.fixups); free(ld.stubs); free(ld.syms);
-  return (valk_lenv_t*)root;
+  return (valk_lenv_t *)img_finalize_root(&ld, registry, VALK_IMAGE_ROOT_ENV);
 }
 
 void valk_image_load_free(valk_lval_t *root) {
@@ -665,17 +784,7 @@ valk_lenv_t *valk_image_load_env_bytes(const unsigned char *bytes, size_t len,
                                       valk_lenv_t *registry) {
   valk_image_loaded_t ld;
   if (!img_read_bytes(bytes, len, &ld)) return nullptr;
-  if (ld.root_kind != VALK_IMAGE_ROOT_ENV) {
-    free(ld.buf); free(ld.fixups); free(ld.stubs); free(ld.syms);
-    return nullptr;
-  }
-  void *root = nullptr;
-  if (!img_finalize(&ld, registry, &root)) {
-    free(ld.buf); free(ld.fixups); free(ld.stubs); free(ld.syms);
-    return nullptr;
-  }
-  free(ld.fixups); free(ld.stubs); free(ld.syms);
-  return (valk_lenv_t *)root;
+  return (valk_lenv_t *)img_finalize_root(&ld, registry, VALK_IMAGE_ROOT_ENV);
 }
 
 valk_lenv_t *valk_image_load_overlay_bytes(const unsigned char *bytes,

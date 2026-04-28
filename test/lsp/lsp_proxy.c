@@ -29,7 +29,11 @@
 #include <time.h>
 #include <unistd.h>
 
-#define BUFSZ 65536
+// 1 MiB rolling buffer per direction. semanticTokens/full responses on
+// large source files routinely cross 64 KiB; dropping bytes mid-frame
+// breaks the proxy's Content-Length parser for the duration of that
+// frame and skews the per-message log entries.
+#define BUFSZ (1 << 20)
 
 static long t0_us;
 static FILE *logf;
@@ -43,10 +47,10 @@ static long now_us(void) {
 // Extract "method":"..." or "id":N from a JSON body. Caller-provided buffer.
 static void extract_summary(const char *body, int body_len, char *out, int out_cap) {
   out[0] = '\0';
-  const char *mkey = "\"method\":\"";
-  const char *m = memmem(body, body_len, mkey, 10);
+  static const char mkey[] = "\"method\":\"";
+  const char *m = memmem(body, body_len, mkey, sizeof(mkey) - 1);
   if (m) {
-    m += 10;
+    m += sizeof(mkey) - 1;
     const char *end = memchr(m, '"', body + body_len - m);
     if (end) {
       int n = end - m;
@@ -56,10 +60,10 @@ static void extract_summary(const char *body, int body_len, char *out, int out_c
       return;
     }
   }
-  const char *ikey = "\"id\":";
-  const char *i = memmem(body, body_len, ikey, 5);
+  static const char ikey[] = "\"id\":";
+  const char *i = memmem(body, body_len, ikey, sizeof(ikey) - 1);
   if (i) {
-    i += 5;
+    i += sizeof(ikey) - 1;
     const char *end = i;
     while (end < body + body_len && *end != ',' && *end != '}' && *end != '\n') end++;
     int n = end - i;
@@ -102,22 +106,27 @@ static int log_and_consume(const char *dir, char *buf, int len) {
   return consumed;
 }
 
-// State per direction: rolling buffer for parsing while bytes stream through.
+// State per direction: rolling buffer for parsing while bytes stream
+// through. Heap-allocated because BUFSZ (1 MiB) is too large for the
+// default stack frame.
 typedef struct {
   const char *dir;
-  char buf[BUFSZ];
+  char *buf;
   int len;
 } stream_t;
 
-static void stream_init(stream_t *s, const char *dir) {
+static int stream_init(stream_t *s, const char *dir) {
   s->dir = dir;
   s->len = 0;
+  s->buf = malloc(BUFSZ);
+  return s->buf ? 0 : -1;
 }
 
 // Forward `n` bytes from src_fd -> dst_fd, ALSO feed them into `s` for parsing.
-// Returns 1 on success, 0 on EOF, -1 on error.
+// Returns 1 on success, 0 on EOF, -1 on error. Read in 64 KiB chunks
+// (the original `tmp[BUFSZ]` would now overflow the default stack).
 static int pump(int src_fd, int dst_fd, stream_t *s) {
-  char tmp[BUFSZ];
+  char tmp[65536];
   int n = read(src_fd, tmp, sizeof(tmp));
   if (n == 0) return 0;
   if (n < 0) {
@@ -193,8 +202,10 @@ int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
 
   stream_t c2s, s2c;
-  stream_init(&c2s, "C2S");
-  stream_init(&s2c, "S2C");
+  if (stream_init(&c2s, "C2S") < 0 || stream_init(&s2c, "S2C") < 0) {
+    fprintf(stderr, "lsp_proxy: stream buffer alloc failed\n");
+    return 2;
+  }
 
   int client_in = 0, client_out = 1;
   int server_in = to_child[1], server_out = from_child[0];
@@ -232,9 +243,28 @@ int main(int argc, char **argv) {
     }
   }
 
+  // If only one direction errored, the child may still be alive (it
+  // hasn't seen its own pipe close yet). Send SIGTERM with a short
+  // grace window before SIGKILL to avoid leaving zombies behind on
+  // partial-shutdown paths.
   int status = 0;
-  waitpid(pid, &status, 0);
-  fprintf(logf, "%ld\tEND\t0\texit=%d\n", now_us() - t0_us, WEXITSTATUS(status));
+  if (waitpid(pid, &status, WNOHANG) == 0) {
+    kill(pid, SIGTERM);
+    for (int i = 0; i < 50; i++) {
+      if (waitpid(pid, &status, WNOHANG) > 0) break;
+      struct timespec ts = { 0, 10 * 1000 * 1000 };
+      nanosleep(&ts, NULL);
+    }
+    if (waitpid(pid, &status, WNOHANG) == 0) {
+      kill(pid, SIGKILL);
+      waitpid(pid, &status, 0);
+    }
+  }
+  free(c2s.buf);
+  free(s2c.buf);
+  fprintf(logf, "%ld\tEND\t0\texit=%d\n",
+          now_us() - t0_us,
+          WIFEXITED(status) ? WEXITSTATUS(status) : -1);
   fclose(logf);
   return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }

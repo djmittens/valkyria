@@ -9,6 +9,8 @@
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 
+#include <ctype.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,10 +18,17 @@
 typedef valk_lval_t *(*jit_expr_fn_t)(valk_lenv_t *);
 
 typedef struct {
-  char *source;              // strdup'd key
+  char *source;              // normalized strdup'd key
   jit_expr_fn_t fn;          // compiled entry
   LLVMOrcResourceTrackerRef rt;  // owns the module; released at jit_free
+  u64 last_used;             // monotonic stamp for LRU eviction
 } jit_cache_entry_t;
+
+// Hard cap on cache entries. Without a cap the LSP/REPL accumulates an
+// entry per distinct source string ever JIT'd — pinned modules included
+// — for the JIT's lifetime. 1024 fits comfortably for an interactive
+// session and bounds resident memory.
+#define VALK_JIT_CACHE_MAX 1024
 
 struct valk_jit_t {
   LLVMOrcLLJITRef lljit;
@@ -29,7 +38,43 @@ struct valk_jit_t {
   u64 cache_cap;
   u64 cache_hits;             // diagnostics / test introspection
   u64 cache_misses;
+  u64 lru_clock;              // monotonic time-stamp source for LRU
+  pthread_mutex_t lock;       // protects cache + lljit (LLJIT add+lookup
+                              // are not documented thread-safe)
 };
+
+// Whitespace-collapse normalizer: maps any run of horizontal/vertical
+// whitespace to a single space, drops line comments. Two source strings
+// that differ only in formatting share a cache entry. NOT a full tokeniser
+// — it doesn't know strings, so a literal `; foo` inside a "..." would be
+// stripped — but Valkyria source uses `;` for line comments only, and the
+// JIT cache keys what users actually type into a REPL/LSP, where this
+// suffices in practice.
+static char *normalize_source(const char *src) {
+  size_t n = strlen(src);
+  char *out = malloc(n + 1);
+  if (!out) return NULL;
+  size_t j = 0;
+  bool in_ws = true;
+  for (size_t i = 0; i < n;) {
+    char c = src[i];
+    if (c == ';') {
+      while (i < n && src[i] != '\n') i++;
+      continue;
+    }
+    if (isspace((unsigned char)c)) {
+      if (!in_ws) { out[j++] = ' '; in_ws = true; }
+      i++;
+      continue;
+    }
+    out[j++] = c;
+    in_ws = false;
+    i++;
+  }
+  while (j > 0 && out[j - 1] == ' ') j--;
+  out[j] = 0;
+  return out;
+}
 
 static bool llvm_initialized = false;
 
@@ -57,11 +102,13 @@ valk_jit_t *valk_jit_new(void) {
   valk_llvm_init();
 
   valk_jit_t *jit = calloc(1, sizeof(valk_jit_t));
+  pthread_mutex_init(&jit->lock, NULL);
 
   LLVMOrcLLJITBuilderRef builder = LLVMOrcCreateLLJITBuilder();
   LLVMErrorRef err = LLVMOrcCreateLLJIT(&jit->lljit, builder);
   if (err) {
     check_error(err, "LLVMOrcCreateLLJIT");
+    pthread_mutex_destroy(&jit->lock);
     free(jit);
     return NULL;
   }
@@ -96,9 +143,11 @@ void valk_jit_free(valk_jit_t *jit) {
     LLVMErrorRef err = LLVMOrcDisposeLLJIT(jit->lljit);
     if (err) check_error(err, "LLVMOrcDisposeLLJIT");
   }
+  pthread_mutex_destroy(&jit->lock);
   free(jit);
 }
 
+// Caller must hold jit->lock.
 static jit_cache_entry_t *jit_cache_lookup(valk_jit_t *jit, const char *src) {
   for (u64 i = 0; i < jit->cache_len; i++) {
     if (strcmp(jit->cache[i].source, src) == 0) return &jit->cache[i];
@@ -106,17 +155,52 @@ static jit_cache_entry_t *jit_cache_lookup(valk_jit_t *jit, const char *src) {
   return NULL;
 }
 
-static void jit_cache_insert(valk_jit_t *jit, const char *src,
+// Caller must hold jit->lock. Evicts the LRU entry (releasing its module
+// from the JIT and its source string) to make room.
+static void jit_cache_evict_one(valk_jit_t *jit) {
+  if (jit->cache_len == 0) return;
+  u64 victim = 0;
+  u64 oldest = jit->cache[0].last_used;
+  for (u64 i = 1; i < jit->cache_len; i++) {
+    if (jit->cache[i].last_used < oldest) {
+      oldest = jit->cache[i].last_used;
+      victim = i;
+    }
+  }
+  if (jit->cache[victim].rt) {
+    LLVMOrcResourceTrackerRemove(jit->cache[victim].rt);
+    LLVMOrcReleaseResourceTracker(jit->cache[victim].rt);
+  }
+  free(jit->cache[victim].source);
+  jit->cache[victim] = jit->cache[jit->cache_len - 1];
+  jit->cache_len--;
+}
+
+// Caller must hold jit->lock. Takes ownership of `src` (already strdup'd
+// or normalized; the entry stores it directly without copying).
+static bool jit_cache_insert(valk_jit_t *jit, char *src,
                              jit_expr_fn_t fn, LLVMOrcResourceTrackerRef rt) {
+  while (jit->cache_len >= VALK_JIT_CACHE_MAX) {
+    jit_cache_evict_one(jit);
+  }
   if (jit->cache_len == jit->cache_cap) {
     u64 ncap = jit->cache_cap ? jit->cache_cap * 2 : 8;
-    jit->cache = realloc(jit->cache, ncap * sizeof(jit_cache_entry_t));
+    if (ncap > VALK_JIT_CACHE_MAX) ncap = VALK_JIT_CACHE_MAX;
+    jit_cache_entry_t *nc =
+        realloc(jit->cache, ncap * sizeof(jit_cache_entry_t));
+    if (!nc) {
+      free(src);
+      return false;
+    }
+    jit->cache = nc;
     jit->cache_cap = ncap;
   }
-  jit->cache[jit->cache_len].source = strdup(src);
+  jit->cache[jit->cache_len].source = src;
   jit->cache[jit->cache_len].fn = fn;
   jit->cache[jit->cache_len].rt = rt;
+  jit->cache[jit->cache_len].last_used = ++jit->lru_clock;
   jit->cache_len++;
+  return true;
 }
 
 u64 valk_jit_cache_hits(valk_jit_t *jit) {
@@ -209,7 +293,8 @@ static bool jit_emit_module(valk_jit_t *jit, bool is_program,
 
 // Install a freshly-emitted module into the JIT under a new ResourceTracker.
 // Returns the compiled fn + rt. Ownership of the context/module is transferred
-// to the JIT on success; on failure they are disposed here.
+// to the JIT on success; on failure they are disposed here. Caller must
+// hold jit->lock.
 static bool jit_install_module(valk_jit_t *jit, LLVMContextRef llvm_ctx,
                                LLVMModuleRef module, const char *fn_name,
                                jit_expr_fn_t *fn_out,
@@ -227,6 +312,9 @@ static bool jit_install_module(valk_jit_t *jit, LLVMContextRef llvm_ctx,
   LLVMErrorRef err = LLVMOrcLLJITAddLLVMIRModuleWithRT(jit->lljit, rt, tsm);
   if (err) {
     check_error(err, "AddLLVMIRModule");
+    // tsm ownership transfers to the JIT only on success; dispose
+    // here on failure to avoid leaking the context+module pair.
+    LLVMOrcDisposeThreadSafeModule(tsm);
     LLVMOrcReleaseResourceTracker(rt);
     return false;
   }
@@ -249,21 +337,32 @@ valk_lval_t *valk_jit_eval(valk_jit_t *jit, valk_lenv_t *env,
                            valk_lval_t *expr) {
   if (!jit || !expr) return valk_lval_err("JIT: null argument");
 
+  pthread_mutex_lock(&jit->lock);
+
   LLVMContextRef llvm_ctx = NULL;
   LLVMModuleRef module = NULL;
   char fn_name[64];
   if (!jit_emit_module(jit, false, expr, &llvm_ctx, &module,
-                       fn_name, sizeof(fn_name)))
+                       fn_name, sizeof(fn_name))) {
+    pthread_mutex_unlock(&jit->lock);
     return valk_lval_err("JIT: module verification failed");
+  }
 
   jit_expr_fn_t compiled;
   LLVMOrcResourceTrackerRef rt;
-  if (!jit_install_module(jit, llvm_ctx, module, fn_name, &compiled, &rt))
+  if (!jit_install_module(jit, llvm_ctx, module, fn_name, &compiled, &rt)) {
+    pthread_mutex_unlock(&jit->lock);
     return valk_lval_err("JIT: install failed");
+  }
+
+  pthread_mutex_unlock(&jit->lock);
 
   valk_lval_t *result_val = compiled(env);
+
+  pthread_mutex_lock(&jit->lock);
   LLVMOrcResourceTrackerRemove(rt);
   LLVMOrcReleaseResourceTracker(rt);
+  pthread_mutex_unlock(&jit->lock);
   return result_val;
 }
 
@@ -271,28 +370,51 @@ valk_lval_t *valk_jit_eval_string(valk_jit_t *jit, valk_lenv_t *env,
                                   const char *code) {
   if (!jit || !code) return valk_lval_err("JIT: null argument");
 
-  jit_cache_entry_t *hit = jit_cache_lookup(jit, code);
+  // Normalize once: this is what we key the cache by, not the raw input.
+  // `(+ 1 2)` and `(+  1 2)` and `(+ 1 2)\n; comment` all share an entry.
+  char *norm = normalize_source(code);
+  if (!norm) return valk_lval_err("JIT: out of memory");
+
+  pthread_mutex_lock(&jit->lock);
+  jit_cache_entry_t *hit = jit_cache_lookup(jit, norm);
   if (hit) {
     jit->cache_hits++;
-    return hit->fn(env);
+    hit->last_used = ++jit->lru_clock;
+    jit_expr_fn_t fn = hit->fn;
+    pthread_mutex_unlock(&jit->lock);
+    free(norm);
+    return fn(env);
   }
   jit->cache_misses++;
+  pthread_mutex_unlock(&jit->lock);
 
   valk_lval_t *ast = valk_parse_text(code);
-  if (!ast || LVAL_TYPE(ast) == LVAL_ERR) return ast;
+  if (!ast || LVAL_TYPE(ast) == LVAL_ERR) { free(norm); return ast; }
 
+  pthread_mutex_lock(&jit->lock);
   LLVMContextRef llvm_ctx = NULL;
   LLVMModuleRef module = NULL;
   char fn_name[64];
   if (!jit_emit_module(jit, true, ast, &llvm_ctx, &module,
-                       fn_name, sizeof(fn_name)))
+                       fn_name, sizeof(fn_name))) {
+    pthread_mutex_unlock(&jit->lock);
+    free(norm);
     return valk_lval_err("JIT: module verification failed");
+  }
 
   jit_expr_fn_t compiled;
   LLVMOrcResourceTrackerRef rt;
-  if (!jit_install_module(jit, llvm_ctx, module, fn_name, &compiled, &rt))
+  if (!jit_install_module(jit, llvm_ctx, module, fn_name, &compiled, &rt)) {
+    pthread_mutex_unlock(&jit->lock);
+    free(norm);
     return valk_lval_err("JIT: install failed");
+  }
 
-  jit_cache_insert(jit, code, compiled, rt);
+  // jit_cache_insert takes ownership of `norm` (or frees it on OOM).
+  if (!jit_cache_insert(jit, norm, compiled, rt)) {
+    pthread_mutex_unlock(&jit->lock);
+    return valk_lval_err("JIT: cache insert failed");
+  }
+  pthread_mutex_unlock(&jit->lock);
   return compiled(env);
 }

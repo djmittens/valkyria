@@ -266,6 +266,11 @@ void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     if (atomic_load(&env->parent->flags) & LENV_FLAG_FROZEN) break;
     env = env->parent;
   }
+  if (atomic_load(&env->flags) & LENV_FLAG_FROZEN) {
+    VALK_RAISE("valk_lenv_def: refused write to frozen env (key='%s')",
+               key && key->str ? key->str : "?");
+    return;
+  }
   if (val && LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH)
     val = valk_evacuate_to_heap(val);
   valk_lenv_put(env, key, val);
