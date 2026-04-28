@@ -99,9 +99,9 @@ check: build
 lint : build/.cmake
 	run-clang-tidy -p build -j $(JOBS) \
 		-extra-arg=-std=c23 \
-		-extra-arg=-isysroot -extra-arg=$$(xcrun --show-sdk-path) \
-		-source-filter='.*/valkyria-lisp/src/.*\.c$$|.*/valkyria-lisp/test/.*\.c$$' \
-		-header-filter='.*/valkyria-lisp/src/.*\.h$$'
+		$(if $(filter Darwin,$(UNAME)),-extra-arg=-isysroot -extra-arg=$$(xcrun --show-sdk-path),) \
+		-source-filter='$(CURDIR)/(src|test)/.*\.c$$' \
+		-header-filter='$(CURDIR)/src/.*\.h$$'
 
 # Install editline (uses autotools)
 # On macOS: brew install autoconf automake libtool
