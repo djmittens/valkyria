@@ -13,6 +13,7 @@
 (load "scripts/lsp/io.valk")
 (load "scripts/lsp/indexer.valk")
 (load "scripts/lsp/workspace.valk")
+(load "scripts/lsp/scan.valk")
 (load "scripts/lsp/nav.valk")
 (load "scripts/lsp/features.valk")
 

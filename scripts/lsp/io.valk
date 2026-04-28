@@ -92,14 +92,24 @@
   (def {lsp/server-req-counter} (+ lsp/server-req-counter 1))
   (+ 200000 lsp/server-req-counter)})
 
+; Tracks the doc-version at which we last asked the client to refresh
+; tokens. didOpen / didChange / didSave each fire two dispatches whose
+; done-cbs both want to refresh; without coalescing the client receives
+; up to 2 requests per keystroke and re-runs semanticTokens/full each
+; time. Coalescing by version keeps refresh count to <=1 per version.
+(def {lsp/last-refresh-version} -1)
+
 ; Tells the client to re-request semantic tokens. Call this once per document
 ; sync after the AST + symdb are populated, so the initial lex-tokens paint
 ; gets upgraded to full AST-based tokens. Uses lsp/send-request (defined in
 ; workspace.valk and resolved at call-time) so test stubs can intercept it.
 (sig 'lsp/refresh-semantic-tokens {-> Nil})
-(fun {lsp/refresh-semantic-tokens}
-  {lsp/send-request (lsp/next-server-req-id)
-    "workspace/semanticTokens/refresh" (None)})
+(fun {lsp/refresh-semantic-tokens} {do
+  (if (== lsp/last-refresh-version lsp/doc-version) {nil}
+    {do
+      (def {lsp/last-refresh-version} lsp/doc-version)
+      (lsp/send-request (lsp/next-server-req-id)
+        "workspace/semanticTokens/refresh" (None))})})
 
 ; ---------------------------------------------------------------------------
 ; State
@@ -158,15 +168,14 @@
 ; document has moved to vN+1, and a subsequent get-ast would hand back
 ; vN's AST offsets applied to vN+1's text — producing tokens/hints at
 ; wrong columns (the "jumpy colors, ::A mid-word" visual bug).
+;
+; Note: `lsp/last-good-ast-cache` is written ONLY from the main loop via
+; `lsp/parse-and-remember`. cache-ast runs on lsp/sys workers and would
+; race main-loop reads if it touched the last-good cache directly.
 (sig 'lsp/cache-ast {-> Str Str List})
 (fun {lsp/cache-ast uri text} {do
   (= {ast} (parse text))
   (dict/set! lsp/ast-cache uri (list text ast))
-  ; Only cache as "last good" if the AST has no parse errors. This lets
-  ; semantic tokens fall back to a stale-but-valid AST during edits.
-  (if (not (lsp/ast-has-error ast))
-    {dict/set! lsp/last-good-ast-cache uri (list text ast)}
-    {})
   ast})
 
 ; Parses `text` when the ast-cache entry is missing or stale (different text).
@@ -286,6 +295,17 @@
 ; Each change is a plist with :range (optional) and :text.
 ; If :range is nil, it's a full document replacement.
 ; Range has :start {:line N :character N} and :end {:line N :character N}.
+
+; Returns 1 if any change in the list is a full-document replacement
+; (no :range field). A whole-buffer paste produces a single full-replace
+; change; the cached "last good" tokens/hints become positionally invalid
+; in that case (offsets refer to the previous buffer) and must be cleared
+; rather than served as fallback during the next broken parse.
+(sig 'lsp/changes-include-full-replace {-> List Num})
+(fun {lsp/changes-include-full-replace changes}
+  {if (nil? changes) {0}
+    {if (nil? (plist/get (head changes) :range)) {1}
+      {lsp/changes-include-full-replace (tail changes)}}})
 
 (sig 'lsp/apply-changes {-> Str List Str})
 (fun {lsp/apply-changes text changes} {
