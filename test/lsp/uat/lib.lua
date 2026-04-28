@@ -7,7 +7,9 @@
 
 local M = {}
 
-local repo_root = vim.fn.getcwd()
+-- The runner sets cwd to the per-run tmp workspace before this file
+-- is required. All "fixture" paths resolve relative to that workspace.
+local workspace = vim.env.VALK_UAT_WORKSPACE or vim.fn.getcwd()
 
 -- ---------------------------------------------------------------------------
 -- File / buffer
@@ -33,17 +35,12 @@ local function open_with_fresh_buffer(path)
   return vim.api.nvim_get_current_buf()
 end
 
--- Open a fixture under test/lsp/uat/fixtures/ in a fresh buffer. Returns
--- the bufnr.
+-- Open a fixture in a fresh buffer. Fixture name is relative to the
+-- workspace root; the bash wrapper has already copied
+-- test/lsp/uat/fixtures/* into the workspace, so e.g.
+-- `open_fixture("small.valk")` opens "<workspace>/small.valk".
 function M.open_fixture(rel)
-  return open_with_fresh_buffer(repo_root .. "/test/lsp/uat/fixtures/" .. rel)
-end
-
--- Open an arbitrary path inside the repo (e.g. an existing real .valk
--- file under scripts/lsp/). Useful for exercising the LSP against the
--- same files the user actually edits.
-function M.open_repo_file(rel)
-  return open_with_fresh_buffer(repo_root .. "/" .. rel)
+  return open_with_fresh_buffer(workspace .. "/" .. rel)
 end
 
 -- Wait until at least one LSP client is attached to `bufnr` AND its
@@ -167,27 +164,11 @@ end
 -- Temp files and save/close lifecycle
 -- ---------------------------------------------------------------------------
 
--- Per-runner-session temp directory. Created lazily, deleted on
--- nvim exit via VimLeavePre. Workflow scenarios that need a writable
--- file create it under this dir so they don't pollute the repo.
-local _tmpdir = nil
-local function ensure_tmpdir()
-  if _tmpdir then return _tmpdir end
-  _tmpdir = vim.fn.tempname() .. "_uat_workflow"
-  vim.fn.mkdir(_tmpdir, "p")
-  vim.api.nvim_create_autocmd("VimLeavePre", {
-    callback = function() pcall(vim.fn.delete, _tmpdir, "rf") end,
-  })
-  return _tmpdir
-end
-
--- Write `content` to a fresh path under the runner's temp dir and
--- return the absolute path. Useful when a scenario needs to start
--- with a known file on disk that it will subsequently mutate via
--- edits + saves.
+-- Write `content` to `<workspace>/<name>` and return the absolute
+-- path. The workspace is wiped on runner exit. Use a unique `name`
+-- per scenario so concurrent fixtures don't collide.
 function M.write_temp(name, content)
-  local dir = ensure_tmpdir()
-  local path = dir .. "/" .. name
+  local path = workspace .. "/" .. name
   local f = assert(io.open(path, "w"), "could not open " .. path)
   f:write(content); f:close()
   return path
@@ -257,6 +238,36 @@ function M.replace_all(bufnr, new_content)
   local lines = vim.split(new_content, "\n", { plain = true })
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   vim.wait(50)
+end
+
+-- ---------------------------------------------------------------------------
+-- Indexing polling
+-- ---------------------------------------------------------------------------
+
+-- Poll documentSymbol until the buffer's symdb entry contains at
+-- least one symbol matching `name_pattern` (Lua pattern), or timeout.
+-- Use after open_fixture / write_temp+open_path before you make
+-- assertions that depend on the LSP having indexed the file.
+-- Returns true if found, false on timeout. Always returns within
+-- timeout_ms; never raises.
+function M.wait_for_symbol_indexed(bufnr, name_pattern, timeout_ms)
+  timeout_ms = timeout_ms or 3000
+  local deadline = vim.uv.hrtime() + timeout_ms * 1e6
+  while vim.uv.hrtime() < deadline do
+    local res = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol",
+      { textDocument = { uri = M.bufuri(bufnr) } }, 500)
+    if res then
+      for _, r in pairs(res) do
+        if r.result then
+          for _, s in ipairs(r.result) do
+            if (s.name or ""):match(name_pattern) then return true end
+          end
+        end
+      end
+    end
+    vim.wait(50)
+  end
+  return false
 end
 
 -- ---------------------------------------------------------------------------

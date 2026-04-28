@@ -10,6 +10,11 @@ return {
   completion_after_open_paren_has_user_fns = function(lib)
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
+    -- Wait for the LSP to actually finish indexing this file.
+    -- `wait_for_lsp` only confirms client attach; the symdb sync
+    -- runs asynchronously and a completion query right after attach
+    -- can race the indexer (returns 0 user-defined symbols).
+    lib.wait_for_symbol_indexed(bufnr, "^add$", 3000)
     -- Position completion right after `(` on a fresh line at EOF.
     -- We do this by appending a line, putting cursor inside the new
     -- empty `(` and asking for completions.
@@ -46,6 +51,7 @@ return {
   completion_with_prefix_filters = function(lib)
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
+    lib.wait_for_symbol_indexed(bufnr, "^square$", 3000)
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local insert_line = #lines
     vim.api.nvim_buf_set_lines(bufnr, insert_line, insert_line, false, { "(squa" })

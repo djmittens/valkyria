@@ -33,7 +33,7 @@ return {
   -- Cross-file goto-def is the harder case. Open the LSP itself and
   -- jump from a call site to a stdlib helper.
   goto_def_cross_file_stdlib = function(lib)
-    local bufnr = lib.open_repo_file("scripts/lsp/io.valk")
+    local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
     -- Wait for workspace indexing to actually finish — cross-file
     -- definition needs the symdb populated. The progress-end
@@ -48,7 +48,7 @@ return {
       if s then found_line, found_col = i - 1, s - 1; break end
     end
     if not found_line then
-      error("could not locate a `dict/set!` call site in io.valk")
+      error("could not locate a `dict/set!` call site in medium.valk")
     end
     local res = lib.request(bufnr, "textDocument/definition",
       lib.tdp(lib.bufuri(bufnr), found_line, found_col + 1), 5000)

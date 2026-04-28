@@ -2,6 +2,14 @@
 # UAT entry point: drive the valk-lsp through real neovim, run all
 # scenarios under test/lsp/uat/scenarios/, report pass/fail.
 #
+# **Workspace isolation:** each run mkdirs a fresh temp dir, copies
+# test/lsp/uat/fixtures/ into it, and points nvim's cwd + LSP root_dir
+# at that dir. This keeps:
+#   - The real .valk/symdb.sqlite untouched (no cross-run pollution)
+#   - Workspace scan to a small fixed set of fixtures (not 180+ repo files)
+#   - Each invocation reproducible regardless of repo state
+#   - /tmp file scenarios indistinguishable from in-workspace ones
+#
 # Exit codes:
 #   0 — all scenarios passed (or skipped: nvim missing in non-strict mode)
 #   1 — at least one scenario failed
@@ -12,10 +20,8 @@
 #   VALK_LSP_BIN   override LSP binary path  (default: build/valk-lsp)
 #   VALK_UAT_FILTER  Lua pattern; only run scenarios matching ($1 also works)
 #   VALK_UAT_STRICT  if set non-empty, missing nvim is fatal (default: skip)
-#
-# Output:
-#   stderr: per-scenario PASS/FAIL line + summary
-#   stdout: nothing (script is composable into other test runners)
+#   VALK_UAT_KEEP    if set non-empty, retain the temp workspace on exit
+#                    (debugging — find it under $TMPDIR/valk-uat-*)
 
 set -eu
 
@@ -41,11 +47,26 @@ if [ ! -x "$SERVER" ]; then
   exit 2
 fi
 
-RESULTS="$(mktemp -t valk-uat-XXXXXX.jsonl)"
-trap "rm -f \"$RESULTS\"" EXIT
+WORKSPACE="$(mktemp -d -t valk-uat-XXXXXX)"
+RESULTS="$(mktemp -t valk-uat-results-XXXXXX.jsonl)"
+cleanup() {
+  rm -f "$RESULTS"
+  if [ -z "${VALK_UAT_KEEP:-}" ]; then
+    rm -rf "$WORKSPACE"
+  else
+    echo "UAT: kept workspace at $WORKSPACE" >&2
+  fi
+}
+trap cleanup EXIT
+
+# Seed the workspace with the fixtures the scenarios reference. Everything
+# else (per-scenario temp files, mutated buffers, etc.) lives under
+# this dir and disappears on exit.
+cp -r "$REPO/test/lsp/uat/fixtures/." "$WORKSPACE/"
 
 VALK_LSP_BIN="$SERVER" \
 VALK_UAT_RESULTS="$RESULTS" \
+VALK_UAT_WORKSPACE="$WORKSPACE" \
   "$NVIM" --headless -l "$REPO/test/lsp/uat/runner.lua" "$FILTER" 2>&1 || true
 
 if [ ! -s "$RESULTS" ]; then
@@ -53,8 +74,6 @@ if [ ! -s "$RESULTS" ]; then
   exit 2
 fi
 
-# Summarize. The runner's stderr already printed per-scenario lines;
-# we just need to set the exit code.
 fails=$(grep -c '"status":"fail"' "$RESULTS" || true)
 passes=$(grep -c '"status":"pass"' "$RESULTS" || true)
 echo "UAT: $passes passed, $fails failed" >&2

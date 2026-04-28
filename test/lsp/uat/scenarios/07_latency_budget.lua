@@ -7,7 +7,7 @@
 
 return {
   hover_p95_under_load = function(lib)
-    local bufnr = lib.open_repo_file("scripts/lsp/io.valk")
+    local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
     -- Wait a beat for the workspace scan to advance; otherwise the
     -- first few hovers race the scan and skew the distribution.
@@ -43,7 +43,7 @@ return {
   end,
 
   semantic_tokens_full_under_500ms = function(lib)
-    local bufnr = lib.open_repo_file("scripts/lsp/io.valk")
+    local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
     vim.wait(500)
     local _, ms = lib.request(bufnr, "textDocument/semanticTokens/full",

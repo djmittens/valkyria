@@ -17,19 +17,27 @@
 local script_dir = debug.getinfo(1, "S").source:sub(2):match("(.*/)")
 package.path = script_dir .. "?.lua;" .. package.path
 
-local lib = require("lib")
+-- The bash wrapper sets up an isolated tmp workspace and points us at
+-- it via VALK_UAT_WORKSPACE. cd there + use it as the LSP root_dir so
+-- the server's workspace scan only sees our fixtures, not the 180+
+-- .valk files in the real repo.
+local workspace = vim.env.VALK_UAT_WORKSPACE
+if not workspace or workspace == "" then
+  io.stderr:write("UAT: VALK_UAT_WORKSPACE not set — run via test/lsp/uat/run.sh\n")
+  os.exit(2)
+end
+vim.cmd("cd " .. vim.fn.fnameescape(workspace))
 
-local repo_root = vim.fn.getcwd()
 local server_bin = vim.env.VALK_LSP_BIN
 if not server_bin or server_bin == "" then
-  server_bin = repo_root .. "/build/valk-lsp"
+  io.stderr:write("UAT: VALK_LSP_BIN not set\n")
+  os.exit(2)
 end
 local results_path = vim.env.VALK_UAT_RESULTS
-local filter = arg[1]  -- optional regex; only run scenarios whose names match
+local filter = arg[1]
 
 if vim.fn.executable(server_bin) ~= 1 then
   io.stderr:write(("UAT: missing LSP binary at %s\n"):format(server_bin))
-  io.stderr:write("     build/valk --build scripts/lsp/build-main.valk -o build/valk-lsp\n")
   os.exit(2)
 end
 
@@ -45,13 +53,15 @@ vim.api.nvim_create_autocmd("FileType", {
     local ok, err = pcall(vim.lsp.start, {
       name = "valk-lsp",
       cmd = { server_bin },
-      root_dir = repo_root,
+      root_dir = workspace,
     })
     if not ok then
       io.stderr:write("vim.lsp.start failed: " .. tostring(err) .. "\n")
     end
   end,
 })
+
+local lib = require("lib")
 
 -- ---------------------------------------------------------------------------
 -- Result reporting

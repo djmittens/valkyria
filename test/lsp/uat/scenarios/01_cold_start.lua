@@ -30,7 +30,7 @@ return {
   -- workspace indexing in `lsp/idx-sys`; if the user-facing path
   -- waited for that, hover would feel sluggish on every cold open.
   cold_start_workspace_scan_does_not_block = function(lib)
-    local bufnr = lib.open_repo_file("scripts/lsp/io.valk")
+    local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr, 10000)
     local res, elapsed_ms = lib.request(bufnr, "textDocument/hover",
       lib.tdp(lib.bufuri(bufnr), 0, 0), 5000)
