@@ -1,0 +1,7 @@
+; Fixture with no diagnostics. Used to verify the LSP does NOT
+; flag valid code as broken.
+
+(sig 'double {-> Num Num})
+(fun {double x} {* x 2})
+
+(def {twelve} (double 6))

@@ -1,0 +1,7 @@
+; Seed for the rapid-typing scenario. Starts valid; the scenario
+; inserts characters into the blank line one at a time and asserts
+; the LSP keeps responding without producing token offsets past EOL.
+
+(fun {add a b} {+ a b})
+
+(def {x} 42)

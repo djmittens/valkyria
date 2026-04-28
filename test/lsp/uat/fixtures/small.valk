@@ -1,0 +1,12 @@
+; Small fixture: 3 user fns, used for hover/completion/goto-def baselines.
+
+(sig 'add {-> Num Num Num})
+(fun {add a b} {+ a b})
+
+(sig 'square {-> Num Num})
+(fun {square x} {* x x})
+
+(sig 'pythag {-> Num Num Num})
+(fun {pythag a b} {add (square a) (square b)})
+
+(def {answer} (pythag 3 4))

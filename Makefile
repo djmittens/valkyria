@@ -180,6 +180,23 @@ TEST_RUN_ARGS = $(TEST_RUN_BASE)
 test: build
 	-@$(MAKE) check
 	$(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
+	-@$(MAKE) uat
+
+# Neovim-driven LSP user-acceptance tests. Auto-builds build/valk-lsp
+# if missing, drives nvim --headless against scenarios under
+# test/lsp/uat/scenarios/. Skips silently if nvim is not on PATH;
+# set VALK_UAT_STRICT=1 to fail in that case (CI use).
+#
+# Usage:
+#   make uat                          # all scenarios
+#   make uat F=hover                  # only scenarios whose name matches `hover`
+.PHONY: uat
+uat: build
+	@if [ ! -x build/valk-lsp ]; then \
+		echo "[uat] building build/valk-lsp from scripts/lsp/build-main.valk"; \
+		build/valk --build scripts/lsp/build-main.valk -o build/valk-lsp; \
+	fi
+	@VALK_LSP_BIN=$(CURDIR)/build/valk-lsp test/lsp/uat/run.sh $(F)
 
 # C tests only
 .PHONY: test-c
