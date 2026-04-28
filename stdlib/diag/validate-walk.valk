@@ -73,12 +73,18 @@
 (fun {vd/walk-list expr ctx} {
   if (nil? expr) {ctx}
   {do
-    (= {name} (ast/head-name expr))
-    (if (not (== name ""))
-      {vd/dispatch-call expr nil name (tail expr) ctx}
-      {if (quoted? expr)
-        {vd/walk-quoted-data expr ctx}
-        {vd/walk-body (tail expr) ctx}})}
+    ; Quoted lists are data, not code. Must short-circuit BEFORE the
+    ; head-name dispatch, otherwise `{a b c}` (a quoted list with first
+    ; element symbol `a`) would be analyzed as a call to function `a`,
+    ; producing spurious "Symbol 'b' is not defined" / "Function 'a' is
+    ; not defined" diagnostics.
+    (if (quoted? expr)
+      {vd/walk-quoted-data expr ctx}
+      {do
+        (= {name} (ast/head-name expr))
+        (if (not (== name ""))
+          {vd/dispatch-call expr nil name (tail expr) ctx}
+          {vd/walk-body (tail expr) ctx})})}
 })
 
 (sig 'vd/walk-quoted-data {-> List List List})

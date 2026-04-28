@@ -439,8 +439,13 @@
     {if (== p "{->") {vd/count-sig-params (tail parts) depth count}
     {if (== p "}") {vd/count-sig-params (tail parts) depth count}
     {do
-      (= {opens} (vd/count-char p "("))
-      (= {closes} (vd/count-char p ")"))
+      ; Count BOTH `()` and `{}` brackets — the C indexer's
+      ; serialize_sig_expr wraps every cons list in `{...}` regardless
+      ; of how the user wrote it (`(List Num)` becomes `{List Num}`
+      ; in the stored sig), so a parser that only knew `()` would
+      ; miscount nested types as separate parameters.
+      (= {opens}  (+ (vd/count-char p "(") (vd/count-char p "{")))
+      (= {closes} (+ (vd/count-char p ")") (vd/count-char p "}")))
       (= {new-depth} (+ (- depth closes) opens))
       (if (== new-depth 0)
         {vd/count-sig-params (tail parts) 0 (+ count 1)}
