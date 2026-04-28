@@ -284,6 +284,10 @@ if(VALK_LLVM)
 
   add_library(valk_llvm STATIC
     src/llvm/llvm_codegen.c
+    src/llvm/llvm_codegen_emit.c
+    src/llvm/llvm_codegen_special.c
+    src/llvm/llvm_codegen_numeric.c
+    src/llvm/llvm_codegen_call.c
     src/llvm/llvm_jit.c
     src/llvm/llvm_aot.c
     src/llvm/build_aot.c
