@@ -69,6 +69,14 @@ static size_t count_fast_formals(valk_lval_t *formals) {
   return n;
 }
 
+// VALK_AOT_VERBOSE=1 prints per-candidate compile decisions on stderr so
+// users can see which lambdas got AOT'd and which fell back to the tree
+// walker. Off by default to keep the build quiet.
+static bool aot_verbose(void) {
+  const char *e = getenv("VALK_AOT_VERBOSE");
+  return e && *e && *e != '0';
+}
+
 int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
                         const char *c_path, size_t *out_count) {
   if (!env) return -1;
@@ -76,6 +84,7 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
   valk_llvm_ctx_t *ctx = valk_llvm_ctx_new("valk_aot");
   if (!ctx) return -1;
   ctx->build_env = env;
+  bool verbose = aot_verbose();
 
   aot_entry_t *entries = nullptr;
   size_t n = 0, cap = 0;
@@ -108,12 +117,30 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
         (LLVMTypeRef[]){ctx->ptr_type}, 1, 0);
       fn = LLVMAddFunction(ctx->module, name, slow_ty);
       LLVMSetLinkage(fn, LLVMExternalLinkage);
+      if (verbose) {
+        fprintf(stderr, "[AOT] fast: %s (%zu formals)\n",
+                env->symbols.items[i] ? env->symbols.items[i] : name, nf);
+      }
     } else {
       fn = valk_llvm_compile_lambda_body(ctx, v->fun.body, name);
-      if (!fn) continue;
+      if (!fn) {
+        if (verbose) {
+          fprintf(stderr, "[AOT] skip: %s (codegen returned null)\n",
+                  env->symbols.items[i] ? env->symbols.items[i] : name);
+        }
+        continue;
+      }
       if (LLVMVerifyFunction(fn, LLVMReturnStatusAction)) {
+        if (verbose) {
+          fprintf(stderr, "[AOT] skip: %s (verify failed)\n",
+                  env->symbols.items[i] ? env->symbols.items[i] : name);
+        }
         LLVMDeleteFunction(fn);
         continue;
+      }
+      if (verbose) {
+        fprintf(stderr, "[AOT] slow: %s\n",
+                env->symbols.items[i] ? env->symbols.items[i] : name);
       }
     }
 
