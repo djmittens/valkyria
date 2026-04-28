@@ -383,6 +383,120 @@ void test_image_nested_strings(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// ===========================================================================
+// Edge cases: malformed images, dedup, double-load
+// ===========================================================================
+
+void test_image_load_missing_file(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_lval_t *r = valk_image_load("/tmp/valk_image_does_not_exist.img");
+  VALK_TEST_ASSERT(r == NULL, "missing file → NULL");
+  VALK_PASS();
+}
+
+void test_image_load_truncated_header(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  // Write only 10 bytes — less than the header size — and confirm load
+  // refuses gracefully without crashing.
+  FILE *f = fopen(tmp_path, "wb");
+  VALK_TEST_ASSERT(f != NULL, "tmp open");
+  const char junk[10] = {'0','1','2','3','4','5','6','7','8','9'};
+  fwrite(junk, 1, sizeof(junk), f);
+  fclose(f);
+  valk_lval_t *r = valk_image_load(tmp_path);
+  VALK_TEST_ASSERT(r == NULL, "truncated → NULL");
+  unlink(tmp_path);
+  VALK_PASS();
+}
+
+void test_image_load_bad_magic(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  // Dump a valid image, then corrupt the magic. Load must refuse.
+  valk_lval_t *v = valk_lval_num(7);
+  VALK_TEST_ASSERT(valk_image_dump(v, tmp_path) == 0, "dump ok");
+  FILE *f = fopen(tmp_path, "r+b");
+  VALK_TEST_ASSERT(f != NULL, "tmp open");
+  fputc('X', f);
+  fclose(f);
+  valk_lval_t *r = valk_image_load(tmp_path);
+  VALK_TEST_ASSERT(r == NULL, "bad magic → NULL");
+  unlink(tmp_path);
+  VALK_PASS();
+}
+
+void test_image_load_bad_version(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_lval_t *v = valk_lval_num(7);
+  VALK_TEST_ASSERT(valk_image_dump(v, tmp_path) == 0, "dump ok");
+  // Patch version field (offset 8) to 999.
+  FILE *f = fopen(tmp_path, "r+b");
+  VALK_TEST_ASSERT(f != NULL, "tmp open");
+  fseek(f, 8, SEEK_SET);
+  uint32_t bad = 0xDEADBEEF;
+  fwrite(&bad, sizeof(bad), 1, f);
+  fclose(f);
+  valk_lval_t *r = valk_image_load(tmp_path);
+  VALK_TEST_ASSERT(r == NULL, "bad version → NULL");
+  unlink(tmp_path);
+  VALK_PASS();
+}
+
+void test_image_load_truncated_buffer(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  // Build a non-trivial image, then truncate so the buffer is incomplete.
+  valk_lval_t *items[] = {
+    valk_lval_num(1), valk_lval_num(2), valk_lval_num(3),
+    valk_lval_num(4), valk_lval_num(5),
+  };
+  valk_lval_t *v = valk_lval_list(items, 5);
+  VALK_TEST_ASSERT(valk_image_dump(v, tmp_path) == 0, "dump ok");
+  // Truncate to 64 bytes (header is larger than 64 only if buf is big;
+  // the buffer for 5 cons cells is well over 64 → cuts mid-buffer).
+  truncate(tmp_path, 64);
+  valk_lval_t *r = valk_image_load(tmp_path);
+  VALK_TEST_ASSERT(r == NULL, "truncated buffer → NULL");
+  unlink(tmp_path);
+  VALK_PASS();
+}
+
+void test_image_string_dedup(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  // Two cells referencing the same interned symbol → one copy in the
+  // serialized buffer. Verify both live pointers reload identical.
+  valk_lval_t *items[] = {
+    valk_lval_sym("shared"), valk_lval_sym("shared"),
+  };
+  valk_lval_t *v = valk_lval_list(items, 2);
+  VALK_TEST_ASSERT(valk_image_dump(v, tmp_path) == 0, "dump ok");
+  valk_lval_t *r = valk_image_load(tmp_path);
+  VALK_TEST_ASSERT(r != NULL, "load ok");
+  valk_lval_t *a = r->cons.head;
+  valk_lval_t *b = r->cons.tail->cons.head;
+  ASSERT_STR_EQ(a->str, "shared");
+  ASSERT_STR_EQ(b->str, "shared");
+  // After re-intern they share the canonical interned string pointer.
+  VALK_TEST_ASSERT(a->str == b->str, "interned strs share pointer");
+  valk_image_load_free(r);
+  unlink(tmp_path);
+  VALK_PASS();
+}
+
+void test_image_load_twice(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_lval_t *v = valk_lval_sym("twice");
+  VALK_TEST_ASSERT(valk_image_dump(v, tmp_path) == 0, "dump ok");
+  valk_lval_t *r1 = valk_image_load(tmp_path);
+  VALK_TEST_ASSERT(r1 != NULL, "first load ok");
+  ASSERT_STR_EQ(r1->str, "twice");
+  valk_lval_t *r2 = valk_image_load(tmp_path);
+  VALK_TEST_ASSERT(r2 != NULL, "second load ok");
+  ASSERT_STR_EQ(r2->str, "twice");
+  valk_image_load_free(r1);
+  valk_image_load_free(r2);
+  unlink(tmp_path);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_lval_init_singletons();
@@ -406,6 +520,14 @@ int main(void) {
   valk_testsuite_add_test(suite, "sym_reintern", test_image_sym_reintern);
   valk_testsuite_add_test(suite, "overlay_shadowing", test_image_overlay_shadowing);
   valk_testsuite_add_test(suite, "overlay_def_stops_at_frozen", test_image_overlay_def_stops_at_frozen);
+
+  valk_testsuite_add_test(suite, "load_missing_file", test_image_load_missing_file);
+  valk_testsuite_add_test(suite, "load_truncated_header", test_image_load_truncated_header);
+  valk_testsuite_add_test(suite, "load_bad_magic", test_image_load_bad_magic);
+  valk_testsuite_add_test(suite, "load_bad_version", test_image_load_bad_version);
+  valk_testsuite_add_test(suite, "load_truncated_buffer", test_image_load_truncated_buffer);
+  valk_testsuite_add_test(suite, "string_dedup", test_image_string_dedup);
+  valk_testsuite_add_test(suite, "load_twice", test_image_load_twice);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_free(suite);

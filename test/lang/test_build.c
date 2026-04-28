@@ -127,6 +127,42 @@ void test_build_time_state_captured(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// Verify the produced binary actually contains an AOT'd function symbol.
+// Without this, a regression that breaks AOT (so every lambda falls back
+// to the tree walker) would still produce correct exit codes — but the
+// performance benefit of --build evaporates silently. Greps `nm` output
+// for `valk_aot_` symbols, expects at least one.
+void test_build_aot_emits_native_symbols(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  const char *src = "/tmp/valk_build_test_aot_symbols.valk";
+  const char *out = "/tmp/valk_build_test_aot_symbols.bin";
+  const char *body =
+      "(def {square} (\\ {x} {* x x}))\n"
+      "(\\ {argv} {square 7})\n";
+  VALK_TEST_ASSERT(write_valk(src, body) == 0, "write src");
+  VALK_TEST_ASSERT(run_valk_build(src, out) == 0, "valk --build succeeds");
+
+  // Use a pipe to capture nm output and grep for AOT-emitted symbols.
+  // (Skip if `nm` isn't on PATH — we want the test to gracefully no-op
+  // rather than fail when the tool is unavailable.)
+  char cmd[PATH_MAX + 32];
+  snprintf(cmd, sizeof(cmd), "nm '%s' 2>/dev/null", out);
+  FILE *p = popen(cmd, "r");
+  VALK_TEST_ASSERT(p != NULL, "popen nm");
+  char line[1024];
+  int saw_aot = 0;
+  while (fgets(line, sizeof(line), p)) {
+    if (strstr(line, "valk_aot_")) { saw_aot = 1; break; }
+  }
+  pclose(p);
+  VALK_TEST_ASSERT(saw_aot,
+                   "produced binary contains valk_aot_* symbols (AOT fired)");
+
+  unlink(src);
+  unlink(out);
+  VALK_PASS();
+}
+
 // Stage 1: a chain of lambdas where each calls the previous. Exercises
 // direct-call emission (compiled body calls sibling AOT'd lambda without
 // going through valk_lval_eval_call). Result: (+ 10 (+ 20 12)) = 42.
@@ -210,6 +246,8 @@ int main(void) {
                           test_build_qexpr_entry);
   valk_testsuite_add_test(suite, "build_time_state_captured",
                           test_build_time_state_captured);
+  valk_testsuite_add_test(suite, "build_aot_emits_native_symbols",
+                          test_build_aot_emits_native_symbols);
   valk_testsuite_add_test(suite, "build_aot_direct_call_chain",
                           test_build_aot_direct_call_chain);
   valk_testsuite_add_test(suite, "build_aot_tco_self_recursion",

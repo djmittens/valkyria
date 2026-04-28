@@ -36,10 +36,20 @@ void test_image_jit_roundtrip(VALK_TEST_ARGS()) {
   valk_lenv_t *overlay = valk_image_load_overlay(tmp_path, registry);
   VALK_TEST_ASSERT(overlay != NULL, "overlay load ok");
 
+  // Snapshot cache miss count before the call. valk_jit_eval_string
+  // either compiles a fresh module (miss) or reuses a cached one (hit);
+  // either way is "JIT path", which is what we want to confirm. A
+  // regression that bypassed the JIT (e.g. silently fell back to the
+  // tree walker) would leave both counters unchanged.
+  u64 m0 = valk_jit_cache_misses(jit);
+  u64 h0 = valk_jit_cache_hits(jit);
   valk_lval_t *result = valk_jit_eval_string(jit, overlay, "(double 21)");
   VALK_TEST_ASSERT(result != NULL, "jit call returned");
   ASSERT_LVAL_TYPE(result, LVAL_NUM);
   ASSERT_LVAL_NUM(result, 42);
+  VALK_TEST_ASSERT(valk_jit_cache_misses(jit) > m0 ||
+                   valk_jit_cache_hits(jit) > h0,
+                   "JIT actually executed the call (cache hit or miss recorded)");
 
   valk_image_load_free_overlay(overlay);
   valk_jit_free(jit);
