@@ -164,6 +164,126 @@ function M.assert_contains(haystack, needle, msg)
 end
 
 -- ---------------------------------------------------------------------------
+-- Temp files and save/close lifecycle
+-- ---------------------------------------------------------------------------
+
+-- Per-runner-session temp directory. Created lazily, deleted on
+-- nvim exit via VimLeavePre. Workflow scenarios that need a writable
+-- file create it under this dir so they don't pollute the repo.
+local _tmpdir = nil
+local function ensure_tmpdir()
+  if _tmpdir then return _tmpdir end
+  _tmpdir = vim.fn.tempname() .. "_uat_workflow"
+  vim.fn.mkdir(_tmpdir, "p")
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    callback = function() pcall(vim.fn.delete, _tmpdir, "rf") end,
+  })
+  return _tmpdir
+end
+
+-- Write `content` to a fresh path under the runner's temp dir and
+-- return the absolute path. Useful when a scenario needs to start
+-- with a known file on disk that it will subsequently mutate via
+-- edits + saves.
+function M.write_temp(name, content)
+  local dir = ensure_tmpdir()
+  local path = dir .. "/" .. name
+  local f = assert(io.open(path, "w"), "could not open " .. path)
+  f:write(content); f:close()
+  return path
+end
+
+-- Open a path that exists on disk (e.g. the result of write_temp) in
+-- a fresh buffer. Same wipe-then-edit pattern as open_fixture.
+function M.open_path(path)
+  local existing = vim.fn.bufnr(path)
+  if existing > 0 and vim.api.nvim_buf_is_valid(existing) then
+    pcall(vim.cmd, "bwipeout! " .. existing)
+  end
+  vim.cmd("edit! " .. vim.fn.fnameescape(path))
+  vim.cmd("filetype detect")
+  return vim.api.nvim_get_current_buf()
+end
+
+-- Save the buffer to disk AND notify the LSP via didSave. nvim's
+-- `:write` triggers BufWritePost and the LSP client's auto-attach
+-- normally fires didSave for us — but only if the relevant autocmds
+-- ran during normal startup, which `nvim --headless -l` skips.
+-- Be explicit: write to disk + manually send the notification.
+function M.save_buffer(bufnr)
+  vim.api.nvim_buf_call(bufnr, function() vim.cmd("write!") end)
+  local clients = vim.lsp.get_clients({ bufnr = bufnr })
+  if #clients == 0 then
+    error("save_buffer: no LSP client attached to buf " .. bufnr)
+  end
+  local include_text = clients[1].server_capabilities.textDocumentSync
+                   and clients[1].server_capabilities.textDocumentSync.save
+                   and clients[1].server_capabilities.textDocumentSync.save.includeText
+  local params = { textDocument = { uri = M.bufuri(bufnr) } }
+  if include_text then
+    params.text = table.concat(
+      vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+  end
+  for _, c in ipairs(clients) do
+    c:notify("textDocument/didSave", params)
+  end
+  -- Give the server a beat to process the notification before the
+  -- caller fires the next request. Without this, requests can race
+  -- the didSave-triggered re-index.
+  vim.wait(50)
+end
+
+-- Close a buffer (sending didClose). open_path/open_fixture already
+-- wipe a stale buffer for the same path, so most scenarios don't
+-- need this — but a "close, do other work, reopen" sequence does.
+function M.close_buffer(bufnr)
+  if vim.api.nvim_buf_is_valid(bufnr) then
+    pcall(vim.cmd, "bwipeout! " .. bufnr)
+  end
+end
+
+-- Append a line at the end of `bufnr`. Used by add-feature scenarios.
+-- Returns the 0-indexed line number of the appended content.
+function M.append_line(bufnr, text)
+  local n = vim.api.nvim_buf_line_count(bufnr)
+  vim.api.nvim_buf_set_lines(bufnr, n, n, false, { text })
+  vim.wait(50)  -- let didChange flush
+  return n  -- caller's appended line is at index n (0-indexed)
+end
+
+-- Replace the entire buffer with new content. Useful for "edit a
+-- function body" by rewriting the whole file at once.
+function M.replace_all(bufnr, new_content)
+  local lines = vim.split(new_content, "\n", { plain = true })
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.wait(50)
+end
+
+-- ---------------------------------------------------------------------------
+-- Diagnostics polling
+-- ---------------------------------------------------------------------------
+
+-- Poll vim.diagnostic.get(bufnr) until either count is met or timeout.
+-- Returns the diagnostics list (possibly empty). When `want_count` is
+-- 0, waits the full timeout to be confident none arrived.
+function M.wait_for_diagnostics(bufnr, want_count, timeout_ms)
+  timeout_ms = timeout_ms or 3000
+  local deadline = vim.uv.hrtime() + timeout_ms * 1e6
+  local diags = {}
+  while vim.uv.hrtime() < deadline do
+    diags = vim.diagnostic.get(bufnr)
+    if want_count == 0 then
+      vim.wait(100)
+      diags = vim.diagnostic.get(bufnr)
+    elseif #diags >= want_count then
+      return diags
+    end
+    vim.wait(50)
+  end
+  return diags
+end
+
+-- ---------------------------------------------------------------------------
 -- Editing
 -- ---------------------------------------------------------------------------
 
