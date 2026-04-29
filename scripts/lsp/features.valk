@@ -383,8 +383,8 @@
 
 (sig 'handle-selection-range {-> Num SelectionParams Nil})
 (fun {handle-selection-range id params} {do
-  (= {positions} (plist/get params :positions))
-  (= {ctx} (lsp/get-doc params))
+  (= {positions} params:positions)
+  (= {ctx} (lsp/get-doc (DocParams params:textDocument)))
   (if (nil? ctx) {lsp/send-response id nil}
     {lsp/send-response id (sel/find-ranges ctx:text ctx:ast positions)})
 })

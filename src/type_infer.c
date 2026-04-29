@@ -955,6 +955,16 @@ valk_type_t *valk_ti_lookup_binding(valk_ti_ctx_t *ctx, const char *name) {
   return NULL;
 }
 
+// Populate the file-level type scope from HM-inferred bindings. ONLY the
+// top-level scope is consulted: per-function locals (lambda formals, `=`
+// bindings inside fn bodies, etc.) live in HM child scopes and are
+// lexically scoped to that function. Flattening them into the file scope
+// causes name collisions across functions — e.g. one function binds
+// `pos: Num` while another binds `pos: LspPosition`, and a third
+// function's lambda `(\ {pos} ...)` then resolves field-access on `pos`
+// using whichever LspPosition leaked in. That mis-typed transform turns
+// `pos:line` into `(nth 2 pos)` against a raw plist, producing wrong
+// values or out-of-bounds errors at runtime.
 static void populate_scope_entries(valk_ti_scope_t *s,
                                    valk_type_scope_t *out_scope) {
   for (u32 i = 0; i < s->count; i++) {
@@ -979,8 +989,6 @@ static void populate_scope_entries(valk_ti_scope_t *s,
     out_scope->entries[out_scope->count].type = t->con.name;
     out_scope->count++;
   }
-  for (u32 c = 0; c < s->child_count; c++)
-    populate_scope_entries(s->children[c], out_scope);
 }
 
 void valk_ti_populate_type_scope(valk_ti_ctx_t *ctx, valk_ti_scope_t *ti_scope,

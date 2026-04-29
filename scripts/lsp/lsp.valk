@@ -161,6 +161,31 @@
                 (plist/get raw :newName))
 })
 
+; Selection range carries an array of positions rather than a single one.
+; Build SelectionParams so handle-selection-range can use field-access on
+; a typed record — see the note on lsp/get-doc for why raw plist input
+; can't be field-accessed directly (key order is non-deterministic).
+(sig 'lsp/to-selection-params {-> List SelectionParams})
+(fun {lsp/to-selection-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (SelectionParams (LspTextDoc (plist/get td :uri))
+                   (plist/get raw :positions))
+})
+
+; Code action carries a range and a context (with diagnostics).
+(sig 'lsp/to-code-action-params {-> List CodeActionParams})
+(fun {lsp/to-code-action-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (= {r} (plist/get raw :range))
+  (= {s} (plist/get r :start))
+  (= {e} (plist/get r :end))
+  (= {ctx} (plist/get raw :context))
+  (CodeActionParams (LspTextDoc (plist/get td :uri))
+                    (LspRange (LspPosition (plist/get s :line) (plist/get s :character))
+                              (LspPosition (plist/get e :line) (plist/get e :character)))
+                    (CodeActionContext (plist/get ctx :diagnostics)))
+})
+
 (sig 'lsp/handle-readonly {-> Str Any List Nil})
 (fun {lsp/handle-readonly method id params} {
   match method
@@ -178,10 +203,10 @@
     {"textDocument/signatureHelp" (features/handle-signature-help id (lsp/to-tdp-params params))}
     {"textDocument/documentHighlight" (features/handle-document-highlight id (lsp/to-tdp-params params))}
     {"textDocument/documentLink" (features/handle-document-link id (lsp/to-doc-params params))}
-    {"textDocument/foldingRange" (features/handle-folding-range id params)}
-    {"textDocument/selectionRange" (features/handle-selection-range id params)}
+    {"textDocument/foldingRange" (features/handle-folding-range id (lsp/to-doc-params params))}
+    {"textDocument/selectionRange" (features/handle-selection-range id (lsp/to-selection-params params))}
     {"textDocument/codeLens" (features/handle-code-lens id (lsp/to-doc-params params))}
-    {"textDocument/codeAction" (features/handle-code-action id params)}
+    {"textDocument/codeAction" (features/handle-code-action id (lsp/to-code-action-params params))}
     {"textDocument/diagnostic" (workspace/handle-pull-diagnostics id (lsp/to-doc-params params))}
     {_ (if (not (nil? id))
          {lsp/send-error id -32601 (str "Method not found: " method)} {})}
