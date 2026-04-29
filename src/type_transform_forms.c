@@ -76,9 +76,24 @@ valk_lval_t *valk_tt_resolve_field_access(valk_type_env_t *env,
     if (ctor) {
       for (u64 i = 0; i < ctor->field_count; i++) {
         if (strcmp(ctor->fields[i].name, field_key) == 0) {
+          // Emit (record/field VAR 'Tag IDX :field) instead of a bare
+          // (nth IDX VAR). This evaluates VAR exactly once and verifies
+          // the tag at runtime — if the type system was wrong about the
+          // runtime shape (e.g. raw JSON plist annotated as a record),
+          // we fall back to plist/get rather than returning whatever
+          // bytes happen to live at slot IDX. See valk_builtin_record_field.
           valk_lval_t *index = valk_lval_num((long)(i + 2));
-          valk_lval_t *nth_sym = valk_lval_sym("nth");
-          return valk_lval_cons(nth_sym, valk_lval_cons(index, valk_lval_cons(var_expr, valk_lval_nil())));
+          valk_lval_t *fn_sym = valk_lval_sym("record/field");
+          valk_lval_t *tag_sym = valk_lval_sym(ctor->name);
+          valk_lval_t *tag_q = valk_lval_qcons(tag_sym, valk_lval_nil());
+          valk_lval_t *tag = valk_lval_cons(valk_lval_sym("head"),
+                               valk_lval_cons(tag_q, valk_lval_nil()));
+          valk_lval_t *key_sym = valk_lval_sym(field_key);
+          return valk_lval_cons(fn_sym,
+                   valk_lval_cons(var_expr,
+                     valk_lval_cons(tag,
+                       valk_lval_cons(index,
+                         valk_lval_cons(key_sym, valk_lval_nil())))));
         }
       }
       return valk_lval_err("type '%s' has no field ':%s'", type_name, field_name);

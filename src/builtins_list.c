@@ -231,6 +231,80 @@ static valk_lval_t* valk_builtin_list_group(valk_lenv_t* e, valk_lval_t* a) {
   return result;
 }
 
+// Type-directed field access with runtime fallback. Emitted by the type
+// transform in place of a bare `(nth N x)` whenever a record type is
+// known at compile time.
+//
+// The dispatch heuristic looks at the value's first element:
+//   - If it's a keyword (starts with `:`) → it's a plist; walk for the
+//     field's keyword and return the matching value.
+//   - Otherwise (sym tag, value, anything else) → treat as a positional
+//     record and return (nth IDX value).
+//
+// Why not strict tag-match against the expected constructor name? Two
+// records with structurally-compatible prefixes (e.g. RenameParams vs
+// TextDocPosParams, both starting :textDocument :position ...) need to
+// be field-accessible against either sig. The keyword-vs-not heuristic
+// captures the only thing that actually matters at runtime: "does this
+// value lay out as <tag, v0, v1, ...> or as <:k0, v0, :k1, v1, ...>?".
+//
+// This makes a sig-misannotation against a raw JSON plist degrade to
+// "wrong key returns nil" rather than "wrong byte returns garbage" —
+// the bug class we're protecting against — while still allowing
+// positional access across compatible record types.
+//
+// TAG-SYM is currently unused but kept in the call site for future
+// runtime-type-checking diagnostics.
+//
+// Args: (record/field VALUE TAG-SYM IDX FIELD-KEY)
+static valk_lval_t* valk_builtin_record_field(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 4);
+  valk_lval_t* value = valk_lval_list_nth(a, 0);
+  valk_lval_t* idx   = valk_lval_list_nth(a, 2);
+  valk_lval_t* key   = valk_lval_list_nth(a, 3);
+  LVAL_ASSERT_TYPE(a, idx, LVAL_NUM);
+
+  // Non-cons values (Err, Nil, Num, Str) — no field to fetch.
+  if (!value || (LVAL_TYPE(value) != LVAL_CONS && LVAL_TYPE(value) != LVAL_QEXPR))
+    return valk_lval_nil();
+
+  valk_lval_t* head = value->cons.head;
+  bool looks_like_plist = head && LVAL_TYPE(head) == LVAL_SYM &&
+                          head->str && head->str[0] == ':';
+
+  if (!looks_like_plist) {
+    // Positional fast path: head is a constructor tag (or any non-keyword).
+    long n = idx->num;
+    valk_lval_t* curr = value;
+    for (long i = 1; i < n; i++) {
+      if (!curr || (LVAL_TYPE(curr) != LVAL_CONS && LVAL_TYPE(curr) != LVAL_QEXPR))
+        return valk_lval_nil();
+      curr = curr->cons.tail;
+    }
+    if (!curr || (LVAL_TYPE(curr) != LVAL_CONS && LVAL_TYPE(curr) != LVAL_QEXPR))
+      return valk_lval_nil();
+    return curr->cons.head;
+  }
+
+  // Plist path: head is a keyword, walk pairs looking for the field key.
+  const char* key_str = NULL;
+  if (LVAL_TYPE(key) == LVAL_SYM || LVAL_TYPE(key) == LVAL_STR)
+    key_str = key->str;
+  if (!key_str) return valk_lval_nil();
+  valk_lval_t* curr = value;
+  while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+    valk_lval_t* k = curr->cons.head;
+    valk_lval_t* rest = curr->cons.tail;
+    if (!rest || LVAL_TYPE(rest) != LVAL_CONS) break;
+    if ((LVAL_TYPE(k) == LVAL_SYM || LVAL_TYPE(k) == LVAL_STR) &&
+        strcmp(k->str, key_str) == 0)
+      return rest->cons.head;
+    curr = rest->cons.tail;
+  }
+  return valk_lval_nil();
+}
+
 // LCOV_EXCL_BR_START - internal plist traversal null guards
 static valk_lval_t* valk_builtin_plist_get(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -492,4 +566,5 @@ void valk_register_list_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "reverse", valk_builtin_reverse);
   valk_lenv_put_builtin(env, "list/group", valk_builtin_list_group);
   valk_lenv_put_builtin(env, "plist/get", valk_builtin_plist_get);
+  valk_lenv_put_builtin(env, "record/field", valk_builtin_record_field);
 }
