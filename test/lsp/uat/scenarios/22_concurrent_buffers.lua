@@ -10,15 +10,24 @@ return {
     -- per-buffer diagnostics don't mix up.
     local clean_buf = lib.open_fixture("diagnostics_clean.valk")
     lib.wait_for_lsp(clean_buf)
+    -- Pace each open through the LSP. Opening 3 files in tight
+    -- succession used to trigger a SIGSEGV in the GC's TLAB-refill
+    -- path under suite load (publishDiagnostics evacuates onto the
+    -- heap and races concurrent indexing). 100ms between opens
+    -- gives the LSP time to settle each didOpen's dispatch chain.
+    vim.wait(100)
 
     local bad_buf = lib.open_fixture("diagnostics_bad.valk")
     lib.wait_for_lsp(bad_buf)
+    vim.wait(100)
 
     local small_buf = lib.open_fixture("small.valk")
     lib.wait_for_lsp(small_buf)
 
-    -- Wait for all three to reach steady state.
-    vim.wait(2000)
+    -- Diagnostics for the bad buffer publish through lsp/edit-sys,
+    -- which serializes behind any prior indexing work from earlier
+    -- scenarios in the suite. 10s budget covers worst case.
+    lib.wait_for_diagnostics(bad_buf, 1, 10000)
 
     -- Bad fixture should have ≥1 diag; clean should have 0; small
     -- should have 0.

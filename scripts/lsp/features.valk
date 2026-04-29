@@ -115,12 +115,28 @@
                   (= {active} (if (>= arg-idx (len fn-params))
                     {- (len fn-params) 1} {arg-idx}))
                   (= {param-items} (map (\ {p} {list :label p}) fn-params))
-                  (= {sig-label} (str "(" name " " (str/join fn-params " ") ")"))
+                  ; Bypass SymInfo record access (which has odd
+                  ; behavior for the :sig field returning ()) by
+                  ; querying sqlite directly for the sig column.
+                  (= {sig-row} (if (nil? lsp/db) {nil}
+                    {sqlite/query-maybe lsp/db
+                      "SELECT sig, doc FROM symbols WHERE name=?1 AND sig LIKE '{->%' LIMIT 1"
+                      name}))
+                  (= {sig-str} (if (nil? sig-row) {nil} {plist/get sig-row :sig}))
+                  (= {sig-doc} (if (nil? sig-row) {nil} {plist/get sig-row :doc}))
+                  (= {sig-label} (if (or (nil? sig-str) (== sig-str ""))
+                    {str "(" name " " (str/join fn-params " ") ")"}
+                    {str name " :: " sig-str}))
+                  (= {sig-entry-base} (list :label sig-label
+                                             :parameters param-items
+                                             :activeParameter (if (< active 0) {0} {active})))
+                  (= {sig-entry} (if (or (nil? sig-doc) (== sig-doc ""))
+                    {sig-entry-base}
+                    {plist/set sig-entry-base :documentation
+                      (list :kind "markdown" :value sig-doc)}))
                   (lsp/send-response id
                     (list :signatures
-                      (list (list :label sig-label
-                                  :parameters param-items
-                                  :activeParameter (if (< active 0) {0} {active})))
+                      (list sig-entry)
                       :activeSignature 0
                       :activeParameter (if (< active 0) {0} {active})))})})})})
 })
@@ -367,7 +383,12 @@
 
 (sig 'handle-selection-range {-> Num SelectionParams Nil})
 (fun {handle-selection-range id params} {do
-  (= {positions} params:positions)
+  ; params:positions evaluated to the symbol `:positions` rather than
+  ; the value, because the field-accessor macro only synthesizes
+  ; accessors for fields declared on a *typed* params (DocParams,
+  ; TextDocPosParams, etc.). Selection's params come in raw, so use
+  ; plist/get explicitly to look up by keyword.
+  (= {positions} (plist/get params :positions))
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
     {lsp/send-response id (sel/find-ranges ctx:text ctx:ast positions)})
