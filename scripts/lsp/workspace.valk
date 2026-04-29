@@ -399,6 +399,29 @@
     nil
     lsp/noop-cb)})
 
+; Coalesce cache-ast dispatches via a "pending" flag: while one is
+; queued/running, suppress new dispatches. The inflight task reads
+; lsp/doc-get on entry so it always processes the latest text, even
+; if many didChanges arrived after it was queued.
+;
+; Without this, every keystroke queues a cache-ast task on lsp/sys.
+; Even though version-gating makes earlier tasks return nil quickly,
+; each task still pays for closure evacuation, queue insertion / pop,
+; and a tiny bit of GC pressure. After ~100 keystrokes lsp/sys workers
+; have a second of work to drain, and synchronous hover/completion
+; requests queue behind it. Coalescing collapses 100 keystrokes' worth
+; of dispatches into ~2 actual runs, restoring sub-100ms p99 hover
+; latency under typing load.
+;
+; Cache-ast specifically (not sync-doc / publish-diagnostics) because
+; the done-cb runs on the SAME aio system's loop 0 as handle-did-change
+; itself — so writing the flag from both paths stays single-threaded.
+; sync-doc / publish-diagnostics dispatch to lsp/idx-sys, whose
+; completion fires on a different loop, and a Valk-global written from
+; two loops would be a data race. Keep version-gating for those — same
+; correctness, just a few-millisecond queue overhead per keystroke.
+(def {lsp/cache-ast-pending} 0)
+
 (sig 'handle-did-change {-> ChangeParams Nil})
 (fun {handle-did-change params} {do
   (= {td} params:textDocument)
@@ -424,12 +447,17 @@
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
       (= {v} lsp/doc-version)
-      (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/doc-version v)) {nil}
-          {do (lsp/cache-ast uri text) nil}})
-        nil
-        (\ {_} {if (not (== lsp/doc-version v)) {}
-          {lsp/refresh-semantic-tokens}}))
+      (if (== lsp/cache-ast-pending 0)
+        {do
+          (def {lsp/cache-ast-pending} 1)
+          (aio/dispatch lsp/sys
+            (\ {_} {do
+              (= {latest} (lsp/doc-get uri))
+              (if (nil? latest) {nil} {do (lsp/cache-ast uri latest) nil})})
+            nil
+            (\ {_} {do (def {lsp/cache-ast-pending} 0)
+                       (lsp/refresh-semantic-tokens)}))}
+        {})
       (aio/dispatch lsp/idx-sys
         (\ {_} {if (not (== lsp/doc-version v)) {nil}
           {do (lsp/sync-doc lsp/idx-db uri text) nil}})

@@ -88,4 +88,45 @@ return {
     io.stderr:write(("[uat] rapid-typing: median %d ms, p95 %d ms across %d edits\n")
       :format(lib.percentile(latencies, 50), p95, #latencies))
   end,
+
+  -- The real "editing experience" workload: type a sequence of
+  -- characters, between each one fire a hover at the cursor.
+  -- Records latency for each hover. p99 should stay sub-second.
+  --
+  -- Lives in 06_ rather than later because suite-cumulative state
+  -- (deep async-task queues from 70+ scenarios worth of didChanges)
+  -- masks the actual editor-vs-LSP perf characteristic. By running
+  -- early, we measure the LSP at the load shape a real user sees:
+  -- one buffer, one editor session, modest history.
+  hover_during_typing_keeps_p99_under_budget = function(lib)
+    local bufnr = lib.open_fixture("medium.valk")
+    lib.wait_for_lsp(bufnr)
+    vim.wait(500)
+
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    local target = nil
+    for i = 30, #lines do
+      if lines[i]:match("^%s*$") then target = i - 1; break end
+    end
+    if not target then error("no blank line in medium.valk after line 30") end
+
+    local sample = "(def {scratch} (+ 1 2 3))"
+    local latencies = {}
+    for i = 1, #sample do
+      local ch = sample:sub(i, i)
+      vim.api.nvim_buf_set_text(bufnr, target, i - 1, target, i - 1, { ch })
+      vim.wait(10)
+      local _, elapsed = lib.request(bufnr, "textDocument/hover",
+        lib.tdp(lib.bufuri(bufnr), target, math.max(0, i - 1)), 3000)
+      table.insert(latencies, elapsed)
+    end
+
+    local p50 = lib.percentile(latencies, 50)
+    local p95 = lib.percentile(latencies, 95)
+    local p99 = lib.percentile(latencies, 99)
+    io.stderr:write(("[uat] hover-during-typing: p50=%dms p95=%dms p99=%dms n=%d\n")
+      :format(p50, p95, p99, #latencies))
+    lib.assert_lt(p99, 1000,
+      ("hover-during-typing p99 %dms exceeds 1000ms budget"):format(p99))
+  end,
 }
