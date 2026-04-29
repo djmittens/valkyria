@@ -73,22 +73,56 @@
 (fun {vd/walk-list expr ctx} {
   if (nil? expr) {ctx}
   {do
-    ; Quoted lists are data, not code. Must short-circuit BEFORE the
-    ; head-name dispatch, otherwise `{a b c}` (a quoted list with first
-    ; element symbol `a`) would be analyzed as a call to function `a`,
-    ; producing spurious "Symbol 'b' is not defined" / "Function 'a' is
-    ; not defined" diagnostics.
-    (if (quoted? expr)
+    (= {name} (ast/head-name expr))
+    (= {is-q} (quoted? expr))
+    ; Qexprs appear in two roles:
+    ;   (a) Body code — `(fun {f x} {/ x 0})`, `(if c {a} {b})` —
+    ;       caller (walk-fun, walk-if, etc.) walks them as CODE.
+    ;   (b) Data — `(test/case {a b c})` — the qexpr is a value
+    ;       being passed; its symbols don't need to resolve.
+    ;
+    ; We can't fully distinguish (a) from (b) without per-call sig
+    ; info, but we get a useful approximation: if the head is a
+    ; known function/special-form/operator, treat as a call; if the
+    ; head is unknown, skip as data. The :in-qexpr flag also tells
+    ; vd/check-sym-name to suppress "Symbol '...' is not defined"
+    ; diagnostics for symbols inside the qexpr, since those are
+    ; almost always false positives on quoted data.
+    (if (and is-q (not (vd/is-call-head name ctx)))
       {vd/walk-quoted-data expr ctx}
       {do
-        (= {name} (ast/head-name expr))
+        (= {ctx2} (if (and is-q (not (plist/get ctx :in-qexpr)))
+          {plist/set ctx :in-qexpr 1}
+          {ctx}))
         (if (not (== name ""))
-          {vd/dispatch-call expr nil name (tail expr) ctx}
-          {vd/walk-body (tail expr) ctx})})}
+          {vd/dispatch-call expr nil name (tail expr) ctx2}
+          {vd/walk-body (tail expr) ctx2})})}
 })
 
+; Returns true when `name` looks like the head of a real call —
+; either a special form, a known global/scoped binding, or a
+; constructor. Used by vd/walk-list to decide whether a qexpr
+; should be analyzed as code or skipped as data.
+(sig 'vd/is-call-head {-> Str List Num})
+(fun {vd/is-call-head name ctx} {
+  if (== name "") {0}
+  {if (== (str/slice name 0 1) ":") {0}
+  {if (dict/has? vd/VALIDATE_SPECIAL_FORMS name) {1}
+  {if (vd/is-known name ctx:scope ctx:globals ctx:known) {1}
+  {if (vd/is-ctor-call name) {1}
+  {0}}}}}
+})
+
+; Quoted lists treated as data still get a few structural checks
+; that don't depend on bindings — div-by-zero is the obvious one
+; (`{/ x 0}` is broken regardless of whether `/` resolves). Walk the
+; head + tail just enough for those checks, but DON'T descend into
+; nested forms (that's what the data-mode short-circuit is for).
 (sig 'vd/walk-quoted-data {-> List List List})
-(fun {vd/walk-quoted-data expr ctx} {ctx})
+(fun {vd/walk-quoted-data expr ctx} {do
+  (= {name} (ast/head-name expr))
+  (if (== name "") {ctx}
+    {vd/check-div-zero expr nil name (tail expr) ctx})})
 
 
 (sig 'vd/walk-implicit-do {-> List List List})
@@ -191,6 +225,9 @@
 (fun {vd/walk-call expr hd name tl ctx} {do
   (= {ctx2} (vd/walk-body tl ctx))
   (= {argc} (len tl))
+  ; Run div-zero etc. regardless of whether we're inside a qexpr —
+  ; those checks are about literal arguments and produce useful
+  ; output even on quoted data.
   (= {ctx3} (vd/check-div-zero expr hd name tl ctx2))
   (= {scope} ctx3:scope)
   (= {globals} ctx3:globals)
@@ -199,8 +236,13 @@
     {vd/check-ctor-arity expr hd name argc tl ctx3}
     {if (vd/is-known name scope globals known)
       {vd/check-arity expr hd name argc tl ctx3}
-      {vd/add-diag ctx3 hd name
-        (str "Function '" name "' is not defined")}})
+      {if (plist/get ctx3 :in-qexpr)
+        ; Quoted data: don't flag undefined "calls". `(test/case
+        ; {a b c})` shouldn't report `a` as an undefined function
+        ; just because the qexpr happens to start with a symbol.
+        {ctx3}
+        {vd/add-diag ctx3 hd name
+          (str "Function '" name "' is not defined")}}})
 })
 
 ; ---------------------------------------------------------------------------

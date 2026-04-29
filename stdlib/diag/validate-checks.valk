@@ -407,8 +407,15 @@
     {if (vd/is-accessor name)
       {vd/check-accessor expr expr name ctx}
       {ctx}}
-  {vd/add-diag ctx expr name
-    (str "Symbol '" name "' is not defined")}}}}
+  {if (plist/get ctx :in-qexpr)
+    ; Suppress undefined-symbol noise inside qexpr data: callers like
+    ; `(some-fn {a b c})` pass quoted symbols that don't need to
+    ; resolve to anything. Function bodies are also qexprs but they
+    ; introduce their own scope (params become known) so genuine
+    ; undefined-references there still get flagged via vd/walk-call.
+    {ctx}
+    {vd/add-diag ctx expr name
+      (str "Symbol '" name "' is not defined")}}}}}
 })
 
 ; ---------------------------------------------------------------------------
