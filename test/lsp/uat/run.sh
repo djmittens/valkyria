@@ -49,7 +49,36 @@ fi
 
 WORKSPACE="$(mktemp -d -t valk-uat-XXXXXX)"
 RESULTS="$(mktemp -t valk-uat-results-XXXXXX.jsonl)"
+
+# Track the nvim child so we can kill the whole subtree on any exit
+# path. Without this, an external SIGTERM (e.g. from `timeout` or
+# Ctrl-C) kills the bash wrapper but leaves nvim + valk-lsp running
+# as orphans, each holding ~1GB of GC heap. Multiple interrupted runs
+# pile up orphan LSPs and have OOM'd the host (lesson learned).
+NVIM_PID=
+LSP_PROC_GLOB="${VALK_LSP_BIN:-build/valk-lsp}"
+
 cleanup() {
+  # Block re-entry of this trap during our own kill burst.
+  trap '' EXIT INT TERM HUP
+
+  if [ -n "$NVIM_PID" ] && kill -0 "$NVIM_PID" 2>/dev/null; then
+    kill -TERM "$NVIM_PID" 2>/dev/null || true
+    # Hand-collect descendants in case nvim exited before forwarding
+    # to its LSP child. pgrep -P walks the parent-pid tree.
+    pgrep -P "$NVIM_PID" 2>/dev/null | xargs -r kill -TERM 2>/dev/null || true
+    sleep 0.3
+    kill -KILL "$NVIM_PID" 2>/dev/null || true
+    pgrep -P "$NVIM_PID" 2>/dev/null | xargs -r kill -KILL 2>/dev/null || true
+  fi
+  # Fallback: if pids leaked beyond what we can track (e.g. nvim was
+  # SIGKILL'd before its trap ran and the LSP child got reparented),
+  # sweep by exact binary path. This is intentionally narrow — only
+  # processes pointing at OUR build of valk-lsp.
+  pkill -TERM -f "^${LSP_PROC_GLOB}\$" 2>/dev/null || true
+  sleep 0.1
+  pkill -KILL -f "^${LSP_PROC_GLOB}\$" 2>/dev/null || true
+
   rm -f "$RESULTS"
   if [ -z "${VALK_UAT_KEEP:-}" ]; then
     rm -rf "$WORKSPACE"
@@ -57,7 +86,7 @@ cleanup() {
     echo "UAT: kept workspace at $WORKSPACE" >&2
   fi
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM HUP
 
 # Seed the workspace with the fixtures the scenarios reference. Everything
 # else (per-scenario temp files, mutated buffers, etc.) lives under
@@ -67,7 +96,12 @@ cp -r "$REPO/test/lsp/uat/fixtures/." "$WORKSPACE/"
 VALK_LSP_BIN="$SERVER" \
 VALK_UAT_RESULTS="$RESULTS" \
 VALK_UAT_WORKSPACE="$WORKSPACE" \
-  "$NVIM" --headless -l "$REPO/test/lsp/uat/runner.lua" "$FILTER" 2>&1 || true
+  "$NVIM" --headless -l "$REPO/test/lsp/uat/runner.lua" "$FILTER" 2>&1 &
+NVIM_PID=$!
+# `wait` is interruptible — if a SIGTERM arrives while waiting, the
+# trap fires, kills the tree, and we resume here with wait returning
+# the signal status. Either way, on return the cleanup trap will run.
+wait "$NVIM_PID" 2>/dev/null || true
 
 if [ ! -s "$RESULTS" ]; then
   echo "UAT: runner produced no results — nvim crashed or scenarios all filtered out" >&2
