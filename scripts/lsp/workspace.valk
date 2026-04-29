@@ -399,28 +399,47 @@
     nil
     lsp/noop-cb)})
 
-; Coalesce cache-ast dispatches via a "pending" flag: while one is
-; queued/running, suppress new dispatches. The inflight task reads
-; lsp/doc-get on entry so it always processes the latest text, even
-; if many didChanges arrived after it was queued.
+; Coalesce dispatches via "pending" flags. While a dispatched task is
+; queued/running, suppress new dispatches of the same kind. The
+; inflight task reads lsp/doc-get on entry so it always processes the
+; latest text, even if many didChanges arrived after it was queued.
 ;
-; Without this, every keystroke queues a cache-ast task on lsp/sys.
-; Even though version-gating makes earlier tasks return nil quickly,
-; each task still pays for closure evacuation, queue insertion / pop,
-; and a tiny bit of GC pressure. After ~100 keystrokes lsp/sys workers
-; have a second of work to drain, and synchronous hover/completion
-; requests queue behind it. Coalescing collapses 100 keystrokes' worth
-; of dispatches into ~2 actual runs, restoring sub-100ms p99 hover
-; latency under typing load.
+; Without this, every keystroke queues 3 tasks (cache-ast, sync-doc,
+; publish-diagnostics). Even though version-gating makes earlier tasks
+; return nil quickly, each queued task pays for closure evacuation,
+; queue insertion / pop, and GC pressure. After ~100 keystrokes the
+; worker loops have seconds of pending work to drain, and synchronous
+; hover/completion requests queue behind it. Coalescing collapses 100
+; keystrokes' worth of dispatches into a handful of actual runs,
+; restoring sub-100ms p99 latency under typing load.
 ;
-; Cache-ast specifically (not sync-doc / publish-diagnostics) because
-; the done-cb runs on the SAME aio system's loop 0 as handle-did-change
-; itself — so writing the flag from both paths stays single-threaded.
-; sync-doc / publish-diagnostics dispatch to lsp/idx-sys, whose
-; completion fires on a different loop, and a Valk-global written from
-; two loops would be a data race. Keep version-gating for those — same
-; correctness, just a few-millisecond queue overhead per keystroke.
+; Synchronization: the pending flag must be written from a single loop
+; only (Valk globals across loops are a data race). cache-ast dispatches
+; to lsp/sys, whose completion fires on lsp/sys loop 0 — the same loop
+; as handle-did-change. For sync-doc / publish-diagnostics, the body
+; runs on lsp/idx-sys but we want flag-clear on lsp/sys loop 0, so the
+; lsp/idx-sys completion does a tiny bounce-back dispatch to lsp/sys
+; whose completion clears the flag. One extra dispatch per coalesced
+; batch is negligible vs the queue depth it saves.
 (def {lsp/cache-ast-pending} 0)
+(def {lsp/sync-doc-pending} 0)
+(def {lsp/publish-diag-pending} 0)
+
+; Bounce a flag-clear back to lsp/sys loop 0 via a no-op dispatch.
+; Used as the completion callback of an lsp/idx-sys dispatch when we
+; need to safely write to a single-loop-owned global from a different
+; aio system.
+(sig 'lsp/clear-sync-doc-pending {-> Nil})
+(fun {lsp/clear-sync-doc-pending} {
+  aio/dispatch lsp/sys (\ {_} {}) nil
+    (\ {_} {def {lsp/sync-doc-pending} 0})
+})
+
+(sig 'lsp/clear-publish-diag-pending {-> Nil})
+(fun {lsp/clear-publish-diag-pending} {
+  aio/dispatch lsp/sys (\ {_} {}) nil
+    (\ {_} {def {lsp/publish-diag-pending} 0})
+})
 
 (sig 'handle-did-change {-> ChangeParams Nil})
 (fun {handle-did-change params} {do
@@ -446,7 +465,6 @@
         {})
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (= {v} lsp/doc-version)
       (if (== lsp/cache-ast-pending 0)
         {do
           (def {lsp/cache-ast-pending} 1)
@@ -458,19 +476,28 @@
             (\ {_} {do (def {lsp/cache-ast-pending} 0)
                        (lsp/refresh-semantic-tokens)}))}
         {})
-      (aio/dispatch lsp/idx-sys
-        (\ {_} {if (not (== lsp/doc-version v)) {nil}
-          {do (lsp/sync-doc lsp/idx-db uri text) nil}})
-        nil
-        (\ {_} {if (not (== lsp/doc-version v)) {}
-          {lsp/refresh-semantic-tokens}}))
+      (if (== lsp/sync-doc-pending 0)
+        {do
+          (def {lsp/sync-doc-pending} 1)
+          (aio/dispatch lsp/idx-sys
+            (\ {_} {do
+              (= {latest} (lsp/doc-get uri))
+              (if (nil? latest) {nil} {do (lsp/sync-doc lsp/idx-db uri latest) nil})})
+            nil
+            (\ {_} {do (lsp/refresh-semantic-tokens)
+                       (lsp/clear-sync-doc-pending)}))}
+        {})
       (def {lsp/diag-version} (+ lsp/diag-version 1))
-      (= {dv} lsp/diag-version)
-      (aio/dispatch lsp/idx-sys
-        (\ {_} {if (not (== lsp/diag-version dv)) {nil}
-          {do (lsp/publish-diagnostics lsp/idx-db uri text) nil}})
-        nil
-        lsp/noop-cb)})})
+      (if (== lsp/publish-diag-pending 0)
+        {do
+          (def {lsp/publish-diag-pending} 1)
+          (aio/dispatch lsp/idx-sys
+            (\ {_} {do
+              (= {latest} (lsp/doc-get uri))
+              (if (nil? latest) {nil} {do (lsp/publish-diagnostics lsp/idx-db uri latest) nil})})
+            nil
+            (\ {_} {lsp/clear-publish-diag-pending}))}
+        {})})})
 
 (sig 'handle-did-close {-> DocParams Nil})
 (fun {handle-did-close params} {do
