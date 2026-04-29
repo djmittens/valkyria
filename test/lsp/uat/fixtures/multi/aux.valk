@@ -1,0 +1,6 @@
+; Third file in the multi-file test set. Also calls utils/double
+; so find-references can verify it spans 3+ files.
+
+(load "utils.valk")
+
+(def {forty-two} (utils/double 21))

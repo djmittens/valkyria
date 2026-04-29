@@ -1,0 +1,10 @@
+; Main script that calls into utils.valk. Used to test that the
+; LSP indexes both files and resolves cross-file references.
+
+(load "utils.valk")
+
+(def {a} (utils/double 21))
+(def {b} (utils/triple 14))
+(def {c} (utils/clamp 50 0 100))
+
+(def {sum} (+ a (+ b c)))
