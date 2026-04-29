@@ -163,6 +163,7 @@
 (sig 'str/ends-with? {-> Str Str Num})
 (sig 'str/join {-> (List Str) Str Str})
 (sig 'str/index-of {-> Str Str Num})
+(sig 'str/last-index-of {-> Str Str & Num Num})
 (sig 'str/contains? {-> Str Str Num})
 (sig 'str/trim {-> Str Str})
 (sig 'str/trim-left {-> Str Str})

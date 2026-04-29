@@ -383,11 +383,6 @@
 
 (sig 'handle-selection-range {-> Num SelectionParams Nil})
 (fun {handle-selection-range id params} {do
-  ; params:positions evaluated to the symbol `:positions` rather than
-  ; the value, because the field-accessor macro only synthesizes
-  ; accessors for fields declared on a *typed* params (DocParams,
-  ; TextDocPosParams, etc.). Selection's params come in raw, so use
-  ; plist/get explicitly to look up by keyword.
   (= {positions} (plist/get params :positions))
   (= {ctx} (lsp/get-doc params))
   (if (nil? ctx) {lsp/send-response id nil}
@@ -445,16 +440,17 @@
       (= {actions} (ca/collect-actions diagnostics uri))
       (lsp/send-response id actions)})})
 
+; Folded over diags via the built-in `map` (which runs in C), then
+; flattened. Previously this was a self-recursive Valk function, which
+; blew the C stack when called from the LSP under load — every
+; recursive call in the slow-path body adds three C frames (aot_NNN
+; → eval_apply_func_iter → eval_call → aot_NNN), so a ~25-diagnostic
+; list overflowed the 8 MB thread stack.
 (sig 'ca/collect-actions {-> List Str List})
-(fun {ca/collect-actions diags uri} {
-  if (nil? diags) {nil}
-  {do
-    (= {d} (head diags))
-    (= {msg} d:message)
-    (= {actions} (if (nil? msg) {nil}
-      {ca/check-undefined msg d uri}))
-    (join actions (ca/collect-actions (tail diags) uri))}
-})
+(fun {ca/collect-actions diags uri}
+  {flatten (map (\ {d}
+    {if (nil? d:message) {nil}
+      {ca/check-undefined d:message d uri}}) diags)})
 
 (sig 'ca/check-undefined {-> Str List Str List})
 (fun {ca/check-undefined msg d uri} {

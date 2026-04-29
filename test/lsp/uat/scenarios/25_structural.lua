@@ -28,17 +28,19 @@ return {
     lib.wait_for_lsp(bufnr)
     lib.wait_for_symbol_indexed(bufnr, "^add$", 3000)
 
-    -- Retry up to 3× — selectionRange races the lsp/last-good-ast
-    -- cache populate and intermittently returns nil when the cache
-    -- is empty. Each retry is a fresh request with 200ms grace.
+    -- nvim queues client-to-server requests while previous responses
+    -- are pending; in busy suites the selectionRange request can sit
+    -- in the queue for >1s before being sent. Use a 10s per-request
+    -- timeout (the actual server-side processing is <10ms; the wait
+    -- is purely for nvim's outbox to drain).
     local res, last_err
-    for attempt = 1, 3 do
+    for attempt = 1, 2 do
       vim.wait(200)
       local line, col = lib.find_text(bufnr, "(square a)")
       res, _, last_err = lib.request(bufnr, "textDocument/selectionRange", {
         textDocument = { uri = lib.bufuri(bufnr) },
         positions = { lib.pos(line, col + 8) },
-      }, 3000)
+      }, 10000)
       if res and #res >= 1 then break end
     end
 

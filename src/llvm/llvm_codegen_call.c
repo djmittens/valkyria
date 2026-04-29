@@ -27,6 +27,16 @@ LLVMValueRef valk_codegen_funcall(valk_llvm_ctx_t *c, valk_lval_t *head,
   LLVMValueRef call_args[] = {env_param, fn_val, qargs};
   LLVMValueRef ret = LLVMBuildCall2(c->builder, call_type, c->fn_lval_eval_call,
     call_args, 3, "call");
+  // Hint sibcall when this funcall is the tail expression of its
+  // enclosing function. The slow-body path (used for any lambda
+  // with `=`, `def`, `\`, or `fn` in its body — which is most of
+  // the LSP) calls eval_call, which calls back into the lambda's
+  // own native_fn for self-recursion. Without this hint, every
+  // recursive call adds 3 C frames (aot → eval_call → eval_apply
+  // → aot), and a ~30-deep Valk recursion blows the 8 MB thread
+  // stack. With the hint, LLVM's TailCallElim folds the call into
+  // a sibcall (jmp instead of call) when the ABI matches.
+  if (saved_tail) LLVMSetTailCall(ret, 1);
   c->in_tail = saved_tail;
   return ret;
 }

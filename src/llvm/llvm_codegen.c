@@ -462,6 +462,12 @@ LLVMValueRef valk_llvm_compile_lambda_body(valk_llvm_ctx_t *ctx,
     eff = valk_qexpr_to_cons(eff);
   }
 
+  // Track tail position so the LAST expression's funcall can be
+  // sibcall-optimized. Without this, slow-body recursion (e.g.
+  // ca/collect-actions, fold/walk-exprs, lens/build-from-syms — any
+  // function whose body uses `=`/`def`/`\`/`fn` and so isn't
+  // fast-safe) builds up C-stack frames at three per Valk call,
+  // blowing the 8 MB thread stack on ~30+ deep recursion.
   if (eff && LVAL_TYPE(eff) == LVAL_CONS) {
     valk_lval_t *first = eff->cons.head;
     bool first_is_list = first && LVAL_TYPE(first) == LVAL_CONS;
@@ -469,18 +475,24 @@ LLVMValueRef valk_llvm_compile_lambda_body(valk_llvm_ctx_t *ctx,
     if (first_is_list) {
       valk_lval_t *cur = eff;
       while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
+        bool last = !(cur->cons.tail && LVAL_TYPE(cur->cons.tail) == LVAL_CONS);
+        ctx->in_tail = last;
         result = valk_codegen_expr(ctx, cur->cons.head, env_param);
         cur = cur->cons.tail;
       }
     } else if (count == 1) {
+      ctx->in_tail = true;
       result = valk_codegen_expr(ctx, first, env_param);
     } else {
+      ctx->in_tail = true;
       result = valk_codegen_expr(ctx, eff, env_param);
     }
   } else if (eff) {
+    ctx->in_tail = true;
     result = valk_codegen_expr(ctx, eff, env_param);
   }
 
+  ctx->in_tail = false;
   LLVMBuildRet(ctx->builder, result);
   valk_codegen_sym_cache_leave(ctx);
   return fn;

@@ -545,6 +545,44 @@ static valk_lval_t* valk_builtin_str_index_of(valk_lenv_t* e,
   return valk_lval_num(found - haystack);
 }
 
+// (str/last-index-of haystack needle limit?) — find LAST occurrence
+// of needle in haystack[0:limit]. limit defaults to len(haystack).
+// Returns -1 if not found. Implemented in C so callers don't have to
+// recurse character-by-character (which blows the C stack on long
+// strings — see lsp/find-line-start).
+// LCOV_EXCL_BR_START - str/last-index-of arg validation
+static valk_lval_t* valk_builtin_str_last_index_of(valk_lenv_t* e,
+                                                    valk_lval_t* a) {
+  UNUSED(e);
+  i64 argc = valk_lval_list_count(a);
+  LVAL_ASSERT_COUNT_GE(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_STR);
+  // LCOV_EXCL_BR_STOP
+  const char* haystack = valk_lval_list_nth(a, 0)->str;
+  const char* needle = valk_lval_list_nth(a, 1)->str;
+  size_t hlen = strlen(haystack);
+  size_t nlen = strlen(needle);
+  if (nlen == 0 || nlen > hlen) return valk_lval_num(-1);
+
+  size_t limit = hlen;
+  if (argc >= 3) {
+    valk_lval_t* lim = valk_lval_list_nth(a, 2);
+    LVAL_ASSERT_TYPE(a, lim, LVAL_NUM);
+    if (lim->num < 0) return valk_lval_num(-1);
+    if ((size_t)lim->num < limit) limit = (size_t)lim->num;
+  }
+  if (limit < nlen) return valk_lval_num(-1);
+
+  // Scan from limit-nlen down to 0 for the last needle occurrence.
+  for (ssize_t i = (ssize_t)(limit - nlen); i >= 0; i--) {
+    if (memcmp(haystack + i, needle, nlen) == 0) {
+      return valk_lval_num(i);
+    }
+  }
+  return valk_lval_num(-1);
+}
+
 // LCOV_EXCL_BR_START - str/lower arg validation
 static valk_lval_t* valk_builtin_str_lower(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -632,6 +670,7 @@ void valk_register_string_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "str/ends-with?", valk_builtin_str_ends_with);
   valk_lenv_put_builtin(env, "str/join", valk_builtin_str_join);
   valk_lenv_put_builtin(env, "str/index-of", valk_builtin_str_index_of);
+  valk_lenv_put_builtin(env, "str/last-index-of", valk_builtin_str_last_index_of);
   valk_lenv_put_builtin(env, "str/lower", valk_builtin_str_lower);
   valk_lenv_put_builtin(env, "str/upper", valk_builtin_str_upper);
   valk_lenv_put_builtin(env, "str/trim", valk_builtin_str_trim);
