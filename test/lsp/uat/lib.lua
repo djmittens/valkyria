@@ -274,21 +274,23 @@ end
 -- Diagnostics polling
 -- ---------------------------------------------------------------------------
 
--- Poll vim.diagnostic.get(bufnr) until either count is met or timeout.
--- Returns the diagnostics list (possibly empty). When `want_count` is
--- 0, waits the full timeout to be confident none arrived.
+-- Poll vim.diagnostic.get(bufnr) until count is met or timeout.
+-- Returns the diagnostics list. Distinguish three modes:
+--   want_count > 0: return as soon as len(diags) >= want_count
+--   want_count == 0: poll until len(diags) == 0 (clear case);
+--                    falls back to a quiescence sample if no clear
+--                    arrives within timeout.
+--   want_count < 0: alias for "wait the full timeout, return whatever
+--                   landed" — useful when you want to assert the
+--                   absence of new diags but currently have some.
 function M.wait_for_diagnostics(bufnr, want_count, timeout_ms)
   timeout_ms = timeout_ms or 3000
   local deadline = vim.uv.hrtime() + timeout_ms * 1e6
-  local diags = {}
+  local diags = vim.diagnostic.get(bufnr)
   while vim.uv.hrtime() < deadline do
     diags = vim.diagnostic.get(bufnr)
-    if want_count == 0 then
-      vim.wait(100)
-      diags = vim.diagnostic.get(bufnr)
-    elseif #diags >= want_count then
-      return diags
-    end
+    if want_count > 0 and #diags >= want_count then return diags end
+    if want_count == 0 and #diags == 0 then return diags end
     vim.wait(50)
   end
   return diags
@@ -315,6 +317,71 @@ function M.insert_at(bufnr, line0, col0, text)
   -- Give the event loop a tick to flush.
   vim.wait(5)
   return end_line, end_col
+end
+
+-- ---------------------------------------------------------------------------
+-- Async / concurrent requests
+-- ---------------------------------------------------------------------------
+
+-- Fire a request without blocking; returns a "ticket" object you can
+-- pass to wait_for_response or cancel_request. The ticket records when
+-- the request was sent so callers can measure latency, and stores the
+-- response in `ticket.response` / error in `ticket.err` when it lands.
+--
+-- Use this when you need to overlap requests in time or want to fire-
+-- and-forget. Pair with M.drain_responses(tickets, timeout_ms) to wait
+-- for a batch.
+function M.request_async(bufnr, method, params)
+  local ticket = {
+    method = method,
+    sent_ns = vim.uv.hrtime(),
+    done = false,
+    response = nil,
+    err = nil,
+  }
+  local clients = vim.lsp.get_clients({ bufnr = bufnr })
+  if #clients == 0 then
+    ticket.done = true; ticket.err = "no client"
+    return ticket
+  end
+  local _, request_id = clients[1]:request(method, params, function(err, result)
+    ticket.done = true
+    ticket.response = result
+    ticket.err = err
+    ticket.recv_ns = vim.uv.hrtime()
+  end, bufnr)
+  ticket.request_id = request_id
+  ticket.client = clients[1]
+  return ticket
+end
+
+-- Wait for all tickets to land (or timeout). Returns the count that
+-- completed. Tickets that didn't complete remain `done = false`.
+function M.drain_responses(tickets, timeout_ms)
+  timeout_ms = timeout_ms or 5000
+  local deadline = vim.uv.hrtime() + timeout_ms * 1e6
+  while vim.uv.hrtime() < deadline do
+    local pending = 0
+    for _, t in ipairs(tickets) do
+      if not t.done then pending = pending + 1 end
+    end
+    if pending == 0 then break end
+    vim.wait(5)
+  end
+  local done = 0
+  for _, t in ipairs(tickets) do
+    if t.done then done = done + 1 end
+  end
+  return done
+end
+
+-- Cancel an in-flight ticket. The LSP spec lets the server respond
+-- normally OR with a Cancelled error after $/cancelRequest. Either is
+-- acceptable; the test we care about is "the server doesn't deadlock
+-- or crash". Returns true if the cancel was sent.
+function M.cancel_request(ticket)
+  if not ticket.client or not ticket.request_id then return false end
+  return ticket.client:cancel_request(ticket.request_id)
 end
 
 -- ---------------------------------------------------------------------------

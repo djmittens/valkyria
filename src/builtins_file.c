@@ -96,6 +96,37 @@ static valk_lval_t* valk_builtin_file_size(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num((long)st.st_size);
 }
 
+// LSP semantic-tokens delta encoder.
+//
+// Input:  text plus a list of 4-tuples (offset length type mods).
+// Output: flat list of 5-tuples (deltaLine deltaCol length type mods)
+//         in LSP wire order: tokens sorted by absolute (line, col) with
+//         non-negative deltas.
+//
+// We sort by offset before encoding because the AST walker emits in
+// AST-traversal order, not source order — a `(do (fn) (fn))` that
+// recurses into the second `(fn)` before classifying the head produces
+// out-of-order tokens. Sorting decouples walker correctness from
+// encoding correctness; otherwise the encoder produces negative
+// deltaLine values, which violate the LSP spec and make every editor
+// downstream of the bad token misalign all subsequent highlighting.
+typedef struct {
+  int off;
+  int len;
+  int type;
+  int mods;
+} sem_tok_t;
+
+static int sem_tok_cmp(const void *a, const void *b) {
+  const sem_tok_t *x = a;
+  const sem_tok_t *y = b;
+  if (x->off != y->off) return x->off - y->off;
+  // Stable order for equal offsets keeps the encoder happy: within one
+  // position, longer tokens first so a containing token doesn't end up
+  // emitted with negative deltaCol.
+  return y->len - x->len;
+}
+
 static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
                                                     valk_lval_t *a) {
   UNUSED(e);
@@ -109,9 +140,11 @@ static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
   LVAL_ASSERT_TYPE(a, tokens, LVAL_CONS, LVAL_NIL); // LCOV_EXCL_BR_LINE
 
   int text_len = (int)strlen(text);
-  int prev_line = 0, prev_col = 0, scan_pos = 0;
-  valk_lval_t *result = valk_lval_nil();
 
+  // Phase 1: collect tokens into a flat array we can sort.
+  u64 capacity = 64;
+  u64 count = 0;
+  sem_tok_t *toks = valk_mem_alloc(sizeof(sem_tok_t) * capacity);
   valk_lval_t *cur = tokens;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
     valk_lval_t *tok = cur->cons.head;
@@ -128,37 +161,52 @@ static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
     if (!r3 || LVAL_TYPE(r3) != LVAL_CONS) break;
     valk_lval_t *mods_v = r3->cons.head;
 
-    int off = (int)off_v->num;
-    int tok_len = (int)len_v->num;
-    int tok_type = (int)type_v->num;
-    int tok_mods = (int)mods_v->num;
-
-    int line = prev_line, col = prev_col;
-    if (off > scan_pos) {
-      for (int i = scan_pos; i < off && i < text_len; i++) {
-        if (text[i] == '\n') { line++; col = 0; }
-        else col++;
-      }
-    } else if (off < scan_pos) {
-      line = 0; col = 0;
-      for (int i = 0; i < off && i < text_len; i++) {
-        if (text[i] == '\n') { line++; col = 0; } // LCOV_EXCL_BR_LINE
-        else col++;
-      }
+    if (count >= capacity) {
+      capacity *= 2;
+      sem_tok_t *new_toks = valk_mem_alloc(sizeof(sem_tok_t) * capacity);
+      memcpy(new_toks, toks, sizeof(sem_tok_t) * count);
+      toks = new_toks;
     }
-    scan_pos = off;
+    int off = (int)off_v->num;
+    // Drop tokens whose offset is outside the current text — these are
+    // stale entries from a previous parse on text that has since been
+    // shortened by an edit. Letting them through produces tokens past
+    // EOF in the encoded output.
+    if (off < 0 || off >= text_len) { cur = cur->cons.tail; continue; }
+    toks[count].off = off;
+    toks[count].len = (int)len_v->num;
+    toks[count].type = (int)type_v->num;
+    toks[count].mods = (int)mods_v->num;
+    count++;
+    cur = cur->cons.tail;
+  }
+
+  // Phase 2: sort by offset so deltas are non-negative by construction.
+  qsort(toks, count, sizeof(sem_tok_t), sem_tok_cmp);
+
+  // Phase 3: encode deltas. Single forward pass over text computes the
+  // (line, col) of each token's offset; since tokens are now sorted,
+  // the scan never has to rewind.
+  int prev_line = 0, prev_col = 0, scan_pos = 0, line = 0, col = 0;
+  valk_lval_t *result = valk_lval_nil();
+  for (u64 i = 0; i < count; i++) {
+    int off = toks[i].off;
+    while (scan_pos < off && scan_pos < text_len) {
+      if (text[scan_pos] == '\n') { line++; col = 0; }
+      else col++;
+      scan_pos++;
+    }
 
     int dl = line - prev_line;
     int dc = (dl == 0) ? col - prev_col : col;
 
     result = valk_lval_qcons(valk_lval_num(dl), result);
     result = valk_lval_qcons(valk_lval_num(dc), result);
-    result = valk_lval_qcons(valk_lval_num(tok_len), result);
-    result = valk_lval_qcons(valk_lval_num(tok_type), result);
-    result = valk_lval_qcons(valk_lval_num(tok_mods), result);
+    result = valk_lval_qcons(valk_lval_num(toks[i].len), result);
+    result = valk_lval_qcons(valk_lval_num(toks[i].type), result);
+    result = valk_lval_qcons(valk_lval_num(toks[i].mods), result);
     prev_line = line;
     prev_col = col;
-    cur = cur->cons.tail;
   }
 
   valk_lval_t *reversed = valk_lval_nil();
