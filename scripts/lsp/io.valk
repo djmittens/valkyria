@@ -111,16 +111,6 @@
       (lsp/send-request (lsp/next-server-req-id)
         "workspace/semanticTokens/refresh" (None))})})
 
-; Tells the client to re-pull diagnostics for all open documents. We use
-; this in place of pushing publishDiagnostics so there's only one
-; diagnostic source — the pull response — preventing duplicate-namespace
-; rendering in nvim 0.10+ when both push and pull are active. Clients
-; that don't advertise diagnostics.refreshSupport will ignore this.
-(sig 'lsp/refresh-diagnostics {-> Nil})
-(fun {lsp/refresh-diagnostics} {do
-  (lsp/send-request (lsp/next-server-req-id)
-    "workspace/diagnostic/refresh" (None))})
-
 ; ---------------------------------------------------------------------------
 ; State
 ; ---------------------------------------------------------------------------
