@@ -583,6 +583,38 @@ static valk_lval_t* valk_builtin_str_last_index_of(valk_lenv_t* e,
   return valk_lval_num(-1);
 }
 
+// (str/in-string? text pos) — returns 1 if `pos` is inside an unescaped
+// double-quoted string literal, 0 otherwise. Pure single-pass C scan,
+// counting unescaped quotes from offset 0 to pos. Replaces a recursive
+// Valk loop that allocated a 1-char string per byte and dominated
+// completion-handler latency on large files (linear in pos, ~500ms for
+// pos ~5000 in heap-pressured runs).
+// LCOV_EXCL_BR_START - str/in-string? arg validation
+static valk_lval_t* valk_builtin_str_in_string_q(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+  // LCOV_EXCL_BR_STOP
+  const char* text = valk_lval_list_nth(a, 0)->str;
+  i64 limit = valk_lval_list_nth(a, 1)->num;
+  if (limit < 0) limit = 0;
+  size_t text_len = strlen(text);
+  if ((size_t)limit > text_len) limit = (i64)text_len;
+
+  int in_quotes = 0;
+  for (i64 i = 0; i < limit; i++) {
+    char c = text[i];
+    if (c == '"') {
+      in_quotes = !in_quotes;
+    } else if (c == '\\') {
+      // Skip the escaped char (backslash plus one).
+      i++;
+    }
+  }
+  return valk_lval_num(in_quotes ? 1 : 0);
+}
+
 // LCOV_EXCL_BR_START - str/lower arg validation
 static valk_lval_t* valk_builtin_str_lower(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
@@ -671,6 +703,7 @@ void valk_register_string_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "str/join", valk_builtin_str_join);
   valk_lenv_put_builtin(env, "str/index-of", valk_builtin_str_index_of);
   valk_lenv_put_builtin(env, "str/last-index-of", valk_builtin_str_last_index_of);
+  valk_lenv_put_builtin(env, "str/in-string?", valk_builtin_str_in_string_q);
   valk_lenv_put_builtin(env, "str/lower", valk_builtin_str_lower);
   valk_lenv_put_builtin(env, "str/upper", valk_builtin_str_upper);
   valk_lenv_put_builtin(env, "str/trim", valk_builtin_str_trim);

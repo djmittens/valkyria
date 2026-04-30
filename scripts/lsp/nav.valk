@@ -244,28 +244,29 @@
 ; Completion context filtering
 ; ---------------------------------------------------------------------------
 
+; Returns 1 if (line, col) is inside an unescaped double-quoted string
+; literal, 0 otherwise. Used by completion to suppress symbol/snippet
+; suggestions inside string contexts.
+;
+; Implemented in C (str/in-string?) with a single linear pass over the
+; text up to the cursor offset. The previous Valk implementation
+; recursed character-by-character allocating a 1-char string per byte
+; via str/slice — for a cursor 5000 bytes in that's 5000 recursions
+; and 5000 GC-tracked allocations per completion request. Under heap
+; pressure this dominated completion latency at ~100ms per 1000 bytes
+; (so >500ms for cursor mid-file), and growing linearly with cursor
+; depth made every completion-after-completion hit a longer
+; GC-cycle-amortized scan. nvim's 1–2s completion timeouts then made
+; the popup never appear.
 (sig 'lsp/in-string? {-> Str Num Num Num})
 (fun {lsp/in-string? text line col} {do
   (= {offset} (analysis/line-col->offset text line col))
-  (lsp/count-quotes-from text offset)
-})
-
-; Scan backwards to find last unescaped quote state boundary, then count forward.
-; Optimization: scan from line start instead of file start for common cases.
-(sig 'lsp/count-quotes-from {-> Str Num Num})
-(fun {lsp/count-quotes-from text limit} {do
-  (= {scan-start} (lsp/find-line-start text limit))
-  (= {pre-count} (if (== scan-start 0) {0}
-    {lsp/count-quotes-total text scan-start 0 0}))
-  (lsp/count-quotes text limit scan-start (+ pre-count 0))
+  (str/in-string? text offset)
 })
 
 ; Find the byte offset of the start of the line containing `pos`.
 ; Use str/last-index-of (a single C call) to find the most recent
-; newline before `pos`; line start is the byte AFTER it. The
-; original recursive implementation walked one character at a time,
-; which blew the C stack on positions thousands of characters into
-; a file. Native scan is ~10000× faster AND can't overflow.
+; newline before `pos`; line start is the byte AFTER it.
 (sig 'lsp/find-line-start {-> Str Num Num})
 (fun {lsp/find-line-start text pos} {do
   (= {limit} (if (>= pos (len text)) {len text} {pos}))
@@ -273,30 +274,6 @@
     {do
       (= {nl} (str/last-index-of text "\n" limit))
       (if (< nl 0) {0} {+ nl 1})})})
-
-(sig 'lsp/count-quotes-total {-> Str Num Num Num Num})
-(fun {lsp/count-quotes-total text limit pos count} {
-  if (>= pos limit) {count}
-  {do
-    (= {ch} (str/slice text pos (+ pos 1)))
-    (if (== ch "\"")
-      {lsp/count-quotes-total text limit (+ pos 1) (+ count 1)}
-    {if (== ch "\\")
-      {lsp/count-quotes-total text limit (+ pos 2) count}
-      {lsp/count-quotes-total text limit (+ pos 1) count}})}
-})
-
-(sig 'lsp/count-quotes {-> Str Num Num Num Num})
-(fun {lsp/count-quotes text limit pos count} {
-  if (>= pos limit) {== (mod count 2) 1}
-  {do
-    (= {ch} (str/slice text pos (+ pos 1)))
-    (if (== ch "\"")
-      {lsp/count-quotes text limit (+ pos 1) (+ count 1)}
-    {if (== ch "\\")
-      {lsp/count-quotes text limit (+ pos 2) count}
-      {lsp/count-quotes text limit (+ pos 1) count}})}
-})
 
 ; ---------------------------------------------------------------------------
 ; Completion — snippets and enriched symbol items
@@ -464,7 +441,10 @@
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
-  (if (nil? text) {lsp/send-response id (list :data nil)}
+  (if (nil? text)
+    {do
+      (stderr/write (str "[sem] uri=" uri " text=NIL -> data=nil\n"))
+      (lsp/send-response id (list :data nil))}
     {do
       ; On clean parse, tokenize the AST, cache the result, and return it.
       ; On broken parse (mid-edit), return the last-good cached tokens
@@ -478,9 +458,14 @@
         (if (or (nil? ast) (lsp/ast-has-error ast))
           {do
             (= {cached} (dict/get lsp/last-good-tokens-cache uri))
-            (if (nil? cached) {sem/lex-tokenize text} {cached})}
+            (if (nil? cached)
+              {do (stderr/write (str "[sem] uri=" uri " path=LEX (broken parse, no cache) text-len=" (len text) "\n"))
+                  (sem/lex-tokenize text)}
+              {do (stderr/write (str "[sem] uri=" uri " path=CACHED-STALE (broken parse, using last-good)\n"))
+                  cached})}
           {do
             (= {fresh} (sem/tokenize-ast ast text))
+            (stderr/write (str "[sem] uri=" uri " path=FRESH (clean parse) tokens=" (/ (len fresh) 5) "\n"))
             (dict/set! lsp/last-good-tokens-cache uri fresh)
             fresh}))
       (lsp/send-response id (list :data data))})

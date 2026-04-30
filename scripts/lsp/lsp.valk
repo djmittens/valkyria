@@ -26,10 +26,12 @@
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
+  (stderr/write (str "[sem-range] id=" id " uri=" uri "\n"))
   (if (nil? text) {lsp/send-response id (list :data nil)}
     {do
       (= {start-line} params:range:start:line)
       (= {end-line} params:range:end:line)
+      (stderr/write (str "[sem-range] [" start-line "," end-line "]\n"))
       ; Same caching strategy as handle-semantic-tokens (see nav.valk):
       ; clean parse → tokenize + cache; broken parse → return cached
       ; tokens to avoid orange flicker from re-lexing latency.
@@ -45,9 +47,37 @@
             fresh}))
       (= {typed} (sem/parse-flat data))
       (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
-      (lsp/send-response id (list :data (sem/flatten filtered)))})
+      (= {result} (sem/flatten filtered))
+      (stderr/write (str "[sem-range] kept " (/ (len result) 5) " tokens of " (/ (len data) 5) " (range " start-line ".." end-line ")\n"))
+      ; Dump first 5 emitted tokens (first 25 ints) so we can verify the
+      ; delta-encoded wire format. dl of the first token MUST be the
+      ; absolute line >= start-line for nvim to render correctly.
+      (stderr/write (str "[sem-range] first emit: " (sem/take-ints result 25) "\n"))
+      (lsp/send-response id (list :data result))})
 })
 
+(sig 'sem/take-ints {-> List Num List})
+(fun {sem/take-ints l n} {
+  if (or (nil? l) (<= n 0)) {nil}
+  {qcons (head l) (sem/take-ints (tail l) (- n 1))}
+})
+
+; Filter the typed token list down to the [start-line, end-line] range.
+;
+; The wire format encodes each token's dl as the line distance from the
+; *previous emitted token*, with the first token's dl being its absolute
+; line (equivalent to "previous = line 0"). When we drop tokens before
+; start-line, the FIRST kept token still has its original dl — relative
+; to a token we just dropped. nvim accumulates dl from 0, so without
+; fixup the first kept token lands at line N (= original dl) instead of
+; its real absolute line. Visible symptom: the visible viewport's
+; tokens render shifted to the top of the file → most positions in the
+; viewport have no token = default (orange) coloring.
+;
+; Fix: when emitting the first kept token, override its dl with the
+; cumulative absolute line. Subsequent kept tokens are correct because
+; we don't drop anything within the range — their dl is relative to
+; the previous kept token, same as the original.
 (sig 'sem/filter-range {-> List Num Num Num List List})
 (fun {sem/filter-range tokens start-line end-line cur-line acc} {
   if (nil? tokens) {reverse acc}
@@ -57,8 +87,17 @@
     (if (> new-line end-line) {reverse acc}
       {if (< new-line start-line)
         {sem/filter-range (tail tokens) start-line end-line new-line acc}
-        {sem/filter-range (tail tokens) start-line end-line new-line
-          (qcons t acc)}})}
+        {do
+          (= {emit-t}
+            (if (nil? acc)
+              {SemToken :dl new-line
+                       :dc (SemToken:dc t)
+                       :len (SemToken:len t)
+                       :ttype (SemToken:ttype t)
+                       :mods (SemToken:mods t)}
+              {t}))
+          (sem/filter-range (tail tokens) start-line end-line new-line
+            (qcons emit-t acc))}})}
 })
 
 ; ---------------------------------------------------------------------------
@@ -223,6 +262,7 @@
       (= {method} msg:method)
       (= {id} msg:id)
       (= {params} msg:params)
+
       (if (nil? method) {}
         {match method
             {"initialize" (do (stderr/write (str "[valk-lsp] <- initialize\n"))

@@ -168,11 +168,13 @@ static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
       toks = new_toks;
     }
     int off = (int)off_v->num;
-    // Drop tokens whose offset is outside the current text — these are
-    // stale entries from a previous parse on text that has since been
-    // shortened by an edit. Letting them through produces tokens past
-    // EOF in the encoded output.
-    if (off < 0 || off >= text_len) { cur = cur->cons.tail; continue; }
+    // Skip tokens with negative offsets (they're invalid in any text).
+    // Don't filter on `off >= text_len` here — the encoder loop below
+    // already bounds its scan by text_len, so a token past EOF will
+    // simply land at end-of-text in the encoded output. Filtering here
+    // dropped legitimate tokens whose end-position equals text_len
+    // exactly, which is a common case for tokens at EOF.
+    if (off < 0) { cur = cur->cons.tail; continue; }
     toks[count].off = off;
     toks[count].len = (int)len_v->num;
     toks[count].type = (int)type_v->num;
@@ -189,6 +191,8 @@ static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
   // the scan never has to rewind.
   int prev_line = 0, prev_col = 0, scan_pos = 0, line = 0, col = 0;
   valk_lval_t *result = valk_lval_nil();
+  int bad_dl = 0, bad_dc = 0, total = 0;
+  int first_bad_line = -1, first_bad_col = -1;
   for (u64 i = 0; i < count; i++) {
     int off = toks[i].off;
     while (scan_pos < off && scan_pos < text_len) {
@@ -199,6 +203,15 @@ static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
 
     int dl = line - prev_line;
     int dc = (dl == 0) ? col - prev_col : col;
+    total++;
+    if (dl < 0) {
+      if (first_bad_line < 0) first_bad_line = (int)i;
+      bad_dl++;
+    }
+    if (dl == 0 && dc < 0) {
+      if (first_bad_col < 0) first_bad_col = (int)i;
+      bad_dc++;
+    }
 
     result = valk_lval_qcons(valk_lval_num(dl), result);
     result = valk_lval_qcons(valk_lval_num(dc), result);
@@ -207,6 +220,11 @@ static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
     result = valk_lval_qcons(valk_lval_num(toks[i].mods), result);
     prev_line = line;
     prev_col = col;
+  }
+  if (bad_dl > 0 || bad_dc > 0) {
+    fprintf(stderr,
+      "[sem-encode] BAD tokens: %d/%d had dl<0 (first idx=%d), %d had dc<0 (first idx=%d)\n",
+      bad_dl, total, first_bad_line, bad_dc, first_bad_col);
   }
 
   valk_lval_t *reversed = valk_lval_nil();

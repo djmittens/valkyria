@@ -484,8 +484,7 @@
               (= {latest} (lsp/doc-get uri))
               (if (nil? latest) {nil} {do (lsp/sync-doc lsp/idx-db uri latest) nil})})
             nil
-            (\ {_} {do (lsp/refresh-semantic-tokens)
-                       (lsp/clear-sync-doc-pending)}))}
+            (\ {_} {lsp/clear-sync-doc-pending}))}
         {})
       (def {lsp/diag-version} (+ lsp/diag-version 1))
       (if (== lsp/publish-diag-pending 0)
