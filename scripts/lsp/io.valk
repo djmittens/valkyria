@@ -157,6 +157,25 @@
 ; clean set around and re-serving it keeps the display stable.
 (def {lsp/last-good-hints-cache} (dict/new))
 
+; State for /sem/full/delta. nvim sends previousResultId from the most
+; recent /full or /full/delta response; we respond with edits relative
+; to that base if the id matches. Single-slot per uri — the moment we
+; respond with new tokens, the previous resultId becomes invalid for
+; that uri (nvim tracks one current_result per buffer anyway). Without
+; delta, every keystroke pushes ~900 tokens which nvim's
+; tokens_to_ranges yields through over ~50ms, easily long enough for
+; the buffer version to drift and the coroutine to bail with partial
+; highlights → orange new lines. Delta cuts the typical response to
+; <100 ints, which processes in one coroutine iteration without
+; yielding, so version drift can't kill it.
+(def {lsp/sem-token-cache} (dict/new))  ; uri → (list resultId-string tokens)
+(def {lsp/sem-result-counter} 0)
+
+(sig 'lsp/next-result-id {-> Str})
+(fun {lsp/next-result-id} {do
+  (def {lsp/sem-result-counter} (+ lsp/sem-result-counter 1))
+  (str lsp/sem-result-counter)})
+
 ; Returns the first parse error in an AST list, or nil if there are none.
 ; Parse errors are now preserved in the AST list as LVAL_ERR elements
 ; (see valk_parse_text in src/reader.c).
@@ -403,7 +422,7 @@
          {:tokenTypes {"keyword" "function" "parameter" "variable"
                        "number" "string" "type" "operator" "property"}
           :tokenModifiers {"declaration" "defaultLibrary"}}
-        :full :true
+        :full {:delta :true}
         :range :true}
      :inlayHintProvider :true
      :signatureHelpProvider
