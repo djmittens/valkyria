@@ -126,6 +126,7 @@ set(VALKYRIA_SOURCES
   src/lsp_index.c
   src/ast_visit.c
   src/builtins_dict.c
+  src/builtins_chm.c
   src/builtins_xml.c
   src/builtins_pipe.c
   src/memory.c

@@ -288,6 +288,12 @@ valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q);
 valk_lval_t* valk_gc_mark_queue_steal(valk_gc_mark_queue_t* q);
 bool valk_gc_mark_queue_empty(valk_gc_mark_queue_t* q);
 
+// Public mark visitor for use by LVAL_REF mark callbacks. The `ctx`
+// arg is the opaque mark context passed to ref.mark — pass it through
+// unchanged. Marks `val` reachable from `ctx`'s root set, queueing
+// children for processing. No-op if val is null or already marked.
+void valk_gc_mark_visit(valk_lval_t* val, void* ctx);
+
 typedef struct valk_gc_thread_info {
   void* ctx;
   pthread_t thread_id;

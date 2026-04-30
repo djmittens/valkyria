@@ -29,6 +29,16 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
     return valk_gc_mark_large_object(ctx->heap, ptr);
   }
 }
+static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx);
+
+// Public wrapper exposed via gc.h for use by LVAL_REF.mark callbacks.
+// LVAL_REF wrapping shared resources (CHM, etc.) implements a mark hook
+// that needs to recursively mark valk values held by the resource;
+// this is the safe entry point.
+void valk_gc_mark_visit(valk_lval_t *lval, void *ctx) {
+  mark_lval(lval, (valk_gc_mark_ctx_t *)ctx);
+}
+
 static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx) {
   if (lval == nullptr) return;
   // Immortal lvals (image buffers, singletons, num cache) live outside the

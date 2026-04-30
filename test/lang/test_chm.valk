@@ -1,0 +1,184 @@
+; Tests for chm/* — concurrent hash map. Same surface as dict/* but
+; thread-safe and used as the underlying storage for cross-thread
+; shared state (LSP caches, etc.).
+
+(load "stdlib/test/test.valk")
+
+(test/run (list
+  (test/case "chm-empty"
+    {do
+      (= {c} (chm/new))
+      (test/assert-eq 0 (chm/size c) "empty chm has size 0")
+      (test/assert-eq 0 (chm/has? c "x") "missing key has?=0")
+      (test/assert-eq nil (chm/get c "x") "missing key returns nil")
+      (test/assert-eq "default" (chm/get c "x" "default") "default returned for missing")
+      true
+    })
+
+  (test/case "chm-put-get"
+    {do
+      (= {c} (chm/new))
+      (chm/put! c "foo" 42)
+      (chm/put! c "bar" "hello")
+      (test/assert-eq 2 (chm/size c) "size 2 after 2 puts")
+      (test/assert-eq 42 (chm/get c "foo") "foo=42")
+      (test/assert-eq "hello" (chm/get c "bar") "bar=hello")
+      (test/assert-eq 1 (chm/has? c "foo") "has? foo=1")
+      true
+    })
+
+  (test/case "chm-put-overwrite"
+    {do
+      (= {c} (chm/new))
+      (chm/put! c "k" 1)
+      (chm/put! c "k" 2)
+      (test/assert-eq 1 (chm/size c) "overwrite keeps size 1")
+      (test/assert-eq 2 (chm/get c "k") "value updated to 2")
+      true
+    })
+
+  (test/case "chm-del"
+    {do
+      (= {c} (chm/new))
+      (chm/put! c "a" 1)
+      (chm/put! c "b" 2)
+      (chm/del! c "a")
+      (test/assert-eq 1 (chm/size c) "size 1 after del")
+      (test/assert-eq 0 (chm/has? c "a") "deleted key has?=0")
+      (test/assert-eq 2 (chm/get c "b") "other key intact")
+      ; del missing is no-op
+      (chm/del! c "nonexistent")
+      (test/assert-eq 1 (chm/size c) "del missing is no-op")
+      true
+    })
+
+  (test/case "chm-cas-replace-success"
+    {do
+      (= {c} (chm/new))
+      (chm/put! c "k" "v1")
+      (= {curr} (chm/get c "k"))
+      (= {ok} (chm/cas! c "k" curr "v2"))
+      (test/assert-eq 1 ok "cas matched, returns 1")
+      (test/assert-eq "v2" (chm/get c "k") "value swapped to v2")
+      true
+    })
+
+  (test/case "chm-cas-replace-mismatch"
+    {do
+      (= {c} (chm/new))
+      (chm/put! c "k" "v1")
+      (= {ok} (chm/cas! c "k" "wrongold" "v2"))
+      (test/assert-eq 0 ok "cas mismatch, returns 0")
+      (test/assert-eq "v1" (chm/get c "k") "value unchanged")
+      true
+    })
+
+  (test/case "chm-cas-insert"
+    {do
+      (= {c} (chm/new))
+      ; old=nil for missing key matches, inserts new
+      (= {ok} (chm/cas! c "k" nil "v1"))
+      (test/assert-eq 1 ok "cas-on-absent matched (old=nil)")
+      (test/assert-eq "v1" (chm/get c "k") "value inserted")
+      ; second cas-on-absent fails because key is present
+      (= {ok2} (chm/cas! c "k" nil "v2"))
+      (test/assert-eq 0 ok2 "cas-on-absent fails when key exists")
+      true
+    })
+
+  (test/case "chm-cas-delete"
+    {do
+      (= {c} (chm/new))
+      (chm/put! c "k" "v1")
+      (= {curr} (chm/get c "k"))
+      ; new=nil with matching old removes
+      (= {ok} (chm/cas! c "k" curr nil))
+      (test/assert-eq 1 ok "cas-delete matched")
+      (test/assert-eq 0 (chm/has? c "k") "key removed")
+      (test/assert-eq 0 (chm/size c) "size now 0")
+      true
+    })
+
+  (test/case "chm-many-buckets-collision"
+    {do
+      ; Force collisions by creating a tiny chm and inserting many keys.
+      (= {c} (chm/new 4))
+      (chm/put! c "a" 1)
+      (chm/put! c "b" 2)
+      (chm/put! c "c" 3)
+      (chm/put! c "d" 4)
+      (chm/put! c "e" 5)
+      (chm/put! c "f" 6)
+      (test/assert-eq 6 (chm/size c) "6 keys with collisions")
+      (test/assert-eq 1 (chm/get c "a") "get a=1")
+      (test/assert-eq 6 (chm/get c "f") "get f=6")
+      ; Delete from a chain (collision)
+      (chm/del! c "c")
+      (test/assert-eq 5 (chm/size c) "size 5 after del c")
+      (test/assert-eq 1 (chm/get c "a") "a still 1")
+      (test/assert-eq 6 (chm/get c "f") "f still 6")
+      true
+    })
+
+  (test/case "chm-keys"
+    {do
+      (= {c} (chm/new))
+      (chm/put! c "x" 1)
+      (chm/put! c "y" 2)
+      (chm/put! c "z" 3)
+      (= {ks} (chm/keys c))
+      (test/assert-eq 3 (len ks) "keys returns 3 entries")
+      true
+    })
+
+  (test/case "chm-clear"
+    {do
+      (= {c} (chm/new))
+      (chm/put! c "a" 1)
+      (chm/put! c "b" 2)
+      (chm/clear! c)
+      (test/assert-eq 0 (chm/size c) "size 0 after clear")
+      (test/assert-eq 0 (chm/has? c "a") "a gone")
+      (test/assert-eq 0 (chm/has? c "b") "b gone")
+      true
+    })
+
+  (test/case "chm-thread-stress"
+    {do
+      ; 8 worker threads x 100 ops each. The plain dict would crash;
+      ; chm should survive with consistent state.
+      (= {sys} (aio/await (aio/start {:num-threads 4})))
+      (= {c} (chm/new))
+      (def {chm-stress-cache} c)
+
+      (sig 'chm-stress-work {-> Num Num})
+      (fun {chm-stress-work n} {
+        if (== n 0) {0}
+        {do
+          (= {key} (str "k" (- n (* 25 (/ n 25)))))
+          (chm/put! chm-stress-cache key n)
+          (chm/get chm-stress-cache key)
+          (chm/has? chm-stress-cache key)
+          (chm-stress-work (- n 1))
+        }
+      })
+
+      (sig 'chm-stress-spawn {-> Num Nil})
+      (fun {chm-stress-spawn n} {
+        if (== n 0) {nil}
+        {do
+          (aio/dispatch sys (\ {_} {chm-stress-work 100}) nil (\ {_} {nil}))
+          (chm-stress-spawn (- n 1))
+        }
+      })
+
+      (chm-stress-spawn 8)
+      (aio/await (aio/sleep sys 1500))
+      ; If we made it here without crashes, it works. Final size <= 25
+      ; (only k0..k24 keys exist).
+      (test/assert (>= 25 (chm/size c)) "size in valid range")
+      (test/assert (>= 25 (len (chm/keys c))) "keys snapshot consistent")
+      (aio/stop sys)
+      true
+    })
+))
