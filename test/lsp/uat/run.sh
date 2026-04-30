@@ -47,6 +47,34 @@ if [ ! -x "$SERVER" ]; then
   exit 2
 fi
 
+# Optional belt-and-suspenders: cap the UAT subtree's RSS via cgroup
+# under systemd. Note we do NOT use `ulimit -v` (RLIMIT_AS) because
+# valk's GC reserves ~36 GiB of virtual address space at startup
+# (PROT_NONE, not committed) and would fail to start under any
+# realistic AS cap.
+#
+# Set VALK_UAT_MEMMAX=2G (or similar systemd format) to opt in.
+# Requires `systemd-run` and the user-scope to be available; falls
+# through silently otherwise.
+if [ -n "${VALK_UAT_MEMMAX:-}" ] && command -v systemd-run >/dev/null 2>&1; then
+  exec systemd-run --user --scope --quiet \
+    -p "MemoryMax=$VALK_UAT_MEMMAX" \
+    -p "MemorySwapMax=0" \
+    -- "$0" "$@"
+fi
+
+# Orphan check: if a previous interrupted run left a valk-lsp (ours)
+# behind, warn loudly. The cleanup trap below tries hard to prevent
+# this, but if the process tree was SIGKILL'd from outside no trap
+# could have run.
+existing_orphans=$(pgrep -f "^${SERVER}\$" 2>/dev/null | wc -l)
+if [ "$existing_orphans" -gt 0 ]; then
+  echo "UAT: WARNING — $existing_orphans pre-existing valk-lsp process(es) detected:" >&2
+  pgrep -af "^${SERVER}\$" >&2 || true
+  echo "     Kill them with: pkill -KILL -f '^${SERVER}\$'" >&2
+  echo "     Continuing; new run will spawn its own LSP." >&2
+fi
+
 WORKSPACE="$(mktemp -d -t valk-uat-XXXXXX)"
 RESULTS="$(mktemp -t valk-uat-results-XXXXXX.jsonl)"
 
@@ -98,10 +126,45 @@ VALK_UAT_RESULTS="$RESULTS" \
 VALK_UAT_WORKSPACE="$WORKSPACE" \
   "$NVIM" --headless -l "$REPO/test/lsp/uat/runner.lua" "$FILTER" 2>&1 &
 NVIM_PID=$!
+
+# Watchdog process. SIGKILL on the bash wrapper bypasses traps, so
+# the cleanup() above doesn't run. The watchdog is a separate
+# background process that polls our pid and, if we vanish, kills the
+# specific nvim child we spawned and any valk-lsp descendants. Yes,
+# the watchdog itself can be SIGKILL'd — but a typical "kill the
+# test" only targets the foreground bash pid, not its background
+# descendants (which is what bit us last time and OOM'd the host).
+#
+# It ignores terminal-driven SIGINT/SIGHUP so a Ctrl-C on a parent
+# shell doesn't take it out before the cleanup completes.
+WATCHDOG_PID=
+PARENT_PID=$$
+(
+  trap '' INT HUP
+  while kill -0 "$PARENT_PID" 2>/dev/null; do
+    sleep 1
+  done
+  # Parent vanished without notifying us. Take the whole tree down.
+  if kill -0 "$NVIM_PID" 2>/dev/null; then
+    pgrep -P "$NVIM_PID" 2>/dev/null | xargs -r kill -KILL 2>/dev/null || true
+    kill -KILL "$NVIM_PID" 2>/dev/null || true
+  fi
+  # Path-based sweep catches any LSP that escaped (e.g. nvim already
+  # died but its child got reparented).
+  pkill -KILL -f "^${SERVER}\$" 2>/dev/null || true
+) &
+WATCHDOG_PID=$!
+disown 2>/dev/null || true
 # `wait` is interruptible — if a SIGTERM arrives while waiting, the
 # trap fires, kills the tree, and we resume here with wait returning
 # the signal status. Either way, on return the cleanup trap will run.
 wait "$NVIM_PID" 2>/dev/null || true
+
+# Clean shutdown path: signal the watchdog to exit. (Unclean shutdowns
+# leave the watchdog to do its job.)
+if [ -n "$WATCHDOG_PID" ]; then
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+fi
 
 if [ ! -s "$RESULTS" ]; then
   echo "UAT: runner produced no results — nvim crashed or scenarios all filtered out" >&2
