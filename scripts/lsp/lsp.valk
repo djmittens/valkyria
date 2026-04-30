@@ -303,21 +303,10 @@
 (sig 'lsp/start {-> Nil})
 (fun {lsp/start} {do
   (stderr/write "[valk-lsp] starting (threaded)\n")
-  ; lsp/sys MUST be single-threaded (one event loop, no worker threads).
-  ; Many globals here (lsp/ast-cache, lsp/last-good-tokens-cache,
-  ; lsp/documents, etc.) and the lsp/db sqlite connection assume
-  ; single-threaded access. Previously this was `:num-threads 0` which
-  ; the C aio_start_with_config interprets as "default to NPROCESSORS"
-  ; (src/aio/system/aio_system.c:105-108) — silently spawning N worker
-  ; threads that all share the same dicts and sqlite connection. That
-  ; matched a string of intermittent SIGSEGVs in lenv_get and
-  ; sqlite_lock errors that looked like GC bugs but were really
-  ; data races between dispatched tasks racing on shared state.
-  (def {lsp/sys} (aio/await (aio/start {:num-threads 1})))
+  (def {lsp/sys} (aio/await (aio/start {:num-threads 0})))
   ; Dedicated aio system for workspace indexing. Its loop 0 absorbs all
-  ; scan-dispatch done-callbacks + sqlite writes (via lsp/idx-db, a
-  ; separate sqlite connection) so lsp/sys loop 0 stays clear for
-  ; interactive LSP traffic.
+  ; scan-dispatch done-callbacks + sqlite writes so lsp/sys loop 0 stays
+  ; clear for interactive LSP traffic (semanticTokens, diagnostics, etc.).
   (def {lsp/idx-sys} (aio/await (aio/start {:num-threads 2})))
   (= {stdin-pipe} (pipe/stdin-open lsp/sys))
   (def {lsp/out} (pipe/stdout-open lsp/sys))
