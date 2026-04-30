@@ -39,11 +39,11 @@
       (= {data}
         (if (or (nil? ast) (lsp/ast-has-error ast))
           {do
-            (= {cached} (dict/get lsp/last-good-tokens-cache uri))
+            (= {cached} (chm/get lsp/last-good-tokens-cache uri))
             (if (nil? cached) {sem/lex-tokenize text} {cached})}
           {do
             (= {fresh} (sem/tokenize-ast ast text))
-            (dict/set! lsp/last-good-tokens-cache uri fresh)
+            (chm/put! lsp/last-good-tokens-cache uri fresh)
             fresh}))
       (= {typed} (sem/parse-flat data))
       (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
@@ -303,6 +303,10 @@
 (sig 'lsp/start {-> Nil})
 (fun {lsp/start} {do
   (stderr/write "[valk-lsp] starting (threaded)\n")
+  ; Allocate the chm-backed shared caches (see comment in io.valk).
+  ; Must happen before lsp/sys spawns workers — once handlers can
+  ; race, late-allocating shared state itself becomes a race.
+  (lsp/init-caches)
   (def {lsp/sys} (aio/await (aio/start {:num-threads 0})))
   ; Dedicated aio system for workspace indexing. Its loop 0 absorbs all
   ; scan-dispatch done-callbacks + sqlite writes so lsp/sys loop 0 stays

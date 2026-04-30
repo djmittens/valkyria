@@ -457,7 +457,7 @@
       (= {data}
         (if (or (nil? ast) (lsp/ast-has-error ast))
           {do
-            (= {cached} (dict/get lsp/last-good-tokens-cache uri))
+            (= {cached} (chm/get lsp/last-good-tokens-cache uri))
             (if (nil? cached)
               {do (stderr/write (str "[sem] uri=" uri " path=LEX (broken parse, no cache) text-len=" (len text) "\n"))
                   (sem/lex-tokenize text)}
@@ -466,7 +466,7 @@
           {do
             (= {fresh} (sem/tokenize-ast ast text))
             (stderr/write (str "[sem] uri=" uri " path=FRESH (clean parse) tokens=" (/ (len fresh) 5) "\n"))
-            (dict/set! lsp/last-good-tokens-cache uri fresh)
+            (chm/put! lsp/last-good-tokens-cache uri fresh)
             fresh}))
       (lsp/send-response id (list :data data))})
 })

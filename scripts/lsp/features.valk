@@ -23,10 +23,10 @@
       ; still clears, but that matches the nothing-to-show state.
       (= {current-ast} (lsp/get-ast ctx:uri ctx:text))
       (if (or (nil? current-ast) (lsp/ast-has-error current-ast))
-        {lsp/send-response id (dict/get lsp/last-good-hints-cache ctx:uri)}
+        {lsp/send-response id (chm/get lsp/last-good-hints-cache ctx:uri)}
         {do
           (= {hints} (hint/collect-from-ast current-ast ctx:text lsp/db range))
-          (dict/set! lsp/last-good-hints-cache ctx:uri hints)
+          (chm/put! lsp/last-good-hints-cache ctx:uri hints)
           (lsp/send-response id hints)})})
 })
 

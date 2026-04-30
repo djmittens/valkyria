@@ -152,7 +152,7 @@
 
 (sig 'lsp/republish-all-diagnostics {-> Nil})
 (fun {lsp/republish-all-diagnostics} {do
-  (= {uris} (dict/keys lsp/documents))
+  (= {uris} (chm/keys lsp/documents))
   (lsp/republish-loop uris)
 })
 
@@ -370,8 +370,8 @@
   (= {uri} td:uri)
   (= {text} td:text)
   (lsp/doc-store uri text)
-  (dict/remove! lsp/ast-cache uri)
-  (dict/remove! lsp/line-index-cache uri)
+  (chm/del! lsp/ast-cache uri)
+  (chm/del! lsp/line-index-cache uri)
   (lsp/invalidate-known-set)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
   (= {v} lsp/doc-version)
@@ -453,15 +453,15 @@
         {plist/get (head changes) :text}
         {lsp/apply-changes old-text changes}))
       (lsp/doc-store uri text)
-      (dict/remove! lsp/ast-cache uri)
-      (dict/remove! lsp/line-index-cache uri)
+      (chm/del! lsp/ast-cache uri)
+      (chm/del! lsp/line-index-cache uri)
       ; Full-document replacement (e.g. paste-over-all) makes cached
       ; offsets in the last-good token/hint arrays meaningless. Drop
       ; the fallbacks rather than serve stale spans pointing past EOL.
       (if (== (lsp/changes-include-full-replace changes) 1)
-        {do (dict/remove! lsp/last-good-ast-cache uri)
-            (dict/remove! lsp/last-good-tokens-cache uri)
-            (dict/remove! lsp/last-good-hints-cache uri)}
+        {do (chm/del! lsp/last-good-ast-cache uri)
+            (chm/del! lsp/last-good-tokens-cache uri)
+            (chm/del! lsp/last-good-hints-cache uri)}
         {})
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
@@ -502,14 +502,14 @@
 (fun {handle-did-close params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
-  (dict/remove! lsp/documents uri)
-  (dict/remove! lsp/ast-cache uri)
-  (dict/remove! lsp/line-index-cache uri)
+  (chm/del! lsp/documents uri)
+  (chm/del! lsp/ast-cache uri)
+  (chm/del! lsp/line-index-cache uri)
   ; Per-URI fallback caches grow unbounded across long-running editor
   ; sessions if not explicitly evicted on close.
-  (dict/remove! lsp/last-good-ast-cache uri)
-  (dict/remove! lsp/last-good-tokens-cache uri)
-  (dict/remove! lsp/last-good-hints-cache uri)
+  (chm/del! lsp/last-good-ast-cache uri)
+  (chm/del! lsp/last-good-tokens-cache uri)
+  (chm/del! lsp/last-good-hints-cache uri)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics nil))})
@@ -523,7 +523,7 @@
   (if (nil? save-text) {}
     {do
       (lsp/doc-store uri save-text)
-      (dict/remove! lsp/line-index-cache uri)
+      (chm/del! lsp/line-index-cache uri)
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
       (= {v} lsp/doc-version)
