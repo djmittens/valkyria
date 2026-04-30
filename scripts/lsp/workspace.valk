@@ -150,21 +150,14 @@
     (lsp/ensure-loads-walk db (tail exprs))}
 })
 
+; After the workspace scan completes the symbol DB has new known
+; functions, which can change which symbols resolve as defined vs.
+; undefined in already-open documents. Tell the client to re-pull
+; diagnostics rather than pushing — pushing alongside nvim's pull
+; produces duplicates in different namespaces.
 (sig 'lsp/republish-all-diagnostics {-> Nil})
-(fun {lsp/republish-all-diagnostics} {do
-  (= {uris} (dict/keys lsp/documents))
-  (lsp/republish-loop uris)
-})
-
-(sig 'lsp/republish-loop {-> List Nil})
-(fun {lsp/republish-loop uris} {
-  if (nil? uris) {}
-  {do
-    (= {uri} (head uris))
-    (= {text} (lsp/doc-get uri))
-    (if (nil? text) {}
-      {lsp/publish-diagnostics lsp/db uri text})
-    (lsp/republish-loop (tail uris))}
+(fun {lsp/republish-all-diagnostics} {
+  lsp/refresh-diagnostics
 })
 
 ; Extract the byte offset from a parse error message of the form
@@ -391,55 +384,22 @@
     nil
     (\ {_} {if (not (== lsp/doc-version v)) {}
       {lsp/refresh-semantic-tokens}}))
-  (def {lsp/diag-version} (+ lsp/diag-version 1))
-  (= {dv} lsp/diag-version)
-  (aio/dispatch lsp/idx-sys
-    (\ {_} {if (not (== lsp/diag-version dv)) {nil}
-      {do (lsp/publish-diagnostics lsp/idx-db uri text) nil}})
-    nil
-    lsp/noop-cb)})
+  ; No publishDiagnostics push here. nvim pulls via textDocument/diagnostic
+  ; after didOpen since we advertise diagnosticProvider — pushing too
+  ; produces duplicates in different namespaces. Bump diag-version so any
+  ; pull request invalidates its cached snapshot.
+  (def {lsp/diag-version} (+ lsp/diag-version 1))})
 
-; Coalesce dispatches via "pending" flags. While a dispatched task is
-; queued/running, suppress new dispatches of the same kind. The
-; inflight task reads lsp/doc-get on entry so it always processes the
-; latest text, even if many didChanges arrived after it was queued.
-;
-; Without this, every keystroke queues 3 tasks (cache-ast, sync-doc,
-; publish-diagnostics). Even though version-gating makes earlier tasks
-; return nil quickly, each queued task pays for closure evacuation,
-; queue insertion / pop, and GC pressure. After ~100 keystrokes the
-; worker loops have seconds of pending work to drain, and synchronous
-; hover/completion requests queue behind it. Coalescing collapses 100
-; keystrokes' worth of dispatches into a handful of actual runs,
-; restoring sub-100ms p99 latency under typing load.
-;
-; Synchronization: the pending flag must be written from a single loop
-; only (Valk globals across loops are a data race). cache-ast dispatches
-; to lsp/sys, whose completion fires on lsp/sys loop 0 — the same loop
-; as handle-did-change. For sync-doc / publish-diagnostics, the body
-; runs on lsp/idx-sys but we want flag-clear on lsp/sys loop 0, so the
-; lsp/idx-sys completion does a tiny bounce-back dispatch to lsp/sys
-; whose completion clears the flag. One extra dispatch per coalesced
-; batch is negligible vs the queue depth it saves.
+; Coalesce cache-ast dispatches via a same-loop pending flag. Both the
+; flag write in handle-did-change and the flag clear in the dispatch's
+; done-cb run on lsp/sys loop 0, so no cross-loop synchronization is
+; needed. Per-keystroke dispatch + version-gating works fine for
+; sync-doc and publish-diagnostics — they're version-gated to a no-op
+; for stale versions, and adding cross-loop bounce-backs to coalesce
+; them caused a memory-safety issue under heavy GC pressure (handles
+; into closures whose enclosing context the GC reclaimed before the
+; bounce-back fired).
 (def {lsp/cache-ast-pending} 0)
-(def {lsp/sync-doc-pending} 0)
-(def {lsp/publish-diag-pending} 0)
-
-; Bounce a flag-clear back to lsp/sys loop 0 via a no-op dispatch.
-; Used as the completion callback of an lsp/idx-sys dispatch when we
-; need to safely write to a single-loop-owned global from a different
-; aio system.
-(sig 'lsp/clear-sync-doc-pending {-> Nil})
-(fun {lsp/clear-sync-doc-pending} {
-  aio/dispatch lsp/sys (\ {_} {}) nil
-    (\ {_} {def {lsp/sync-doc-pending} 0})
-})
-
-(sig 'lsp/clear-publish-diag-pending {-> Nil})
-(fun {lsp/clear-publish-diag-pending} {
-  aio/dispatch lsp/sys (\ {_} {}) nil
-    (\ {_} {def {lsp/publish-diag-pending} 0})
-})
 
 (sig 'handle-did-change {-> ChangeParams Nil})
 (fun {handle-did-change params} {do
@@ -456,8 +416,7 @@
       (dict/remove! lsp/ast-cache uri)
       (dict/remove! lsp/line-index-cache uri)
       ; Full-document replacement (e.g. paste-over-all) makes cached
-      ; offsets in the last-good token/hint arrays meaningless. Drop
-      ; the fallbacks rather than serve stale spans pointing past EOL.
+      ; offsets in the last-good token/hint arrays meaningless.
       (if (== (lsp/changes-include-full-replace changes) 1)
         {do (dict/remove! lsp/last-good-ast-cache uri)
             (dict/remove! lsp/last-good-tokens-cache uri)
@@ -465,6 +424,7 @@
         {})
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
+      (= {v} lsp/doc-version)
       (if (== lsp/cache-ast-pending 0)
         {do
           (def {lsp/cache-ast-pending} 1)
@@ -476,27 +436,19 @@
             (\ {_} {do (def {lsp/cache-ast-pending} 0)
                        (lsp/refresh-semantic-tokens)}))}
         {})
-      (if (== lsp/sync-doc-pending 0)
-        {do
-          (def {lsp/sync-doc-pending} 1)
-          (aio/dispatch lsp/idx-sys
-            (\ {_} {do
-              (= {latest} (lsp/doc-get uri))
-              (if (nil? latest) {nil} {do (lsp/sync-doc lsp/idx-db uri latest) nil})})
-            nil
-            (\ {_} {lsp/clear-sync-doc-pending}))}
-        {})
-      (def {lsp/diag-version} (+ lsp/diag-version 1))
-      (if (== lsp/publish-diag-pending 0)
-        {do
-          (def {lsp/publish-diag-pending} 1)
-          (aio/dispatch lsp/idx-sys
-            (\ {_} {do
-              (= {latest} (lsp/doc-get uri))
-              (if (nil? latest) {nil} {do (lsp/publish-diagnostics lsp/idx-db uri latest) nil})})
-            nil
-            (\ {_} {lsp/clear-publish-diag-pending}))}
-        {})})})
+      ; sync-doc dispatches per-keystroke, version-gated. Earlier
+      ; superseded tasks return nil. Final task wins and writes symdb.
+      (aio/dispatch lsp/idx-sys
+        (\ {_} {if (not (== lsp/doc-version v)) {nil}
+          {do (lsp/sync-doc lsp/idx-db uri text) nil}})
+        nil
+        (\ {_} {if (not (== lsp/doc-version v)) {}
+          {lsp/refresh-semantic-tokens}}))
+      ; Diagnostics via pull only (textDocument/diagnostic) — see note
+      ; above on the duplicate-namespace bug we hit when both push and
+      ; pull are active. nvim auto-pulls after didChange when the
+      ; server advertises diagnosticProvider.
+      (def {lsp/diag-version} (+ lsp/diag-version 1))})})
 
 (sig 'handle-did-close {-> DocParams Nil})
 (fun {handle-did-close params} {do
@@ -539,11 +491,6 @@
         nil
         (\ {_} {if (not (== lsp/doc-version v)) {}
           {lsp/refresh-semantic-tokens}}))
-      (def {lsp/diag-version} (+ lsp/diag-version 1))
-      (= {dv} lsp/diag-version)
-      (aio/dispatch lsp/idx-sys
-        (\ {_} {if (not (== lsp/diag-version dv)) {nil}
-          {do (lsp/publish-diagnostics lsp/idx-db uri save-text) nil}})
-        nil
-        lsp/noop-cb)})})
+      ; No publishDiagnostics push on save. Pull-only — see handle-did-open.
+      (def {lsp/diag-version} (+ lsp/diag-version 1))})})
 

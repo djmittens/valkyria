@@ -26,40 +26,32 @@
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
-  (stderr/write (str "[sem-range] id=" id " uri=" uri "\n"))
   (if (nil? text) {lsp/send-response id (list :data nil)}
     {do
       (= {start-line} params:range:start:line)
       (= {end-line} params:range:end:line)
-      (stderr/write (str "[sem-range] [" start-line "," end-line "]\n"))
-      ; Same caching strategy as handle-semantic-tokens (see nav.valk):
-      ; clean parse → tokenize + cache; broken parse → return cached
-      ; tokens to avoid orange flicker from re-lexing latency.
-      (= {ast} (lsp/get-ast uri text))
+      ; Use the cached full-token list when available for the current
+      ; text — the cache stores (list text tokens). Then filter to the
+      ; requested range. See handle-semantic-tokens for caching notes.
+      (= {cached} (dict/get lsp/last-good-tokens-cache uri))
       (= {data}
-        (if (or (nil? ast) (lsp/ast-has-error ast))
+        (if (and (not (nil? cached))
+                 (list? cached)
+                 (== (head cached) text))
+          {head (tail cached)}
           {do
-            (= {cached} (dict/get lsp/last-good-tokens-cache uri))
-            (if (nil? cached) {sem/lex-tokenize text} {cached})}
-          {do
-            (= {fresh} (sem/tokenize-ast ast text))
-            (dict/set! lsp/last-good-tokens-cache uri fresh)
-            fresh}))
+            (= {ast} (lsp/get-ast uri text))
+            (if (or (nil? ast) (lsp/ast-has-error ast))
+              {if (nil? cached)
+                {sem/lex-tokenize text}
+                {if (list? cached) {head (tail cached)} {cached}}}
+              {do
+                (= {fresh} (sem/tokenize-ast ast text))
+                (dict/set! lsp/last-good-tokens-cache uri (list text fresh))
+                fresh})}))
       (= {typed} (sem/parse-flat data))
       (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
-      (= {result} (sem/flatten filtered))
-      (stderr/write (str "[sem-range] kept " (/ (len result) 5) " tokens of " (/ (len data) 5) " (range " start-line ".." end-line ")\n"))
-      ; Dump first 5 emitted tokens (first 25 ints) so we can verify the
-      ; delta-encoded wire format. dl of the first token MUST be the
-      ; absolute line >= start-line for nvim to render correctly.
-      (stderr/write (str "[sem-range] first emit: " (sem/take-ints result 25) "\n"))
-      (lsp/send-response id (list :data result))})
-})
-
-(sig 'sem/take-ints {-> List Num List})
-(fun {sem/take-ints l n} {
-  if (or (nil? l) (<= n 0)) {nil}
-  {qcons (head l) (sem/take-ints (tail l) (- n 1))}
+      (lsp/send-response id (list :data (sem/flatten filtered)))})
 })
 
 ; Filter the typed token list down to the [start-line, end-line] range.
@@ -116,6 +108,21 @@
     lsp/noop-cb
 })
 
+; LSP RequestCancelled error code. Sent in place of dropping a
+; superseded request silently — nvim's request-pending table relies
+; on every request getting either a result or an error to clean up
+; its tracking. Without this, cancelled-but-unanswered requests leak
+; into nvim's state, eventually corrupting its internal bookkeeping
+; (we observed nvim logging "Cannot find request with id N whilst
+; attempting to cancel" — that's its tracking getting out of sync).
+;
+; Spec value: -32800.
+(def {lsp/ERR_REQUEST_CANCELLED} -32800)
+
+(sig 'lsp/send-cancelled {-> Num Nil})
+(fun {lsp/send-cancelled id}
+  {lsp/send-error id lsp/ERR_REQUEST_CANCELLED "Request superseded"})
+
 (sig 'lsp/dispatch-request {-> Str Any List Nil})
 (fun {lsp/dispatch-request method id params} {
   match method
@@ -124,7 +131,7 @@
       (= {v} lsp/sem-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/sem-version v))
-          {nil}
+          {do (lsp/send-cancelled id) nil}
           {do (lsp/handle-readonly method id params) nil}})
         nil lsp/noop-cb))}
     {"textDocument/semanticTokens/range" (do
@@ -132,7 +139,7 @@
       (= {v} lsp/sem-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/sem-version v))
-          {nil}
+          {do (lsp/send-cancelled id) nil}
           {do (lsp/handle-readonly method id params) nil}})
         nil lsp/noop-cb))}
     {"textDocument/inlayHint" (do
@@ -140,7 +147,7 @@
       (= {v} lsp/hint-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/hint-version v))
-          {nil}
+          {do (lsp/send-cancelled id) nil}
           {do (lsp/handle-readonly method id params) nil}})
         nil lsp/noop-cb))}
     {_ (lsp/dispatch-to-worker method id params)}
