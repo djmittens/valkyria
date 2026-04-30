@@ -436,69 +436,42 @@
       }) syms))
       (lsp/send-response id lsp-syms)})})
 
-; Compute semantic tokens for a (uri, text) pair. Pure function — no
-; state mutation other than updating the broken-parse fallback cache.
-; Returns the flat int-list ready for the LSP wire format.
-(sig 'lsp/compute-tokens {-> Str Str List})
-(fun {lsp/compute-tokens uri text} {do
-  (= {ast} (lsp/get-ast uri text))
-  (if (or (nil? ast) (lsp/ast-has-error ast))
-    ; Broken parse mid-typing — lex-tokenize covers all current text
-    ; including newly-added lines. Stale AST tokens would miss new
-    ; lines entirely → orange. Lex loses scope info but covers all
-    ; bytes. See sem/lex-tokenize comments.
-    {sem/lex-tokenize text}
-    {do
-      (= {fresh} (sem/tokenize-ast ast text))
-      (dict/set! lsp/last-good-tokens-cache uri (list text fresh))
-      fresh})})
-
 (sig 'handle-semantic-tokens {-> Num DocParams Nil})
 (fun {handle-semantic-tokens id params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
-  (if (nil? text)
-    {lsp/send-response id (list :resultId (lsp/next-result-id) :data nil)}
+  (if (nil? text) {lsp/send-response id (list :data nil)}
     {do
-      (= {data} (lsp/compute-tokens uri text))
-      (= {result-id} (lsp/next-result-id))
-      (dict/set! lsp/sem-token-cache uri (list result-id data))
-      (stderr/write (str "[sem/full] " uri " resultId=" result-id " tokens=" (/ (len data) 5) "\n"))
-      (lsp/send-response id (list :resultId result-id :data data))})})
-
-; /full/delta handler. nvim sends previousResultId; if it matches our
-; cache, return edits relative to the base tokens. Otherwise return
-; full data (a valid delta response per LSP 3.17 spec) so nvim
-; resyncs.
-(sig 'handle-semantic-tokens-delta {-> Num Any Nil})
-(fun {handle-semantic-tokens-delta id params} {do
-  (= {td} (plist/get params :textDocument))
-  (= {uri} (plist/get td :uri))
-  (= {prev-id} (plist/get params :previousResultId))
-  (= {text} (lsp/doc-get uri))
-  (if (nil? text)
-    {lsp/send-response id (list :resultId (lsp/next-result-id) :data nil)}
-    {do
-      (= {data} (lsp/compute-tokens uri text))
-      (= {new-id} (lsp/next-result-id))
-      (= {cached} (dict/get lsp/sem-token-cache uri))
-      (dict/set! lsp/sem-token-cache uri (list new-id data))
-      ; Note: valk `and` is strictly binary, so guard via nested ifs
-      ; to avoid the silent error-as-falsy trap.
-      (if (nil? cached)
-        {do (stderr/write (str "[sem/delta] " uri " resultId=" new-id " prev=" prev-id " RESYNC (no-cache)\n"))
-            (lsp/send-response id (list :resultId new-id :data data))}
-        {if (not (list? cached))
-          {do (stderr/write (str "[sem/delta] " uri " resultId=" new-id " prev=" prev-id " RESYNC (cache-malformed)\n"))
-              (lsp/send-response id (list :resultId new-id :data data))}
-          {if (not (== (head cached) prev-id))
-            {do (stderr/write (str "[sem/delta] " uri " resultId=" new-id " prev=" prev-id " RESYNC (id-mismatch had=" (head cached) ")\n"))
-                (lsp/send-response id (list :resultId new-id :data data))}
-            {do
-              (= {edits} (sem/diff-tokens (head (tail cached)) data))
-              (stderr/write (str "[sem/delta] " uri " resultId=" new-id " prev=" prev-id " edits=" (len edits) "\n"))
-              (lsp/send-response id (list :resultId new-id :edits edits))}}})})})
+      ; Fast path: cached tokens for this exact text. Skips parse +
+      ; tokenize entirely. Critical because nvim cancels and re-fires
+      ; /full on every typed char; without the cache we re-walk the
+      ; whole AST per keystroke, and a delayed response misses nvim's
+      ; "version still matches" gate (current_result.version ==
+      ; buf_versions[bufnr]) so the response is silently discarded
+      ; and the buffer stays uncolored.
+      (= {cached} (dict/get lsp/last-good-tokens-cache uri))
+      (if (and (not (nil? cached))
+               (list? cached)
+               (== (head cached) text))
+        {lsp/send-response id (list :data (head (tail cached)))}
+        {do
+          ; On clean parse, tokenize the AST, cache the (text, tokens)
+          ; pair, return tokens. On broken parse (mid-edit), return
+          ; the last-good cached tokens — stale positions are better
+          ; than orange.
+          (= {ast} (lsp/get-ast uri text))
+          (= {data}
+            (if (or (nil? ast) (lsp/ast-has-error ast))
+              {if (nil? cached)
+                {sem/lex-tokenize text}
+                {if (list? cached) {head (tail cached)} {cached}}}
+              {do
+                (= {fresh} (sem/tokenize-ast ast text))
+                (dict/set! lsp/last-good-tokens-cache uri (list text fresh))
+                fresh}))
+          (lsp/send-response id (list :data data))})})
+})
 
 (sig 'nav/rows-to-token-groups {-> List List})
 (fun {nav/rows-to-token-groups rows} {

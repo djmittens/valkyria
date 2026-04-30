@@ -30,9 +30,25 @@
     {do
       (= {start-line} params:range:start:line)
       (= {end-line} params:range:end:line)
-      ; Compute tokens via the shared helper — same broken-parse
-      ; lex fallback as handle-semantic-tokens, then filter to range.
-      (= {data} (lsp/compute-tokens uri text))
+      ; Use the cached full-token list when available for the current
+      ; text — the cache stores (list text tokens). Then filter to the
+      ; requested range. See handle-semantic-tokens for caching notes.
+      (= {cached} (dict/get lsp/last-good-tokens-cache uri))
+      (= {data}
+        (if (and (not (nil? cached))
+                 (list? cached)
+                 (== (head cached) text))
+          {head (tail cached)}
+          {do
+            (= {ast} (lsp/get-ast uri text))
+            (if (or (nil? ast) (lsp/ast-has-error ast))
+              {if (nil? cached)
+                {sem/lex-tokenize text}
+                {if (list? cached) {head (tail cached)} {cached}}}
+              {do
+                (= {fresh} (sem/tokenize-ast ast text))
+                (dict/set! lsp/last-good-tokens-cache uri (list text fresh))
+                fresh})}))
       (= {typed} (sem/parse-flat data))
       (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
       (lsp/send-response id (list :data (sem/flatten filtered)))})
@@ -111,14 +127,6 @@
 (fun {lsp/dispatch-request method id params} {
   match method
     {"textDocument/semanticTokens/full" (do
-      (def {lsp/sem-version} (+ lsp/sem-version 1))
-      (= {v} lsp/sem-version)
-      (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/sem-version v))
-          {do (lsp/send-cancelled id) nil}
-          {do (lsp/handle-readonly method id params) nil}})
-        nil lsp/noop-cb))}
-    {"textDocument/semanticTokens/full/delta" (do
       (def {lsp/sem-version} (+ lsp/sem-version 1))
       (= {v} lsp/sem-version)
       (aio/dispatch lsp/sys
@@ -234,7 +242,6 @@
     {"textDocument/documentSymbol" (nav/handle-document-symbols id (lsp/to-doc-params params))}
     {"workspace/symbol" (nav/handle-workspace-symbols id params)}
     {"textDocument/semanticTokens/full" (nav/handle-semantic-tokens id (lsp/to-doc-params params))}
-    {"textDocument/semanticTokens/full/delta" (nav/handle-semantic-tokens-delta id params)}
     {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id (lsp/to-range-params params))}
     {"textDocument/prepareRename" (nav/handle-prepare-rename id (lsp/to-tdp-params params))}
     {"textDocument/rename" (nav/handle-rename id (lsp/to-rename-params params))}

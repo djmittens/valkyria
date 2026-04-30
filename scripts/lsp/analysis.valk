@@ -47,48 +47,6 @@
 })
 
 ; ---------------------------------------------------------------------------
-; Delta computation for /sem/full/delta
-; ---------------------------------------------------------------------------
-; Compute a single edit that turns old-tokens into new-tokens, working
-; on the flat int representation per LSP 3.17 spec. Returns a list of
-; SemanticTokensEdit plists — empty list if the two are identical, or
-; one edit covering the differing middle section.
-;
-; A more sophisticated multi-edit diff (Myers etc.) would produce
-; smaller wire payloads when changes are scattered, but for typing
-; (single-region edits) one edit is optimal: prefix common, middle
-; replaced, suffix common.
-
-(sig 'sem/common-prefix-len {-> List List Num Num})
-(fun {sem/common-prefix-len a b acc} {
-  if (or (nil? a) (nil? b)) {acc}
-  {if (== (head a) (head b))
-    {sem/common-prefix-len (tail a) (tail b) (+ acc 1)}
-    {acc}}})
-
-(sig 'sem/diff-tokens {-> List List List})
-(fun {sem/diff-tokens old-tokens new-tokens} {do
-  (= {old-len} (len old-tokens))
-  (= {new-len} (len new-tokens))
-  (= {prefix} (sem/common-prefix-len old-tokens new-tokens 0))
-  (if (and (== prefix old-len) (== prefix new-len))
-    ; Identical — no edit needed.
-    {nil}
-    {do
-      ; Cap suffix so prefix + suffix don't overlap into the same span
-      ; on either side. min(old-len, new-len) - prefix is the longest
-      ; possible non-overlapping suffix.
-      (= {min-len} (if (< old-len new-len) {old-len} {new-len}))
-      (= {max-suffix} (- min-len prefix))
-      (= {suffix-raw}
-        (sem/common-prefix-len (reverse old-tokens) (reverse new-tokens) 0))
-      (= {suffix} (if (> suffix-raw max-suffix) {max-suffix} {suffix-raw}))
-      (= {delete-count} (- old-len (+ prefix suffix)))
-      (= {insert-len} (- new-len (+ prefix suffix)))
-      (= {data} (take insert-len (drop prefix new-tokens)))
-      (list (list :start prefix :deleteCount delete-count :data data))})})
-
-; ---------------------------------------------------------------------------
 ; Walk a list of expressions as code
 ; ---------------------------------------------------------------------------
 
