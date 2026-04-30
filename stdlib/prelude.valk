@@ -417,11 +417,31 @@
 (sig 'not {-> Num Num})
 (fun {not x} {- 1 x})
 
-(sig 'or {-> Num Num Num})
-(fun {or x y} {+ x y})
+; Variadic logical or/and. Each arg is treated as truthy (non-zero)
+; or falsy (zero); the result is strictly 0 or 1, NOT a sum/product
+; (the old binary `(or 1 1)` returned 2, which broke `(not (or ...))`
+; since `(- 1 2) = -1` is itself truthy under `if`).
+;
+; Empty cases follow the boolean-algebra identities:
+;   (or)  = 0  (empty disjunction is false)
+;   (and) = 1  (empty conjunction is true)
+;
+; Note: arguments are still evaluated by the caller before this
+; function runs (valk has no special-form short-circuit). The
+; recursive unpack only short-circuits the LIST WALK once a result
+; is determined; it does not avoid evaluating later args at the call
+; site. For evaluation-level short-circuit, use nested `if`.
+(sig 'or {-> & Num Num})
+(fun {or & xs} {
+  if (nil? xs) {0}
+  {if (head xs) {1} {unpack or (tail xs)}}
+})
 
-(sig 'and {-> Num Num Num})
-(fun {and x y} {* x y})
+(sig 'and {-> & Num Num})
+(fun {and & xs} {
+  if (nil? xs) {1}
+  {if (head xs) {unpack and (tail xs)} {0}}
+})
 
 ; Higher-order function utilities
 

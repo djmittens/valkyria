@@ -196,7 +196,22 @@
 
     (test/assert-eq 1 (or 1 0) "or 1 0 should be 1")
     (test/assert-eq 1 (or 0 1) "or 0 1 should be 1")
-    (test/assert-eq 0 (or 0 0) "or 0 0 should be 0")})
+    (test/assert-eq 0 (or 0 0) "or 0 0 should be 0")
+
+    ; Variadic: 0-arg identities, 1-arg passthrough, 3+ args
+    (test/assert-eq 0 (or) "(or) should be 0 (empty disjunction)")
+    (test/assert-eq 1 (and) "(and) should be 1 (empty conjunction)")
+    (test/assert-eq 1 (or 1) "(or 1) should be 1")
+    (test/assert-eq 0 (or 0) "(or 0) should be 0")
+    (test/assert-eq 1 (or 0 0 1) "(or 0 0 1) should be 1")
+    (test/assert-eq 0 (or 0 0 0) "(or 0 0 0) should be 0")
+    (test/assert-eq 1 (and 1 1 1) "(and 1 1 1) should be 1")
+    (test/assert-eq 0 (and 1 1 0) "(and 1 1 0) should be 0")
+    (test/assert-eq 0 (and 1 0 1) "(and 1 0 1) should be 0")
+    ; Strict 0/1 return — important because (not 2) = -1 is truthy
+    (test/assert-eq 1 (or 1 1) "(or 1 1) should be 1, not 2 (was a bug)")
+    (test/assert-eq 1 (not (or 0 0)) "(not (or 0 0)) should be 1")
+    (test/assert-eq 0 (not (or 1 1)) "(not (or 1 1)) should be 0")})
   (test/case "prelude-flip"
     {do
     (fun {div a b} {/ a b})
