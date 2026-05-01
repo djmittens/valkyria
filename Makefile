@@ -191,12 +191,36 @@ test: build
 #   make uat                          # all scenarios
 #   make uat F=hover                  # only scenarios whose name matches `hover`
 .PHONY: uat
-uat: build
-	@if [ ! -x build/valk-lsp ]; then \
-		echo "[uat] building build/valk-lsp from scripts/lsp/build-main.valk"; \
-		build/valk --build scripts/lsp/build-main.valk -o build/valk-lsp; \
-	fi
+uat: build/valk-lsp
 	@VALK_LSP_BIN=$(CURDIR)/build/valk-lsp test/lsp/uat/run.sh $(F)
+
+# build/valk-lsp is currently a shell wrapper that runs the LSP in
+# interpreted mode (build/valk + scripts/lsp/main.valk). The AOT
+# binary at build/valk-lsp-aot crashes intermittently in lenv_get
+# (strcmp on freed memory) — the AOT compiler doesn't insert GC
+# safe-points around lenv lookups, so when the copying GC runs
+# during a worker thread's symbol resolution, env->symbols.items
+# pointers become stale and strcmp segfaults. Tracked under the
+# AOT safe-point gap; until that's fixed, interpreted mode is the
+# default for stability under typing load.
+#
+# Set VALK_LSP_USE_AOT=1 in env to opt back into the AOT binary
+# (faster but crashes; only useful for reproducing the bug).
+build/valk-lsp: build build/valk-lsp-aot
+	@printf '%s\n' \
+		'#!/bin/bash' \
+		'# Auto-generated. Routes through interpreted valk-lsp by default.' \
+		'# AOT binary at build/valk-lsp-aot has a missing-safe-point bug.' \
+		'if [ -n "$${VALK_LSP_USE_AOT:-}" ]; then' \
+		'  exec $(CURDIR)/build/valk-lsp-aot "$$@"' \
+		'fi' \
+		'exec $(CURDIR)/build/valk $(CURDIR)/scripts/lsp/main.valk "$$@"' \
+		> build/valk-lsp
+	@chmod +x build/valk-lsp
+
+build/valk-lsp-aot: build $(wildcard scripts/lsp/*.valk) $(wildcard stdlib/**/*.valk)
+	@echo "[lsp] building AOT binary build/valk-lsp-aot"
+	@build/valk --build scripts/lsp/build-main.valk -o build/valk-lsp-aot
 
 # C tests only
 .PHONY: test-c
