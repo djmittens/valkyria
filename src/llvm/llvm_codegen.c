@@ -82,6 +82,10 @@ void valk_llvm_declare_runtime_fns(valk_llvm_ctx_t *c) {
   c->fn_printf = LLVMAddFunction(c->module, "printf",
     LLVMFunctionType(LLVMInt32TypeInContext(c->ctx), p1, 1, 1));
 
+  // GC safe-point hook: void (void). See header comment.
+  c->fn_safepoint = LLVMAddFunction(c->module, "valk_gc_safepoint_aot",
+    LLVMFunctionType(vd, NULL, 0, 0));
+
   mark_nounwind_willreturn(c, c->fn_lval_num);
   mark_nounwind_willreturn(c, c->fn_lval_str);
   mark_nounwind_willreturn(c, c->fn_lval_nil);
@@ -100,6 +104,12 @@ void valk_llvm_declare_runtime_fns(valk_llvm_ctx_t *c) {
   mark_nounwind_willreturn(c, c->fn_lval_println);
   mark_nounwind_willreturn(c, c->fn_lval_print);
   add_fn_attr(c, c->fn_printf, "nounwind");
+  // safepoint must NOT be willreturn — it conditionally parks the
+  // thread at a barrier waiting for GC, which from LLVM's POV is a
+  // potentially-non-returning call (the thread blocks). Marking it
+  // willreturn would let the optimizer hoist loads of GC-managed
+  // memory across it, defeating the safepoint's purpose.
+  add_fn_attr(c, c->fn_safepoint, "nounwind");
 
   add_argmem_read_attr(c, c->fn_lval_is_truthy);
 }
@@ -328,6 +338,19 @@ LLVMValueRef valk_llvm_compile_lambda_body_fast(valk_llvm_ctx_t *ctx,
     LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
   }
 
+  // GC safe-point on entry to the lambda body. Placed here (after
+  // PHI setup and BYOL error short-circuit) so the safepoint is
+  // dominated by the entry edge but only fires when we're actually
+  // about to run real code. AOT→AOT direct calls (TCO sibcalls and
+  // codegen_try_direct_call's slow fallback) bypass the slow
+  // adapter, so we need a safepoint here too. One call per AOT
+  // function invocation; ~2-5ns hot path (atomic load + predicted
+  // branch).
+  {
+    LLVMTypeRef sp_type = LLVMFunctionType(ctx->void_type, NULL, 0, 0);
+    LLVMBuildCall2(ctx->builder, sp_type, ctx->fn_safepoint, NULL, 0, "");
+  }
+
   LLVMValueRef result = valk_codegen_nil(ctx);
   valk_lval_t *eff = body;
   if (eff && LVAL_TYPE(eff) == LVAL_CONS && (eff->flags & LVAL_FLAG_QUOTED)) {
@@ -393,6 +416,17 @@ LLVMValueRef valk_llvm_compile_lambda_body_slow_adapter(
   LLVMBasicBlockRef entry =
     LLVMAppendBasicBlockInContext(ctx->ctx, slow_fn, "entry");
   LLVMPositionBuilderAtEnd(ctx->builder, entry);
+
+  // GC safe-point on entry to every AOT-compiled function. The adapter
+  // is the boundary between the tree-walker (which has its own
+  // safepoints) and AOT code that does not. Without this, an AOT
+  // function with no internal calls can run for a full GC cycle while
+  // the rest of the system waits at the STW barrier — and any env
+  // pointers it holds become stale by the time it touches them.
+  // One call per function invocation is cheap enough to keep AOT fast
+  // (~2-5ns hot path: atomic load + predicted-not-taken branch).
+  LLVMTypeRef sp_type = LLVMFunctionType(ctx->void_type, NULL, 0, 0);
+  LLVMBuildCall2(ctx->builder, sp_type, ctx->fn_safepoint, NULL, 0, "");
 
   LLVMValueRef call_env = LLVMGetParam(slow_fn, 0);
 

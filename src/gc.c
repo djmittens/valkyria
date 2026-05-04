@@ -355,6 +355,16 @@ void valk_gc_thread_unregister(void) {
 // Safe Point Slow Path
 // ============================================================================
 
+// AOT-compiled functions call this before any operation that can race
+// with concurrent GC (lenv_get, lval_eval_call). Wraps the
+// VALK_GC_SAFE_POINT macro so LLVM codegen can emit a simple `call
+// void @valk_gc_safepoint_aot()` instead of inlining the atomic load
+// + branch in IR. Marked `nounwind` from the LLVM side; not marked
+// `willreturn` because the slow path can park the thread at a barrier.
+void valk_gc_safepoint_aot(void) {
+  VALK_GC_SAFE_POINT();
+}
+
 // LCOV_EXCL_START - safe point slow path requires STW coordination from parallel GC
 void valk_gc_safe_point_slow(void) {
   u32 flags = atomic_load_explicit(&valk_thread_ctx.safepoint_flags,

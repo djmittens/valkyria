@@ -194,27 +194,24 @@ test: build
 uat: build/valk-lsp
 	@VALK_LSP_BIN=$(CURDIR)/build/valk-lsp test/lsp/uat/run.sh $(F)
 
-# build/valk-lsp is currently a shell wrapper that runs the LSP in
-# interpreted mode (build/valk + scripts/lsp/main.valk). The AOT
-# binary at build/valk-lsp-aot crashes intermittently in lenv_get
-# (strcmp on freed memory) — the AOT compiler doesn't insert GC
-# safe-points around lenv lookups, so when the copying GC runs
-# during a worker thread's symbol resolution, env->symbols.items
-# pointers become stale and strcmp segfaults. Tracked under the
-# AOT safe-point gap; until that's fixed, interpreted mode is the
-# default for stability under typing load.
+# build/valk-lsp is the AOT binary for end-user nvim usage. The shell
+# wrapper used as a previous workaround (interpreted mode) is no
+# longer needed: AOT codegen now emits a GC safe-point at every
+# AOT function entry so the copying GC can park threads before they
+# touch env memory with stale pointers.
 #
-# Set VALK_LSP_USE_AOT=1 in env to opt back into the AOT binary
-# (faster but crashes; only useful for reproducing the bug).
+# Set VALK_LSP_USE_INTERP=1 in env to fall back to the interpreted
+# LSP via build/valk-lsp-interp (slower; useful to A/B if AOT
+# regresses).
 build/valk-lsp: build build/valk-lsp-aot
 	@printf '%s\n' \
 		'#!/bin/bash' \
-		'# Auto-generated. Routes through interpreted valk-lsp by default.' \
-		'# AOT binary at build/valk-lsp-aot has a missing-safe-point bug.' \
-		'if [ -n "$${VALK_LSP_USE_AOT:-}" ]; then' \
-		'  exec $(CURDIR)/build/valk-lsp-aot "$$@"' \
+		'# Auto-generated. Routes to AOT-compiled valk-lsp by default.' \
+		'# Set VALK_LSP_USE_INTERP=1 to use the interpreted fallback.' \
+		'if [ -n "$${VALK_LSP_USE_INTERP:-}" ]; then' \
+		'  exec $(CURDIR)/build/valk $(CURDIR)/scripts/lsp/main.valk "$$@"' \
 		'fi' \
-		'exec $(CURDIR)/build/valk $(CURDIR)/scripts/lsp/main.valk "$$@"' \
+		'exec $(CURDIR)/build/valk-lsp-aot "$$@"' \
 		> build/valk-lsp
 	@chmod +x build/valk-lsp
 

@@ -34,6 +34,15 @@ typedef struct {
   LLVMValueRef fn_lval_println;
   LLVMValueRef fn_printf;
 
+  // GC safe-point hook. AOT-compiled code calls this before any
+  // operation that might race with a concurrent GC cycle (notably
+  // lenv_get and lval_eval_call). Without these calls, the AOT
+  // function's local pointers (env, captured lvals) can become stale
+  // during the function body if GC evacuates objects under it.
+  // Implementation: tiny C function `valk_gc_safepoint_aot` that
+  // expands the VALK_GC_SAFE_POINT() macro.
+  LLVMValueRef fn_safepoint;
+
   u64 expr_counter;
   u64 str_counter;
   u64 block_counter;
