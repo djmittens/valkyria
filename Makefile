@@ -207,9 +207,21 @@ build/valk-lsp: build build/valk-lsp-aot
 	@printf '%s\n' \
 		'#!/bin/bash' \
 		'# Auto-generated. Routes to AOT-compiled valk-lsp by default.' \
-		'# Set VALK_LSP_USE_INTERP=1 to use the interpreted fallback.' \
+		'# AOT GC safety is provided by conservative stack scanning' \
+		'# (src/gc_mark.c::scan_thread_native_stack) — every registered' \
+		'# threads native stack is walked at STW, so AOT formals/SSA' \
+		'# spills/C-locals are all rooted automatically.' \
+		'#' \
+		'# Heap limit: 4GiB. Default 1GiB is too small once the LSP has' \
+		'# indexed a medium-sized workspace (~185 files = ~250MB of ASTs/' \
+		'# symdb plus per-keystroke parse churn that GC reclaims but' \
+		'# briefly spikes the high-water mark). User can override via' \
+		'# VALK_HEAP_HARD_LIMIT env if their workspace is larger.' \
+		'# Set VALK_LSP_USE_INTERP=1 to force the interpreted fallback.' \
+		'export VALK_HEAP_HARD_LIMIT="$${VALK_HEAP_HARD_LIMIT:-4294967296}"' \
 		'if [ -n "$${VALK_LSP_USE_INTERP:-}" ]; then' \
-		'  exec $(CURDIR)/build/valk $(CURDIR)/scripts/lsp/main.valk "$$@"' \
+		'  cd $(CURDIR)' \
+		'  exec $(CURDIR)/build/valk scripts/lsp/main.valk "$$@"' \
 		'fi' \
 		'exec $(CURDIR)/build/valk-lsp-aot "$$@"' \
 		> build/valk-lsp

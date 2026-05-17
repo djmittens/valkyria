@@ -73,6 +73,16 @@ void vir_print_value(vir_value_t *val, FILE *out) {
       fprintf(out, ")");
       break;
 
+    case VIR_DIRECT_CALL:
+      fprintf(out, " @%s(", val->direct_call.native_name);
+      for (u32 i = 0; i < val->direct_call.nargs; i++) {
+        if (i > 0) fprintf(out, ", ");
+        fprintf(out, "%s=", val->direct_call.formal_names[i]);
+        print_ref(val->direct_call.arg_vals[i], out);
+      }
+      fprintf(out, ")");
+      break;
+
     case VIR_ENV_GET:
       fprintf(out, " ");
       print_ref(val->operands[0], out);
@@ -99,14 +109,6 @@ void vir_print_value(vir_value_t *val, FILE *out) {
       fprintf(out, " <ast:%p>", val->ast_node);
       break;
 
-    case VIR_GC_ROOT:
-      fprintf(out, " ");
-      print_ref(val->operands[0], out);
-      break;
-    case VIR_GC_UNROOT:
-      fprintf(out, " ");
-      print_ref(val->operands[0], out);
-      break;
     case VIR_GC_SAFEPOINT:
       break;
 

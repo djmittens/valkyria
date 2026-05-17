@@ -32,6 +32,12 @@ typedef enum {
 
   VIR_CALL,
   VIR_TAIL_CALL,
+  // Direct AOT-to-AOT call. The target is a known compiled lambda;
+  // ast_to_vir embeds the target's native_name + formal names so
+  // vir_to_llvm can build a call_env + lenv_put each formal + call
+  // native_fn(call_env), bypassing valk_lval_eval_call. Mirrors the
+  // codegen_try_direct_call slow fallback in llvm_codegen_call.c.
+  VIR_DIRECT_CALL,
 
   VIR_ENV_GET,
   VIR_ENV_PUT,
@@ -42,8 +48,10 @@ typedef enum {
   VIR_LAMBDA,
   VIR_LITERAL,
 
-  VIR_GC_ROOT,
-  VIR_GC_UNROOT,
+  // VIR_GC_ROOT/UNROOT removed: GC roots are discovered automatically
+  // via conservative native-stack scanning (see scan_thread_native_stack
+  // in src/gc_mark.c). The compiler emits safepoint polls only —
+  // everything else is the runtime's job.
   VIR_GC_SAFEPOINT,
 
   VIR_PHI,
@@ -83,13 +91,25 @@ struct vir_value {
     struct {
       vir_value_t **args;
       u32 num_args;
+      // When true, vir_to_llvm emits this call with musttail and an
+      // immediate ret. Set by ast_to_vir when the call appears in
+      // tail position (last expr of body / if branch / do block).
+      // Required to prevent slow-body recursion from blowing the C
+      // stack — see test_recursion_stress.valk.
+      bool is_tail;
     } call;
+    struct {
+      char *native_name;     // strdup'd; target's compiled fn symbol
+      char **formal_names;   // strdup'd array of N formal names
+      vir_value_t **arg_vals;// N evaluated arg SSA values
+      u32 nargs;
+      bool is_tail;          // see VIR_CALL.is_tail above
+    } direct_call;
     struct {
       vir_value_t **incoming_vals;
       vir_block_t **incoming_blocks;
       u32 num_incoming;
     } phi;
-    u64 gc_save_id;
     void *ast_node;
   };
 
@@ -142,7 +162,6 @@ typedef struct {
   vir_block_t *cur_bb;
   u32 next_val_id;
   u32 next_bb_id;
-  u32 next_gc_save_id;
 } vir_builder_t;
 
 const char *vir_opcode_name(vir_opcode_e op);
@@ -179,6 +198,14 @@ vir_value_t *vir_build_call(vir_builder_t *b, vir_value_t *fn,
                             vir_value_t **args, u32 num_args);
 vir_value_t *vir_build_tail_call(vir_builder_t *b, vir_value_t *fn,
                                  vir_value_t **args, u32 num_args);
+// Direct AOT-to-AOT call. `native_name` is the target's compiled symbol;
+// `formal_names` is an array of N formal name strings (non-NULL); both
+// are copied. `arg_vals` are the N already-lowered arg SSA values.
+// vir_to_llvm builds a call_env, binds formals via lenv_put, calls
+// native_fn(call_env). Skips valk_lval_eval_call entirely.
+vir_value_t *vir_build_direct_call(vir_builder_t *b, const char *native_name,
+                                   const char **formal_names,
+                                   vir_value_t **arg_vals, u32 nargs);
 
 vir_value_t *vir_build_env_get(vir_builder_t *b, vir_value_t *env,
                                const char *sym);
@@ -195,8 +222,6 @@ vir_value_t *vir_build_lambda(vir_builder_t *b, vir_value_t *env,
                               vir_value_t *formals, vir_value_t *body);
 vir_value_t *vir_build_literal(vir_builder_t *b, void *ast_node);
 
-vir_value_t *vir_build_gc_root(vir_builder_t *b, vir_value_t *val);
-vir_value_t *vir_build_gc_unroot(vir_builder_t *b, vir_value_t *save);
 void vir_build_gc_safepoint(vir_builder_t *b);
 
 vir_value_t *vir_build_phi(vir_builder_t *b, vir_type_e type);
@@ -205,6 +230,26 @@ void vir_phi_add_incoming(vir_value_t *phi, vir_value_t *val,
 
 void vir_block_add_pred(vir_block_t *bb, vir_block_t *pred);
 void vir_block_add_succ(vir_block_t *bb, vir_block_t *succ);
+
+// AST → VIR lowering entry points (defined in src/vir/ast_to_vir.c).
+struct valk_lval_t;
+struct valk_lenv_t;
+vir_func_t *vir_lower_toplevel(vir_builder_t *b, struct valk_lval_t *expr,
+                               const char *name);
+vir_func_t *vir_lower_lambda_body(vir_builder_t *b, struct valk_lval_t *body,
+                                  const char *name);
+// Same as vir_lower_lambda_body but with a build_env for resolving
+// direct AOT-to-AOT calls. Used by build_aot.c during --build.
+vir_func_t *vir_lower_lambda_body_with_env(vir_builder_t *b,
+                                           struct valk_lval_t *body,
+                                           const char *name,
+                                           struct valk_lenv_t *build_env);
+vir_func_t *vir_lower_program(vir_builder_t *b, struct valk_lval_t *exprs);
+
+// IR pass: insert one VIR_GC_SAFEPOINT at the entry of every function
+// in the module. Conservative native-stack scanning at the safepoint
+// finds all roots — no per-call-site root tracking needed.
+void vir_gc_insert_safepoints(vir_module_t *mod);
 
 void vir_print_module(vir_module_t *mod, FILE *out);
 void vir_print_func(vir_func_t *fn, FILE *out);

@@ -402,8 +402,16 @@ static valk_lval_t *valk_builtin_compile_process(valk_lenv_t *e,
 
   valk_lval_t *ast = valk_parse_text(text);
   if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
-  VALK_GC_ROOT(ast);
-  return compile_process_ast(ast, prefix);
+  // Stash ast into eval_expr so the inner valk_lval_eval calls inside
+  // compile_process_ast keep ast (and everything reachable from it)
+  // GC-walked via mark_eval_stack_roots. The inner eval saves/restores
+  // eval_expr through saved_eval_exprs[] on entry/exit, so this outer
+  // assignment survives recursive evaluations.
+  valk_lval_t *saved_outer_expr = valk_thread_ctx.eval_expr;
+  valk_thread_ctx.eval_expr = ast;
+  valk_lval_t *result = compile_process_ast(ast, prefix);
+  valk_thread_ctx.eval_expr = saved_outer_expr;
+  return result;
 }
 
 // Like compile/process but takes a path and uses the parse cache. Avoids
@@ -431,8 +439,11 @@ static valk_lval_t *valk_builtin_compile_process_file(valk_lenv_t *e,
 
   valk_lval_t *ast = parse_file_cached(resolved);
   if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
-  VALK_GC_ROOT(ast);
-  return compile_process_ast(ast, prefix);
+  valk_lval_t *saved_outer_expr = valk_thread_ctx.eval_expr;
+  valk_thread_ctx.eval_expr = ast;
+  valk_lval_t *result = compile_process_ast(ast, prefix);
+  valk_thread_ctx.eval_expr = saved_outer_expr;
+  return result;
 }
 
 

@@ -32,15 +32,15 @@
       (= {start-line} params:range:start:line)
       (= {end-line} params:range:end:line)
       (stderr/write (str "[sem-range] [" start-line "," end-line "]\n"))
-      ; Same caching strategy as handle-semantic-tokens (see nav.valk):
-      ; clean parse → tokenize + cache; broken parse → return cached
-      ; tokens to avoid orange flicker from re-lexing latency.
+      ; Mirror handle-semantic-tokens (nav.valk): on broken parse,
+      ; lex-tokenize the CURRENT text instead of returning stale cache.
+      ; Stale cache predates newly-typed lines → those lines have no
+      ; tokens → nvim renders default-color (orange). Lex on every
+      ; request is fast; the editor's debouncing controls request rate.
       (= {ast} (lsp/get-ast uri text))
       (= {data}
         (if (or (nil? ast) (lsp/ast-has-error ast))
-          {do
-            (= {cached} (chm/get lsp/last-good-tokens-cache uri))
-            (if (nil? cached) {sem/lex-tokenize text} {cached})}
+          {sem/lex-tokenize text}
           {do
             (= {fresh} (sem/tokenize-ast ast text))
             (chm/put! lsp/last-good-tokens-cache uri fresh)
@@ -104,6 +104,24 @@
 ; Dispatch
 ; ---------------------------------------------------------------------------
 
+; Versions for coalescing rapid-fire requests. The LSP receives one
+; request per keystroke during typing; running the full parse + walk +
+; encode pipeline for every one allocates ~100MB/sec on a medium file
+; and triggers a multi-second STW GC pause that hangs the server.
+;
+; Strategy: increment a counter per request, snapshot v before async
+; dispatch, and in the async body check `current == v`. If yes (we're
+; the latest), run the full handler. If no (a newer request arrived),
+; send the LAST CACHED response immediately — no work, but the client
+; still gets a valid response so the request doesn't dangle.
+;
+; The earlier "drop superseded requests entirely" approach left
+; request IDs pending forever in the client (orange while typing).
+; This approach: always respond. Memory bounded to one full work per
+; typing burst; ID always resolves with current-or-stale data.
+;
+; lsp/diag-version: notification (not request), no response needed,
+; dropping superseded values is fine.
 (def {lsp/sem-version} 0)
 (def {lsp/hint-version} 0)
 (def {lsp/diag-version} 0)
@@ -116,6 +134,29 @@
     lsp/noop-cb
 })
 
+; For superseded sem-tokens/inlay requests, send the last cached
+; response (per-URI) instead of either dropping or recomputing.
+; Cached tokens are fresh from a recent handler run; they don't
+; cover newly-typed lines but the FOLLOWING (latest) request will,
+; so the editor sees correct tokens within one debounce window.
+(sig 'lsp/send-cached-sem-tokens {-> Any List Nil})
+(fun {lsp/send-cached-sem-tokens id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {cached} (chm/get lsp/last-good-tokens-cache uri))
+  (if (nil? cached)
+    {lsp/send-response id (list :data nil)}
+    {lsp/send-response id (list :data cached)})})
+
+(sig 'lsp/send-cached-hints {-> Any List Nil})
+(fun {lsp/send-cached-hints id params} {do
+  (= {td} (plist/get params :textDocument))
+  (= {uri} (plist/get td :uri))
+  (= {cached} (chm/get lsp/last-good-hints-cache uri))
+  (if (nil? cached)
+    {lsp/send-response id nil}
+    {lsp/send-response id cached})})
+
 (sig 'lsp/dispatch-request {-> Str Any List Nil})
 (fun {lsp/dispatch-request method id params} {
   match method
@@ -123,25 +164,31 @@
       (def {lsp/sem-version} (+ lsp/sem-version 1))
       (= {v} lsp/sem-version)
       (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/sem-version v))
-          {nil}
-          {do (lsp/handle-readonly method id params) nil}})
+        (\ {_} {do
+          (if (== lsp/sem-version v)
+            {(lsp/handle-readonly method id params)}
+            {(lsp/send-cached-sem-tokens id params)})
+          nil})
         nil lsp/noop-cb))}
     {"textDocument/semanticTokens/range" (do
       (def {lsp/sem-version} (+ lsp/sem-version 1))
       (= {v} lsp/sem-version)
       (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/sem-version v))
-          {nil}
-          {do (lsp/handle-readonly method id params) nil}})
+        (\ {_} {do
+          (if (== lsp/sem-version v)
+            {(lsp/handle-readonly method id params)}
+            {(lsp/send-cached-sem-tokens id params)})
+          nil})
         nil lsp/noop-cb))}
     {"textDocument/inlayHint" (do
       (def {lsp/hint-version} (+ lsp/hint-version 1))
       (= {v} lsp/hint-version)
       (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/hint-version v))
-          {nil}
-          {do (lsp/handle-readonly method id params) nil}})
+        (\ {_} {do
+          (if (== lsp/hint-version v)
+            {(lsp/handle-readonly method id params)}
+            {(lsp/send-cached-hints id params)})
+          nil})
         nil lsp/noop-cb))}
     {_ (lsp/dispatch-to-worker method id params)}
 })

@@ -8,27 +8,80 @@
 
 #include "llvm_aot.h"
 #include "llvm_codegen.h"
+#include "vir_to_llvm.h"
+#include "../vir/vir.h"
+
+// Slow-body lambda compile via the VIR pipeline.
+//
+// AST → VIR (ast_to_vir.c::vir_lower_lambda_body_with_env) → safepoint
+// pass → LLVM IR (vir_to_llvm.c::vir_to_llvm_func), all into the same
+// LLVM context build_aot.c is managing. Replaces the hand-rolled
+// valk_llvm_compile_lambda_body path that used to live in
+// llvm_codegen.c.
+//
+// VIR is the proper IR layer: liveness analysis, safepoint placement,
+// and any future optimization passes are added at the IR level. Direct
+// AOT-to-AOT calls (resolved against build_env) are emitted as
+// VIR_DIRECT_CALL ops; lower_value lowers them to a build-call_env +
+// lenv_put each formal + native_fn(call_env) sequence, bypassing
+// valk_lval_eval_call.
+static LLVMValueRef compile_slow_body_via_vir(valk_llvm_ctx_t *ctx,
+                                              valk_lval_t *body,
+                                              const char *fn_name) {
+  vir_module_t *vmod = vir_module_new(fn_name);
+  vir_builder_t *b = vir_builder_new(vmod);
+
+  // Pass build_env so ast_to_vir can resolve direct AOT-to-AOT calls.
+  // ctx->build_env points at the env containing every AOT candidate's
+  // lambda lval (with native_name already assigned in phase 1).
+  vir_func_t *vfn = vir_lower_lambda_body_with_env(b, body, fn_name,
+                                                    ctx->build_env);
+  if (!vfn) {
+    vir_builder_free(b);
+    vir_module_free(vmod);
+    return NULL;
+  }
+
+  vir_gc_insert_safepoints(vmod);
+
+  LLVMValueRef llvm_fn = vir_to_llvm_func(ctx, vfn);
+
+  vir_builder_free(b);
+  vir_module_free(vmod);
+  return llvm_fn;
+}
 
 typedef struct {
   char *name;  // strdup'd; owned by this struct
 } aot_entry_t;
 
-// Mutable state per candidate across the multi-phase compile below.
-typedef struct {
-  valk_lval_t *lval;          // the LVAL_FUN
-  char *slow_name;            // strdup'd; matches v->fun.native_name
-  char *fast_name;            // strdup'd; null if body isn't fast-safe
-  LLVMValueRef slow_fn;       // compiled (or declared-empty) slow variant
-  LLVMValueRef fast_fn;       // declared (pre) then populated; nullable
-  valk_lval_t *formals;       // for adapter emission (fast-safe only)
-  bool is_fast;               // compile slow as adapter if true
-} aot_cand_t;
-
-static bool is_aot_candidate(valk_lval_t *v) {
+// Closures created at runtime (e.g. `(make-counter 10)`) capture a
+// non-trivial env chain holding the values they close over. AOT
+// compilation discards captured env state — fast variants build a
+// fresh env parented at `valk_aot_root_env`, slow variants use the
+// caller's call_env. Either way, a closure's captured `start`/etc.
+// is unreachable from the compiled body.
+//
+// Detect closures by env identity: a top-level lambda has
+// `v->fun.env == build_env` (the env the AOT compile is iterating);
+// a closure has some other env. Skip AOT for closures so they stay
+// interpreter-evaluated against their captured env.
+//
+// Macros (LVAL_FLAG_MACRO) are also skipped: their bodies typically
+// contain `(quasiquote ...)` and `(unquote ...)` forms, which VIR
+// doesn't lower as special forms — they fall through to funcall
+// against env, which fails because quasiquote/unquote aren't bound.
+// Macros are called only at expansion time anyway (and in `--build`
+// mode never at runtime, since expansion already happened in the
+// load phase); AOT'ing them is dead work that breaks JIT mode where
+// `(eval {macro-using-form})` re-triggers expansion at runtime.
+static bool is_aot_candidate(valk_lval_t *v, valk_lenv_t *build_env) {
   if (!v || LVAL_TYPE(v) != LVAL_FUN) return false;
   if (v->fun.builtin != nullptr) return false;
   if (!v->fun.body) return false;
   if (v->fun.native_name) return false;
+  if (v->fun.env != build_env) return false;
+  if (v->flags & LVAL_FLAG_MACRO) return false;
   return true;
 }
 
@@ -55,20 +108,6 @@ static void write_dispatch_c(FILE *f, aot_entry_t *entries, size_t n) {
   fprintf(f, "const size_t valk_aot_table_count = %zu;\n", n);
 }
 
-// Count the formals in a lambda's formals list, rejecting `&` varargs.
-// Returns SIZE_MAX if the list is malformed or contains varargs.
-static size_t count_fast_formals(valk_lval_t *formals) {
-  size_t n = 0;
-  for (valk_lval_t *f = formals; f && LVAL_TYPE(f) == LVAL_CONS;
-       f = f->cons.tail) {
-    valk_lval_t *fh = f->cons.head;
-    if (!fh || LVAL_TYPE(fh) != LVAL_SYM) return SIZE_MAX;
-    if (strcmp(fh->str, "&") == 0) return SIZE_MAX;
-    n++;
-  }
-  return n;
-}
-
 // VALK_AOT_VERBOSE=1 prints per-candidate compile decisions on stderr so
 // users can see which lambdas got AOT'd and which fell back to the tree
 // walker. Off by default to keep the build quiet.
@@ -77,209 +116,141 @@ static bool aot_verbose(void) {
   return e && *e && *e != '0';
 }
 
-int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
-                        const char *c_path, size_t *out_count) {
-  if (!env) return -1;
+// Compile every AOT-eligible lambda in `env` to LLVM IR. Returns a new
+// llvm ctx with the populated, verified, optimized module on success;
+// NULL on failure. Sets v->fun.native_name on each compiled candidate.
+// Caller owns the returned ctx — must call valk_llvm_ctx_free OR
+// transfer ownership into a JIT runner.
+//
+// On `*count_out`: number of compiled candidates (their native_names
+// are now set on env entries). Walk env to find them: any LVAL_FUN
+// with non-null native_name was compiled into this ctx's module.
+//
+// This is the shared pipeline for `--build` (which emits a .o + dispatch
+// table) and the JIT (which hands ctx->module to ORC). Both paths drive
+// phases 1-5 (identify candidates, compile slow/fast, verify, optimize)
+// identically.
+//
+// On failure, env is rolled back: any v->fun.native_name set during
+// phase 1 is freed and cleared, so the caller can fall back to the
+// tree walker without dangling references.
+valk_llvm_ctx_t *valk_aot_compile_env(valk_lenv_t *env, size_t *count_out) {
+  if (!env) return nullptr;
 
   valk_llvm_ctx_t *ctx = valk_llvm_ctx_new("valk_aot");
-  if (!ctx) return -1;
+  if (!ctx) return nullptr;
   ctx->build_env = env;
   bool verbose = aot_verbose();
 
   aot_entry_t *entries = nullptr;
   size_t n = 0, cap = 0;
 
-  // Phase 1 — identify candidates, assign native_name, and emit slow
-  // variants for NON-fast-safe candidates. For fast-safe candidates we
-  // only reserve the slow name here; the slow body is emitted in phase 4
-  // as an adapter that trampolines into the fast variant (the body
-  // already lives in the fast function, so slow doesn't need it).
-  // Skipping the full slow-body compile also means forward references
-  // don't matter for fast-safe candidates — phase 4 only needs the fast
-  // name, which phase 2 guarantees exists.
-  aot_cand_t *cands = nullptr;
+  // Single-pass compile: every AOT candidate gets one VIR-lowered
+  // function. The earlier fast/slow split is gone — fast was a
+  // duplicate codegen path that lacked TCO and led to architectural
+  // drift between the two pipelines (each fix had to be applied to
+  // both, and slow-body recursion blew the C stack because TCO only
+  // existed in fast). VIR now handles tail calls via musttail (see
+  // ast_to_vir.c::lower_tail and vir_to_llvm.c VIR_CALL.is_tail), so
+  // one pipeline covers all cases.
+  //
+  // Two-phase loop keeps mutual recursion working: phase 1 declares
+  // every candidate's symbol so phase 2's bodies can resolve direct
+  // calls (via VIR_DIRECT_CALL → LLVMGetNamedFunction) regardless of
+  // ordering.
 
+  // Phase 1: declare every candidate's compiled-fn symbol and assign
+  // native_name. This must happen before any body is compiled so that
+  // direct-call lowering during phase 2 can resolve the target by name.
   for (u64 i = 0; i < env->symbols.count; i++) {
     valk_lval_t *v = env->vals.items[i];
-    if (!is_aot_candidate(v)) continue;
+    if (!is_aot_candidate(v, env)) continue;
 
     char name[64];
     snprintf(name, sizeof(name), "valk_aot_%zu", n);
 
-    bool safe = valk_llvm_body_is_fast_safe(v->fun.body);
-    size_t nf = safe ? count_fast_formals(v->fun.formals) : SIZE_MAX;
-    bool is_fast = safe && (nf != SIZE_MAX);
-
-    LLVMValueRef fn;
-    if (is_fast) {
-      // Reserve the slow name with no body — phase 4 fills it in.
-      LLVMTypeRef slow_ty = LLVMFunctionType(ctx->ptr_type,
-        (LLVMTypeRef[]){ctx->ptr_type}, 1, 0);
-      fn = LLVMAddFunction(ctx->module, name, slow_ty);
-      LLVMSetLinkage(fn, LLVMExternalLinkage);
-      if (verbose) {
-        fprintf(stderr, "[AOT] fast: %s (%zu formals)\n",
-                env->symbols.items[i] ? env->symbols.items[i] : name, nf);
-      }
-    } else {
-      fn = valk_llvm_compile_lambda_body(ctx, v->fun.body, name);
-      if (!fn) {
-        if (verbose) {
-          fprintf(stderr, "[AOT] skip: %s (codegen returned null)\n",
-                  env->symbols.items[i] ? env->symbols.items[i] : name);
-        }
-        continue;
-      }
-      if (LLVMVerifyFunction(fn, LLVMReturnStatusAction)) {
-        if (verbose) {
-          fprintf(stderr, "[AOT] skip: %s (verify failed)\n",
-                  env->symbols.items[i] ? env->symbols.items[i] : name);
-        }
-        LLVMDeleteFunction(fn);
-        continue;
-      }
-      if (verbose) {
-        fprintf(stderr, "[AOT] slow: %s\n",
-                env->symbols.items[i] ? env->symbols.items[i] : name);
-      }
-    }
+    LLVMTypeRef fn_ty = LLVMFunctionType(ctx->ptr_type,
+      (LLVMTypeRef[]){ctx->ptr_type}, 1, 0);
+    LLVMValueRef fn = LLVMAddFunction(ctx->module, name, fn_ty);
+    LLVMSetLinkage(fn, LLVMExternalLinkage);
 
     v->fun.native_name = strdup(name);
 
     if (n == cap) {
       cap = cap ? cap * 2 : 8;
       entries = realloc(entries, cap * sizeof(*entries));
-      cands = realloc(cands, cap * sizeof(*cands));
     }
     entries[n].name = strdup(name);
-    cands[n].lval = v;
-    cands[n].slow_name = strdup(name);
-    cands[n].fast_name = nullptr;
-    cands[n].slow_fn = fn;
-    cands[n].fast_fn = nullptr;
-    cands[n].formals = v->fun.formals;
-    cands[n].is_fast = is_fast;
     n++;
   }
 
-  // Phase 2 — pre-declare fast variants for all fast-safe candidates.
-  // This is the whole point: when we compile the body of fast_A in
-  // phase 3 and it references fast_B (forward or mutual), phase 2 has
-  // already added fast_B to the module, so try_codegen_direct_call
-  // resolves the LLVMGetNamedFunction lookup and emits a direct call.
-  // Without this pre-declaration, fast_A would fall through to the
-  // slow path for fast_B, killing TCO across the pair.
-  for (size_t i = 0; i < n; i++) {
-    if (!cands[i].is_fast) continue;
-    size_t nf = count_fast_formals(cands[i].formals);
+  // Phase 2: compile each body via VIR. lower_funcall sees other
+  // candidates' native_names in build_env and emits VIR_DIRECT_CALL
+  // for AOT-to-AOT calls; ast_to_vir's lower_tail marks tail-position
+  // calls so vir_to_llvm emits musttail (sibcall).
+  bool ok = true;
+  for (u64 i = 0; i < env->symbols.count && ok; i++) {
+    valk_lval_t *v = env->vals.items[i];
+    // Recognize candidates by native_name (set in phase 1 above) — we
+    // can't call is_aot_candidate here because that predicate excludes
+    // anything with native_name already set, which is exactly what
+    // we just did to every candidate.
+    if (!v || LVAL_TYPE(v) != LVAL_FUN) continue;
+    if (!v->fun.native_name) continue;
+    if (!v->fun.body) continue;
 
-    char fast_name[80];
-    snprintf(fast_name, sizeof fast_name, "%s_fast", cands[i].slow_name);
-
-    LLVMTypeRef *params = malloc(sizeof(LLVMTypeRef) * (nf + 1));
-    params[0] = ctx->ptr_type;
-    for (size_t j = 0; j < nf; j++) params[j + 1] = ctx->ptr_type;
-    LLVMTypeRef ft = LLVMFunctionType(ctx->ptr_type, params,
-                                      (unsigned)(nf + 1), 0);
-    free(params);
-
-    LLVMValueRef ffn = LLVMAddFunction(ctx->module, fast_name, ft);
-    LLVMSetLinkage(ffn, LLVMExternalLinkage);
-    cands[i].fast_name = strdup(fast_name);
-    cands[i].fast_fn = ffn;
-  }
-
-  // Phase 3 — populate fast variant bodies. Each body can now direct-call
-  // any other fast variant by name. If verification fails for any fast
-  // variant, the module is likely corrupt because other fast bodies may
-  // already reference this fn by value — bail out and fall back to the
-  // slow-only path (return -1 from this function; the caller treats
-  // AOT emit failure as "skip AOT, use tree walker"). In practice fast
-  // bodies share semantics with slow + arg threading, so this only
-  // triggers on codegen bugs.
-  bool fast_ok = true;
-  for (size_t i = 0; i < n && fast_ok; i++) {
-    if (!cands[i].fast_fn) continue;
-    valk_lval_t *v = cands[i].lval;
-
-    LLVMValueRef ffn = valk_llvm_compile_lambda_body_fast(
-      ctx, v->fun.body, v->fun.formals, cands[i].fast_name);
-    if (!ffn) { fast_ok = false; break; }
-
-    if (LLVMVerifyFunction(ffn, LLVMReturnStatusAction)) {
-      fprintf(stderr, "valk --build: fast variant %s failed verify; "
-                      "dropping AOT for whole module\n",
-              cands[i].fast_name);
-      fast_ok = false;
+    LLVMValueRef fn = compile_slow_body_via_vir(ctx, v->fun.body,
+                                                v->fun.native_name);
+    if (!fn) {
+      fprintf(stderr, "[AOT] skip: %s (codegen returned null)\n",
+              env->symbols.items[i] ? env->symbols.items[i]
+                                    : v->fun.native_name);
+      ok = false;
+      break;
+    }
+    if (LLVMVerifyFunction(fn, LLVMReturnStatusAction)) {
+      fprintf(stderr, "valk --build: %s failed verify; aborting\n",
+              v->fun.native_name);
+      ok = false;
+      break;
+    }
+    if (verbose) {
+      fprintf(stderr, "[AOT] compiled: %s\n",
+              env->symbols.items[i] ? env->symbols.items[i]
+                                    : v->fun.native_name);
     }
   }
 
-  // Phase 4 — emit slow bodies for fast-safe candidates as thin adapters
-  // that unpack formals from call_env by name and tail-call the matching
-  // _fast variant with (valk_aot_root_env, arg_0, ...). This is what the
-  // tree walker actually invokes via native_fn; the adapter then enters
-  // the _fast call chain where mutual recursion turns into sibcall jmps.
-  // Without this, native_fn for fast-safe lambdas would dispatch to the
-  // empty reserved slow stub (undefined IR) or to a full slow body that
-  // never enters _fast and so bounces back through the tree walker on
-  // every forward/mutual reference.
-  for (size_t i = 0; i < n && fast_ok; i++) {
-    if (!cands[i].is_fast) continue;
+  // Roll back env state on failure so the caller sees a clean env (no
+  // dangling native_name pointers) and doesn't leak.
+#define COMPILE_FAIL_CLEANUP() do {                                       \
+    for (u64 _i = 0; _i < env->symbols.count; _i++) {                     \
+      valk_lval_t *_v = env->vals.items[_i];                              \
+      if (_v && LVAL_TYPE(_v) == LVAL_FUN && _v->fun.native_name) {       \
+        free(_v->fun.native_name);                                        \
+        _v->fun.native_name = nullptr;                                    \
+      }                                                                   \
+    }                                                                     \
+    for (size_t _i = 0; _i < n; _i++) free(entries[_i].name);             \
+    free(entries);                                                        \
+    valk_llvm_ctx_free(ctx);                                              \
+  } while (0)
 
-    LLVMValueRef sfn = valk_llvm_compile_lambda_body_slow_adapter(
-      ctx, cands[i].formals, cands[i].slow_name, cands[i].fast_name);
-    if (!sfn || LLVMVerifyFunction(sfn, LLVMReturnStatusAction)) {
-      fprintf(stderr, "valk --build: slow adapter %s failed verify; "
-                      "dropping AOT for whole module\n",
-              cands[i].slow_name);
-      fast_ok = false;
-    }
-  }
-
-  if (!fast_ok) {
-    for (size_t i = 0; i < n; i++) {
-      valk_lval_t *v = cands[i].lval;
-      if (v && LVAL_TYPE(v) == LVAL_FUN && v->fun.native_name) {
-        free(v->fun.native_name);
-        v->fun.native_name = nullptr;
-      }
-      free(cands[i].slow_name);
-      free(cands[i].fast_name);
-      free(entries[i].name);
-    }
-    free(cands);
-    free(entries);
-    valk_llvm_ctx_free(ctx);
-    return -1;
+  if (!ok) {
+    COMPILE_FAIL_CLEANUP();
+    return nullptr;
   }
 
   char *mod_err = nullptr;
   if (LLVMVerifyModule(ctx->module, LLVMReturnStatusAction, &mod_err)) {
-    fprintf(stderr, "valk --build: AOT module verify failed: %s\n",
+    fprintf(stderr, "valk_aot_compile_env: AOT module verify failed: %s\n",
             mod_err ? mod_err : "unknown");
     if (mod_err) LLVMDisposeMessage(mod_err);
-    // Roll back native_name assignments so runtime doesn't try to
-    // resolve symbols that won't exist.
-    for (u64 i = 0; i < env->symbols.count; i++) {
-      valk_lval_t *v = env->vals.items[i];
-      if (v && LVAL_TYPE(v) == LVAL_FUN && v->fun.native_name) {
-        free(v->fun.native_name);
-        v->fun.native_name = nullptr;
-      }
-    }
-    for (size_t i = 0; i < n; i++) {
-      free(entries[i].name);
-      free(cands[i].slow_name);
-      free(cands[i].fast_name);
-    }
-    free(cands);
-    free(entries);
-    valk_llvm_ctx_free(ctx);
-    return -1;
+    COMPILE_FAIL_CLEANUP();
+    return nullptr;
   }
   if (mod_err) LLVMDisposeMessage(mod_err);
 
-  int rc = 0;
   if (n > 0) {
     if (getenv("VALK_DUMP_AOT_IR")) {
       valk_aot_emit_ir(ctx, "/tmp/valk_aot_pre.ll");
@@ -289,16 +260,80 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
     // after tail calls, and direct calls that could be sibcalled —
     // the optimizer handles all three cleanly.
     if (valk_aot_optimize(ctx) != 0) {
-      fprintf(stderr, "valk --build: AOT optimize failed\n");
+      fprintf(stderr, "valk_aot_compile_env: optimize failed\n");
+      COMPILE_FAIL_CLEANUP();
+      return nullptr;
+    }
+    if (getenv("VALK_DUMP_AOT_IR")) {
+      valk_aot_emit_ir(ctx, "/tmp/valk_aot_post.ll");
+    }
+  }
+
+#undef COMPILE_FAIL_CLEANUP
+
+  // Both consumers (build and JIT) re-derive what they need by walking
+  // env post-compile, so we can free the entries array here.
+  for (size_t i = 0; i < n; i++) free(entries[i].name);
+  free(entries);
+
+  if (count_out) *count_out = n;
+  return ctx;
+}
+
+// Walk env, collect compiled candidates' native_names into a fresh
+// entry array. Used by valk_build_emit_aot to build the dispatch table
+// and by the JIT layer to walk symbols for ORC lookup. Caller owns the
+// returned array and must free it via valk_aot_free_entries.
+typedef struct {
+  char *name;          // strdup'd (matches v->fun.native_name)
+  valk_lval_t *lval;   // points back to env entry
+} valk_aot_compiled_t;
+
+static valk_aot_compiled_t *collect_compiled_entries(valk_lenv_t *env,
+                                                     size_t *out_count) {
+  size_t cap = 0, n = 0;
+  valk_aot_compiled_t *out = nullptr;
+  for (u64 i = 0; i < env->symbols.count; i++) {
+    valk_lval_t *v = env->vals.items[i];
+    if (!v || LVAL_TYPE(v) != LVAL_FUN || !v->fun.native_name) continue;
+    if (n == cap) {
+      cap = cap ? cap * 2 : 8;
+      out = realloc(out, cap * sizeof(*out));
+    }
+    out[n].name = strdup(v->fun.native_name);
+    out[n].lval = v;
+    n++;
+  }
+  *out_count = n;
+  return out;
+}
+
+static void free_compiled_entries(valk_aot_compiled_t *entries, size_t n) {
+  if (!entries) return;
+  for (size_t i = 0; i < n; i++) free(entries[i].name);
+  free(entries);
+}
+
+int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
+                        const char *c_path, size_t *out_count) {
+  size_t n = 0;
+  valk_llvm_ctx_t *ctx = valk_aot_compile_env(env, &n);
+  if (!ctx) return -1;
+
+  size_t entry_count = 0;
+  valk_aot_compiled_t *compiled = collect_compiled_entries(env, &entry_count);
+
+  // Adapt to the legacy aot_entry_t shape that write_dispatch_c expects.
+  aot_entry_t *entries = malloc(entry_count * sizeof(*entries));
+  for (size_t i = 0; i < entry_count; i++) {
+    entries[i].name = strdup(compiled[i].name);
+  }
+
+  int rc = 0;
+  if (n > 0) {
+    if (valk_aot_emit_object(ctx, o_path) != 0) {
+      fprintf(stderr, "valk --build: AOT emit object failed\n");
       rc = -1;
-    } else {
-      if (getenv("VALK_DUMP_AOT_IR")) {
-        valk_aot_emit_ir(ctx, "/tmp/valk_aot_post.ll");
-      }
-      if (valk_aot_emit_object(ctx, o_path) != 0) {
-        fprintf(stderr, "valk --build: AOT emit object failed\n");
-        rc = -1;
-      }
     }
   }
 
@@ -307,17 +342,13 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
     fprintf(stderr, "valk --build: cannot write %s\n", c_path);
     rc = -1;
   } else {
-    write_dispatch_c(f, entries, n);
+    write_dispatch_c(f, entries, entry_count);
     fclose(f);
   }
 
-  for (size_t i = 0; i < n; i++) {
-    free(entries[i].name);
-    free(cands[i].slow_name);
-    free(cands[i].fast_name);
-  }
-  free(cands);
+  for (size_t i = 0; i < entry_count; i++) free(entries[i].name);
   free(entries);
+  free_compiled_entries(compiled, entry_count);
   valk_llvm_ctx_free(ctx);
 
   if (out_count) *out_count = n;

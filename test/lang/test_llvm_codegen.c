@@ -2,17 +2,10 @@
 #include "../src/parser.h"
 #include "../src/memory.h"
 #include "../src/llvm/llvm_codegen.h"
-#include "../src/llvm/llvm_jit.h"
 #include "../src/llvm/llvm_aot.h"
 
 #include <stdio.h>
 #include <string.h>
-
-static valk_lenv_t *make_env(void) {
-  valk_lenv_t *env = valk_lenv_empty();
-  valk_lenv_builtins(env);
-  return env;
-}
 
 void test_codegen_num_literal(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -143,189 +136,6 @@ void test_codegen_dump_ir(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_jit_num(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-  VALK_TEST_ASSERT(jit != NULL, "Should create JIT");
-
-  valk_lval_t *expr = valk_lval_num(42);
-  valk_lval_t *result = valk_jit_eval(jit, env, expr);
-
-  VALK_TEST_ASSERT(result != NULL, "JIT should return result");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 42);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_string(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-  VALK_TEST_ASSERT(jit != NULL, "Should create JIT");
-
-  valk_lval_t *expr = valk_lval_str("hello");
-  valk_lval_t *result = valk_jit_eval(jit, env, expr);
-
-  VALK_TEST_ASSERT(result != NULL, "JIT should return result");
-  ASSERT_LVAL_TYPE(result, LVAL_STR);
-  ASSERT_STR_EQ(result->str, "hello");
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_arithmetic(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-  VALK_TEST_ASSERT(jit != NULL, "Should create JIT");
-
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "(+ 1 2)");
-  VALK_TEST_ASSERT(result != NULL, "JIT should return result");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 3);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_nested_arithmetic(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "(+ (* 3 4) (- 10 5))");
-  VALK_TEST_ASSERT(result != NULL, "Should evaluate nested arithmetic");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 17);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_if_true(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "(if 1 42 0)");
-  VALK_TEST_ASSERT(result != NULL, "Should evaluate if-true");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 42);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_if_false(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "(if 0 42 99)");
-  VALK_TEST_ASSERT(result != NULL, "Should evaluate if-false");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 99);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_def_and_lookup(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-
-  valk_jit_eval_string(jit, env, "(def {x} 42)");
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "x");
-  VALK_TEST_ASSERT(result != NULL, "Should look up defined variable");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 42);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_do_sequence(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "(do 1 2 3)");
-  VALK_TEST_ASSERT(result != NULL, "Should evaluate do sequence");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 3);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_lambda(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-
-  valk_jit_eval_string(jit, env, "(def {double} (\\ {x} {* x 2}))");
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "(double 21)");
-  VALK_TEST_ASSERT(result != NULL, "Should call JIT-compiled lambda");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 42);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_fun_def(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-
-  valk_jit_eval_string(jit, env, "(def {square} (\\ {x} {* x x}))");
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "(square 7)");
-  VALK_TEST_ASSERT(result != NULL, "Should call def+lambda function");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 49);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_multiple_exprs(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-
-  valk_jit_eval_string(jit, env, "(def {a} 10)");
-  valk_jit_eval_string(jit, env, "(def {b} 20)");
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "(+ a b)");
-
-  VALK_TEST_ASSERT(result != NULL, "Should evaluate multiple JIT invocations");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 30);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
-void test_jit_recursive_function(VALK_TEST_ARGS()) {
-  VALK_TEST();
-  valk_lenv_t *env = make_env();
-  valk_jit_t *jit = valk_jit_new();
-
-  valk_jit_eval_string(jit, env,
-    "(def {fact} (\\ {n} {if (== n 0) {1} {* n (fact (- n 1))}}))");
-  valk_lval_t *result = valk_jit_eval_string(jit, env, "(fact 10)");
-  VALK_TEST_ASSERT(result != NULL, "Should compute factorial");
-  ASSERT_LVAL_TYPE(result, LVAL_NUM);
-  ASSERT_LVAL_NUM(result, 3628800);
-
-  valk_jit_free(jit);
-  VALK_PASS();
-}
-
 void test_aot_emit_ir(VALK_TEST_ARGS()) {
   VALK_TEST();
   valk_llvm_ctx_t *ctx = valk_llvm_ctx_new("test_aot");
@@ -372,18 +182,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "codegen_if_expr", test_codegen_if_expr);
   valk_testsuite_add_test(suite, "codegen_do_expr", test_codegen_do_expr);
   valk_testsuite_add_test(suite, "codegen_dump_ir", test_codegen_dump_ir);
-  valk_testsuite_add_test(suite, "jit_num", test_jit_num);
-  valk_testsuite_add_test(suite, "jit_string", test_jit_string);
-  valk_testsuite_add_test(suite, "jit_arithmetic", test_jit_arithmetic);
-  valk_testsuite_add_test(suite, "jit_nested_arithmetic", test_jit_nested_arithmetic);
-  valk_testsuite_add_test(suite, "jit_if_true", test_jit_if_true);
-  valk_testsuite_add_test(suite, "jit_if_false", test_jit_if_false);
-  valk_testsuite_add_test(suite, "jit_def_and_lookup", test_jit_def_and_lookup);
-  valk_testsuite_add_test(suite, "jit_do_sequence", test_jit_do_sequence);
-  valk_testsuite_add_test(suite, "jit_lambda", test_jit_lambda);
-  valk_testsuite_add_test(suite, "jit_fun_def", test_jit_fun_def);
-  valk_testsuite_add_test(suite, "jit_multiple_exprs", test_jit_multiple_exprs);
-  valk_testsuite_add_test(suite, "jit_recursive_function", test_jit_recursive_function);
   valk_testsuite_add_test(suite, "aot_emit_ir", test_aot_emit_ir);
   valk_testsuite_add_test(suite, "aot_emit_object", test_aot_emit_object);
 

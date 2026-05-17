@@ -345,129 +345,15 @@ void test_gc_phase_transitions(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_gc_root_stack_init(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_system_create(NULL);
-
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack != nullptr, "root_stack should be allocated");
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack_capacity == 256, "capacity should be 256");
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == 0, "count should be 0");
-
-  valk_gc_thread_unregister();
-
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack == nullptr, "root_stack should be freed");
-
-  VALK_PASS();
-}
-
-// ============================================================================
-// Root Management Tests
-// ============================================================================
-
-void test_gc_root_push_pop(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_system_create(NULL);
-
-  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
-  valk_lval_t *val1 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
-  valk_lval_t *val2 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
-  val1->flags = LVAL_NUM;
-  val2->flags = LVAL_NUM;
-
-  size_t before = valk_thread_ctx.root_stack_count;
-
-  valk_gc_root_t r1 = valk_gc_root_push(val1);
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == before + 1, "count should increase");
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack[before] == val1, "val1 should be on stack");
-
-  valk_gc_root_t r2 = valk_gc_root_push(val2);
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == before + 2, "count should increase");
-
-  valk_gc_root_pop();
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == before + 1, "count should decrease");
-
-  valk_gc_root_cleanup(&r1);
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == before, "cleanup should restore");
-
-  (void)r2;
-  valk_gc_heap_destroy(heap);
-  valk_gc_thread_unregister();
-
-  VALK_PASS();
-}
-
-void test_gc_root_scoped(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_system_create(NULL);
-
-  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
-  valk_lval_t *val = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
-  val->flags = LVAL_NUM;
-
-  size_t before = valk_thread_ctx.root_stack_count;
-
-  {
-    VALK_GC_ROOT(val);
-    VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == before + 1, 
-                     "VALK_GC_ROOT should push");
-  }
-
-  VALK_TEST_ASSERT(valk_thread_ctx.root_stack_count == before, 
-                   "Should auto-pop on scope exit");
-
-  valk_gc_heap_destroy(heap);
-  valk_gc_thread_unregister();
-
-  VALK_PASS();
-}
-
-typedef struct {
-  int count;
-  valk_lval_t *found[10];
-} root_visitor_ctx_t;
-
-static void root_visitor_fn(valk_lval_t *root, void *c) {
-  root_visitor_ctx_t *vc = c;
-  if (vc->count < 10) vc->found[vc->count++] = root;
-}
-
-void test_gc_visit_thread_roots(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_system_create(NULL);
-
-  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
-  valk_lval_t *val1 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
-  valk_lval_t *val2 = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
-  val1->flags = LVAL_NUM;
-  val1->num = 42;
-  val2->flags = LVAL_NUM;
-  val2->num = 99;
-
-  valk_gc_root_push(val1);
-  valk_gc_root_push(val2);
-
-  root_visitor_ctx_t ctx = {0};
-  valk_gc_visit_thread_roots(root_visitor_fn, &ctx);
-
-  VALK_TEST_ASSERT(ctx.count >= 2, "Should visit at least 2 roots");
-
-  bool found_val1 = false, found_val2 = false;
-  for (int i = 0; i < ctx.count; i++) {
-    if (ctx.found[i] == val1) found_val1 = true;
-    if (ctx.found[i] == val2) found_val2 = true;
-  }
-  VALK_TEST_ASSERT(found_val1, "Should find val1");
-  VALK_TEST_ASSERT(found_val2, "Should find val2");
-
-  valk_gc_heap_destroy(heap);
-  valk_gc_thread_unregister();
-
-  VALK_PASS();
-}
+// Root-stack tests removed: the explicit root_stack mechanism was
+// retired in favor of conservative native-stack scanning at safepoints
+// (see src/gc_mark.c::scan_thread_native_stack). The runtime now
+// discovers roots automatically by walking each registered thread's
+// native C stack — no compiler cooperation, no manual push/pop, no
+// per-thread root array. Coverage of the same scenarios moved to the
+// LSP UAT 33_orange_repro stress test (real AOT under typing load) and
+// test_gc_unit's precise mark/sweep tests (which opt out via
+// gc_disable_stack_scan to test the marker primitives directly).
 
 void test_gc_safe_point_with_stw(VALK_TEST_ARGS()) {
   VALK_TEST();
@@ -497,10 +383,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_safe_point_idle", test_gc_safe_point_idle);
   valk_testsuite_add_test(suite, "test_gc_mark_queue_concurrent_steal", test_gc_mark_queue_concurrent_steal);
   valk_testsuite_add_test(suite, "test_gc_phase_transitions", test_gc_phase_transitions);
-  valk_testsuite_add_test(suite, "test_gc_root_stack_init", test_gc_root_stack_init);
-  valk_testsuite_add_test(suite, "test_gc_root_push_pop", test_gc_root_push_pop);
-  valk_testsuite_add_test(suite, "test_gc_root_scoped", test_gc_root_scoped);
-  valk_testsuite_add_test(suite, "test_gc_visit_thread_roots", test_gc_visit_thread_roots);
   valk_testsuite_add_test(suite, "test_gc_safe_point_with_stw", test_gc_safe_point_with_stw);
 
   int result = valk_testsuite_run(suite);

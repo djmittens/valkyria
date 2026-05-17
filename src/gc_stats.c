@@ -266,7 +266,9 @@ void valk_diag_dump_on_timeout(void) {
   fprintf(stderr, "=== Current Thread Context ===\n");
   fprintf(stderr, "  gc_registered:   %s\n", valk_thread_ctx.gc_registered ? "yes" : "no");
   fprintf(stderr, "  gc_thread_id:    %llu\n", (unsigned long long)valk_thread_ctx.gc_thread_id);
-  fprintf(stderr, "  root_stack_cnt:  %zu\n", valk_thread_ctx.root_stack_count);
+  fprintf(stderr, "  native_stack:    [%p, %p)\n",
+          valk_thread_ctx.native_stack_limit,
+          valk_thread_ctx.native_stack_base);
   fprintf(stderr, "\n");
 
 #ifdef __linux__

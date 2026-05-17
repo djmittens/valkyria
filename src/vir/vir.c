@@ -35,8 +35,7 @@ const char *vir_opcode_name(vir_opcode_e op) {
     case VIR_QCONS: return "qcons";
     case VIR_LAMBDA: return "lambda";
     case VIR_LITERAL: return "literal";
-    case VIR_GC_ROOT: return "gc.root";
-    case VIR_GC_UNROOT: return "gc.unroot";
+    case VIR_DIRECT_CALL: return "direct_call";
     case VIR_GC_SAFEPOINT: return "gc.safepoint";
     case VIR_PHI: return "phi";
     case VIR_COPY: return "copy";
@@ -76,6 +75,15 @@ static void free_value(vir_value_t *v) {
     free(v->str_val);
   if (v->opcode == VIR_CALL || v->opcode == VIR_TAIL_CALL)
     free(v->call.args);
+  if (v->opcode == VIR_DIRECT_CALL) {
+    free(v->direct_call.native_name);
+    if (v->direct_call.formal_names) {
+      for (u32 i = 0; i < v->direct_call.nargs; i++)
+        free(v->direct_call.formal_names[i]);
+      free(v->direct_call.formal_names);
+    }
+    free(v->direct_call.arg_vals);
+  }
   if (v->opcode == VIR_PHI) {
     free(v->phi.incoming_vals);
     free(v->phi.incoming_blocks);
@@ -172,8 +180,20 @@ vir_block_t *vir_builder_add_block(vir_builder_t *b, const char *name) {
   if (!b->cur_fn->entry)
     b->cur_fn->entry = bb;
 
-  bb->next = b->cur_fn->block_list;
-  b->cur_fn->block_list = bb;
+  // Append to block_list so iteration order matches addition order.
+  // Critical for vir_to_llvm_func: it visits blocks head-first and
+  // expects an entry-block value to be lowered (and added to val_map)
+  // before any later block references it. Prepending would visit
+  // dominator blocks AFTER their dominees, leaving operands unset and
+  // crashing in LLVMTypeOf at the first cross-block use.
+  bb->next = NULL;
+  if (!b->cur_fn->block_list) {
+    b->cur_fn->block_list = bb;
+  } else {
+    vir_block_t *tail = b->cur_fn->block_list;
+    while (tail->next) tail = tail->next;
+    tail->next = bb;
+  }
   b->cur_fn->num_blocks++;
   return bb;
 }
@@ -313,6 +333,25 @@ vir_value_t *vir_build_tail_call(vir_builder_t *b, vir_value_t *fn,
   return build_call_impl(b, VIR_TAIL_CALL, fn, args, num_args);
 }
 
+vir_value_t *vir_build_direct_call(vir_builder_t *b, const char *native_name,
+                                   const char **formal_names,
+                                   vir_value_t **arg_vals, u32 nargs) {
+  vir_value_t *v = new_val(b, VIR_DIRECT_CALL, VIR_TYPE_PTR);
+  v->direct_call.native_name = str_dup(native_name);
+  v->direct_call.nargs = nargs;
+  if (nargs > 0) {
+    v->direct_call.formal_names = calloc(nargs, sizeof(char *));
+    v->direct_call.arg_vals = calloc(nargs, sizeof(vir_value_t *));
+    VALK_OOM_ASSERT(v->direct_call.formal_names);
+    VALK_OOM_ASSERT(v->direct_call.arg_vals);
+    for (u32 i = 0; i < nargs; i++) {
+      v->direct_call.formal_names[i] = str_dup(formal_names[i]);
+      v->direct_call.arg_vals[i] = arg_vals[i];
+    }
+  }
+  return emit(b, v);
+}
+
 vir_value_t *vir_build_env_get(vir_builder_t *b, vir_value_t *env,
                                const char *sym) {
   vir_value_t *v = new_val(b, VIR_ENV_GET, VIR_TYPE_PTR);
@@ -369,19 +408,9 @@ vir_value_t *vir_build_literal(vir_builder_t *b, void *ast_node) {
   return emit(b, v);
 }
 
-vir_value_t *vir_build_gc_root(vir_builder_t *b, vir_value_t *val) {
-  vir_value_t *v = new_val(b, VIR_GC_ROOT, VIR_TYPE_I64);
-  v->gc_save_id = b->next_gc_save_id++;
-  set_operands(v, &val, 1);
-  return emit(b, v);
-}
-
-vir_value_t *vir_build_gc_unroot(vir_builder_t *b, vir_value_t *save) {
-  vir_value_t *v = new_val(b, VIR_GC_UNROOT, VIR_TYPE_VOID);
-  set_operands(v, &save, 1);
-  return emit(b, v);
-}
-
+// vir_build_gc_root / vir_build_gc_unroot retired with the wider
+// root_stack delete. The compiler emits safepoint polls only;
+// conservative native-stack scanning at safepoint discovers all roots.
 void vir_build_gc_safepoint(vir_builder_t *b) {
   emit(b, new_val(b, VIR_GC_SAFEPOINT, VIR_TYPE_VOID));
 }

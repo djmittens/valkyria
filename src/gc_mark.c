@@ -31,6 +31,108 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
 }
 static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx);
 
+// Conservative mark: takes an arbitrary uintptr_t found on the C stack
+// (or in any uninspected memory) and decides whether it points at a
+// valid heap-allocated lval slot. If yes, marks it AND enqueues it so
+// the worker loop processes its children — same recursive coverage as
+// mark_lval, but starting from a raw address with no type info.
+//
+// Validation pipeline (each layer rejects most non-pointers cheaply):
+//   1. NULL / non-canonical address — reject
+//   2. Outside heap virtual reservation — reject (one bounds check)
+//   3. Not slot-aligned — reject (interior pointers ignored)
+//   4. Slot's alloc-bitmap bit is 0 (slot was freed) — reject
+//   5. Already marked — return false (no enqueue, already covered)
+//   6. Otherwise: atomic-set mark, push to mark queue
+//
+// Large objects are handled by the same path that mark_lval uses: if
+// ptr_to_location says "not in main heap", try the large-object list.
+// Large-object lookup matches `data == ptr` exactly (no interior ptrs);
+// fine for this use because AOT-emitted lval pointers always point at
+// the lval header, not into its body.
+//
+// Marked LCOV_EXCL because deterministic test coverage of conservative
+// scanning would require careful stack-layout choreography; the
+// integration test is "LSP under typing load doesn't SIGSEGV in
+// valk_lenv_get / valk_evacuate_value".
+static bool mark_conservative(void *ptr, valk_gc_mark_ctx_t *ctx) {
+  if (ptr == nullptr) return false;
+  uintptr_t p = (uintptr_t)ptr;
+  // Reject obvious non-pointers (kernel space, low memory). On x86_64 a
+  // canonical user pointer is in [0x10000, 0x7fffffffffff]. Tighter
+  // checks happen inside ptr_to_location.
+  if (p < 0x10000 || p >= 0x800000000000ULL) return false;
+
+  valk_gc_ptr_location_t loc;
+  if (valk_gc_ptr_to_location(ctx->heap, ptr, &loc)) {
+    // ptr_to_location accepts any address inside the slot region. We
+    // require exact slot-base alignment so we don't mark on interior
+    // pointers (e.g., ptr+8 from some random integer that happens to
+    // land mid-slot). For valk_lval_t* the AOT/interpreter always
+    // hold pointers at the slot base.
+    void *slot_base = valk_gc_page_slot_ptr(loc.page, loc.slot);
+    if (slot_base != ptr) return false;
+    // Check alloc bitmap so we don't mark a swept slot.
+    if (!valk_gc_page_is_allocated(loc.page, loc.slot)) return false;
+    if (!valk_gc_page_try_mark(loc.page, loc.slot)) return false;
+    // Newly marked — enqueue so worker drains children. Conservative
+    // entry treats every marked slot as a possible lval; the worker
+    // will dispatch on its actual LVAL_TYPE in mark_children.
+    valk_gc_mark_queue_push(ctx->queue, (valk_lval_t *)ptr);
+    return true;
+  }
+  return valk_gc_mark_large_object(ctx->heap, ptr);
+}
+
+// Walk the live portion of a thread's native C stack and conservatively
+// mark every aligned uintptr_t that points at a heap-allocated lval
+// slot. Called once per registered thread per mark phase, while every
+// thread is parked at the STW barrier (so stack snapshots are stable).
+//
+// The stack range is [native_stack_top, native_stack_base) on
+// x86_64/aarch64 (stack grows down). top is captured at safepoint
+// entry by valk_gc_safe_point_slow / valk_gc_heap_collect; base is
+// captured once on thread register.
+//
+// Granularity: 8-byte aligned. Lvals are at minimum 16-byte aligned
+// (size class 0), but we step by 8 to catch lvals that happen to land
+// at +8 offsets (uncommon but possible if the stack frame layout puts
+// them there). Cost is one mark_conservative call per pointer-shaped
+// 8-byte word in the live stack region.
+//
+// What this catches that precise root-tracking does not:
+//   - LLVM SSA values held in register-spill slots during AOT calls
+//   - Formal parameters in fast-variant compiled functions
+//   - C-local valk_lval_t* in any builtin or runtime helper
+//   - Anything held across an apply_func_iter's nested call chain
+// In short: replaces the entire VALK_GC_ROOT machinery + AOT IR-level
+// root insertion with one runtime stack walk per GC cycle.
+static void scan_thread_native_stack(valk_thread_context_t *tc,
+                                     valk_gc_mark_ctx_t *ctx) {
+  if (!tc) return;
+  // Test-only opt-out for tests that exercise precise mark/sweep
+  // semantics. Production never sets this.
+  if (tc->gc_disable_stack_scan) return;
+  void *top  = atomic_load_explicit(&tc->native_stack_top,
+                                    memory_order_acquire);
+  void *base = tc->native_stack_base;
+  if (!top || !base) return;
+  // Sanity: top must be below base on a downward-growing stack.
+  if ((uintptr_t)top >= (uintptr_t)base) return;
+
+  // Align the start address up to 8-byte boundary in case the captured
+  // frame address isn't (it usually is, since pthread frames are
+  // 16-byte aligned and __builtin_frame_address returns an 8-aligned
+  // address by ABI).
+  uintptr_t start = ((uintptr_t)top + 7) & ~(uintptr_t)7;
+  uintptr_t end   = (uintptr_t)base & ~(uintptr_t)7;
+
+  for (uintptr_t addr = start; addr < end; addr += sizeof(void *)) {
+    void *candidate = *(void **)addr;
+    mark_conservative(candidate, ctx);
+  }
+}
+
 // Public wrapper exposed via gc.h for use by LVAL_REF.mark callbacks.
 // LVAL_REF wrapping shared resources (CHM, etc.) implements a mark hook
 // that needs to recursively mark valk values held by the resource;
@@ -64,6 +166,8 @@ static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
     mark_ptr_only(env->symbols.items, ctx);
     mark_ptr_only(env->vals.items, ctx);
     for (u64 i = 0; i < env->symbols.count; i++) {
+      // env->symbols.items[i] is char* (the strdup'd sym name buffer);
+      // mark_ptr_only suffices — no children to recurse.
       mark_ptr_only(env->symbols.items[i], ctx);
     }
     for (u64 i = 0; i < env->vals.count; i++) {
@@ -194,9 +298,16 @@ static void mark_eval_stack_roots(valk_gc_mark_ctx_t *ctx) {
   mark_lval(tc->eval_value, ctx);
   if (tc->eval_env) mark_env(tc->eval_env, ctx);
 
+  // For every nested eval level, walk:
+  //   - the level's continuation-frame stack (every payload lval),
+  //   - the saved outer eval_expr/value/env snapshotted on entry to
+  //     that level so the outer eval's state stays live across nested
+  //     eval calls.
   for (u32 i = 0; i < tc->eval_stack_depth; i++) {
     valk_eval_stack_t *stack = (valk_eval_stack_t *)tc->eval_stacks[i];
     if (stack) mark_one_eval_stack(stack, ctx);
+    if (tc->saved_eval_exprs[i]) mark_lval(tc->saved_eval_exprs[i], ctx);
+    if (tc->saved_eval_values[i]) mark_lval(tc->saved_eval_values[i], ctx);
     if (tc->saved_eval_envs[i]) mark_env(tc->saved_eval_envs[i], ctx);
   }
 }
@@ -303,8 +414,20 @@ void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
     .queue = my_queue
   };
 
-  valk_gc_visit_thread_roots(mark_root_visitor2, &ctx);
+  // Eval-state precise roots: walked from valk_thread_ctx.eval_expr/
+  // eval_value/eval_env + every nested level's saved snapshots and
+  // continuation-frame payloads.
   mark_eval_stack_roots(&ctx);
+
+  // Conservative scan of THIS thread's native C stack. Discovers
+  // everything else: AOT-held formals/SSA spills, register-spilled C
+  // locals, hand-written-C lvals held without manual rooting,
+  // anything sitting in a stack frame at safepoint entry. Each thread
+  // scans its own stack in parallel; cache-friendly, no cross-thread
+  // reads. The captured native_stack_top is set by safe_point_slow
+  // (or by valk_gc_heap_collect for the initiator) right before the
+  // STW barrier, so the snapshot is stable while mark runs.
+  scan_thread_native_stack(&valk_thread_ctx, &ctx);
 
   if (my_id == 0) {
     valk_gc_visit_global_roots(mark_root_visitor2, &ctx);
@@ -473,6 +596,14 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
 
   VALK_ASSERT(atomic_load(&valk_sys->threads_registered) > 0,
               "GC collect requires at least one registered thread");
+
+  // The initiator thread does NOT enter valk_gc_safe_point_slow, so it
+  // must capture its own deepest live frame for the conservative scanner
+  // here, before parking at the barrier below. Mirrors the snapshot
+  // taken by safe_point_slow for every other thread.
+  atomic_store_explicit(&valk_thread_ctx.native_stack_top,
+                        __builtin_frame_address(0),
+                        memory_order_release);
 
   // LCOV_EXCL_START - STW request contention: requires concurrent GC requests
   if (!valk_gc_heap_request_stw(heap)) {

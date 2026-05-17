@@ -236,6 +236,200 @@ static valk_lval_t *valk_builtin_sem_encode_deltas(valk_lenv_t *e,
   return reversed;
 }
 
+// Token type constants — must match SEM_* defs in scripts/lsp/analysis.valk.
+#define SEM_KEYWORD   0
+#define SEM_FUNCTION  1
+#define SEM_PARAMETER 2
+#define SEM_VARIABLE  3
+#define SEM_NUMBER    4
+#define SEM_STRING    5
+#define SEM_TYPE      6
+#define SEM_OPERATOR  7
+#define SEM_PROPERTY  8
+#define MOD_NONE      0
+
+// Static keyword + operator sets used by sem/lex-tokenize. Mirrors the
+// SEM_KEYWORD_SET / SEM_OPERATOR_SET dicts in scripts/lsp/analysis.valk;
+// kept in sync by hand. Linear scan is fine — both sets are tiny and
+// the lookup is per-symbol.
+static const char *sem_keyword_set[] = {
+  "fun", "\\", "def", "=", "if", "match", "select", "case",
+  "do", "let", "type", "sig", "load", "and", "or", "not",
+  "quote", "quasiquote", "unquote", "unquote-splicing",
+};
+static const char *sem_operator_set[] = {
+  "+", "-", "*", "/", ">", "<", ">=", "<=", "==", "!=", "%", "ord",
+};
+
+static int sem_classify_symbol(const char *name, size_t n) {
+  if (n == 0) return SEM_VARIABLE;
+  if (name[0] == ':') return SEM_PROPERTY;
+  for (size_t i = 0; i < sizeof(sem_keyword_set)/sizeof(*sem_keyword_set); i++) {
+    const char *k = sem_keyword_set[i];
+    if (strlen(k) == n && memcmp(k, name, n) == 0) return SEM_KEYWORD;
+  }
+  for (size_t i = 0; i < sizeof(sem_operator_set)/sizeof(*sem_operator_set); i++) {
+    const char *k = sem_operator_set[i];
+    if (strlen(k) == n && memcmp(k, name, n) == 0) return SEM_OPERATOR;
+  }
+  return SEM_VARIABLE;
+}
+
+static inline bool sem_is_paren(char c) {
+  return c == '(' || c == ')' || c == '{' || c == '}';
+}
+
+static inline bool sem_is_sym_char(char c) {
+  if (c == 0) return false;
+  if (c == ' ' || c == '\t' || c == '\n' || c == '\r') return false;
+  if (sem_is_paren(c)) return false;
+  if (c == ';' || c == '"') return false;
+  return true;
+}
+
+// One-pass lex + delta-encode. Replaces a 4-second-on-17KB Lisp
+// implementation (scripts/lsp/analysis.valk's sem/lex-tokenize) that
+// walks the text via recursive `str/slice` calls. The C version runs
+// in microseconds — required for the LSP fallback path that fires on
+// every keystroke during broken-parse states (mid-typing).
+//
+// Identical output to the Lisp version: flat list of 5-tuples
+// (deltaLine deltaCol length type mods) in LSP semanticTokens wire
+// format, sorted by absolute (line, col), non-negative deltas.
+static valk_lval_t *valk_builtin_sem_lex_tokenize(valk_lenv_t *e,
+                                                  valk_lval_t *a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+
+  const char *text = valk_lval_list_nth(a, 0)->str;
+  int text_len = (int)strlen(text);
+
+  u64 capacity = 256;
+  u64 count = 0;
+  sem_tok_t *toks = valk_mem_alloc(sizeof(sem_tok_t) * capacity);
+
+  int pos = 0;
+  while (pos < text_len) {
+    char c = text[pos];
+
+    // Whitespace / parens → skip.
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+        sem_is_paren(c)) {
+      pos++;
+      continue;
+    }
+
+    // Comment: `;` to end of line. Emit as KEYWORD to keep the comment
+    // visibly distinct from default text.
+    if (c == ';') {
+      int start = pos;
+      while (pos < text_len && text[pos] != '\n') pos++;
+      if (count >= capacity) {
+        capacity *= 2;
+        sem_tok_t *nt = valk_mem_alloc(sizeof(sem_tok_t) * capacity);
+        memcpy(nt, toks, sizeof(sem_tok_t) * count);
+        toks = nt;
+      }
+      toks[count++] = (sem_tok_t){.off = start, .len = pos - start,
+                                   .type = SEM_KEYWORD, .mods = MOD_NONE};
+      continue;
+    }
+
+    // String: `"..."` with `\"` escapes.
+    if (c == '"') {
+      int start = pos;
+      pos++; // consume opening quote
+      while (pos < text_len) {
+        if (text[pos] == '\\' && pos + 1 < text_len) {
+          pos += 2;
+          continue;
+        }
+        if (text[pos] == '"') {
+          pos++;
+          break;
+        }
+        pos++;
+      }
+      if (count >= capacity) {
+        capacity *= 2;
+        sem_tok_t *nt = valk_mem_alloc(sizeof(sem_tok_t) * capacity);
+        memcpy(nt, toks, sizeof(sem_tok_t) * count);
+        toks = nt;
+      }
+      toks[count++] = (sem_tok_t){.off = start, .len = pos - start,
+                                   .type = SEM_STRING, .mods = MOD_NONE};
+      continue;
+    }
+
+    // Number: digit, then digits + optional `.`.
+    if (c >= '0' && c <= '9') {
+      int start = pos;
+      while (pos < text_len &&
+             ((text[pos] >= '0' && text[pos] <= '9') || text[pos] == '.')) {
+        pos++;
+      }
+      if (count >= capacity) {
+        capacity *= 2;
+        sem_tok_t *nt = valk_mem_alloc(sizeof(sem_tok_t) * capacity);
+        memcpy(nt, toks, sizeof(sem_tok_t) * count);
+        toks = nt;
+      }
+      toks[count++] = (sem_tok_t){.off = start, .len = pos - start,
+                                   .type = SEM_NUMBER, .mods = MOD_NONE};
+      continue;
+    }
+
+    // Symbol: any non-whitespace, non-paren, non-quote, non-semicolon run.
+    int start = pos;
+    while (pos < text_len && sem_is_sym_char(text[pos])) pos++;
+    if (pos == start) { pos++; continue; } // safety: unknown char
+    int type = sem_classify_symbol(text + start, pos - start);
+    if (count >= capacity) {
+      capacity *= 2;
+      sem_tok_t *nt = valk_mem_alloc(sizeof(sem_tok_t) * capacity);
+      memcpy(nt, toks, sizeof(sem_tok_t) * count);
+      toks = nt;
+    }
+    toks[count++] = (sem_tok_t){.off = start, .len = pos - start,
+                                 .type = type, .mods = MOD_NONE};
+  }
+
+  // Sort by offset (already in order from forward scan, but re-sort so
+  // any future change to the walker doesn't silently break encoding).
+  qsort(toks, count, sizeof(sem_tok_t), sem_tok_cmp);
+
+  // Delta-encode same as valk_builtin_sem_encode_deltas.
+  int prev_line = 0, prev_col = 0, scan_pos = 0, line = 0, col = 0;
+  valk_lval_t *result = valk_lval_nil();
+  for (u64 i = 0; i < count; i++) {
+    int off = toks[i].off;
+    while (scan_pos < off && scan_pos < text_len) {
+      if (text[scan_pos] == '\n') { line++; col = 0; }
+      else col++;
+      scan_pos++;
+    }
+    int dl = line - prev_line;
+    int dc = (dl == 0) ? col - prev_col : col;
+    result = valk_lval_qcons(valk_lval_num(dl), result);
+    result = valk_lval_qcons(valk_lval_num(dc), result);
+    result = valk_lval_qcons(valk_lval_num(toks[i].len), result);
+    result = valk_lval_qcons(valk_lval_num(toks[i].type), result);
+    result = valk_lval_qcons(valk_lval_num(toks[i].mods), result);
+    prev_line = line;
+    prev_col = col;
+  }
+
+  // Reverse: we cons'd onto front, so the list is in reverse order.
+  valk_lval_t *reversed = valk_lval_nil();
+  valk_lval_t *p = result;
+  while (p && LVAL_TYPE(p) == LVAL_CONS) {
+    reversed = valk_lval_qcons(p->cons.head, reversed);
+    p = p->cons.tail;
+  }
+  return reversed;
+}
+
 static valk_lval_t *valk_builtin_offsets_to_lines(valk_lenv_t *e,
                                                     valk_lval_t *a) {
   UNUSED(e);
@@ -806,7 +1000,11 @@ static valk_lval_t* valk_builtin_for_each_line(valk_lenv_t* e, valk_lval_t* a) {
     LVAL_RAISE(a, "for-each-line: second argument must be a function");
   }
   // LCOV_EXCL_BR_STOP
-  VALK_GC_ROOT(fn);
+  // No VALK_GC_ROOT(fn): `a` is the args lval list passed to this
+  // builtin, which is GC-walked via eval_calling_args
+  // (set by valk_eval_apply_func_iter on this builtin's behalf).
+  // mark_lval recursively walks a's cons cells, so fn (= a[1]) stays
+  // reachable across the inner valk_lval_eval calls below.
 
   const char* filename = valk_lval_list_nth(a, 0)->str;
   FILE* f = fopen(filename, "r");
@@ -898,6 +1096,7 @@ void valk_register_file_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "file/size", valk_builtin_file_size);
   valk_lenv_put_builtin(env, "file/fingerprint", valk_builtin_file_fingerprint);
   valk_lenv_put_builtin(env, "sem/encode-deltas", valk_builtin_sem_encode_deltas);
+  valk_lenv_put_builtin(env, "sem/lex-tokenize", valk_builtin_sem_lex_tokenize);
   valk_lenv_put_builtin(env, "lsp/index-ast", valk_builtin_lsp_index_file);
   extern valk_lval_t *valk_builtin_ast_visit(valk_lenv_t *, valk_lval_t *);
   valk_lenv_put_builtin(env, "ast/visit", valk_builtin_ast_visit);

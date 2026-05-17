@@ -455,15 +455,18 @@ static void __dispatch_completion_on_loop0(void *ctx) {
 
   dispatch_completion_t *comp = (dispatch_completion_t *)ctx;
 
+  // cb and result are kept GC-reachable via the handle table (walked
+  // by valk_handle_table_visit in visit_global_roots) until their
+  // handles are released below. The intermediate `args` cons is walked
+  // via eval_calling_args once valk_lval_eval_call → apply_func_iter
+  // entry sets it. The window between cons construction and eval_call
+  // is straight-line C with no allocator calls. No manual roots needed.
   valk_lval_t *cb = valk_handle_resolve(&valk_sys->handle_table, comp->cb_handle);
   valk_lval_t *result = valk_handle_resolve(&valk_sys->handle_table, comp->result_handle);
 
   // LCOV_EXCL_START — handles just created in dispatch; null = handle table race
   if (cb && result) {
     // LCOV_EXCL_STOP
-    VALK_GC_ROOT(cb);
-    VALK_GC_ROOT(result);
-
     valk_lval_t *args = valk_lval_cons(result, valk_lval_nil());
     valk_lval_t *r = valk_lval_eval_call(cb->fun.env, cb, args);
     if (LVAL_TYPE(r) == LVAL_ERR) {
@@ -481,27 +484,32 @@ static void __dispatch_worker(void *ctx) {
 
   dispatch_ctx_t *dctx = (dispatch_ctx_t *)ctx;
 
+  // fn and arg stay reachable via the handle table (walked by
+  // valk_handle_table_visit) until released below. `args` (the cons)
+  // and intermediate locals are reachable via the conservative
+  // native-stack scan (gc_mark.c::scan_thread_native_stack). Parking
+  // `result`/`heap_result` in eval_value covers them across
+  // handle_release + evacuate_to_heap + handle_create — those can
+  // each transitively touch the allocator + safepoint.
   valk_lval_t *fn = valk_handle_resolve(&valk_sys->handle_table, dctx->fn_handle);
   valk_lval_t *arg = valk_handle_resolve(&valk_sys->handle_table, dctx->arg_handle);
 
-  VALK_GC_ROOT(fn);
-  VALK_GC_ROOT(arg);
-
   valk_lval_t *args = valk_lval_cons(arg, valk_lval_nil());
-  VALK_GC_ROOT(args);
-
   valk_lval_t *result = valk_lval_eval_call(fn->fun.env, fn, args);
-  VALK_GC_ROOT(result);
+  valk_thread_ctx.eval_value = result;
 
   valk_handle_release(&valk_sys->handle_table, dctx->fn_handle);
   valk_handle_release(&valk_sys->handle_table, dctx->arg_handle);
 
   valk_lval_t *heap_result = valk_evacuate_to_heap(result);
+  valk_thread_ctx.eval_value = heap_result;
 
   dispatch_completion_t *comp = malloc(sizeof(dispatch_completion_t));
   comp->sys = dctx->sys;
   comp->cb_handle = dctx->cb_handle;
   comp->result_handle = valk_handle_create(&valk_sys->handle_table, heap_result);
+
+  valk_thread_ctx.eval_value = NULL;
 
   valk_aio_loop_enqueue_task(&dctx->sys->loops[0], __dispatch_completion_on_loop0, comp);
 

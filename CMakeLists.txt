@@ -289,9 +289,9 @@ if(VALK_LLVM)
     src/llvm/llvm_codegen_special.c
     src/llvm/llvm_codegen_numeric.c
     src/llvm/llvm_codegen_call.c
-    src/llvm/llvm_jit.c
     src/llvm/llvm_aot.c
     src/llvm/build_aot.c
+    src/llvm/llvm_jit.c
     src/llvm/vir_to_llvm.c
     src/vir/vir.c
     src/vir/vir_print.c
@@ -345,6 +345,7 @@ if(VALK_LLVM)
   # from valkyria.so is a weak one.
   target_link_libraries(valk PRIVATE
     "-Wl,-u,valk_build_emit_aot"
+    "-Wl,-u,valk_jit_compile_env"
     valk_llvm
     ${LLVM_LIBS_LIST})
 endif()
@@ -633,29 +634,5 @@ if(VALK_LLVM)
   target_include_directories(test_vir SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
   target_compile_options(test_vir PRIVATE -Wno-pedantic)
   include_directories(test_vir src/)
-
-  add_executable(test_image_jit test/lang/test_image_jit.c test/testing.c)
-  target_link_libraries(test_image_jit PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
-  target_include_directories(test_image_jit SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_compile_options(test_image_jit PRIVATE -Wno-pedantic)
-  include_directories(test_image_jit src/)
-
-  add_executable(test_jit_cache test/lang/test_jit_cache.c test/testing.c)
-  target_link_libraries(test_jit_cache PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
-  target_include_directories(test_jit_cache SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_compile_options(test_jit_cache PRIVATE -Wno-pedantic)
-  include_directories(test_jit_cache src/)
-
-  add_executable(test_jit_numeric test/lang/test_jit_numeric.c test/testing.c)
-  target_link_libraries(test_jit_numeric PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
-  target_include_directories(test_jit_numeric SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_compile_options(test_jit_numeric PRIVATE -Wno-pedantic)
-  include_directories(test_jit_numeric src/)
-
-  add_executable(bench_jit test/lang/bench_jit.c)
-  target_link_libraries(bench_jit PRIVATE "-lc" valkyria valk_llvm ${LLVM_LIBS_LIST})
-  target_include_directories(bench_jit SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_compile_options(bench_jit PRIVATE -Wno-pedantic -O2)
-  include_directories(bench_jit src/)
 endif()
 

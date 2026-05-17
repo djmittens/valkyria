@@ -81,16 +81,33 @@ static void xml_node_append_text(xml_node_t* node, const char* s, int len) {
   node->text[node->text_len] = '\0';
 }
 
+// Recursive XML-tree → lval converter. Builds two intermediate lists
+// (children, attrs) incrementally with cons. Each cons may allocate
+// and trigger GC, and the recursive call to xml_node_to_lval()
+// definitely allocates many lvals — without protection, the
+// in-progress children_list and attrs would be unreachable from any
+// root and freed by mark/sweep mid-construction.
+//
+// Replaces the previous VALK_GC_ROOT(children_list) + VALK_GC_ROOT(attrs)
+// pushes onto the explicit root_stack. Now we use the per-thread
+// eval_expr / eval_value runtime-state slots, which are walked by
+// mark_eval_stack_roots — same coverage, no manual root_stack push.
+// Each recursion level saves the outer slot values on entry and
+// restores on exit, so nesting works.
 static valk_lval_t* xml_node_to_lval(xml_node_t* node) {
+  valk_lval_t *saved_expr = valk_thread_ctx.eval_expr;
+  valk_lval_t *saved_value = valk_thread_ctx.eval_value;
+
   valk_lval_t* children_list = valk_lval_nil();
-  VALK_GC_ROOT(children_list);
+  valk_thread_ctx.eval_expr = children_list;
   for (int i = node->child_count - 1; i >= 0; i--) {
     valk_lval_t* child = xml_node_to_lval(node->children[i]);
     children_list = valk_lval_cons(child, children_list);
+    valk_thread_ctx.eval_expr = children_list;
   }
 
   valk_lval_t* attrs = valk_lval_nil();
-  VALK_GC_ROOT(attrs);
+  valk_thread_ctx.eval_value = attrs;
   if (node->attr_count > 0) {
     valk_lval_t** attr_items = malloc(node->attr_count * 2 * sizeof(valk_lval_t*));
     for (int i = 0; i < node->attr_count; i++) {
@@ -101,6 +118,7 @@ static valk_lval_t* xml_node_to_lval(xml_node_t* node) {
     }
     attrs = valk_lval_qlist(attr_items, node->attr_count * 2);
     free(attr_items);
+    valk_thread_ctx.eval_value = attrs;
   }
 
   int item_count = 6;
@@ -121,6 +139,9 @@ static valk_lval_t* xml_node_to_lval(xml_node_t* node) {
 
   valk_lval_t* result = valk_lval_qlist(items, item_count);
   free(items);
+
+  valk_thread_ctx.eval_expr = saved_expr;
+  valk_thread_ctx.eval_value = saved_value;
   return result;
 }
 

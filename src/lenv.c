@@ -140,10 +140,26 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   }
 
   while (env) {
-    for (u64 i = 0; i < env->symbols.count; i++) {
-      if (strcmp(key->str, env->symbols.items[i]) == 0) {
+    // Snapshot count and items pointer ONCE per env. Concurrent
+    // lenv_put on the same env can grow/swap items[] under us; reading
+    // each iteration would let i exceed the snapshotted array bounds.
+    // Snapshot keeps us within a consistent view; if writer is racing
+    // we may miss the latest entry but won't crash.
+    char **items = env->symbols.items;
+    u64 count = env->symbols.count;
+    if (items == NULL) { env = env->parent; continue; }
+    for (u64 i = 0; i < count; i++) {
+      char *slot = items[i];
+      // NULL guard: a concurrent lenv_put may have just resized items
+      // and is mid-write to slot[count-1]. Without this check, strcmp
+      // SIGSEGVs on the NULL — root cause of the AOT-LSP-under-load
+      // crashes when worker threads race lenv_get against a put on the
+      // same env (typically the env-just-below the frozen image root,
+      // where (def ...) inside any handler writes).
+      if (slot == NULL) continue;
+      if (strcmp(key->str, slot) == 0) {
         if (valk_log_would_log(VALK_LOG_TRACE)) {
-          VALK_TRACE("env get idx=%zu key=%s", i, env->symbols.items[i]);
+          VALK_TRACE("env get idx=%zu key=%s", i, slot);
         }
         return env->vals.items[i];
       }
@@ -186,13 +202,20 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   }
   valk_lval_t* safe_val = __lenv_ensure_safe_val(env, val);
 
-  for (u64 i = 0; i < env->symbols.count; i++) {
-    if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {  // LCOV_EXCL_BR_LINE - defensive check
-      break;
-    }
-    if (strcmp(key->str, env->symbols.items[i]) == 0) {
-      env->vals.items[i] = safe_val;
-      return;
+  // Snapshot to avoid concurrent-put races on items[]/count. Same
+  // pattern as lenv_get above; see rationale there.
+  {
+    char **items = env->symbols.items;
+    u64 count = env->symbols.count;
+    if (items != NULL) {
+      for (u64 i = 0; i < count; i++) {
+        char *slot = items[i];
+        if (slot == NULL) continue;
+        if (strcmp(key->str, slot) == 0) {
+          env->vals.items[i] = safe_val;
+          return;
+        }
+      }
     }
   }
 

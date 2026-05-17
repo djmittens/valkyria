@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include "../parser.h"
+#include "llvm_codegen.h"
 
 // AOT hook used by src/build.c when the valk_llvm library is linked in.
 //
@@ -22,3 +23,19 @@
 // should fall back to a pure tree-walker build.
 int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
                         const char *c_path, size_t *out_count);
+
+// Compile every AOT-eligible lambda in `env` to LLVM IR. Returns a new
+// llvm ctx with the populated, verified, optimized module on success;
+// NULL on failure. Sets v->fun.native_name on each compiled candidate.
+//
+// Caller owns the returned ctx — must call valk_llvm_ctx_free OR
+// transfer ownership into a JIT runner (which then frees on jit_free).
+//
+// Same compile pipeline as `valk_build_emit_aot`; that function is now
+// a thin wrapper that calls this then emits a .o + dispatch table. The
+// JIT layer (src/llvm/llvm_jit.c) calls this then hands ctx->module to
+// LLVM ORC LLJIT for in-process execution.
+//
+// `*count_out` (optional): number of compiled candidates. Walk env to
+// find them — any LVAL_FUN with non-null `fun.native_name` was compiled.
+valk_llvm_ctx_t *valk_aot_compile_env(valk_lenv_t *env, size_t *count_out);

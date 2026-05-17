@@ -396,56 +396,27 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap);
 // ============================================================================
 // Root Enumeration
 // ============================================================================
-
-typedef struct valk_gc_root {
-  sz saved_count;
-} valk_gc_root_t;
-
-static inline valk_gc_root_t valk_gc_root_push(valk_lval_t *val);
-static inline void valk_gc_root_pop(void);
-static inline void valk_gc_root_cleanup(valk_gc_root_t *r);
-
-#define VALK_GC_ROOT(var) \
-  __attribute__((cleanup(valk_gc_root_cleanup))) \
-  valk_gc_root_t __gc_root_##var = valk_gc_root_push(var)
+//
+// The explicit per-thread root_stack and the VALK_GC_ROOT macro that
+// pushed onto it have been retired. GC root discovery is now fully
+// automatic via:
+//   1. Walking the env chain rooted at each thread's `root_env`
+//      (visit_env_roots, visit_global_roots) — covers all bound names.
+//   2. Walking the iterative evaluator's continuation-frame stack
+//      (mark_eval_stack_roots in gc_mark.c) — covers in-flight eval
+//      state, args lists, saved frame payloads.
+//   3. Conservative scanning of each registered thread's native C
+//      stack (scan_thread_native_stack in gc_mark.c) — covers
+//      AOT-held formals/SSA spills, register-spilled C locals,
+//      anything held by hand-written C without manual rooting.
+//
+// Hand-written C never needs to push roots. AOT codegen never needs
+// to emit root tracking. The runtime discovers everything.
 
 typedef void (*valk_gc_root_visitor_t)(valk_lval_t *root, void *ctx);
 
-void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx);
 void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx);
 void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, void *ctx);
-
-// ============================================================================
-// Root Stack Inline Implementations
-// ============================================================================
-
-static inline valk_gc_root_t valk_gc_root_push(valk_lval_t *val) {
-  valk_thread_context_t *ctx = &valk_thread_ctx;
-
-  if (ctx->root_stack == nullptr) {
-    return (valk_gc_root_t){ 0 };
-  }
-
-  if (ctx->root_stack_count >= ctx->root_stack_capacity) {
-    ctx->root_stack_capacity *= 2;
-    ctx->root_stack = realloc(ctx->root_stack,
-                               sizeof(valk_lval_t*) * ctx->root_stack_capacity);
-  }
-
-  sz saved = ctx->root_stack_count;
-  ctx->root_stack[ctx->root_stack_count++] = val;
-  return (valk_gc_root_t){ saved };
-}
-
-static inline void valk_gc_root_pop(void) {
-  if (valk_thread_ctx.root_stack_count > 0) {
-    valk_thread_ctx.root_stack_count--;
-  }
-}
-
-static inline void valk_gc_root_cleanup(valk_gc_root_t *r) {
-  valk_thread_ctx.root_stack_count = r->saved_count;
-}
 
 // ============================================================================
 // Diagnostic Dump
@@ -453,8 +424,4 @@ static inline void valk_gc_root_cleanup(valk_gc_root_t *r) {
 
 void valk_diag_dump_on_timeout(void);
 
-void valk_gc_root_push_fn(valk_lval_t *val);
-void valk_gc_root_pop_fn(void);
-sz valk_gc_root_save(void);
-void valk_gc_root_restore(sz count);
 void valk_gc_safepoint_fn(void);

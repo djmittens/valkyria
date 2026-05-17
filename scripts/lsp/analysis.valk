@@ -377,123 +377,15 @@
 ; ---------------------------------------------------------------------------
 ; Lexer-based fallback for semantic tokens.
 ;
-; When the parser can't produce an AST (broken file mid-edit and no
-; last-known-good cache), walk the text character-by-character and emit
-; tokens for things we can identify lexically: comments, strings, numbers,
-; keywords, properties (:foo), and other symbols.
-;
-; This loses scope/binding awareness but preserves syntax-level highlighting,
-; which is much better UX than the editor falling back to orange-text default.
+; sem/lex-tokenize is implemented as a C builtin (src/builtins_file.c).
+; A Lisp implementation lived here previously but ran in ~4.7 seconds
+; on a 17KB file — too slow for the LSP fallback path that fires on
+; every keystroke during broken-parse states. The C builtin is identical
+; in semantics: walks text byte-by-byte, emits comment/string/number/
+; symbol tokens, returns LSP delta-encoded wire format. SEM_KEYWORD_SET
+; and SEM_OPERATOR_SET above are duplicated in the C builtin's static
+; arrays — keep in sync if either changes.
 ; ---------------------------------------------------------------------------
-
-(sig 'sem/lex-tokenize {-> Str List})
-(fun {sem/lex-tokenize text} {do
-  (sem/encode-deltas text
-    (list/group 4 (reverse (sem/lex-walk text 0 (len text) nil))))
-})
-
-(fun {sem/lex-is-ws ch} {
-  or (== ch " ") (or (== ch "\t") (or (== ch "\n") (== ch "\r")))
-})
-
-(fun {sem/lex-is-paren ch} {
-  or (== ch "(") (or (== ch ")") (or (== ch "{") (== ch "}")))
-})
-
-(fun {sem/lex-is-digit ch} {
-  if (== (len ch) 0) {0}
-  {>= (str/index-of "0123456789" ch) 0}
-})
-
-(fun {sem/lex-is-sym-char ch} {
-  if (== (len ch) 0) {0}
-  {if (sem/lex-is-ws ch) {0}
-  {if (sem/lex-is-paren ch) {0}
-  {if (== ch ";") {0}
-  {if (== ch "\"") {0} {1}}}}}
-})
-
-(fun {sem/lex-walk text pos end acc} {
-  if (>= pos end) {acc}
-  {do
-    (= {ch} (str/slice text pos (+ pos 1)))
-    (if (sem/lex-is-ws ch)    {sem/lex-walk text (+ pos 1) end acc}
-    {if (sem/lex-is-paren ch) {sem/lex-walk text (+ pos 1) end acc}
-    {if (== ch ";")           {sem/lex-eat-comment text pos end acc}
-    {if (== ch "\"")          {sem/lex-eat-string text pos end acc}
-    {if (sem/lex-is-digit ch) {sem/lex-eat-number text pos end acc}
-    {sem/lex-eat-symbol text pos end acc}}}}})}
-})
-
-; Comment: from `;` to end of line
-(fun {sem/lex-eat-comment text pos end acc} {do
-  (= {endpos} (sem/lex-find-newline text pos end))
-  (sem/lex-walk text endpos end
-    (sem/emit pos (- endpos pos) SEM_KEYWORD MOD_NONE acc))
-})
-
-(fun {sem/lex-find-newline text pos end} {
-  if (>= pos end) {pos}
-  {if (== (str/slice text pos (+ pos 1)) "\n") {pos}
-    {sem/lex-find-newline text (+ pos 1) end}}
-})
-
-; String: from `"` to matching `"`, with `\"` escapes
-(fun {sem/lex-eat-string text pos end acc} {do
-  (= {endpos} (sem/lex-find-string-end text (+ pos 1) end))
-  (sem/lex-walk text endpos end
-    (sem/emit pos (- endpos pos) SEM_STRING MOD_NONE acc))
-})
-
-(fun {sem/lex-find-string-end text pos end} {
-  if (>= pos end) {pos}
-  {do
-    (= {ch} (str/slice text pos (+ pos 1)))
-    (if (== ch "\"") {+ pos 1}
-    {if (== ch "\\")
-      {if (>= (+ pos 1) end) {+ pos 1}
-        {sem/lex-find-string-end text (+ pos 2) end}}
-      {sem/lex-find-string-end text (+ pos 1) end}})}
-})
-
-; Number: digits, optional `.` and trailing digits
-(fun {sem/lex-eat-number text pos end acc} {do
-  (= {endpos} (sem/lex-find-num-end text pos end))
-  (sem/lex-walk text endpos end
-    (sem/emit pos (- endpos pos) SEM_NUMBER MOD_NONE acc))
-})
-
-(fun {sem/lex-find-num-end text pos end} {
-  if (>= pos end) {pos}
-  {do
-    (= {ch} (str/slice text pos (+ pos 1)))
-    (if (or (sem/lex-is-digit ch) (== ch ".")) {sem/lex-find-num-end text (+ pos 1) end}
-      {pos})}
-})
-
-; Symbol: any non-whitespace, non-paren, non-quote, non-semicolon run
-(fun {sem/lex-eat-symbol text pos end acc} {do
-  (= {endpos} (sem/lex-find-sym-end text pos end))
-  (= {name} (str/slice text pos endpos))
-  (= {ttype} (sem/lex-classify name))
-  (sem/lex-walk text endpos end
-    (sem/emit pos (- endpos pos) ttype MOD_NONE acc))
-})
-
-(fun {sem/lex-find-sym-end text pos end} {
-  if (>= pos end) {pos}
-  {if (sem/lex-is-sym-char (str/slice text pos (+ pos 1)))
-    {sem/lex-find-sym-end text (+ pos 1) end}
-    {pos}}
-})
-
-(fun {sem/lex-classify name} {
-  if (== (len name) 0) {SEM_VARIABLE}
-  {if (== (str/slice name 0 1) ":") {SEM_PROPERTY}
-  {if (dict/has? SEM_KEYWORD_SET name) {SEM_KEYWORD}
-  {if (dict/has? SEM_OPERATOR_SET name) {SEM_OPERATOR}
-  {SEM_VARIABLE}}}}
-})
 
 ; ---------------------------------------------------------------------------
 ; Typed semantic token representation

@@ -200,7 +200,25 @@ static valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) 
 
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args);
 
+// Force GC-relevant pointers onto the native stack so the conservative
+// scanner (gc_mark.c::scan_thread_native_stack) finds them. Without
+// this, x86_64 SysV ABI keeps the first three pointer args in
+// rdi/rsi/rdx and the compiler may never spill them — making them
+// invisible to the marker. The "+m" constraint tells the compiler "I
+// read and write this through memory" which forces an addressable
+// stack home for the value before/after the asm. Compiles to zero
+// instructions; just changes register allocation.
+//
+// Used at the entry of every C function that holds GC-managed
+// valk_lval_t* parameters across an allocation (which can trigger GC).
+#define VALK_GC_PIN(p) __asm__ volatile("" : "+m" (p))
+
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args) {
+  // Pin func + args to the stack so the conservative scanner sees them
+  // regardless of how the compiler allocated registers for the call.
+  VALK_GC_PIN(func);
+  VALK_GC_PIN(args);
+
   if (LVAL_TYPE(func) == LVAL_SYM && func->str[0] == ':') {
     u64 argc = valk_lval_list_count(args);
     if (argc != 1)
@@ -225,6 +243,32 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
     return valk_eval_value(valk_lval_err("Cannot call non-function: %s", valk_ltype_name(LVAL_TYPE(func))));
   }
 
+  // Stack-overflow guard. AOT-compiled lambdas calling each other
+  // through eval_apply_func_iter (the slow path) add ~256 bytes of
+  // C stack per call; with the default 8MB pthread stack a runaway
+  // recursion blows the stack and SIGSEGVs at unpredictable frames.
+  //
+  // Check actual remaining C stack instead of call_depth — the
+  // iterative interpreter's tail-recursive loop doesn't grow C
+  // stack but does grow call_depth, so a depth-only cap would
+  // (and did) break legitimate countdown(10000)-style tail recursion.
+  //
+  // Bail when within 256KB of the stack guard. That's enough headroom
+  // for a few more legitimate frames (lenv ops, sweep, error-format
+  // etc.) but cuts off recursion before it crashes.
+  if (valk_thread_ctx.native_stack_limit) {
+    void *current_frame = __builtin_frame_address(0);
+    uintptr_t margin = (uintptr_t)current_frame
+                     - (uintptr_t)valk_thread_ctx.native_stack_limit;
+    if (margin < (256ULL * 1024)) {
+      return valk_eval_value(valk_lval_err(
+          "Eval recursion: C stack near limit (%zu bytes left); aborting to "
+          "avoid SIGSEGV. Likely cause: deep non-tail recursion in compiled "
+          "lambda chain.",
+          (size_t)margin));
+    }
+  }
+
   u32 depth = atomic_fetch_add(&g_eval_metrics.stack_depth, 1) + 1;
   if (depth > g_eval_metrics.stack_depth_max) {
     g_eval_metrics.stack_depth_max = depth;
@@ -232,7 +276,6 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
 
   if (func->fun.builtin) {
     atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);
-    VALK_GC_ROOT(args);
     valk_lval_t* result = func->fun.builtin(env, args);
     atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
     // LCOV_EXCL_START - defensive check: builtins should never return NULL
@@ -373,17 +416,20 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
   valk_lenv_t* cur_env = env;
   valk_lval_t* value = NULL;
   
-  valk_lval_t *saved_expr = valk_thread_ctx.eval_expr;
-  valk_lval_t *saved_value = valk_thread_ctx.eval_value;
-  VALK_GC_ROOT(saved_expr);
-  VALK_GC_ROOT(saved_value);
-
+  // Snapshot outer eval state into the per-depth saved_eval_* arrays.
+  // mark_eval_stack_roots walks these for every nested level, so the
+  // outer eval's expr/value/env stay GC-reachable while we run the inner
+  // eval. Replaces the previous VALK_GC_ROOT(saved_expr/saved_value)
+  // pattern: precise tracking via thread_ctx instead of pushing onto
+  // the explicit root_stack.
   void *saved_stack = valk_thread_ctx.eval_stack;
   valk_thread_ctx.eval_stack = &stack;
 
   u32 my_depth = valk_thread_ctx.eval_stack_depth;
   VALK_ASSERT(my_depth < 16, "Eval nesting too deep");
   valk_thread_ctx.eval_stacks[my_depth] = &stack;
+  valk_thread_ctx.saved_eval_exprs[my_depth] = valk_thread_ctx.eval_expr;
+  valk_thread_ctx.saved_eval_values[my_depth] = valk_thread_ctx.eval_value;
   valk_thread_ctx.saved_eval_envs[my_depth] = valk_thread_ctx.eval_env;
   valk_thread_ctx.eval_stack_depth = my_depth + 1;
   
@@ -571,6 +617,14 @@ apply_cont:
       if (LVAL_ALLOC(value) == LVAL_ALLOC_SCRATCH)
         value = valk_evacuate_to_heap(value);
 
+      // Sync the in-flight value into thread_ctx.eval_value so any GC
+      // that fires inside this handler (e.g. via valk_lval_list,
+      // valk_lval_eval, or apply_func_iter) can reach `value`.
+      // mark_eval_stack_roots reads eval_value directly. Without this,
+      // value lives only in this C local during the handler window
+      // between pop and the next loop iteration.
+      valk_thread_ctx.eval_value = value;
+
       if (frame.kind != CONT_DONE &&
           frame.kind != CONT_DO_NEXT &&
           frame.kind != CONT_BODY_NEXT) {
@@ -584,8 +638,8 @@ apply_cont:
           valk_thread_ctx.eval_stack_depth = my_depth;
           valk_eval_stack_destroy(&stack);
           valk_thread_ctx.eval_stack = saved_stack;
-          valk_thread_ctx.eval_expr = saved_expr;
-          valk_thread_ctx.eval_value = saved_value;
+          valk_thread_ctx.eval_expr = valk_thread_ctx.saved_eval_exprs[my_depth];
+          valk_thread_ctx.eval_value = valk_thread_ctx.saved_eval_values[my_depth];
           valk_thread_ctx.eval_env = valk_thread_ctx.saved_eval_envs[my_depth];
           return value;
         }

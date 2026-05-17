@@ -157,7 +157,17 @@ static valk_lval_t *eval_script_capture_last(valk_lenv_t *env,
   valk_lval_t *res;
   VALK_WITH_ALLOC((void *)heap) { res = valk_parse_file(script_path); }
   if (LVAL_TYPE(res) == LVAL_ERR) { valk_lval_println(res); return NULL; }
-  valk_gc_root_push(res);
+
+  // Make `res` (the parsed form list) GC-reachable for the lifetime of
+  // this loader by stashing it into thread_ctx.eval_expr.
+  // mark_eval_stack_roots reads eval_expr on every cycle (gc_mark.c:193),
+  // so any GC during the macro/expand/eval walk below sees `res` and
+  // everything reachable from it. Each call to valk_lval_eval below
+  // saves/restores eval_expr via the saved_eval_exprs[] array (eval.c
+  // valk_lval_eval_iterative entry+CONT_DONE), so our outer assignment
+  // survives across inner evaluations.
+  valk_lval_t *saved_outer_expr = valk_thread_ctx.eval_expr;
+  valk_thread_ctx.eval_expr = res;
 
   VALK_WITH_ALLOC((void *)heap) {
     valk_lval_t *cur = res;
@@ -186,25 +196,28 @@ static valk_lval_t *eval_script_capture_last(valk_lenv_t *env,
     if (LVAL_TYPE(x) == LVAL_NIL) continue;
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
-      valk_gc_root_pop();
+      valk_thread_ctx.eval_expr = saved_outer_expr;
       if (script_prefix) free(script_prefix);
       return NULL;
     }
-    valk_gc_root_push(x);
+    // Per-iteration: x is the form being evaluated. Stash into eval_value
+    // (also walked) so the inner eval's snapshot machinery covers it.
+    valk_lval_t *saved_outer_value = valk_thread_ctx.eval_value;
+    valk_thread_ctx.eval_value = x;
     VALK_WITH_ALLOC((void *)valk_thread_ctx.scratch) {
       x = valk_lval_eval(env, x);
     }
-    valk_gc_root_pop();
+    valk_thread_ctx.eval_value = saved_outer_value;
     if (LVAL_TYPE(x) == LVAL_ERR) {
       valk_lval_println(x);
-      valk_gc_root_pop();
+      valk_thread_ctx.eval_expr = saved_outer_expr;
       if (script_prefix) free(script_prefix);
       return NULL;
     }
     VALK_WITH_ALLOC((void *)heap) { last = valk_lval_copy(x); }
     VALK_GC_SAFE_POINT();
   }
-  valk_gc_root_pop();
+  valk_thread_ctx.eval_expr = saved_outer_expr;
   if (script_prefix) free(script_prefix);
   return last;
 }

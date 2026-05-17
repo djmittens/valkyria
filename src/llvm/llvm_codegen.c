@@ -1,8 +1,8 @@
 #include "llvm_codegen.h"
 #include "llvm_codegen_internal.h"
-#include "llvm_jit.h"
 #include "../builtins_internal.h"
 #include <llvm-c/Analysis.h>
+#include <llvm-c/Target.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,8 +114,17 @@ void valk_llvm_declare_runtime_fns(valk_llvm_ctx_t *c) {
   add_argmem_read_attr(c, c->fn_lval_is_truthy);
 }
 
+static void llvm_init_native_target(void) {
+  static bool initialized = false;
+  if (initialized) return;
+  LLVMInitializeNativeTarget();
+  LLVMInitializeNativeAsmPrinter();
+  LLVMInitializeNativeAsmParser();
+  initialized = true;
+}
+
 valk_llvm_ctx_t *valk_llvm_ctx_new(const char *module_name) {
-  valk_llvm_init();
+  llvm_init_native_target();
   valk_llvm_ctx_t *c = calloc(1, sizeof(valk_llvm_ctx_t));
   c->ctx = LLVMContextCreate();
   c->module = LLVMModuleCreateWithNameInContext(module_name, c->ctx);
@@ -203,44 +212,25 @@ LLVMValueRef valk_llvm_compile_expr(valk_llvm_ctx_t *ctx,
   return valk_codegen_expr(ctx, expr, env_param);
 }
 
-// Recursive scan: forbidden head = symbol in {`\`, `fn`, `def`, `=`}.
-// Those forms capture or mutate call_env, which the fast variant doesn't
-// build. Qexprs must be scanned too — qexpr branches are executed as
-// code at runtime. Over-scanning quoted *data* costs a slow-path compile
-// but never miscompiles.
-static bool body_has_forbidden_head(valk_lval_t *expr) {
-  if (!expr) return false;
-  if (LVAL_TYPE(expr) != LVAL_CONS) return false;
-  valk_lval_t *head = expr->cons.head;
-  if (head && LVAL_TYPE(head) == LVAL_SYM) {
-    const char *s = head->str;
-    if (strcmp(s, "\\") == 0 || strcmp(s, "fn") == 0 ||
-        strcmp(s, "def") == 0 || strcmp(s, "=") == 0) {
-      return true;
-    }
-  }
-  for (valk_lval_t *c = expr; c && LVAL_TYPE(c) == LVAL_CONS; c = c->cons.tail) {
-    if (body_has_forbidden_head(c->cons.head)) return true;
-  }
-  return false;
-}
+// valk_llvm_body_is_fast_safe / compile_lambda_body_fast / slow_adapter
+// were the duplicate codegen pipeline. They had TCO via PHI back-edges
+// but the slow body path (used as fallback) didn't, leading to
+// architectural drift: bug fixes had to land in both pipelines, and
+// non-fast-safe lambdas (closures, varargs, etc.) blew the C stack
+// under recursion because slow had no TCO.
+//
+// Replaced by the unified VIR pipeline: ast_to_vir's lower_tail marks
+// tail-position calls so vir_to_llvm emits musttail/tail-call hints,
+// and direct AOT-to-AOT calls (VIR_DIRECT_CALL) become sibcalls that
+// reuse the C frame. Deleted from this file since build_aot.c no
+// longer calls them.
+//
+// Source kept inside `#if 0` purely as a reference for the BYOL error
+// short-circuit pattern that VIR doesn't yet replicate — if/when we
+// port that, delete the block entirely.
 
-bool valk_llvm_body_is_fast_safe(valk_lval_t *body) {
-  if (!body) return true;
-  valk_lval_t *eff = body;
-  if (LVAL_TYPE(eff) == LVAL_CONS && (eff->flags & LVAL_FLAG_QUOTED)) {
-    eff = valk_qexpr_to_cons(eff);
-  }
-  if (eff && LVAL_TYPE(eff) == LVAL_CONS) {
-    for (valk_lval_t *c = eff; c && LVAL_TYPE(c) == LVAL_CONS;
-         c = c->cons.tail) {
-      if (body_has_forbidden_head(c->cons.head)) return false;
-    }
-  }
-  return true;
-}
-
-LLVMValueRef valk_llvm_compile_lambda_body_fast(valk_llvm_ctx_t *ctx,
+#if 0
+LLVMValueRef valk_llvm_compile_lambda_body_fast_DEAD(valk_llvm_ctx_t *ctx,
                                                 valk_lval_t *body,
                                                 valk_lval_t *formals,
                                                 const char *fn_name) {
@@ -473,64 +463,11 @@ LLVMValueRef valk_llvm_compile_lambda_body_slow_adapter(
 
   return slow_fn;
 }
+#endif  // DELETED: fast variant + slow_adapter
 
-LLVMValueRef valk_llvm_compile_lambda_body(valk_llvm_ctx_t *ctx,
-                                           valk_lval_t *body,
-                                           const char *fn_name) {
-  LLVMTypeRef fn_type = LLVMFunctionType(ctx->ptr_type,
-    (LLVMTypeRef[]){ctx->ptr_type}, 1, 0);
-  LLVMValueRef fn = LLVMAddFunction(ctx->module, fn_name, fn_type);
-  LLVMSetLinkage(fn, LLVMExternalLinkage);
-
-  LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->ctx, fn, "entry");
-  LLVMPositionBuilderAtEnd(ctx->builder, entry);
-  valk_codegen_sym_cache_enter(ctx, entry);
-
-  LLVMValueRef env_param = LLVMGetParam(fn, 0);
-  LLVMValueRef result = valk_codegen_nil(ctx);
-
-  // Mirror tree-walker body semantics (eval.c valk_eval_apply_func_iter
-  // + count==1 SINGLE_ELEM in valk_lval_eval_iterative).
-  valk_lval_t *eff = body;
-  if (eff && LVAL_TYPE(eff) == LVAL_CONS && (eff->flags & LVAL_FLAG_QUOTED)) {
-    eff = valk_qexpr_to_cons(eff);
-  }
-
-  // Track tail position so the LAST expression's funcall can be
-  // sibcall-optimized. Without this, slow-body recursion (e.g.
-  // ca/collect-actions, fold/walk-exprs, lens/build-from-syms — any
-  // function whose body uses `=`/`def`/`\`/`fn` and so isn't
-  // fast-safe) builds up C-stack frames at three per Valk call,
-  // blowing the 8 MB thread stack on ~30+ deep recursion.
-  if (eff && LVAL_TYPE(eff) == LVAL_CONS) {
-    valk_lval_t *first = eff->cons.head;
-    bool first_is_list = first && LVAL_TYPE(first) == LVAL_CONS;
-    u64 count = valk_lval_list_count(eff);
-    if (first_is_list) {
-      valk_lval_t *cur = eff;
-      while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-        bool last = !(cur->cons.tail && LVAL_TYPE(cur->cons.tail) == LVAL_CONS);
-        ctx->in_tail = last;
-        result = valk_codegen_expr(ctx, cur->cons.head, env_param);
-        cur = cur->cons.tail;
-      }
-    } else if (count == 1) {
-      ctx->in_tail = true;
-      result = valk_codegen_expr(ctx, first, env_param);
-    } else {
-      ctx->in_tail = true;
-      result = valk_codegen_expr(ctx, eff, env_param);
-    }
-  } else if (eff) {
-    ctx->in_tail = true;
-    result = valk_codegen_expr(ctx, eff, env_param);
-  }
-
-  ctx->in_tail = false;
-  LLVMBuildRet(ctx->builder, result);
-  valk_codegen_sym_cache_leave(ctx);
-  return fn;
-}
+// valk_llvm_compile_lambda_body retired: slow-body lambdas now go
+// through the VIR pipeline. See src/llvm/build_aot.c::compile_slow_body_via_vir
+// and src/vir/ast_to_vir.c::vir_lower_lambda_body_with_env.
 
 LLVMValueRef valk_llvm_compile_toplevel(valk_llvm_ctx_t *ctx,
                                         valk_lval_t *expr) {

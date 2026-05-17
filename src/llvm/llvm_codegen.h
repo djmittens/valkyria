@@ -103,60 +103,11 @@ LLVMValueRef valk_llvm_compile_toplevel(valk_llvm_ctx_t *ctx,
 LLVMValueRef valk_llvm_compile_program(valk_llvm_ctx_t *ctx,
                                        valk_lval_t *exprs);
 
-// Compile a lambda body into a named function with signature
-// valk_lval_t *(*)(valk_lenv_t *). Caller is responsible for binding
-// formals into the env before invoking the resulting function.
-// `body` may be a qexpr (each head form is a body statement, result of last
-// is returned) or a single expression.
-//
-// BYOL ERROR INVARIANT (caller-enforced). Unlike the _fast variant, the slow
-// body does NOT check formals for LVAL_ERR at entry. Callers must ensure no
-// formal bound in the call_env is LVAL_ERR:
-//   * Tree-walker dispatch: CONT_COLLECT_ARG (eval.c) short-circuits on
-//     LVAL_ERR args before the native fn is ever invoked.
-//   * try_codegen_direct_call's slow fallback in llvm_codegen.c: emits its
-//     own BYOL check around the call site (see the `direct.err` block).
-// Failing to uphold this invariant causes recursive walk-like lambdas to
-// loop forever on error input. See memory `project_aot_byol_invariant`.
-LLVMValueRef valk_llvm_compile_lambda_body(valk_llvm_ctx_t *ctx,
-                                           valk_lval_t *body,
-                                           const char *fn_name);
-
-// Return true if `body` contains no forms that would require the full
-// call_env at runtime: no nested `\` / `fn` lambdas (closures capture env),
-// no `def` or `=` (local mutation touches env_param). Safe bodies may be
-// compiled via `valk_llvm_compile_lambda_body_fast`.
-bool valk_llvm_body_is_fast_safe(valk_lval_t *body);
-
-// Compile a lambda body into a function with signature
-// `valk_lval_t *(*)(valk_lenv_t *env, valk_lval_t *formal_0, ...)` where
-// each formal is passed as a direct LLVM argument. Inside the body,
-// `codegen_sym_lookup` resolves formals from the argument map instead of
-// walking `env`. `env` is still used for non-formal symbols (globals).
-// `formals` is the lambda's formals list (LVAL_CONS of LVAL_SYM). Caller
-// must ensure the body is "fast safe" (see valk_llvm_body_is_fast_safe).
-//
-// BYOL ERROR INVARIANT (self-enforced). Emits a `byol.err` check at entry
-// that returns the first LVAL_ERR formal without running the body. Safe to
-// call with any arg values.
-LLVMValueRef valk_llvm_compile_lambda_body_fast(valk_llvm_ctx_t *ctx,
-                                                valk_lval_t *body,
-                                                valk_lval_t *formals,
-                                                const char *fn_name);
-
-// Compile a "slow adapter": a function with signature
-// `valk_lval_t *(*)(valk_lenv_t *call_env)` that unpacks each formal from
-// `call_env` by name, then calls the matching `_fast` variant with the
-// global `valk_aot_root_env` and the unpacked formal values. This is what
-// gets installed as the lambda's native_fn so the tree walker can dispatch
-// to native code; the adapter then trampolines into the _fast chain where
-// mutual tail calls can become sibcalls.
-//
-// BYOL ERROR INVARIANT (delegated to _fast). The adapter forwards formals
-// into the _fast variant, whose byol.err block handles the LVAL_ERR case.
-LLVMValueRef valk_llvm_compile_lambda_body_slow_adapter(
-    valk_llvm_ctx_t *ctx, valk_lval_t *formals,
-    const char *slow_name, const char *fast_name);
+// Lambda-body compilation lives entirely in the VIR pipeline now. See
+// src/llvm/build_aot.c::compile_slow_body_via_vir and
+// src/vir/ast_to_vir.c::vir_lower_lambda_body_with_env. The fast/slow
+// duplication that used to live here is retired — the unified VIR path
+// handles all lambdas with TCO via musttail (vir_to_llvm.c VIR_CALL.is_tail).
 
 char *valk_llvm_dump_ir(valk_llvm_ctx_t *ctx);
 bool valk_llvm_verify(valk_llvm_ctx_t *ctx, char **error);

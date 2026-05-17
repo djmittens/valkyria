@@ -180,12 +180,47 @@ void valk_system_register_thread(valk_system_t *sys,
   valk_thread_ctx.gc_thread_id = idx;
   valk_thread_ctx.gc_registered = true;
   atomic_store(&valk_thread_ctx.safepoint_flags, 0);
-  valk_thread_ctx.root_stack = malloc(sizeof(valk_lval_t*) * 256);
-  valk_thread_ctx.root_stack_capacity = 256;
-  valk_thread_ctx.root_stack_count = 0;
   valk_gc_mark_queue_init(&sys->threads[idx].mark_queue);
 
-  VALK_DEBUG("Thread registered: idx=%llu", (unsigned long long)idx);
+  // Capture native C-stack range for conservative GC scanning. The marker
+  // walks [native_stack_top, native_stack_base) at every STW pause and
+  // marks anything there that looks like a valid heap-object pointer —
+  // covering AOT-held formals/SSA spills + tree-walker C locals + any
+  // valk_lval_t* held in a register at safepoint entry. No compiler
+  // cooperation, no manual root push needed.
+  //
+  // pthread_getattr_np works on glibc/musl for both the initial thread
+  // (reads /proc/self/maps) and pthread_create'd threads. macOS would
+  // need pthread_get_stackaddr_np / pthread_get_stacksize_np here.
+  pthread_attr_t pattr;
+  if (pthread_getattr_np(pthread_self(), &pattr) == 0) {
+    void *stack_addr = NULL;
+    size_t stack_size = 0;
+    pthread_attr_getstack(&pattr, &stack_addr, &stack_size);
+    pthread_attr_destroy(&pattr);
+    // pthread_attr_getstack returns the LOW address of the stack region
+    // (stack_addr) and its total size. On x86_64/aarch64 the stack grows
+    // down, so the high boundary (where SP starts) is stack_addr + size.
+    valk_thread_ctx.native_stack_limit = stack_addr;
+    valk_thread_ctx.native_stack_base  = (char *)stack_addr + stack_size;
+    atomic_store_explicit(&valk_thread_ctx.native_stack_top,
+                          valk_thread_ctx.native_stack_base,
+                          memory_order_relaxed);
+  } else {
+    // Defensive: leave fields NULL; the marker skips threads without
+    // captured ranges. Should not happen on Linux for any pthread.
+    valk_thread_ctx.native_stack_base = NULL;
+    valk_thread_ctx.native_stack_limit = NULL;
+    atomic_store_explicit(&valk_thread_ctx.native_stack_top, NULL,
+                          memory_order_relaxed);
+  }
+
+  VALK_DEBUG("Thread registered: idx=%llu stack=[%p,%p) %zu bytes",
+             (unsigned long long)idx,
+             valk_thread_ctx.native_stack_limit,
+             valk_thread_ctx.native_stack_base,
+             (size_t)((char *)valk_thread_ctx.native_stack_base -
+                      (char *)valk_thread_ctx.native_stack_limit));
 }
 
 void valk_system_unregister_thread(valk_system_t *sys) {
@@ -217,10 +252,6 @@ void valk_system_unregister_thread(valk_system_t *sys) {
     break;
   }
 
-  if (valk_thread_ctx.root_stack) {
-    free(valk_thread_ctx.root_stack);
-    valk_thread_ctx.root_stack = nullptr;
-  }
   valk_thread_ctx.gc_registered = false;
 
   VALK_DEBUG("Thread unregistered: idx=%llu", (unsigned long long)idx);
@@ -366,6 +397,7 @@ void valk_gc_safepoint_aot(void) {
 }
 
 // LCOV_EXCL_START - safe point slow path requires STW coordination from parallel GC
+__attribute__((noinline))
 void valk_gc_safe_point_slow(void) {
   u32 flags = atomic_load_explicit(&valk_thread_ctx.safepoint_flags,
                                     memory_order_acquire);
@@ -391,6 +423,16 @@ void valk_gc_safe_point_slow(void) {
                          valk_thread_ctx.heap,
                          valk_thread_ctx.root_env);
       }
+
+      // Snapshot this thread's deepest live frame just before parking.
+      // The marker scans [native_stack_top, native_stack_base) for
+      // valk_lval_t* candidates. __builtin_frame_address(0) is the
+      // current function's frame; everything above (toward base) on the
+      // stack is live caller state. The `noinline` attribute on this
+      // function ensures the frame is real and stable.
+      atomic_store_explicit(&valk_thread_ctx.native_stack_top,
+                            __builtin_frame_address(0),
+                            memory_order_release);
 
       valk_barrier_wait(&valk_sys->barrier);
       valk_gc_participate_in_parallel_gc();
@@ -421,20 +463,15 @@ void valk_gc_safe_point_slow(void) {
 // ============================================================================
 // Root Enumeration
 // ============================================================================
-
-// LCOV_EXCL_BR_START - defensive null checks in root iteration
-void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx) {
-  valk_thread_context_t *tc = &valk_thread_ctx;
-
-  if (tc->root_stack == nullptr) return;
-
-  for (u64 i = 0; i < tc->root_stack_count; i++) {
-    if (tc->root_stack[i] != nullptr) {
-      visitor(tc->root_stack[i], ctx);
-    }
-  }
-}
-// LCOV_EXCL_BR_STOP
+//
+// valk_gc_visit_thread_roots was deleted along with the per-thread
+// root_stack. The mark phase now derives all live roots from:
+//   - the env chain (visit_env_roots / visit_global_roots, here)
+//   - the iterative evaluator's continuation-frame stack
+//     (mark_eval_stack_roots, gc_mark.c)
+//   - conservative scanning of each thread's native C stack
+//     (scan_thread_native_stack, gc_mark.c)
+// No compiler-emitted root push/pop, no manual VALK_GC_ROOT macros.
 
 // LCOV_EXCL_BR_START - defensive null checks in env root iteration
 void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, void *ctx) {
@@ -733,32 +770,17 @@ void valk_gc_reset_after_fork(void) {
   valk_thread_ctx.eval_stack = nullptr;
   valk_thread_ctx.eval_expr = nullptr;
   valk_thread_ctx.eval_value = nullptr;
-
-  if (valk_thread_ctx.root_stack) {
-    free(valk_thread_ctx.root_stack);
-    valk_thread_ctx.root_stack = nullptr;
-  }
-  valk_thread_ctx.root_stack_count = 0;
-  valk_thread_ctx.root_stack_capacity = 0;
+  valk_thread_ctx.native_stack_base = nullptr;
+  valk_thread_ctx.native_stack_limit = nullptr;
+  atomic_store_explicit(&valk_thread_ctx.native_stack_top, nullptr,
+                        memory_order_relaxed);
 }
 // LCOV_EXCL_STOP
 
-void valk_gc_root_push_fn(valk_lval_t *val) {
-  valk_gc_root_push(val);
-}
-
-void valk_gc_root_pop_fn(void) {
-  valk_gc_root_pop();
-}
-
-sz valk_gc_root_save(void) {
-  return valk_thread_ctx.root_stack_count;
-}
-
-void valk_gc_root_restore(sz count) {
-  valk_thread_ctx.root_stack_count = count;
-}
-
+// valk_gc_root_push_fn / valk_gc_root_pop_fn / valk_gc_root_save /
+// valk_gc_root_restore retired with the wider root_stack delete.
+// Conservative native-stack scanning at safepoint
+// (gc_mark.c::scan_thread_native_stack) covers what they did.
 void valk_gc_safepoint_fn(void) {
   VALK_GC_SAFE_POINT();
 }

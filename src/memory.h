@@ -340,15 +340,45 @@ typedef struct {
   // Parallel GC fields (Phase 0)
   u64 gc_thread_id;            // Index in GC coordinator's thread registry
   bool gc_registered;             // Whether registered with parallel GC
-  struct valk_lval_t **root_stack;       // Explicit root stack for protecting temps during GC
-  sz root_stack_count;
-  sz root_stack_capacity;
+
+  // Native C-stack range for conservative GC scanning. Captured once on
+  // thread register via pthread_getattr_np / pthread_attr_getstack.
+  // `native_stack_top` is updated by valk_gc_safe_point_slow (and by
+  // valk_gc_heap_collect for the initiator) to point at the deepest live
+  // frame just before the thread parks at the STW barrier — bounding the
+  // range the marker must conservatively scan to find AOT-held lvals
+  // (formals, SSA temps, anything in registers spilled to stack).
+  // Layout:
+  //   native_stack_base  — high address (where stack started)
+  //   native_stack_limit — low address (stack overflow boundary)
+  //   native_stack_top   — current frame pointer at safepoint
+  // Stack grows down on x86_64/aarch64, so the live range is
+  //   [native_stack_top, native_stack_base).
+  void *native_stack_base;
+  void *native_stack_limit;
+  void *_Atomic native_stack_top;
+
+  // Disable conservative stack scanning for this thread. Default is 0
+  // (scanning enabled). Unit tests that exercise precise mark/sweep
+  // semantics — e.g., "allocate N slots, mark M, expect N-M reclaimed"
+  // — set this to 1 to opt out, because their stack-resident pointers
+  // would otherwise be pinned by the scanner. Production code should
+  // never set this; the conservative scanner is what makes
+  // hand-written C and AOT-compiled code safe under GC.
+  bool gc_disable_stack_scan;
   
   // Eval stack registry (precise root tracking for nested eval)
   void *eval_stacks[16];          // All active eval stacks (nested eval calls)
   u32 eval_stack_depth;            // Number of active eval stacks
 
-  // Saved eval envs for nested eval (parallel to eval_stacks)
+  // Saved eval state for nested eval (parallel arrays to eval_stacks).
+  // When a nested valk_lval_eval_iterative starts, it saves the outer
+  // eval_expr/eval_value/eval_env into slot [my_depth] so the outer
+  // values stay GC-reachable while the inner eval runs. mark_eval_stack_roots
+  // walks all three arrays. Restored from these slots on the inner
+  // eval's CONT_DONE.
+  struct valk_lval_t *saved_eval_exprs[16];
+  struct valk_lval_t *saved_eval_values[16];
   struct valk_lenv_t *saved_eval_envs[16];
 
   // Current eval state (innermost eval loop)

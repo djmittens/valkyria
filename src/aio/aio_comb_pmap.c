@@ -62,13 +62,14 @@ static void __pmap_worker(void *arg) {
   }
   // LCOV_EXCL_STOP
 
+  // fn and arg_val stay GC-reachable via the handle table (walked by
+  // valk_handle_table_visit) until released. `args` is walked via
+  // eval_calling_args during the eval_call. After eval_call, `result`
+  // is parked in eval_value across the handle_release + evacuate path.
   valk_lval_t *fn = valk_handle_resolve(&valk_sys->handle_table, task->fn_handle);
   valk_lval_t *arg_val = valk_handle_resolve(&valk_sys->handle_table, task->arg_handle);
-  VALK_GC_ROOT(fn);
-  VALK_GC_ROOT(arg_val);
 
   valk_lval_t *args = valk_lval_cons(arg_val, valk_lval_nil());
-  VALK_GC_ROOT(args);
 
   valk_mem_arena_t *scratch = valk_thread_ctx.scratch;
   valk_lval_t *result;
@@ -79,7 +80,7 @@ static void __pmap_worker(void *arg) {
   } else {
     result = valk_lval_eval_call(fn->fun.env, fn, args); // LCOV_EXCL_LINE
   }
-  VALK_GC_ROOT(result);
+  valk_thread_ctx.eval_value = result;
 
   valk_handle_release(&valk_sys->handle_table, task->arg_handle);
 
@@ -97,9 +98,11 @@ static void __pmap_worker(void *arg) {
   // LCOV_EXCL_BR_STOP
 
   valk_lval_t *heap_result = valk_evacuate_to_heap(result);
+  valk_thread_ctx.eval_value = heap_result;
   if (scratch) valk_mem_arena_reset(scratch); // LCOV_EXCL_BR_LINE - scratch always present
   ctx->result_handles[task->index] =
       valk_handle_create(&valk_sys->handle_table, heap_result);
+  valk_thread_ctx.eval_value = NULL;
   atomic_store_explicit(&ctx->result_ready[task->index], true, memory_order_release);
   u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
 

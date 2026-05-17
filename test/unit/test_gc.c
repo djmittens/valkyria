@@ -1166,7 +1166,10 @@ void test_gc_heap_collect_preserves_marked(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
   valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
   
-  void *ptrs[50];
+  // volatile so the compiler can't elide our explicit clear-to-NULL
+  // below. Without conservative-scan-aware test discipline, every ptr
+  // would be pinned by the marker walking this thread's C stack.
+  void * volatile ptrs[50];
   for (int i = 0; i < 50; i++) {
     ptrs[i] = valk_gc_heap_alloc(heap, 72);
   }
@@ -1177,6 +1180,10 @@ void test_gc_heap_collect_preserves_marked(VALK_TEST_ARGS()) {
       valk_gc_page_try_mark(loc.page, loc.slot);
     }
   }
+  
+  // Drop unmarked references so the conservative scanner doesn't pin
+  // them. The test wants slots 25..49 to be unreachable from any root.
+  for (int i = 25; i < 50; i++) ptrs[i] = NULL;
   
   size_t reclaimed = valk_gc_heap_collect(heap);
   
@@ -1384,8 +1391,10 @@ void test_gc_reclaim_empty_pages_after_sweep(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
   valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
   
-  void *p1 = valk_gc_heap_alloc(heap, 64);
+  void * volatile p1 = valk_gc_heap_alloc(heap, 64);
   VALK_TEST_ASSERT(p1 != nullptr, "Allocation should succeed");
+  // Drop reference so the conservative scanner doesn't pin p1's slot.
+  p1 = NULL;
   
   size_t committed_before = atomic_load(&heap->committed_bytes);
   
@@ -1409,12 +1418,14 @@ void test_gc_reclaim_empty_pages_multiple_classes(VALK_TEST_ARGS()) {
   valk_gc_thread_register();
   valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
   
-  void *p1 = valk_gc_heap_alloc(heap, 16);
-  void *p2 = valk_gc_heap_alloc(heap, 64);
-  void *p3 = valk_gc_heap_alloc(heap, 256);
-  void *p4 = valk_gc_heap_alloc(heap, 1024);
+  void * volatile p1 = valk_gc_heap_alloc(heap, 16);
+  void * volatile p2 = valk_gc_heap_alloc(heap, 64);
+  void * volatile p3 = valk_gc_heap_alloc(heap, 256);
+  void * volatile p4 = valk_gc_heap_alloc(heap, 1024);
   
   VALK_TEST_ASSERT(p1 && p2 && p3 && p4, "All allocations should succeed");
+  // Drop refs so conservative-scan doesn't pin them as live across collect.
+  p1 = NULL; p2 = NULL; p3 = NULL; p4 = NULL;
   
   size_t committed_before = atomic_load(&heap->committed_bytes);
   
@@ -1561,6 +1572,10 @@ void test_gc_heap_collect_reclaims_bytes(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_gc_thread_register();
+  // Test exercises precise "no roots == reclaim everything" semantics.
+  // Conservative stack scan would pin transient pointers held in the
+  // loop's stack slots / spilled registers. Opt out for this test.
+  valk_thread_ctx.gc_disable_stack_scan = true;
   valk_gc_heap_t *heap = valk_gc_heap_create(64 * 1024 * 1024);
   
   for (int i = 0; i < 100; i++) {
@@ -1821,6 +1836,9 @@ void test_gc_heap_parallel_gc_stw(VALK_TEST_ARGS()) {
   VALK_TEST();
   
   valk_system_create(NULL);
+  // Precise mark/sweep test — opt out of conservative stack scan; see
+  // test_gc_heap_collect_reclaims_bytes above for rationale.
+  valk_thread_ctx.gc_disable_stack_scan = true;
   
   valk_gc_heap_t *heap = valk_gc_heap_create(256 * 1024 * 1024);
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
@@ -1873,7 +1891,9 @@ static void *true_parallel_gc_worker(void *arg) {
       val->flags = LVAL_NUM;
       val->num = (args->thread_id + 1) * 1000 + i;
       args->rooted_vals[i] = val;
-      valk_gc_root_push(val);
+      // val is kept alive by the rooted_vals[] store + conservative
+      // native-stack scan walking this thread's frame at safepoint.
+      // Manual root_push retired with the broader root_stack delete.
     }
   }
   

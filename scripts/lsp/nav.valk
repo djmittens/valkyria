@@ -446,23 +446,20 @@
       (stderr/write (str "[sem] uri=" uri " text=NIL -> data=nil\n"))
       (lsp/send-response id (list :data nil))}
     {do
-      ; On clean parse, tokenize the AST, cache the result, and return it.
-      ; On broken parse (mid-edit), return the last-good cached tokens
-      ; instantly — re-lexing on every keystroke is too slow to avoid
-      ; a visible orange flash between didChange and response. Stale
-      ; token positions drift slightly during edits but recover as soon
-      ; as parse succeeds again. Only fall back to lex-tokenize when no
-      ; clean parse has ever landed (first open with broken content).
+      ; On clean parse, tokenize the AST and cache for future queries.
+      ; On broken parse (mid-edit), lex-tokenize the CURRENT text so
+      ; newly-typed lines get highlights immediately. The earlier
+      ; "return last-good cached tokens" path looked nice in benchmarks
+      ; but produced the orange-while-typing bug: cache predates the
+      ; new line, new line has no tokens, nvim renders default-color.
+      ; Lex on every keystroke is fast enough in practice — typing
+      ; debouncing on the editor side bounds the request rate, and
+      ; sem/lex-tokenize is a single-pass scanner with no AST work.
       (= {ast} (lsp/get-ast uri text))
       (= {data}
         (if (or (nil? ast) (lsp/ast-has-error ast))
-          {do
-            (= {cached} (chm/get lsp/last-good-tokens-cache uri))
-            (if (nil? cached)
-              {do (stderr/write (str "[sem] uri=" uri " path=LEX (broken parse, no cache) text-len=" (len text) "\n"))
-                  (sem/lex-tokenize text)}
-              {do (stderr/write (str "[sem] uri=" uri " path=CACHED-STALE (broken parse, using last-good)\n"))
-                  cached})}
+          {do (stderr/write (str "[sem] uri=" uri " path=LEX (broken parse) text-len=" (len text) "\n"))
+              (sem/lex-tokenize text)}
           {do
             (= {fresh} (sem/tokenize-ast ast text))
             (stderr/write (str "[sem] uri=" uri " path=FRESH (clean parse) tokens=" (/ (len fresh) 5) "\n"))
