@@ -1,5 +1,7 @@
 #include "parser.h"
 
+#include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +15,65 @@
 #include "aio/aio_request_ctx.h"
 
 extern valk_eval_metrics_t g_eval_metrics;
+
+// Native C-stack overflow guard for the interpreter.
+//
+// AOT-compiled lambdas (and builtins like map/foldl) re-enter the evaluator
+// via valk_lval_eval_call per Valk-level call, and that nesting is NOT
+// tail-call-optimized — each level consumes real C-stack frames. Deep or
+// runaway recursion overflows the native stack and the process dies with
+// SIGBUS/SIGSEGV on the guard page (no recovery, no error). A fixed call-depth
+// limit is a poor proxy because frame sizes vary wildly (a tokenizer/validator
+// frame is far larger than a trivial recursive arithmetic frame).
+//
+// Instead we measure actual stack headroom: capture each thread's stack bounds
+// on first use, then refuse to recurse further once we're within
+// VALK_STACK_RESERVE_BYTES of the limit, returning a catchable LVAL_ERR.
+#define VALK_STACK_RESERVE_BYTES (256u * 1024u)
+
+// Per-thread stack low-water mark (the address we must not grow past). 0 means
+// "not yet probed for this thread". Thread-local so each worker computes its
+// own bound from its own stack.
+static _Thread_local uintptr_t valk_stack_limit_addr = 0;
+static _Thread_local int valk_stack_grows_down = 1;
+
+static void valk_stack_probe_init(void) {
+  // Approximate current stack position via a local's address.
+  uintptr_t here = (uintptr_t)__builtin_frame_address(0);
+#if defined(__APPLE__)
+  pthread_t self = pthread_self();
+  void* top = pthread_get_stackaddr_np(self);   // highest address (base)
+  size_t size = pthread_get_stacksize_np(self);
+  uintptr_t base = (uintptr_t)top;
+  // macOS stacks grow down: usable region is [base - size, base).
+  valk_stack_grows_down = 1;
+  valk_stack_limit_addr = base - size + VALK_STACK_RESERVE_BYTES;
+  (void)here;
+#else
+  pthread_attr_t attr;
+  void* base = nullptr;
+  size_t size = 0;
+  if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+    pthread_attr_getstack(&attr, &base, &size);
+    pthread_attr_destroy(&attr);
+  }
+  if (base && size) {
+    valk_stack_grows_down = 1;
+    valk_stack_limit_addr = (uintptr_t)base + VALK_STACK_RESERVE_BYTES;
+  } else {
+    // Fallback: assume 8 MB down from here.
+    valk_stack_limit_addr = here - (8u * 1024u * 1024u) + VALK_STACK_RESERVE_BYTES;
+  }
+#endif
+}
+
+// Returns true when the C stack is too close to its limit to recurse safely.
+static inline bool valk_stack_near_limit(void) {
+  if (valk_stack_limit_addr == 0) valk_stack_probe_init();
+  uintptr_t sp = (uintptr_t)__builtin_frame_address(0);
+  return valk_stack_grows_down ? (sp <= valk_stack_limit_addr)
+                               : (sp >= valk_stack_limit_addr);
+}
 
 void valk_eval_stack_init(valk_eval_stack_t *stack) {
   stack->frames = malloc(sizeof(valk_cont_frame_t) * VALK_EVAL_STACK_INIT_CAP);
@@ -844,12 +905,21 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
                                  valk_lval_t* args) {
   LVAL_ASSERT_TYPE(args, func, LVAL_FUN);
 
+  // Each (re-)entry here is a real C stack frame: builtins (map/foldl/...) and
+  // AOT-compiled lambdas call back in to evaluate user functions, and that
+  // nesting is NOT tail-call-optimized. Unbounded nesting overflows the native
+  // stack (SIGBUS/SIGSEGV on the guard page). Detect imminent overflow via
+  // actual stack headroom and return a recoverable error instead of crashing.
+  if (valk_stack_near_limit()) {
+    return valk_lval_err("maximum recursion depth exceeded (stack limit)");
+  }
+
   valk_eval_result_t res = valk_eval_apply_func_iter(env, func, args);
-  
+
   if (!res.is_thunk) {
     return res.value;
   }
-  
+
   if (res.thunk.remaining_body != NULL && !valk_lval_list_is_empty(res.thunk.remaining_body)) {
     valk_lval_t* result = valk_lval_eval(res.thunk.env, res.thunk.expr);
     if (LVAL_TYPE(result) == LVAL_ERR) {
@@ -857,7 +927,7 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
       atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
       return result;
     }
-    
+
     valk_lval_t* curr = res.thunk.remaining_body;
     while (!valk_lval_list_is_empty(curr)) {
       result = valk_lval_eval(res.thunk.call_env, curr->cons.head);
@@ -868,12 +938,12 @@ valk_lval_t* valk_lval_eval_call(valk_lenv_t* env, valk_lval_t* func,
       }
       curr = curr->cons.tail;
     }
-    
+
     valk_thread_ctx.call_depth--;
     atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);
     return result;
   }
-  
+
   valk_lval_t* result = valk_lval_eval(res.thunk.env, res.thunk.expr);
   valk_thread_ctx.call_depth--;
   atomic_fetch_sub(&g_eval_metrics.stack_depth, 1);

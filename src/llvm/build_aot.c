@@ -89,6 +89,13 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
   aot_entry_t *entries = nullptr;
   size_t n = 0, cap = 0;
 
+  // Snapshot the env's bindings into flat arrays. The global env may be
+  // backed by the concurrent hash map (empty linear arrays), so we must
+  // enumerate via the snapshot helper rather than env->symbols/vals directly.
+  char **env_names = nullptr;
+  valk_lval_t **env_vals = nullptr;
+  u64 env_count = valk_lenv_snapshot(env, &env_names, &env_vals);
+
   // Phase 1 — identify candidates, assign native_name, and emit slow
   // variants for NON-fast-safe candidates. For fast-safe candidates we
   // only reserve the slow name here; the slow body is emitted in phase 4
@@ -99,8 +106,8 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
   // name, which phase 2 guarantees exists.
   aot_cand_t *cands = nullptr;
 
-  for (u64 i = 0; i < env->symbols.count; i++) {
-    valk_lval_t *v = env->vals.items[i];
+  for (u64 i = 0; i < env_count; i++) {
+    valk_lval_t *v = env_vals[i];
     if (!is_aot_candidate(v)) continue;
 
     char name[64];
@@ -119,28 +126,28 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
       LLVMSetLinkage(fn, LLVMExternalLinkage);
       if (verbose) {
         fprintf(stderr, "[AOT] fast: %s (%zu formals)\n",
-                env->symbols.items[i] ? env->symbols.items[i] : name, nf);
+                env_names[i] ? env_names[i] : name, nf);
       }
     } else {
       fn = valk_llvm_compile_lambda_body(ctx, v->fun.body, name);
       if (!fn) {
         if (verbose) {
           fprintf(stderr, "[AOT] skip: %s (codegen returned null)\n",
-                  env->symbols.items[i] ? env->symbols.items[i] : name);
+                  env_names[i] ? env_names[i] : name);
         }
         continue;
       }
       if (LLVMVerifyFunction(fn, LLVMReturnStatusAction)) {
         if (verbose) {
           fprintf(stderr, "[AOT] skip: %s (verify failed)\n",
-                  env->symbols.items[i] ? env->symbols.items[i] : name);
+                  env_names[i] ? env_names[i] : name);
         }
         LLVMDeleteFunction(fn);
         continue;
       }
       if (verbose) {
         fprintf(stderr, "[AOT] slow: %s\n",
-                env->symbols.items[i] ? env->symbols.items[i] : name);
+                env_names[i] ? env_names[i] : name);
       }
     }
 
@@ -247,6 +254,8 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
       free(cands[i].fast_name);
       free(entries[i].name);
     }
+    free(env_names);
+    free(env_vals);
     free(cands);
     free(entries);
     valk_llvm_ctx_free(ctx);
@@ -260,8 +269,8 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
     if (mod_err) LLVMDisposeMessage(mod_err);
     // Roll back native_name assignments so runtime doesn't try to
     // resolve symbols that won't exist.
-    for (u64 i = 0; i < env->symbols.count; i++) {
-      valk_lval_t *v = env->vals.items[i];
+    for (u64 i = 0; i < env_count; i++) {
+      valk_lval_t *v = env_vals[i];
       if (v && LVAL_TYPE(v) == LVAL_FUN && v->fun.native_name) {
         free(v->fun.native_name);
         v->fun.native_name = nullptr;
@@ -272,6 +281,8 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
       free(cands[i].slow_name);
       free(cands[i].fast_name);
     }
+    free(env_names);
+    free(env_vals);
     free(cands);
     free(entries);
     valk_llvm_ctx_free(ctx);
@@ -316,6 +327,8 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
     free(cands[i].slow_name);
     free(cands[i].fast_name);
   }
+  free(env_names);
+  free(env_vals);
   free(cands);
   free(entries);
   valk_llvm_ctx_free(ctx);

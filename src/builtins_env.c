@@ -132,11 +132,13 @@ static valk_lval_t* valk_builtin_lambda(valk_lenv_t* e, valk_lval_t* a) {
 static valk_lval_t* valk_builtin_penv(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(a);
   valk_lval_t* res = valk_lval_nil();
-  for (u64 i = 0; i < e->symbols.count; i++) {
-    res = valk_lval_cons(
-        valk_lval_cons(valk_lval_sym(e->symbols.items[i]),
-                       valk_lval_cons(e->vals.items[i], valk_lval_nil())),
-        res);
+  for (valk_lenv_t* env = e; env != nullptr; env = env->parent) {
+    for (u64 i = 0; i < env->symbols.count; i++) {
+      res = valk_lval_cons(
+          valk_lval_cons(valk_lval_sym(env->symbols.items[i]),
+                         valk_lval_cons(env->vals.items[i], valk_lval_nil())),
+          res);
+    }
   }
   return res;
 }

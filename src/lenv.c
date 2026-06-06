@@ -4,6 +4,7 @@
 
 #include "builtins_internal.h"
 #include "common.h"
+#include "conc_map.h"
 #include "gc.h"
 #include "log.h"
 #include "memory.h"
@@ -11,6 +12,21 @@
 extern valk_eval_metrics_t g_eval_metrics;
 
 static void valk_lenv_init(valk_lenv_t* env);
+
+// Promote `env` to use a concurrent hash map for its bindings. Used for the
+// shared global/root env, which is read on every symbol resolution and
+// mutated concurrently by the LSP's worker threads. Idempotent.
+void valk_lenv_make_concurrent(valk_lenv_t* env) {
+  if (!env || env->cmap) return;
+  void* alloc = env->allocator ? env->allocator : valk_thread_ctx.allocator;
+  valk_cmap_t* m = valk_cmap_new(alloc, 1024);
+  // Migrate any existing linear bindings into the map.
+  for (u64 i = 0; i < env->symbols.count; i++) {
+    if (env->symbols.items[i] == nullptr) continue;
+    valk_cmap_put(m, env->symbols.items[i], env->vals.items[i]);
+  }
+  env->cmap = m;
+}
 
 valk_lenv_t* valk_lenv_empty(void) {
   valk_lenv_t* res;
@@ -37,6 +53,7 @@ static void valk_lenv_init(valk_lenv_t* env) {
   env->vals.capacity = 0;
   env->vals.items = nullptr;
   env->allocator = valk_thread_ctx.allocator;
+  env->cmap = nullptr;
 }
 
 // LCOV_EXCL_BR_START - env free/copy have defensive null checks for internal consistency
@@ -140,12 +157,18 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   }
 
   while (env) {
-    for (u64 i = 0; i < env->symbols.count; i++) {
-      if (strcmp(key->str, env->symbols.items[i]) == 0) {
-        if (valk_log_would_log(VALK_LOG_TRACE)) {
-          VALK_TRACE("env get idx=%zu key=%s", i, env->symbols.items[i]);
+    if (env->cmap) {
+      // Concurrent (shared global) env: lock-free hash lookup.
+      valk_lval_t* v = valk_cmap_get((valk_cmap_t*)env->cmap, key->str);
+      if (v != nullptr) return v;
+    } else {
+      for (u64 i = 0; i < env->symbols.count; i++) {
+        if (strcmp(key->str, env->symbols.items[i]) == 0) {
+          if (valk_log_would_log(VALK_LOG_TRACE)) {
+            VALK_TRACE("env get idx=%zu key=%s", i, env->symbols.items[i]);
+          }
+          return env->vals.items[i];
         }
-        return env->vals.items[i];
       }
     }
     env = env->parent;
@@ -185,6 +208,13 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     VALK_DEBUG("env put: %s", key->str);
   }
   valk_lval_t* safe_val = __lenv_ensure_safe_val(env, val);
+
+  if (env->cmap) {
+    // Concurrent (shared global) env: striped-lock map handles overwrite,
+    // growth, and cross-thread visibility.
+    valk_cmap_put((valk_cmap_t*)env->cmap, key->str, safe_val);
+    return;
+  }
 
   for (u64 i = 0; i < env->symbols.count; i++) {
     if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {  // LCOV_EXCL_BR_LINE - defensive check
@@ -257,6 +287,43 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     env->symbols.items[env->symbols.count++] = new_symbol;
     env->vals.items[env->vals.count++] = safe_val;
   }
+}
+
+typedef struct {
+  char** names;
+  valk_lval_t** vals;
+  u64 count;
+} lenv_snapshot_t;
+
+static void lenv_snapshot_cb(char* key, _Atomic(valk_lval_t*)* slot, void* ctx) {
+  lenv_snapshot_t* s = ctx;
+  s->names[s->count] = key;
+  s->vals[s->count] = atomic_load(slot);
+  s->count++;
+}
+
+u64 valk_lenv_snapshot(valk_lenv_t* env, char*** out_names,
+                       valk_lval_t*** out_vals) {
+  if (env->cmap) {
+    u64 cap = valk_cmap_count((valk_cmap_t*)env->cmap);
+    lenv_snapshot_t s = {0};
+    s.names = malloc(sizeof(char*) * (cap ? cap : 1));
+    s.vals = malloc(sizeof(valk_lval_t*) * (cap ? cap : 1));
+    valk_cmap_foreach((valk_cmap_t*)env->cmap, lenv_snapshot_cb, &s);
+    *out_names = s.names;
+    *out_vals = s.vals;
+    return s.count;
+  }
+  u64 n = env->symbols.count;
+  char** names = malloc(sizeof(char*) * (n ? n : 1));
+  valk_lval_t** vals = malloc(sizeof(valk_lval_t*) * (n ? n : 1));
+  for (u64 i = 0; i < n; i++) {
+    names[i] = env->symbols.items[i];
+    vals[i] = env->vals.items[i];
+  }
+  *out_names = names;
+  *out_vals = vals;
+  return n;
 }
 
 void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {

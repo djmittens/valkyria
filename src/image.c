@@ -1,4 +1,5 @@
 #include "image.h"
+#include "conc_map.h"
 #include "dict.h"
 #include "gc.h"
 #include "log.h"
@@ -236,6 +237,11 @@ static u64 img_dump_lval(valk_image_builder_t *b, valk_lval_t *v) {
   void *existing = valk_ptr_map_get(&b->pm, v);
   if (existing) return (u64)(uintptr_t)existing - 1;
 
+  // valk_lval_t has u64/pointer fields written via raw *(u64*) stores below;
+  // they must land on 8-byte boundaries or arm64 faults (EXC_ARM_DA_ALIGN).
+  // img_reserve doesn't align, and a preceding odd-length cstr dump (e.g. a
+  // lambda's native_name) can leave b->len unaligned, so align first.
+  img_align(b, alignof(valk_lval_t));
   u64 off = img_reserve(b, sizeof(valk_lval_t));
   valk_ptr_map_put(&b->pm, v, (void*)(uintptr_t)(off + 1));
 
@@ -321,24 +327,59 @@ static u64 img_dump_lval(valk_image_builder_t *b, valk_lval_t *v) {
   return off;
 }
 
+// Collect a cmap env's live {key,val} pairs into flat arrays so the env can
+// be serialized in the same linear form as a non-concurrent env. The loaded
+// image env is frozen (read-only), so it never needs the concurrent map.
+typedef struct {
+  char **keys;
+  valk_lval_t **vals;
+  u64 count;
+  u64 cap;
+} img_cmap_collect_t;
+
+static void img_cmap_collect_cb(char *key, _Atomic(valk_lval_t *) *slot,
+                                void *ctx) {
+  img_cmap_collect_t *c = ctx;
+  if (c->count >= c->cap) return;  // LCOV_EXCL_LINE - sized to count up front
+  c->keys[c->count] = key;
+  c->vals[c->count] = atomic_load(slot);
+  c->count++;
+}
+
 static u64 img_dump_lenv(valk_image_builder_t *b, valk_lenv_t *env) {
   if (!env) return 0;
   void *existing = valk_ptr_map_get(&b->pm, env);
   if (existing) return (u64)(uintptr_t)existing - 1;
 
+  img_align(b, alignof(valk_lenv_t));
   u64 off = img_reserve(b, sizeof(valk_lenv_t));
   valk_ptr_map_put(&b->pm, env, (void*)(uintptr_t)(off + 1));
 
   memcpy(b->buf + off, env, sizeof(valk_lenv_t));
 
+  // Source bindings from the concurrent map when present, else linear arrays.
+  char **keys = env->symbols.items;
+  valk_lval_t **vals = env->vals.items;
   u64 n = env->symbols.count;
+  img_cmap_collect_t collected = {0};
+  if (env->cmap) {
+    u64 cnt = valk_cmap_count((valk_cmap_t *)env->cmap);
+    collected.keys = malloc(sizeof(char *) * (cnt ? cnt : 1));
+    collected.vals = malloc(sizeof(valk_lval_t *) * (cnt ? cnt : 1));
+    collected.cap = cnt;
+    valk_cmap_foreach((valk_cmap_t *)env->cmap, img_cmap_collect_cb, &collected);
+    keys = collected.keys;
+    vals = collected.vals;
+    n = collected.count;
+  }
 
   // Dump symbol name strings array: char*[n].
   u64 sym_arr_off = 0;
-  if (n > 0 && env->symbols.items) {
+  if (n > 0 && keys) {
+    img_align(b, alignof(char*));
     sym_arr_off = img_reserve(b, n * sizeof(char*));
     for (u64 i = 0; i < n; i++) {
-      u64 s_off = img_dump_cstr(b, env->symbols.items[i]);
+      u64 s_off = img_dump_cstr(b, keys[i]);
       u64 slot_off = sym_arr_off + i * sizeof(char*);
       img_store_ptr(b, slot_off, s_off);
     }
@@ -346,22 +387,28 @@ static u64 img_dump_lenv(valk_image_builder_t *b, valk_lenv_t *env) {
 
   // Dump value pointer array: valk_lval_t*[n].
   u64 val_arr_off = 0;
-  if (n > 0 && env->vals.items) {
+  if (n > 0 && vals) {
+    img_align(b, alignof(valk_lval_t*));
     val_arr_off = img_reserve(b, n * sizeof(valk_lval_t*));
     for (u64 i = 0; i < n; i++) {
-      u64 v_off = img_dump_lval(b, env->vals.items[i]);
+      u64 v_off = img_dump_lval(b, vals[i]);
       u64 slot_off = val_arr_off + i * sizeof(valk_lval_t*);
       img_store_ptr(b, slot_off, v_off);
     }
   }
 
+  if (collected.keys) free(collected.keys);
+  if (collected.vals) free(collected.vals);
+
   u64 parent_off = env->parent ? img_dump_lenv(b, env->parent) : 0;
 
   // Write the env header fields (count, pointers) after all reserves so we
-  // don't hold stale buf pointers across realloc.
+  // don't hold stale buf pointers across realloc. The dumped env is a frozen,
+  // linear-array env (no concurrent map needed: it is read-only after load).
   valk_lenv_t *dst = (valk_lenv_t*)(b->buf + off);
   atomic_store(&dst->flags, LENV_FLAG_FROZEN);
   dst->allocator = nullptr;
+  dst->cmap = nullptr;
   dst->symbols.count = n;
   dst->symbols.capacity = n;
   dst->vals.count = n;
@@ -369,6 +416,7 @@ static u64 img_dump_lenv(valk_image_builder_t *b, valk_lenv_t *env) {
   img_store_ptr(b, off + offsetof(valk_lenv_t, symbols.items), sym_arr_off);
   img_store_ptr(b, off + offsetof(valk_lenv_t, vals.items), val_arr_off);
   img_store_ptr(b, off + offsetof(valk_lenv_t, parent), parent_off);
+  img_store_ptr(b, off + offsetof(valk_lenv_t, cmap), 0);
 
   return off;
 }
@@ -795,6 +843,11 @@ valk_lenv_t *valk_image_load_overlay_bytes(const unsigned char *bytes,
 
   valk_lenv_t *overlay = valk_lenv_empty();
   overlay->parent = dumped;
+  // The overlay is the mutable global env in image-backed runtimes (the AOT
+  // LSP). It is read on every lookup and written/read by worker threads, so
+  // back it with the concurrent map. The frozen `dumped` parent is read-only
+  // after load and needs no synchronization.
+  valk_lenv_make_concurrent(overlay);
   return overlay;
 }
 

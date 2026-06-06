@@ -464,26 +464,26 @@
       (test/assert-eq 0 (lsp/in-string? "(print \"hi\") x" 0 13) "after close = outside")
     })
 
-  ; --- lsp/count-quotes ---
+  ; --- str/in-string? (replaces the old recursive lsp/count-quotes) ---
 
   (test/case "count-quotes-none"
     {do
-      (test/assert-eq 0 (lsp/count-quotes "hello" 5 0 0) "0 quotes = even = false")
+      (test/assert-eq 0 (str/in-string? "hello" 5) "0 quotes = even = not in string")
     })
 
   (test/case "count-quotes-one"
     {do
-      (test/assert-eq 1 (lsp/count-quotes "a\"b" 3 0 0) "1 quote = odd = true")
+      (test/assert-eq 1 (str/in-string? "a\"b" 3) "1 quote = odd = in string")
     })
 
   (test/case "count-quotes-two"
     {do
-      (test/assert-eq 0 (lsp/count-quotes "a\"b\"c" 5 0 0) "2 quotes = even = false")
+      (test/assert-eq 0 (str/in-string? "a\"b\"c" 5) "2 quotes = even = not in string")
     })
 
   (test/case "count-quotes-escaped"
     {do
-      (test/assert-eq 0 (lsp/count-quotes "a\\\"b" 4 0 0) "escaped quote not counted")
+      (test/assert-eq 0 (str/in-string? "a\\\"b" 4) "escaped quote not counted")
     })
 
   ; --- lsp/skip-dir? ---

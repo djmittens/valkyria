@@ -79,6 +79,10 @@ int main(int argc, char* argv[]) {
   
   valk_lenv_t* env = valk_lenv_empty();
   valk_lenv_builtins(env);
+  // The root env is read on every symbol resolution and, under the threaded
+  // runtime (LSP workers), mutated and read concurrently. Back it with the
+  // concurrent hash map: lock-free reads, striped-lock writes, O(1) lookup.
+  valk_lenv_make_concurrent(env);
   valk_macro_env_init(env);
 
   VALK_WITH_ALLOC((void*)gc_heap) {

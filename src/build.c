@@ -1,7 +1,14 @@
 #define _POSIX_C_SOURCE 200809L
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#endif
 #include "build.h"
 
 #include <ctype.h>
+#include <dlfcn.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
@@ -141,9 +148,19 @@ static int write_file(const char *path, const char *content, size_t len) {
 
 static int resolve_exe_dir(char *out, size_t cap) {
   char buf[PATH_MAX];
+#ifdef __APPLE__
+  uint32_t bufsize = sizeof(buf);
+  if (_NSGetExecutablePath(buf, &bufsize) != 0) return -1;
+  char real[PATH_MAX];
+  if (realpath(buf, real) != nullptr) {
+    if (strlen(real) + 1 > sizeof(buf)) return -1;
+    strcpy(buf, real);
+  }
+#else
   ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
   if (n <= 0) return -1;
   buf[n] = 0;
+#endif
   char *dir = dirname(buf);
   if (strlen(dir) + 1 > cap) return -1;
   strcpy(out, dir);
@@ -209,9 +226,12 @@ static valk_lval_t *eval_script_capture_last(valk_lenv_t *env,
   return last;
 }
 
-__attribute__((weak))
-int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
-                        const char *c_path, size_t *out_count);
+typedef int (*valk_build_emit_aot_fn)(valk_lenv_t *env, const char *o_path,
+                                      const char *c_path, size_t *out_count);
+
+static valk_build_emit_aot_fn valk_build_resolve_emit_aot(void) {
+  return (valk_build_emit_aot_fn)dlsym(RTLD_DEFAULT, "valk_build_emit_aot");
+}
 
 #define MAX_TMP_FILES 8
 typedef struct {
@@ -309,7 +329,8 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   char aot_c[PATH_MAX] = "";
   size_t aot_count = 0;
   bool aot_ok = false;
-  if (&valk_build_emit_aot != nullptr) {
+  valk_build_emit_aot_fn emit_aot = valk_build_resolve_emit_aot();
+  if (emit_aot != nullptr) {
     if (mkstemp_named(tmp_template, ".o", aot_o, sizeof(aot_o)) != 0 ||
         mkstemp_named(tmp_template, ".c", aot_c, sizeof(aot_c)) != 0) {
       tmp_set_cleanup(&tmps);
@@ -317,7 +338,7 @@ int valk_build(valk_lenv_t *env, const char *script_path,
     }
     tmp_set_add(&tmps, aot_o);
     tmp_set_add(&tmps, aot_c);
-    if (valk_build_emit_aot(env, aot_o, aot_c, &aot_count) == 0) {
+    if (emit_aot(env, aot_o, aot_c, &aot_count) == 0) {
       aot_ok = true;
     } else {
       fprintf(stderr, "valk --build: AOT emit failed; falling back to "
@@ -337,7 +358,7 @@ int valk_build(valk_lenv_t *env, const char *script_path,
 
   char exe_dir[PATH_MAX];
   if (resolve_exe_dir(exe_dir, sizeof(exe_dir)) != 0) {
-    fprintf(stderr, "valk --build: could not resolve /proc/self/exe\n");
+    fprintf(stderr, "valk --build: could not resolve executable path\n");
     tmp_set_cleanup(&tmps); return 1;
   }
   char src_dir[PATH_MAX];
@@ -387,6 +408,18 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   }
 
   char shim_s_content[PATH_MAX + 256];
+#ifdef __APPLE__
+  // Mach-O assembler: read-only data lives in __TEXT,__const and C symbols
+  // carry a leading underscore in the asm namespace.
+  snprintf(shim_s_content, sizeof(shim_s_content),
+           "    .section __TEXT,__const\n"
+           "    .global _valk_build_image_start\n"
+           "    .global _valk_build_image_end\n"
+           "_valk_build_image_start:\n"
+           "    .incbin \"%s\"\n"
+           "_valk_build_image_end:\n",
+           img_abs);
+#else
   snprintf(shim_s_content, sizeof(shim_s_content),
            "    .section .rodata\n"
            "    .global valk_build_image_start\n"
@@ -395,6 +428,7 @@ int valk_build(valk_lenv_t *env, const char *script_path,
            "    .incbin \"%s\"\n"
            "valk_build_image_end:\n",
            img_abs);
+#endif
   if (write_file(shim_s, shim_s_content, strlen(shim_s_content)) != 0) {
     tmp_set_cleanup(&tmps); return 1;
   }

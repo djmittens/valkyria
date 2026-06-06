@@ -103,6 +103,7 @@ set(VALKYRIA_SOURCES
   src/lval.c
   src/eval.c
   src/lenv.c
+  src/conc_map.c
   src/reader.c
   src/type_env.c
   src/type_transform.c
@@ -275,12 +276,23 @@ target_link_libraries(valkyria PRIVATE
   pthread)
 
 if(VALK_LLVM)
+  # find_package(LLVM) exposes LLVM_TOOLS_BINARY_DIR; use the llvm-config that
+  # ships with the detected LLVM rather than relying on one being on PATH (it
+  # often is not on macOS/homebrew, which silently yielded an empty lib list and
+  # undefined LLVM symbols at link time).
+  find_program(LLVM_CONFIG_EXE
+    NAMES llvm-config
+    HINTS ${LLVM_TOOLS_BINARY_DIR}
+    REQUIRED)
   execute_process(
-    COMMAND llvm-config --link-shared --libs core orcjit native support
+    COMMAND ${LLVM_CONFIG_EXE} --link-shared --libs core orcjit native support
     OUTPUT_VARIABLE LLVM_LIBS_RAW
     OUTPUT_STRIP_TRAILING_WHITESPACE
   )
   string(REPLACE " " ";" LLVM_LIBS_LIST "${LLVM_LIBS_RAW}")
+  # llvm-config emits -lLLVM-NN but not the -L for homebrew's lib dir; add it so
+  # the linker can find libLLVM.dylib.
+  link_directories(${LLVM_LIBRARY_DIRS})
 
   add_library(valk_llvm STATIC
     src/llvm/llvm_codegen.c
@@ -336,14 +348,22 @@ add_executable(valk
 target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
 if(VALK_LLVM)
   # Link valk_llvm so --build can use LLVM AOT compilation of user lambdas.
-  # The weak extern `valk_build_emit_aot` in src/build.c resolves to the
-  # impl in src/llvm/build_aot.c when valk_llvm is linked.
+  # src/build.c resolves valk_build_emit_aot at runtime via
+  # dlsym(RTLD_DEFAULT, ...) so it degrades gracefully when the symbol is
+  # absent (no LLVM) instead of crashing on a null weak reference.
   #
-  # -Wl,-u forces the linker to treat the symbol as undefined so it pulls
-  # build_aot.o out of the static archive even though the only reference
-  # from valkyria.so is a weak one.
+  # For dlsym to find it, the executable must (a) pull build_aot.o out of the
+  # static archive and (b) export the symbol in its dynamic symbol table.
+  if(APPLE)
+    target_link_options(valk PRIVATE
+      "-Wl,-u,_valk_build_emit_aot"
+      "-Wl,-export_dynamic")
+  else()
+    target_link_options(valk PRIVATE
+      "-Wl,-u,valk_build_emit_aot"
+      "-rdynamic")
+  endif()
   target_link_libraries(valk PRIVATE
-    "-Wl,-u,valk_build_emit_aot"
     valk_llvm
     ${LLVM_LIBS_LIST})
 endif()
@@ -573,6 +593,10 @@ target_link_libraries(test_chase_lev_unit PRIVATE "-lc" valkyria)
 # MPMC bounded queue tests (Vyukov multi-producer multi-consumer)
 add_executable(test_mpmc_unit test/unit/test_mpmc.c test/testing.c)
 target_link_libraries(test_mpmc_unit PRIVATE "-lc" valkyria)
+
+# Concurrent map tests (striped-lock global-env hash map)
+add_executable(test_conc_map_unit test/unit/test_conc_map.c test/testing.c)
+target_link_libraries(test_conc_map_unit PRIVATE "-lc" valkyria)
 
 # Task queue tests (async task execution via libuv event loop)
 add_executable(test_task_queue_unit test/unit/test_task_queue.c test/testing.c)

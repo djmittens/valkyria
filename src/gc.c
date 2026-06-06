@@ -1,5 +1,6 @@
 #include "gc.h"
 #include "parser.h"
+#include "conc_map.h"
 #include "memory.h"
 #include "metrics_v2.h"
 #include "eval_internal.h"
@@ -427,8 +428,26 @@ void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx) {
 // LCOV_EXCL_BR_STOP
 
 // LCOV_EXCL_BR_START - defensive null checks in env root iteration
+typedef struct {
+  valk_gc_root_visitor_t visitor;
+  void *ctx;
+} valk_env_root_visit_t;
+
+static void valk_env_root_cmap_cb(char *key, _Atomic(valk_lval_t *) *slot,
+                                  void *ctx) {
+  (void)key;
+  valk_env_root_visit_t *v = ctx;
+  valk_lval_t *val = atomic_load(slot);
+  if (val != nullptr) v->visitor(val, v->ctx);
+}
+
 void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, void *ctx) {
   if (env == nullptr) return;
+
+  if (env->cmap) {
+    valk_env_root_visit_t v = {.visitor = visitor, .ctx = ctx};
+    valk_cmap_foreach((valk_cmap_t *)env->cmap, valk_env_root_cmap_cb, &v);
+  }
 
   for (u64 i = 0; i < env->vals.count; i++) {
     if (env->vals.items[i] != nullptr) {

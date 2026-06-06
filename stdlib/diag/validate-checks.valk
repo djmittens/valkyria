@@ -206,6 +206,34 @@
 ; Load all known symbol names from symdb (queried once, O(1) C-level lookup)
 ; ---------------------------------------------------------------------------
 
+; Built-in / prelude names (operators like `+`, `head`, etc.) come from the
+; running environment via (penv), which walks the full scope chain. These are
+; constant for the life of the process, so we build the set ONCE and memoize
+; it — rebuilding per validation (every keystroke) was ~13ms/call and made the
+; LSP diagnostics path pathologically slow. Without this set, an arbitrary
+; project (whose workspace has no stdlib/ to index) flags every operator as
+; undefined.
+(def {vd/BUILTIN_NAMES_CACHE} nil)
+
+(sig 'vd/add-env-names {-> Dict List Dict})
+(fun {vd/add-env-names d pairs} {
+  if (nil? pairs) {d}
+  {do
+    (dict/put! d (str (head (head pairs))))
+    (vd/add-env-names d (tail pairs))}
+})
+
+(sig 'vd/builtin-names {-> Dict})
+(fun {vd/builtin-names} {
+  if (nil? vd/BUILTIN_NAMES_CACHE)
+    {do
+      (= {pairs} (penv))
+      (def {vd/BUILTIN_NAMES_CACHE}
+        (vd/add-env-names (dict/new (len pairs)) pairs))
+      vd/BUILTIN_NAMES_CACHE}
+    {vd/BUILTIN_NAMES_CACHE}
+})
+
 (sig 'vd/load-known-set {-> Ref Dict})
 (fun {vd/load-known-set db} {
   if (nil? db) {(dict/new)}
@@ -343,8 +371,9 @@
   {if (vd/in-scope? name scope) {1}
   {if (dict/has? globals-set name) {1}
   {if (dict/has? known-set name) {1}
+  {if (dict/has? (vd/builtin-names) name) {1}
   {if (vd/is-accessor name) {1}
-  {vd/is-known-by-basename name known-set}}}}}}
+  {vd/is-known-by-basename name known-set}}}}}}}
 })
 
 (sig 'vd/is-known-by-basename {-> Str Dict Num})

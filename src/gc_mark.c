@@ -1,5 +1,6 @@
 #include "gc.h"
 #include "parser.h"
+#include "conc_map.h"
 #include "dict.h"
 #include "memory.h"
 #include "async_handle.h"
@@ -46,10 +47,22 @@ static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx) {
   }
 }
 
+static void mark_env_block_cb(void *ptr, void *ctx) {
+  mark_ptr_only(ptr, (valk_gc_mark_ctx_t *)ctx);
+}
+static void mark_env_value_cb(valk_lval_t *val, void *ctx) {
+  mark_lval(val, (valk_gc_mark_ctx_t *)ctx);
+}
+
 static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
   while (env != nullptr) {
     if (!mark_ptr_only(env, ctx)) {
       return;
+    }
+    if (env->cmap) {
+      // Concurrent (shared global) env: mark the map's tables, keys, values.
+      valk_cmap_gc_mark((valk_cmap_t *)env->cmap, mark_env_block_cb,
+                        mark_env_value_cb, ctx);
     }
     mark_ptr_only(env->symbols.items, ctx);
     mark_ptr_only(env->vals.items, ctx);

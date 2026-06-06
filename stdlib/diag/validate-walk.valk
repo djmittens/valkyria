@@ -91,12 +91,17 @@
     (if (and is-q (not (vd/is-call-head name ctx)))
       {vd/walk-quoted-data expr ctx}
       {do
-        (= {ctx2} (if (and is-q (not (plist/get ctx :in-qexpr)))
+        (= {saved-iq} (plist/get ctx :in-qexpr))
+        (= {ctx2} (if (and is-q (not saved-iq))
           {plist/set ctx :in-qexpr 1}
           {ctx}))
-        (if (not (== name ""))
-          {vd/dispatch-call expr nil name (tail expr) ctx2}
-          {vd/walk-body (tail expr) ctx2})})}
+        (= {result} (if (not (== name ""))
+          {vd/dispatch-call expr (head expr) name (tail expr) ctx2}
+          {vd/walk-body (tail expr) ctx2}))
+        ; :in-qexpr is scoped to this qexpr subtree — restore the prior
+        ; value so a qexpr body (e.g. a fun's `{...}`) doesn't suppress
+        ; undefined-symbol diagnostics in following sibling expressions.
+        (plist/set result :in-qexpr saved-iq)})}
 })
 
 ; Returns true when `name` looks like the head of a real call —

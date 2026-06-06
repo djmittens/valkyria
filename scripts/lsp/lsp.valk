@@ -274,9 +274,19 @@
               ; loop 0 — completely separated from lsp/sys loop 0, which
               ; keeps handling interactive LSP traffic (semanticTokens,
               ; hover, diagnostics) with zero backlog from indexing.
-              (if (not (nil? lsp/idx-db))
+              ;
+              ; The idx-sys worker owns its own sqlite connection (lsp/idx-db),
+              ; opened on this thread and used for scan + diagnostics. Builtin
+              ; names are NOT seeded into the DB — the validator gets them from
+              ; (penv) directly (see vd/load-known-set), so there is no
+              ; cross-thread connection sharing to coordinate.
+              (if (not (nil? lsp/db-path))
                 {aio/dispatch lsp/idx-sys
-                  (\ {_} {lsp/collect-workspace-files lsp/root-path})
+                  (\ {_} {do
+                    (def {lsp/idx-db} (symdb/init lsp/db-path))
+                    (def {lsp/idx-db-own} 1)
+                    (lsp/seed-builtins lsp/idx-db lsp/root-path)
+                    (lsp/collect-workspace-files lsp/root-path)})
                   nil
                   (\ {files} {if (or (nil? files) (error? files)) {}
                     {do

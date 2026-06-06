@@ -395,6 +395,15 @@
     {join (f (head l)) (list/flat-map (tail l) f)}
 })
 
+; Concatenate a list of lists into a single list. nil elements are
+; treated as empty, so `(flatten (list (list 1) nil (list 2)))` = `(1 2)`.
+(sig 'flatten {-> (List (List A)) (List A)})
+(fun {flatten l} {
+  if (== l nil)
+    {nil}
+    {join (head l) (flatten (tail l))}
+})
+
 ; Applicative for lists: apply each function in fs to each value in xs
 (sig 'list/ap {-> (List (-> A B)) (List A) (List B)})
 (fun {list/ap fs xs} {
@@ -415,7 +424,7 @@
 ; Logics
 
 (sig 'not {-> Num Num})
-(fun {not x} {- 1 x})
+(fun {not x} {if x {0} {1}})
 
 (sig 'or {-> Num Num Num})
 (fun {or x y} {+ x y})

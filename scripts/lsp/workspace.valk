@@ -84,6 +84,12 @@
           (\ {} {lsp/index-file-full db (str "file://" path) text fp})})})
 })
 
+; Best-effort: index stdlib so go-to-def / hover on a builtin lands in
+; source. This only finds files when the workspace IS the valkyria repo;
+; for an arbitrary project the files are absent and we skip silently. The
+; validator does NOT depend on this — it recognizes builtins/operators via
+; (penv) in vd/load-known-set, so `+` etc. are never falsely flagged even
+; when stdlib is not on disk.
 (sig 'lsp/seed-builtins {-> Ref Str Nil})
 (fun {lsp/seed-builtins db root} {do
   (= {builtins-path} (str root "/stdlib/builtins.valk"))
@@ -91,7 +97,7 @@
   (= {b} (lsp/seed-from-disk db builtins-path))
   (= {p} (lsp/seed-from-disk db prelude-path))
   (if (== (+ b p) 0)
-    {stderr/write "[valk-lsp] builtins + prelude cached\n"}
+    {stderr/write "[valk-lsp] builtins + prelude not on disk (using env)\n"}
     {stderr/write "[valk-lsp] seeded builtins + prelude\n"})})
 
 (sig 'lsp/precompute-file-data {-> Ref Str List Str Nil})
@@ -324,27 +330,22 @@
       ; otherwise sqlite/open fails and we silently fall back to
       ; :memory: which loses all stdlib seeding.
       (mkdir-p db-dir)
+      (def {lsp/db-path} db-path)
       (= {result} (symdb/init db-path))
       (if (error? result)
         {do (stderr/write (str "[valk-lsp] symdb file init failed, using :memory:\n"))
             (def {lsp/db} (symdb/init ":memory:"))
-            ; :memory: can't be shared across connections; reuse the same
-            ; handle and mark it NOT owned by the idx slot.
-            (def {lsp/idx-db} lsp/db)
-            (def {lsp/idx-db-own} 0)}
-        {do (def {lsp/db} result)
-            ; Separate sqlite handle for the indexing system. WAL mode
-            ; (set in symdb/schema-sql) + per-connection tx state means
-            ; idx-sys can run BEGIN/COMMIT without racing lsp/sys's own
-            ; writes. Both point at the same on-disk file.
-            (def {lsp/idx-db} (symdb/init db-path))
-            (def {lsp/idx-db-own} 1)
-            (lsp/seed-builtins lsp/db lsp/root-path)})}
+            (def {lsp/db-path} ":memory:")}
+        {do (def {lsp/db} result)})
+      ; lsp/db is read on lsp/sys by interactive features (hover/go-to-def);
+      ; index stdlib into it here (same thread) for richer builtin navigation.
+      ; Builtin *recognition* for diagnostics comes from (penv), not this.
+      (lsp/seed-builtins lsp/db lsp/root-path)}
     {do
       (def {lsp/root-path} "")
       (def {lsp/db} (symdb/init ":memory:"))
-      (def {lsp/idx-db} lsp/db)
-      (def {lsp/idx-db-own} 0)})
+      (def {lsp/db-path} ":memory:")
+      (lsp/seed-builtins lsp/db lsp/root-path)})
   (lsp/send-response id lsp/capabilities)})
 
 (def {lsp/noop-cb} (\ {_} {}))

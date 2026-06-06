@@ -11,6 +11,9 @@
 #include <string.h>
 
 static void init_all_targets(void) {
+  static bool done = false;
+  if (done) return;
+  done = true;
   LLVMInitializeAllTargetInfos();
   LLVMInitializeAllTargets();
   LLVMInitializeAllTargetMCs();

@@ -1,5 +1,4 @@
 #include "aio_internal.h"
-#include <unistd.h>
 #include "aio_http2_session.h"
 #include "aio_http2_server.h"
 #include "aio_http2_client.h"
@@ -103,7 +102,7 @@ int valk_aio_system_config_resolve(valk_aio_system_config_t *cfg) {
   if (cfg->maintenance_interval_ms == 0) cfg->maintenance_interval_ms = 1000;
 
   if (cfg->num_threads == 0) {
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    unsigned int n = uv_available_parallelism();
     cfg->num_threads = n > 0 ? (u32)n : 4;
   }
   if (cfg->num_threads > 64) cfg->num_threads = 64;

@@ -119,6 +119,7 @@
 (def {lsp/db} nil)
 (def {lsp/idx-db} nil)
 (def {lsp/idx-db-own} 0)
+(def {lsp/db-path} nil)
 (def {lsp/root-path} nil)
 (def {lsp/doc-version} 0)
 

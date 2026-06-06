@@ -355,6 +355,9 @@ static valk_lenv_t* valk_evacuate_env_clone(valk_evacuation_ctx_t* ctx,
   if (!dst) return src;
   memset(dst, 0, sizeof(valk_lenv_t));
   dst->allocator = ctx->heap;
+  // Concurrent (global) envs are heap-allocated and never evacuated here, but
+  // carry the map pointer through defensively so it is never silently dropped.
+  dst->cmap = src->cmap;
 
   if (src->symbols.items != nullptr && src->symbols.count > 0) {
     u64 array_size = src->symbols.capacity * sizeof(char*);

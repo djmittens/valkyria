@@ -121,6 +121,13 @@ struct valk_lenv_t {
   struct valk_lenv_t *parent;
   // Allocator where persistent env data lives (globals/closures)
   void *allocator;
+  // When non-null, this env stores its bindings in a concurrent hash map
+  // instead of the linear symbols/vals arrays above. Only the shared global
+  // env uses this (it is read on every symbol resolution and mutated by
+  // multiple threads); per-call-frame envs leave it null and use the fast
+  // single-threaded linear arrays. Declared as void* to avoid pulling
+  // conc_map.h into the public parser header. See conc_map.h.
+  void *cmap;
 };
 
 struct valk_lval_t {
@@ -296,6 +303,19 @@ static inline void valk_lval_println(valk_lval_t *val) {
 //// LEnv Constructors ////
 valk_lenv_t *valk_lenv_empty(void);
 void valk_lenv_free(valk_lenv_t *env);  // Free malloc-allocated environments
+// Promote an env to a concurrent hash map for its bindings. Use for the
+// shared global/root env that is read on every lookup and mutated by
+// multiple threads. No-op if already concurrent.
+void valk_lenv_make_concurrent(valk_lenv_t *env);
+
+// Materialize an env's bindings into flat (name, value) arrays regardless of
+// whether the env is backed by the linear arrays or the concurrent map. The
+// returned arrays are malloc'd; the caller must free *out_names and *out_vals
+// (the name pointers themselves are borrowed from the env, do not free those).
+// Used by code that needs to enumerate all of an env's own bindings (e.g. AOT
+// candidate discovery). Returns the entry count.
+u64 valk_lenv_snapshot(valk_lenv_t *env, char ***out_names,
+                       valk_lval_t ***out_vals);
 //// END LEnv Constructors ////
 valk_lenv_t *valk_lenv_copy(valk_lenv_t *env);
 
