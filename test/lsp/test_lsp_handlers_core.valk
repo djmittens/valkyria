@@ -68,7 +68,6 @@
   (def {lsp/known-set-cache} nil)
   (def {lsp/progress-token} 0)
   (def {lsp/doc-version} 0)
-  (def {lsp/line-index-cache} (dict/new))
   (def {lsp/ast-cache} (dict/new))
   (reset-captures)
 })
@@ -305,42 +304,22 @@
     })
 
   ; =========================================================================
-  ; Line index
+  ; line:col -> offset conversion (str/lc->offset builtin)
   ; =========================================================================
-
-  (test/case "build-line-index-single-line"
-    {do
-      (= {idx} (lsp/build-line-index "hello"))
-      (test/assert-eq 1 (len idx) "single line = 1 entry")
-      (test/assert-eq 0 (head idx) "starts at 0")
-    })
-
-  (test/case "build-line-index-multi-line"
-    {do
-      (= {idx} (lsp/build-line-index "ab\ncd\nef"))
-      (test/assert-eq 3 (len idx) "3 lines = 3 entries")
-      (test/assert-eq 0 (nth 1 idx) "line 0 at 0")
-      (test/assert-eq 3 (nth 2 idx) "line 1 at 3")
-      (test/assert-eq 6 (nth 3 idx) "line 2 at 6")
-    })
 
   (test/case "lc-to-offset-basic"
     {do
-      (= {idx} (lsp/build-line-index "ab\ncd\nef"))
-      (test/assert-eq 0 (lsp/lc->offset idx 0 0) "line 0 col 0")
-      (test/assert-eq 1 (lsp/lc->offset idx 0 1) "line 0 col 1")
-      (test/assert-eq 3 (lsp/lc->offset idx 1 0) "line 1 col 0")
-      (test/assert-eq 7 (lsp/lc->offset idx 2 1) "line 2 col 1")
+      (test/assert-eq 0 (str/lc->offset "ab\ncd\nef" 0 0) "line 0 col 0")
+      (test/assert-eq 1 (str/lc->offset "ab\ncd\nef" 0 1) "line 0 col 1")
+      (test/assert-eq 3 (str/lc->offset "ab\ncd\nef" 1 0) "line 1 col 0")
+      (test/assert-eq 7 (str/lc->offset "ab\ncd\nef" 2 1) "line 2 col 1")
     })
 
-  (test/case "offset-to-lc-basic"
+  (test/case "lc-to-offset-out-of-range"
     {do
-      (= {idx} (lsp/build-line-index "ab\ncd\nef"))
-      (= {lc0} (lsp/offset->lc idx 0))
-      (test/assert-eq 0 (head lc0) "offset 0 = line 0")
-      (= {lc4} (lsp/offset->lc idx 4))
-      (test/assert-eq 1 (head lc4) "offset 4 = line 1")
-      (test/assert-eq 1 (head (tail lc4)) "offset 4 = col 1")
+      (test/assert-eq 0 (str/lc->offset "ab\ncd" 5 0) "line past end = 0")
+      (test/assert-eq 0 (str/lc->offset "hello" 1 0) "no newline, line 1 = 0")
+      (test/assert-eq 0 (str/lc->offset "ab" -1 0) "negative line = 0")
     })
 
   ; =========================================================================
@@ -402,11 +381,11 @@
     {do
       (reset-state)
       (lsp/doc-store "file:///cl.valk" "text")
-      (lsp/get-line-index "file:///cl.valk" "text")
+      (lsp/cache-ast "file:///cl.valk" "text")
       (reset-captures)
       (workspace/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
       (test/assert (nil? (lsp/doc-get "file:///cl.valk")) "doc removed")
-      (test/assert (nil? (dict/get lsp/line-index-cache "file:///cl.valk")) "line index removed")
+      (test/assert (nil? (dict/get lsp/ast-cache "file:///cl.valk")) "ast cache removed")
     })
 
   ; --- handle-selection-range ---

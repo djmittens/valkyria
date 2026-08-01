@@ -258,6 +258,7 @@
 
 (fun {quality/run dir} {do
   (= {root} dir)
+  (mkdir-p (str root "/.valk"))
   (= {db-path} (str root "/.valk/symdb.sqlite"))
 
   (= {db} (symdb/init db-path))

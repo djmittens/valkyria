@@ -132,7 +132,6 @@
   {dict/get lsp/documents uri})
 
 (def {lsp/ast-cache} (dict/new))
-(def {lsp/line-index-cache} (dict/new))
 ; Cache of the last AST that parsed cleanly (no errors). Used as a fallback
 ; for semantic tokens during in-progress edits when the current AST has
 ; parse errors. Stale offsets are better than no highlighting.
@@ -227,61 +226,6 @@
   (= {last-good} (dict/get lsp/last-good-ast-cache uri))
   (nil? last-good)})
 
-; ---------------------------------------------------------------------------
-; Line index — O(1) line:col <-> offset conversion
-; ---------------------------------------------------------------------------
-; A line index is a list of byte offsets where each line starts.
-; Line 0 starts at offset 0. Line N starts at (nth line-index N).
-
-(sig 'lsp/build-line-index {-> Str List})
-(fun {lsp/build-line-index text} {
-  lsp/build-line-index-walk text 0 (len text) (list 0)
-})
-
-(sig 'lsp/build-line-index-walk {-> Str Num Num List List})
-(fun {lsp/build-line-index-walk text pos end acc} {
-  if (>= pos end) {reverse acc}
-  {if (== (str/slice text pos (+ pos 1)) "\n")
-    {lsp/build-line-index-walk text (+ pos 1) end (qcons (+ pos 1) acc)}
-    {lsp/build-line-index-walk text (+ pos 1) end acc}}
-})
-
-(sig 'lsp/get-line-index {-> Str Str List})
-(fun {lsp/get-line-index uri text} {do
-  (= {cached} (dict/get lsp/line-index-cache uri))
-  (if (nil? cached)
-    {do
-      (= {idx} (lsp/build-line-index text))
-      (dict/set! lsp/line-index-cache uri idx)
-      idx}
-    {cached})
-})
-
-; O(1) line-col to byte offset using line index (nth is 1-indexed)
-; Returns 0 when line is out of range.
-(sig 'lsp/lc->offset {-> List Num Num Num})
-(fun {lsp/lc->offset line-index line col} {do
-  (= {idx} (+ line 1))
-  (if (> idx (len line-index)) {0}
-    {+ (nth idx line-index) col})
-})
-
-; O(log n) byte offset to line-col using line index (binary search)
-(sig 'lsp/offset->lc {-> List Num List})
-(fun {lsp/offset->lc line-index offset} {
-  lsp/offset->lc-scan line-index offset 0
-})
-
-(sig 'lsp/offset->lc-scan {-> List Num Num List})
-(fun {lsp/offset->lc-scan lines offset line-num} {
-  if (nil? lines) {list 0 offset}
-  {if (nil? (tail lines))
-    {list line-num (- offset (head lines))}
-    {if (> (head (tail lines)) offset)
-      {list line-num (- offset (head lines))}
-      {lsp/offset->lc-scan (tail lines) offset (+ line-num 1)}}}
-})
-
 ; Snapshot the current document state on the main thread
 (sig 'lsp/snapshot {-> Str List})
 (fun {lsp/snapshot uri} {do
@@ -323,9 +267,8 @@
     {do
       (= {start} (plist/get range :start))
       (= {end} (plist/get range :end))
-      (= {line-idx} (lsp/build-line-index text))
-      (= {start-offset} (lsp/lc->offset line-idx (plist/get start :line) (plist/get start :character)))
-      (= {end-offset} (lsp/lc->offset line-idx (plist/get end :line) (plist/get end :character)))
+      (= {start-offset} (str/lc->offset text (plist/get start :line) (plist/get start :character)))
+      (= {end-offset} (str/lc->offset text (plist/get end :line) (plist/get end :character)))
       (str (str/slice text 0 start-offset) new-text (str/slice text end-offset (len text)))})
 })
 

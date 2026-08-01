@@ -87,7 +87,6 @@
   (def {lsp/known-set-cache} nil)
   (def {lsp/progress-token} 0)
   (def {lsp/doc-version} 0)
-  (def {lsp/line-index-cache} (dict/new))
   (def {lsp/ast-cache} (dict/new))
   (reset-captures)
 })

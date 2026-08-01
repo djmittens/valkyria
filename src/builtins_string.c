@@ -583,6 +583,32 @@ static valk_lval_t* valk_builtin_str_last_index_of(valk_lenv_t* e,
   return valk_lval_num(-1);
 }
 
+// (str/lc->offset text line col) — byte offset of line:col in text.
+// Single C scan; replaces the LSP's per-keystroke line-index rebuild,
+// which allocated a 1-char string per byte of the document. Returns 0
+// when `line` is past the last line (matches the old Lisp helper).
+// LCOV_EXCL_BR_START - str/lc->offset arg validation
+static valk_lval_t* valk_builtin_str_lc_to_offset(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 3);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 2), LVAL_NUM);
+  // LCOV_EXCL_BR_STOP
+  const char* text = valk_lval_list_nth(a, 0)->str;
+  i64 line = valk_lval_list_nth(a, 1)->num;
+  i64 col = valk_lval_list_nth(a, 2)->num;
+  if (line < 0 || col < 0) return valk_lval_num(0);
+
+  const char* p = text;
+  for (i64 l = 0; l < line; l++) {
+    p = strchr(p, '\n');
+    if (!p) return valk_lval_num(0);
+    p++;
+  }
+  return valk_lval_num((p - text) + col);
+}
+
 // (str/in-string? text pos) — returns 1 if `pos` is inside an unescaped
 // double-quoted string literal, 0 otherwise. Pure single-pass C scan,
 // counting unescaped quotes from offset 0 to pos. Replaces a recursive
@@ -703,6 +729,7 @@ void valk_register_string_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "str/join", valk_builtin_str_join);
   valk_lenv_put_builtin(env, "str/index-of", valk_builtin_str_index_of);
   valk_lenv_put_builtin(env, "str/last-index-of", valk_builtin_str_last_index_of);
+  valk_lenv_put_builtin(env, "str/lc->offset", valk_builtin_str_lc_to_offset);
   valk_lenv_put_builtin(env, "str/in-string?", valk_builtin_str_in_string_q);
   valk_lenv_put_builtin(env, "str/lower", valk_builtin_str_lower);
   valk_lenv_put_builtin(env, "str/upper", valk_builtin_str_upper);

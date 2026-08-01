@@ -372,26 +372,26 @@
   (= {text} td:text)
   (lsp/doc-store uri text)
   (dict/remove! lsp/ast-cache uri)
-  (dict/remove! lsp/line-index-cache uri)
   (lsp/invalidate-known-set)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
   (= {v} lsp/doc-version)
+  ; No semanticTokens/refresh on didOpen: notifications and requests share
+  ; one FIFO worker, so cache-ast completes before the client's own token
+  ; request for the new buffer is processed — there is no stale initial
+  ; paint left to upgrade. Refreshing here made every didOpen fan out into
+  ; token re-requests for EVERY attached buffer; a 30-buffer open/close
+  ; churn in a long session flooded the worker and queued hovers behind
+  ; ~700ms of redundant token traffic. didChange/didSave still refresh.
   (aio/dispatch lsp/sys
     (\ {_} {if (not (== lsp/doc-version v)) {nil}
       {do (lsp/cache-ast uri text) nil}})
     nil
-    (\ {_} {if (not (== lsp/doc-version v)) {}
-      ; AST is now cached. Tell the client to re-request so the initial
-      ; lex/token paint upgrades to full AST-based tokens immediately —
-      ; DB-backed tokens will land on a later refresh once sync-doc
-      ; commits.
-      {lsp/refresh-semantic-tokens}}))
+    lsp/noop-cb)
   (aio/dispatch lsp/idx-sys
     (\ {_} {if (not (== lsp/doc-version v)) {nil}
       {do (lsp/sync-doc lsp/idx-db uri text) nil}})
     nil
-    (\ {_} {if (not (== lsp/doc-version v)) {}
-      {lsp/refresh-semantic-tokens}}))
+    lsp/noop-cb)
   (def {lsp/diag-version} (+ lsp/diag-version 1))
   (= {dv} lsp/diag-version)
   (aio/dispatch lsp/idx-sys
@@ -455,7 +455,6 @@
         {lsp/apply-changes old-text changes}))
       (lsp/doc-store uri text)
       (dict/remove! lsp/ast-cache uri)
-      (dict/remove! lsp/line-index-cache uri)
       ; Full-document replacement (e.g. paste-over-all) makes cached
       ; offsets in the last-good token/hint arrays meaningless. Drop
       ; the fallbacks rather than serve stale spans pointing past EOL.
@@ -505,7 +504,6 @@
   (= {uri} td:uri)
   (dict/remove! lsp/documents uri)
   (dict/remove! lsp/ast-cache uri)
-  (dict/remove! lsp/line-index-cache uri)
   ; Per-URI fallback caches grow unbounded across long-running editor
   ; sessions if not explicitly evicted on close.
   (dict/remove! lsp/last-good-ast-cache uri)
@@ -524,7 +522,6 @@
   (if (nil? save-text) {}
     {do
       (lsp/doc-store uri save-text)
-      (dict/remove! lsp/line-index-cache uri)
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
       (= {v} lsp/doc-version)

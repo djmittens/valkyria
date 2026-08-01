@@ -26,12 +26,10 @@
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
-  (stderr/write (str "[sem-range] id=" id " uri=" uri "\n"))
   (if (nil? text) {lsp/send-response id (list :data nil)}
     {do
       (= {start-line} params:range:start:line)
       (= {end-line} params:range:end:line)
-      (stderr/write (str "[sem-range] [" start-line "," end-line "]\n"))
       ; Same caching strategy as handle-semantic-tokens (see nav.valk):
       ; clean parse → tokenize + cache; broken parse → return cached
       ; tokens to avoid orange flicker from re-lexing latency.
@@ -48,18 +46,7 @@
       (= {typed} (sem/parse-flat data))
       (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
       (= {result} (sem/flatten filtered))
-      (stderr/write (str "[sem-range] kept " (/ (len result) 5) " tokens of " (/ (len data) 5) " (range " start-line ".." end-line ")\n"))
-      ; Dump first 5 emitted tokens (first 25 ints) so we can verify the
-      ; delta-encoded wire format. dl of the first token MUST be the
-      ; absolute line >= start-line for nvim to render correctly.
-      (stderr/write (str "[sem-range] first emit: " (sem/take-ints result 25) "\n"))
       (lsp/send-response id (list :data result))})
-})
-
-(sig 'sem/take-ints {-> List Num List})
-(fun {sem/take-ints l n} {
-  if (or (nil? l) (<= n 0)) {nil}
-  {qcons (head l) (sem/take-ints (tail l) (- n 1))}
 })
 
 ; Filter the typed token list down to the [start-line, end-line] range.
@@ -116,33 +103,69 @@
     lsp/noop-cb
 })
 
+; Notifications (didOpen/didChange/didClose/didSave) run on the SAME single
+; worker loop as requests, in arrival order (one FIFO task queue). Evaluating
+; them inline on loop 0 raced the worker: notification handlers mutate shared
+; non-cmap envs via (=  ...) while the worker walks them in lenv_get (TSAN:
+; lenv.c valk_lenv_put vs valk_lenv_get). Loop 0's Lisp is now limited to
+; parse-and-dispatch, which touches only thread-local call envs, the cmap
+; root env, and lock-protected dicts.
+(sig 'lsp/handle-notification {-> Str List Nil})
+(fun {lsp/handle-notification method params} {
+  match method
+    {"textDocument/didOpen" (workspace/handle-did-open (lsp/to-open-params params))}
+    {"textDocument/didChange" (workspace/handle-did-change (lsp/to-change-params params))}
+    {"textDocument/didClose" (workspace/handle-did-close (lsp/to-doc-params params))}
+    {"textDocument/didSave" (workspace/handle-did-save (lsp/to-save-params params))}
+    {_ nil}
+})
+
+(sig 'lsp/dispatch-notification {-> Str List Nil})
+(fun {lsp/dispatch-notification method params} {
+  aio/dispatch lsp/sys
+    (\ {_} {do (lsp/handle-notification method params) nil})
+    nil
+    lsp/noop-cb
+})
+
+; Debounced dispatch: when a newer request of the same family has already
+; bumped the version, the queued stale request answers from the last-good
+; cache instead of recomputing. Every request MUST get a response — a
+; silently dropped id leaves the client holding stale state forever.
+(sig 'lsp/params-uri {-> List Str})
+(fun {lsp/params-uri params}
+  {plist/get (plist/get params :textDocument) :uri})
+
+(sig 'lsp/dispatch-sem-debounced {-> Str Any List Nil})
+(fun {lsp/dispatch-sem-debounced method id params} {do
+  (def {lsp/sem-version} (+ lsp/sem-version 1))
+  (= {v} lsp/sem-version)
+  (aio/dispatch lsp/sys
+    (\ {_} {if (not (== lsp/sem-version v))
+      {do (lsp/send-response id
+            (list :data (dict/get lsp/last-good-tokens-cache (lsp/params-uri params))))
+          nil}
+      {do (lsp/handle-readonly method id params) nil}})
+    nil lsp/noop-cb)})
+
+(sig 'lsp/dispatch-hint-debounced {-> Str Any List Nil})
+(fun {lsp/dispatch-hint-debounced method id params} {do
+  (def {lsp/hint-version} (+ lsp/hint-version 1))
+  (= {v} lsp/hint-version)
+  (aio/dispatch lsp/sys
+    (\ {_} {if (not (== lsp/hint-version v))
+      {do (lsp/send-response id
+            (dict/get lsp/last-good-hints-cache (lsp/params-uri params)))
+          nil}
+      {do (lsp/handle-readonly method id params) nil}})
+    nil lsp/noop-cb)})
+
 (sig 'lsp/dispatch-request {-> Str Any List Nil})
 (fun {lsp/dispatch-request method id params} {
   match method
-    {"textDocument/semanticTokens/full" (do
-      (def {lsp/sem-version} (+ lsp/sem-version 1))
-      (= {v} lsp/sem-version)
-      (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/sem-version v))
-          {nil}
-          {do (lsp/handle-readonly method id params) nil}})
-        nil lsp/noop-cb))}
-    {"textDocument/semanticTokens/range" (do
-      (def {lsp/sem-version} (+ lsp/sem-version 1))
-      (= {v} lsp/sem-version)
-      (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/sem-version v))
-          {nil}
-          {do (lsp/handle-readonly method id params) nil}})
-        nil lsp/noop-cb))}
-    {"textDocument/inlayHint" (do
-      (def {lsp/hint-version} (+ lsp/hint-version 1))
-      (= {v} lsp/hint-version)
-      (aio/dispatch lsp/sys
-        (\ {_} {if (not (== lsp/hint-version v))
-          {nil}
-          {do (lsp/handle-readonly method id params) nil}})
-        nil lsp/noop-cb))}
+    {"textDocument/semanticTokens/full" (lsp/dispatch-sem-debounced method id params)}
+    {"textDocument/semanticTokens/range" (lsp/dispatch-sem-debounced method id params)}
+    {"textDocument/inlayHint" (lsp/dispatch-hint-debounced method id params)}
     {_ (lsp/dispatch-to-worker method id params)}
 })
 
@@ -300,10 +323,10 @@
                  {if (num? id)
                    {lsp/send-error id -32002 "Server not initialized"} {}}
                  {match method
-                   {"textDocument/didOpen" (workspace/handle-did-open (lsp/to-open-params params))}
-                   {"textDocument/didChange" (workspace/handle-did-change (lsp/to-change-params params))}
-                   {"textDocument/didClose" (workspace/handle-did-close (lsp/to-doc-params params))}
-                   {"textDocument/didSave" (workspace/handle-did-save (lsp/to-save-params params))}
+                   {"textDocument/didOpen" (lsp/dispatch-notification method params)}
+                   {"textDocument/didChange" (lsp/dispatch-notification method params)}
+                   {"textDocument/didClose" (lsp/dispatch-notification method params)}
+                   {"textDocument/didSave" (lsp/dispatch-notification method params)}
                    {"$/cancelRequest" {}}
                    {_ (if (not (nil? id))
                           {lsp/dispatch-request method id params}
@@ -313,11 +336,23 @@
 (sig 'lsp/start {-> Nil})
 (fun {lsp/start} {do
   (stderr/write "[valk-lsp] starting (threaded)\n")
-  (def {lsp/sys} (aio/await (aio/start {:num-threads 0})))
-  ; Dedicated aio system for workspace indexing. Its loop 0 absorbs all
-  ; scan-dispatch done-callbacks + sqlite writes so lsp/sys loop 0 stays
-  ; clear for interactive LSP traffic (semanticTokens, diagnostics, etc.).
-  (def {lsp/idx-sys} (aio/await (aio/start {:num-threads 2})))
+  ; Two loops: loop 0 owns stdin/stdout + notification handlers; loop 1
+  ; is the single worker every request dispatches to (round-robin over
+  ; loops 1..N-1 degenerates to always loop 1). :num-threads 0 resolved
+  ; to CPU-count loops, which ran handlers concurrently on many threads —
+  ; but handlers mutate shared Lisp state (caches, closure envs, version
+  ; counters) and non-root envs have no cross-thread synchronization,
+  ; producing use-after-free crashes under load. Handlers are ~1-2ms, so
+  ; one serialized worker meets latency budgets while keeping loop 0
+  ; free for I/O; indexing still runs off-thread on lsp/idx-sys.
+  (def {lsp/sys} (aio/await (aio/start {:num-threads 2})))
+  ; Dedicated aio system for workspace indexing so lsp/sys stays clear for
+  ; interactive traffic. ONE loop: with two, dispatch workers (loop 1) and
+  ; done-callbacks (loop 0) both wrote lsp/idx-db over a single sqlite
+  ; connection, interleaving BEGIN/COMMIT ("cannot start a transaction
+  ; within a transaction" under load). One loop serializes every idx-db
+  ; write by construction.
+  (def {lsp/idx-sys} (aio/await (aio/start {:num-threads 1})))
   (= {stdin-pipe} (pipe/stdin-open lsp/sys))
   (def {lsp/out} (pipe/stdout-open lsp/sys))
   (pipe/lsp-reader stdin-pipe (\ {body} {lsp/on-message body}))
