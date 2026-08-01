@@ -475,89 +475,7 @@ void test_arena_total_bytes(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-// Phase 3: Test valk_should_checkpoint threshold check
-void test_should_checkpoint(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t arena_size = 10 * 1024;  // 10 KB
-  valk_mem_arena_t *arena = malloc(arena_size);
-  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
-
-  // Initially empty - should not trigger checkpoint
-  VALK_TEST_ASSERT(!valk_should_checkpoint(arena, 0.75f),
-                   "Empty arena should not trigger checkpoint");
-
-  // Fill to 50% - still below 75% threshold
-  size_t half = (arena->capacity * 50) / 100;
-  arena->offset = half;
-  VALK_TEST_ASSERT(!valk_should_checkpoint(arena, 0.75f),
-                   "50% full should not trigger checkpoint at 75% threshold");
-
-  // Fill to 76% - should trigger
-  size_t over_threshold = (arena->capacity * 76) / 100;
-  arena->offset = over_threshold;
-  VALK_TEST_ASSERT(valk_should_checkpoint(arena, 0.75f),
-                   "76% full should trigger checkpoint at 75% threshold");
-
-  // Fill to 100%
-  arena->offset = arena->capacity;
-  VALK_TEST_ASSERT(valk_should_checkpoint(arena, 0.75f),
-                   "100% full should trigger checkpoint");
-
-  // Test with different threshold (50%)
-  arena->offset = half;
-  VALK_TEST_ASSERT(!valk_should_checkpoint(arena, 0.50f),
-                   "50% full should not trigger at exact 50% threshold");
-
-  arena->offset = half + 1;
-  VALK_TEST_ASSERT(valk_should_checkpoint(arena, 0.50f),
-                   "50%+1 should trigger at 50% threshold");
-
-  // nullptr arena should not crash and return false
-  VALK_TEST_ASSERT(!valk_should_checkpoint(nullptr, 0.75f),
-                   "nullptr arena should return false");
-
-  free(arena);
-  VALK_PASS();
-}
-
-// Phase 3: Test checkpoint with empty arena
-void test_checkpoint_empty(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  // Create scratch arena
-  size_t arena_size = 64 * 1024;
-  valk_mem_arena_t *arena = malloc(arena_size);
-  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
-
-  valk_gc_heap_t *heap = valk_gc_heap_create(0);
-
-  valk_thread_context_t old_ctx = valk_thread_ctx;
-  valk_thread_ctx.allocator = (void *)heap;
-  valk_thread_ctx.heap = heap;
-
-  valk_lenv_t *env = valk_lenv_empty();
-
-  sz initial_offset = arena->offset;
-
-  // Run checkpoint on empty arena - should be a no-op (early return)
-  valk_checkpoint(arena, heap, env);
-
-  // Empty arena checkpoint is skipped entirely (no allocations = no work)
-  VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 0,
-                   "num_checkpoints should be 0 for empty arena (skipped)");
-  VALK_TEST_ASSERT(atomic_load(&arena->stats.values_evacuated) == 0,
-                   "values_evacuated should be 0 for empty arena");
-  VALK_TEST_ASSERT(arena->offset == initial_offset,
-                   "Arena offset should be unchanged after skipped checkpoint");
-
-  valk_thread_ctx = old_ctx;
-  free(arena);
-  valk_gc_heap_destroy(heap);
-  VALK_PASS();
-}
-
-// Phase 3: Test checkpoint evacuates number values
+// Phase 3: Test def evacuates number values from scratch to heap
 void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -591,11 +509,6 @@ void test_checkpoint_evacuate_number(VALK_TEST_ARGS()) {
       VALK_TEST_ASSERT(LVAL_ALLOC(retrieved) == LVAL_ALLOC_HEAP,
                        "def should evacuate scratch value to heap");
     }
-
-    valk_checkpoint(arena, heap, env);
-
-    VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 1,
-                     "num_checkpoints should be 1");
   }
 
   valk_thread_ctx = old_ctx;
@@ -682,8 +595,6 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
   VALK_WITH_ALLOC((void *)heap) {
     valk_lenv_t *env = valk_lenv_empty();
     valk_gc_set_root(heap, env);
-    VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 0,
-                     "Initial checkpoints should be 0");
 
     VALK_WITH_ALLOC((void *)arena) {
       valk_lenv_def(env, valk_lval_sym("a"), valk_lval_num(1));
@@ -699,19 +610,9 @@ void test_checkpoint_stats(VALK_TEST_ARGS()) {
                        "def should evacuate scratch values to heap");
     }
 
-    valk_checkpoint(arena, heap, env);
-
-    VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 1,
-                     "num_checkpoints should be 1");
-
     VALK_WITH_ALLOC((void *)arena) {
       valk_lenv_def(env, valk_lval_sym("d"), valk_lval_num(4));
     }
-
-    valk_checkpoint(arena, heap, env);
-
-    VALK_TEST_ASSERT(atomic_load(&arena->stats.num_checkpoints) == 2,
-                     "num_checkpoints should be 2");
 
     VALK_WITH_ALLOC((void *)heap) {
       valk_lval_t *d = valk_lenv_get(env, valk_lval_sym("d"));
@@ -749,9 +650,6 @@ void test_checkpoint_nil_cons(VALK_TEST_ARGS()) {
       valk_lval_t *nil_cons = valk_lval_cons(valk_lval_nil(), valk_lval_nil());
       valk_lenv_put(env, valk_lval_sym("nil_cons"), nil_cons);
     }
-
-    // Checkpoint should handle nil values gracefully
-    valk_checkpoint(arena, heap, env);
 
     // Verify value survived
     valk_lval_t *retrieved = valk_lenv_get(env, valk_lval_sym("nil_cons"));
@@ -798,9 +696,6 @@ void test_checkpoint_deep_env_chain(VALK_TEST_ARGS()) {
         valk_lenv_put(root_env, valk_lval_sym(name), valk_lval_num(i * 10));
       }
     }
-
-    // Checkpoint
-    valk_checkpoint(arena, heap, root_env);
 
     // Verify all levels survived
     int verified = 0;
@@ -850,9 +745,6 @@ void test_checkpoint_many_bindings(VALK_TEST_ARGS()) {
         valk_lenv_put(env, valk_lval_sym(name), valk_lval_num(i * 2));
       }
     }
-
-    // Checkpoint
-    valk_checkpoint(arena, heap, env);
 
     // Verify all bindings survived
     int verified = 0;
@@ -1212,9 +1104,6 @@ void test_checkpoint_closure(VALK_TEST_ARGS()) {
 
       valk_lenv_put(env, valk_lval_sym("my_closure"), lambda);
     }
-
-    // Checkpoint
-    valk_checkpoint(arena, heap, env);
 
     // Verify closure survived with captured env
     valk_lval_t *closure = valk_lenv_get(env, valk_lval_sym("my_closure"));
@@ -2584,8 +2473,6 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_arena_total_bytes", test_arena_total_bytes);
 
   // Phase 3 checkpoint/evacuation tests
-  valk_testsuite_add_test(suite, "test_should_checkpoint", test_should_checkpoint);
-  valk_testsuite_add_test(suite, "test_checkpoint_empty", test_checkpoint_empty);
   valk_testsuite_add_test(suite, "test_checkpoint_evacuate_number", test_checkpoint_evacuate_number);
   valk_testsuite_add_test(suite, "test_checkpoint_evacuate_list", test_checkpoint_evacuate_list);
   valk_testsuite_add_test(suite, "test_checkpoint_stats", test_checkpoint_stats);

@@ -139,7 +139,6 @@ set(VALKYRIA_SOURCES
   src/gc_heap_sweep.c
   src/gc_heap_lifecycle.c
   src/gc_evacuation.c
-  src/gc_checkpoint.c
   src/gc_mark.c
   src/gc_region.c
   src/gc_stats.c

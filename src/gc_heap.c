@@ -3,6 +3,7 @@
 #include "parser.h"
 #include "memory.h"
 #include "log.h"
+#include <sched.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -94,6 +95,16 @@ void valk_gc_tlab_invalidate_heap(valk_gc_heap_t *heap) {
   }
 }
 
+// Release this thread's TLAB (unused slots returned to the heap, struct
+// freed). Called from valk_system_unregister_thread; without it every
+// exiting thread that touched the heap leaks its TLAB.
+void valk_gc_tlab_release_thread(void) {
+  if (!valk_gc_local_tlab) return;
+  valk_gc_tlab_abandon(valk_gc_local_tlab);
+  free(valk_gc_local_tlab);
+  valk_gc_local_tlab = nullptr;
+}
+
 static valk_gc_page_t *valk_gc_page_alloc(valk_gc_heap_t *heap, u8 size_class) {
   if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return nullptr; // LCOV_EXCL_BR_LINE
 
@@ -168,6 +179,24 @@ static u32 valk_gc_page_find_free_slots(valk_gc_page_t *page, u32 count) {
 
 bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_class) {
   if (size_class >= VALK_GC_NUM_SIZE_CLASSES) return false;
+
+  // Late-registrant gate: a thread that registered while a GC cycle was in
+  // flight is not part of the cycle's frozen participant set and must not
+  // allocate while mark/sweep runs (sweep rebuilds the very free lists this
+  // refill consumes). Counted participants (epoch match) pass through —
+  // the coordinator is waiting for them to reach a safepoint. A fresh
+  // thread's first allocation always lands here (empty TLAB), so this gate
+  // plus the safepoint slow path covers every entry into the heap.
+  // LCOV_EXCL_START - requires registration racing an active GC cycle
+  if (valk_thread_ctx.gc_registered) {
+    while (atomic_load_explicit(&valk_sys->phase, memory_order_acquire) !=
+               VALK_GC_PHASE_IDLE &&
+           atomic_load(&valk_thread_ctx.stw_epoch) !=
+               atomic_load(&valk_sys->stw_epoch)) {
+      sched_yield();
+    }
+  }
+  // LCOV_EXCL_STOP
 
   valk_gc_page_list_t *list = &heap->classes[size_class];
 

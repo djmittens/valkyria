@@ -331,6 +331,7 @@ void *valk_gc_heap_realloc(valk_gc_heap_t *heap, void *ptr, sz new_size);
 void valk_gc_tlab_init(valk_gc_tlab_t *tlab);
 void valk_gc_tlab_reset(valk_gc_tlab_t *tlab);
 void valk_gc_tlab_abandon(valk_gc_tlab_t *tlab);
+void valk_gc_tlab_release_thread(void);
 void valk_gc_tlab_invalidate_heap(valk_gc_heap_t *heap);
 
 static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab, u8 size_class) {

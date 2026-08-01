@@ -326,9 +326,7 @@ typedef struct {
   struct valk_system *system;     // Owning valk_system_t (set during thread onboard)
   void *heap;                     // Fallback GC heap for arena overflow (valk_gc_heap_t*)
   valk_mem_arena_t *scratch;      // Scratch arena for temporary allocations
-  struct valk_lenv_t *root_env;   // Root environment for checkpoint evacuation
-  float checkpoint_threshold;     // Threshold for automatic checkpointing (0.0-1.0)
-  bool checkpoint_enabled;        // Whether automatic checkpointing is enabled
+  struct valk_lenv_t *_Atomic root_env;  // Root environment for GC marking; read cross-thread by rank-0 marker
   u64 call_depth;              // Current function call depth (for TCO testing/debugging)
   
   // Request context (Finagle-style context propagation)
@@ -340,6 +338,8 @@ typedef struct {
   // Parallel GC fields (Phase 0)
   u64 gc_thread_id;            // Index in GC coordinator's thread registry
   bool gc_registered;             // Whether registered with parallel GC
+  _Atomic u64 stw_epoch;          // Cycle epoch this thread was counted into
+  u64 gc_cycle_rank;              // Dense participant rank for current cycle
   struct valk_lval_t **root_stack;       // Explicit root stack for protecting temps during GC
   sz root_stack_count;
   sz root_stack_capacity;

@@ -235,6 +235,44 @@ void test_build_aot_tco_mutual_recursion(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// AOT binaries must survive a GC cycle: runtime globals (numbers, dicts,
+// lambdas, lists), heap-allocated builtin lvals referenced from the frozen
+// image env, and image dicts grown onto the heap were all collected while
+// live before the frozen-env walk + heap-mark-bit rule + remembered set
+// landed. The program defines one global of each flavor, forces a
+// collection, then uses them; exit 0 requires every check to pass.
+void test_build_aot_survives_gc(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  const char *src = "/tmp/valk_build_test_gc.valk";
+  const char *out = "/tmp/valk_build_test_gc.bin";
+  const char *body =
+      "(\\ {argv} {do\n"
+      "  (def {g-num} 42)\n"
+      "  (def {g-dict} (dict/new))\n"
+      "  (dict/set! g-dict \"k\" 99)\n"
+      "  (def {g-lambda} (\\ {x} {+ x 1}))\n"
+      "  (def {g-list} (list 1 2 3))\n"
+      "  (mem/gc/collect)\n"
+      "  (if (not (== g-num 42)) {1}\n"
+      "  {if (not (== (dict/get g-dict \"k\") 99)) {2}\n"
+      "  {if (not (== (g-lambda 1) 2)) {3}\n"
+      "  {if (not (== (len g-list) 3)) {4}\n"
+      "  {0}}}})\n"
+      "})\n";
+  VALK_TEST_ASSERT(write_valk(src, body) == 0, "write src");
+
+  VALK_TEST_ASSERT(run_valk_build(src, out) == 0, "valk --build succeeds");
+
+  int rc = run_produced(out, NULL);
+  VALK_TEST_ASSERT(rc == 0,
+                   "all globals survive a GC cycle in the AOT binary (got %d: "
+                   "1=num 2=dict 3=lambda 4=list dead)", rc);
+
+  unlink(src);
+  unlink(out);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -254,6 +292,8 @@ int main(void) {
                           test_build_aot_tco_self_recursion);
   valk_testsuite_add_test(suite, "build_aot_tco_mutual_recursion",
                           test_build_aot_tco_mutual_recursion);
+  valk_testsuite_add_test(suite, "build_aot_survives_gc",
+                          test_build_aot_survives_gc);
   int rc = valk_testsuite_run(suite);
   valk_testsuite_free(suite);
   return rc;

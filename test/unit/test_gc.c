@@ -233,21 +233,6 @@ void test_gc_print_stats_does_not_crash(VALK_TEST_ARGS()) {
 
 
 
-void test_gc_should_checkpoint(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
-  valk_mem_arena_t *scratch = malloc(arena_size);
-  valk_mem_arena_init(scratch, 4096);
-
-  bool should = valk_should_checkpoint(scratch, 0.75f);
-  VALK_TEST_ASSERT(should == false, "Empty scratch should not need checkpoint");
-
-  free(scratch);
-
-  VALK_PASS();
-}
-
 void test_gc_heap_destroy_null_safe(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -501,53 +486,6 @@ void test_gc_print_stats_null(VALK_TEST_ARGS()) {
   VALK_TEST();
 
   valk_gc_print_stats(nullptr);
-
-  VALK_PASS();
-}
-
-void test_gc_should_checkpoint_null_scratch(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  bool should = valk_should_checkpoint(nullptr, 0.75f);
-  VALK_TEST_ASSERT(should == false, "nullptr scratch should return false");
-
-  VALK_PASS();
-}
-
-void test_gc_should_checkpoint_high_threshold(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
-  valk_mem_arena_t *scratch = malloc(arena_size);
-  valk_mem_arena_init(scratch, 4096);
-
-  scratch->offset = 3500;
-
-  bool should = valk_should_checkpoint(scratch, 0.75f);
-  VALK_TEST_ASSERT(should == true, "85% full should trigger checkpoint");
-
-  free(scratch);
-
-  VALK_PASS();
-}
-
-void test_gc_checkpoint_null_args(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_checkpoint(nullptr, nullptr, nullptr);
-
-  size_t arena_size = 4096 + sizeof(valk_mem_arena_t);
-  valk_mem_arena_t *scratch = malloc(arena_size);
-  valk_mem_arena_init(scratch, 4096);
-
-  valk_checkpoint(scratch, nullptr, nullptr);
-
-  valk_gc_heap_t *heap = valk_gc_heap_create(10 * 1024 * 1024);
-
-  valk_checkpoint(nullptr, heap, nullptr);
-
-  valk_gc_heap_destroy(heap);
-  free(scratch);
 
   VALK_PASS();
 }
@@ -1820,7 +1758,7 @@ void test_gc_heap_parallel_gc_stress(VALK_TEST_ARGS()) {
 void test_gc_heap_parallel_gc_stw(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_system_create(NULL);
+  valk_system_t *sys = valk_system_create(NULL);
   
   valk_gc_heap_t *heap = valk_gc_heap_create(256 * 1024 * 1024);
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
@@ -1844,6 +1782,7 @@ void test_gc_heap_parallel_gc_stw(VALK_TEST_ARGS()) {
   
   valk_gc_thread_unregister();
   valk_gc_heap_destroy(heap);
+  valk_system_destroy(sys);
   
   VALK_PASS();
 }
@@ -1907,7 +1846,7 @@ static void *true_parallel_gc_worker(void *arg) {
 void test_gc_heap_true_parallel_gc(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_system_create(NULL);
+  valk_system_t *sys = valk_system_create(NULL);
   
   valk_gc_heap_t *heap = valk_gc_heap_create(256 * 1024 * 1024);
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
@@ -1978,6 +1917,7 @@ void test_gc_heap_true_parallel_gc(VALK_TEST_ARGS()) {
   
   valk_gc_thread_unregister();
   valk_gc_heap_destroy(heap);
+  valk_system_destroy(sys);
   
   VALK_PASS();
 }
@@ -2027,7 +1967,7 @@ static void *root_marking_worker(void *arg) {
 void test_gc_parallel_thread_local_roots(VALK_TEST_ARGS()) {
   VALK_TEST();
   
-  valk_system_create(NULL);
+  valk_system_t *sys = valk_system_create(NULL);
   
   valk_gc_heap_t *heap = valk_gc_heap_create(256 * 1024 * 1024);
   VALK_TEST_ASSERT(heap != nullptr, "Heap should be created");
@@ -2073,6 +2013,7 @@ void test_gc_parallel_thread_local_roots(VALK_TEST_ARGS()) {
   
   valk_gc_thread_unregister();
   valk_gc_heap_destroy(heap);
+  valk_system_destroy(sys);
   
   VALK_PASS();
 }
@@ -3422,6 +3363,7 @@ void test_gc_region_session_lifetime(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(ptr != nullptr, "Allocation from session region should succeed");
 
   valk_region_destroy(region);
+  valk_gc_thread_unregister();
   valk_system_destroy(valk_sys);
 
   VALK_PASS();
@@ -3544,6 +3486,7 @@ void test_gc_region_alloc_limit_overflow(VALK_TEST_ARGS()) {
   valk_region_destroy(child);
   valk_region_destroy(parent);
 
+  valk_gc_thread_unregister();
   valk_system_destroy(valk_sys);
 
   VALK_PASS();
@@ -3569,11 +3512,14 @@ void test_gc_region_limit_exceeds_allocation(VALK_TEST_ARGS()) {
 void test_gc_runtime_double_init(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  valk_system_create(NULL);
+  valk_system_t *sys1 = valk_system_create(NULL);
+  valk_gc_thread_unregister();
 
-  valk_system_create(NULL);
+  valk_system_t *sys2 = valk_system_create(NULL);
+  valk_gc_thread_unregister();
 
-  valk_system_destroy(valk_sys);
+  valk_system_destroy(sys2);
+  valk_system_destroy(sys1);
 
   VALK_PASS();
 }
@@ -3592,6 +3538,7 @@ void test_gc_evacuate_to_heap_already_on_heap(VALK_TEST_ARGS()) {
   valk_lval_t *result = valk_evacuate_to_heap(val);
   VALK_TEST_ASSERT(result == val, "Already-on-heap value should return same pointer");
 
+  valk_gc_thread_unregister();
   valk_system_destroy(valk_sys);
 
   VALK_PASS();
@@ -3696,6 +3643,117 @@ void test_gc_tlab_refill_multiple_partial_pages(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// ===========================================================================
+// Registration during an active GC cycle must not wedge or corrupt the cycle.
+//
+// This is a direct interrogation of the coordination protocol, not a
+// probabilistic stress test:
+//   - participant thread B polls safepoints (2 participants total with main)
+//   - prober thread C spins on sys->phase and registers the moment it
+//     observes MARKING, then unregisters
+//   - main runs collect cycles over a large rooted cons chain (wide mark
+//     window) until C has landed >= 3 mid-cycle registrations
+// The test FAILS as inconclusive if C never lands mid-cycle, so it cannot
+// silently pass without exercising the condition. A wedge trips alarm(20).
+// ===========================================================================
+
+typedef struct {
+  _Atomic bool stop;
+  _Atomic int mid_cycle_registrations;
+  _Atomic bool prober_stuck;
+} reg_during_gc_ctx_t;
+
+static void *reg_during_gc_participant(void *arg) {
+  reg_during_gc_ctx_t *c = arg;
+  valk_mem_init_malloc();
+  valk_gc_thread_register();
+  while (!atomic_load(&c->stop)) {
+    VALK_GC_SAFE_POINT();
+    usleep(50);
+  }
+  valk_gc_thread_unregister();
+  return nullptr;
+}
+
+static void *reg_during_gc_prober(void *arg) {
+  reg_during_gc_ctx_t *c = arg;
+  valk_mem_init_malloc();
+  while (!atomic_load(&c->stop) &&
+         atomic_load(&c->mid_cycle_registrations) < 3) {
+    if (atomic_load(&valk_sys->phase) == VALK_GC_PHASE_MARKING) {
+      valk_system_register_thread(valk_sys, nullptr, nullptr);
+      valk_gc_phase_e p = atomic_load(&valk_sys->phase);
+      if (p == VALK_GC_PHASE_MARKING || p == VALK_GC_PHASE_SWEEPING) {
+        atomic_fetch_add(&c->mid_cycle_registrations, 1);
+      }
+      atomic_store(&c->prober_stuck, true);
+      valk_system_unregister_thread(valk_sys);
+      atomic_store(&c->prober_stuck, false);
+    }
+    sched_yield();
+  }
+  return nullptr;
+}
+
+static void reg_during_gc_alarm(int sig) {
+  (void)sig;
+  const char msg[] = "FAIL: GC wedged with mid-cycle thread registration\n";
+  write(STDERR_FILENO, msg, sizeof(msg) - 1);
+  _exit(1);
+}
+
+void test_gc_register_during_cycle_no_wedge(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  signal(SIGALRM, reg_during_gc_alarm);
+  alarm(20);
+
+  valk_system_create(NULL);
+  valk_gc_heap_t *heap = valk_sys->heap;
+  VALK_TEST_ASSERT(heap != nullptr, "system heap should exist");
+
+  // Large rooted cons chain: gives the mark phase a wide window so the
+  // prober deterministically lands inside it within a few cycles.
+  valk_lval_t *chain = nullptr;
+  for (int i = 0; i < 150000; i++) {
+    valk_lval_t *cell = valk_gc_heap_alloc(heap, sizeof(valk_lval_t));
+    VALK_TEST_ASSERT(cell != nullptr, "chain alloc should succeed");
+    memset(cell, 0, sizeof(*cell));
+    cell->flags = LVAL_CONS;
+    cell->cons.head = nullptr;
+    cell->cons.tail = chain;
+    chain = cell;
+  }
+  valk_gc_root_push(chain);
+
+  reg_during_gc_ctx_t ctx = {0};
+  pthread_t participant, prober;
+  pthread_create(&participant, nullptr, reg_during_gc_participant, &ctx);
+  pthread_create(&prober, nullptr, reg_during_gc_prober, &ctx);
+
+  int cycles = 0;
+  for (; cycles < 300 && atomic_load(&ctx.mid_cycle_registrations) < 3;
+       cycles++) {
+    valk_gc_heap_collect(heap);
+  }
+
+  atomic_store(&ctx.stop, true);
+  pthread_join(prober, nullptr);
+  pthread_join(participant, nullptr);
+  alarm(0);
+  signal(SIGALRM, SIG_DFL);
+
+  int landed = atomic_load(&ctx.mid_cycle_registrations);
+  VALK_TEST_ASSERT(landed >= 1,
+                   "inconclusive: prober never registered mid-cycle "
+                   "(%d cycles run)", cycles);
+
+  valk_gc_root_pop();
+  valk_gc_thread_unregister();
+  valk_system_destroy(valk_sys);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -3714,7 +3772,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_get_runtime_metrics", test_gc_get_runtime_metrics);
   valk_testsuite_add_test(suite, "test_gc_runtime_metrics_after_collect", test_gc_runtime_metrics_after_collect);
   valk_testsuite_add_test(suite, "test_gc_print_stats_does_not_crash", test_gc_print_stats_does_not_crash);
-  valk_testsuite_add_test(suite, "test_gc_should_checkpoint", test_gc_should_checkpoint);
 
   valk_testsuite_add_test(suite, "test_gc_heap_destroy_null_safe", test_gc_heap_destroy_null_safe);
   valk_testsuite_add_test(suite, "test_gc_multiple_collections", test_gc_multiple_collections);
@@ -3735,9 +3792,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_collect_with_additional_root", test_gc_collect_with_additional_root);
   valk_testsuite_add_test(suite, "test_gc_print_stats_null", test_gc_print_stats_null);
 
-  valk_testsuite_add_test(suite, "test_gc_should_checkpoint_null_scratch", test_gc_should_checkpoint_null_scratch);
-  valk_testsuite_add_test(suite, "test_gc_should_checkpoint_high_threshold", test_gc_should_checkpoint_high_threshold);
-  valk_testsuite_add_test(suite, "test_gc_checkpoint_null_args", test_gc_checkpoint_null_args);
   valk_testsuite_add_test(suite, "test_gc_should_collect_rate_limiting", test_gc_should_collect_rate_limiting);
   valk_testsuite_add_test(suite, "test_gc_should_collect_above_threshold", test_gc_should_collect_above_threshold);
   valk_testsuite_add_test(suite, "test_gc_heap_usage_pct_with_allocations", test_gc_heap_usage_pct_with_allocations);
@@ -3907,6 +3961,7 @@ int main(void) {
   // Phase 25: gc_heap.c coverage — bitmap search and multi-partial-page paths
   valk_testsuite_add_test(suite, "test_gc_tlab_refill_fragmented_page", test_gc_tlab_refill_fragmented_page);
   valk_testsuite_add_test(suite, "test_gc_tlab_refill_multiple_partial_pages", test_gc_tlab_refill_multiple_partial_pages);
+  valk_testsuite_add_test(suite, "test_gc_register_during_cycle_no_wedge", test_gc_register_during_cycle_no_wedge);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

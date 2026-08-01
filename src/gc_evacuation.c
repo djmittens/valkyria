@@ -8,13 +8,28 @@
 #include <string.h>
 
 // ============================================================================
-// Evacuation Context Lifecycle
+// Evacuation Context
 // ============================================================================
+
+typedef struct {
+  valk_mem_arena_t* scratch;
+  valk_gc_heap_t* heap;
+  valk_lval_t** worklist;
+  sz worklist_count;
+  sz worklist_capacity;
+  valk_lval_t** evacuated;
+  sz evacuated_count;
+  sz evacuated_capacity;
+  u64 values_copied;
+  sz bytes_copied;
+  u64 pointers_fixed;
+  valk_ptr_map_t ptr_map;
+} valk_evacuation_ctx_t;
 
 // LCOV_EXCL_BR_START - evacuation context internal defensive checks
 #define EVAC_WORKLIST_INITIAL_CAPACITY 256
 
-void evac_ctx_init(valk_evacuation_ctx_t* ctx) {
+static void evac_ctx_init(valk_evacuation_ctx_t* ctx) {
   ctx->worklist = malloc(EVAC_WORKLIST_INITIAL_CAPACITY * sizeof(valk_lval_t*));
   ctx->worklist_count = 0;
   ctx->worklist_capacity = EVAC_WORKLIST_INITIAL_CAPACITY;
@@ -26,7 +41,7 @@ void evac_ctx_init(valk_evacuation_ctx_t* ctx) {
   valk_ptr_map_init(&ctx->ptr_map);
 }
 
-void evac_ctx_free(valk_evacuation_ctx_t* ctx) {
+static void evac_ctx_free(valk_evacuation_ctx_t* ctx) {
   if (ctx->worklist) {
     free(ctx->worklist);
     ctx->worklist = nullptr;
@@ -82,37 +97,22 @@ static void evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   ctx->worklist[ctx->worklist_count++] = v;
 }
 
-valk_lval_t* evac_worklist_pop(valk_evacuation_ctx_t* ctx) {
+static valk_lval_t* evac_worklist_pop(valk_evacuation_ctx_t* ctx) {
   if (ctx->worklist_count == 0) return nullptr; // LCOV_EXCL_BR_LINE
   return ctx->worklist[--ctx->worklist_count];
-}
-
-// LCOV_EXCL_START - public API for external evacuators, not currently called
-void valk_evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
-  evac_worklist_push(ctx, v);
-}
-// LCOV_EXCL_STOP
-
-// ============================================================================
-// Checkpoint Threshold Check
-// ============================================================================
-
-bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold) {
-  if (scratch == nullptr) return false;
-  return (float)scratch->offset / scratch->capacity > threshold;
 }
 
 // ============================================================================
 // Value Evacuation (scratch -> heap)
 // ============================================================================
 
-valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
-void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
-valk_lenv_t* valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env);
-void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+static valk_lenv_t* valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env);
+static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
 
 // LCOV_EXCL_BR_START - evacuation value copy null checks and type dispatch
-valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
+static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   if (v == nullptr) return nullptr;
 
   if (v->flags & LVAL_FLAG_IMMORTAL) return v;
@@ -224,7 +224,7 @@ valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 // Child Evacuation
 // ============================================================================
 
-void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
+static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   if (v == nullptr) return;
 
   switch (LVAL_TYPE(v)) {
@@ -413,7 +413,7 @@ static valk_lenv_t* valk_evacuate_env_clone(valk_evacuation_ctx_t* ctx,
 }
 // LCOV_EXCL_STOP
 
-valk_lenv_t* valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
+static valk_lenv_t* valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* env) {
   if (env == nullptr) return nullptr;
 
   valk_lenv_t* new_root = nullptr;
@@ -475,7 +475,7 @@ static inline bool fix_scratch_pointer(valk_evacuation_ctx_t* ctx, valk_lval_t**
 // LCOV_EXCL_STOP
 
 // LCOV_EXCL_BR_START - pointer fixing null checks and type dispatch
-void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
+static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
   if (v == nullptr) return;
   if (LVAL_ALLOC(v) == LVAL_ALLOC_SCRATCH) return;
 

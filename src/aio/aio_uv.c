@@ -55,8 +55,6 @@ void __loop_thread_fn(void *arg) {
   valk_mem_arena_init(scratch, scratch_bytes - sizeof(*scratch));
   loop->scratch = scratch;
   valk_thread_ctx.scratch = scratch;
-  valk_thread_ctx.checkpoint_threshold = VALK_CHECKPOINT_THRESHOLD_DEFAULT;
-  valk_thread_ctx.checkpoint_enabled = true;
 
   VALK_DEBUG("Initializing event loop thread %u", loop->id);
 

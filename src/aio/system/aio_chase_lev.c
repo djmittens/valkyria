@@ -55,9 +55,12 @@ void valk_chase_lev_reset(valk_chase_lev_deque_t *deque) {
   deque->garbage = NULL;
 }
 
+// Idempotent: GC mark queues are destroyed at thread unregistration AND
+// (for still-registered slots / zeroed slots) at system destroy.
 void valk_chase_lev_destroy(valk_chase_lev_deque_t *deque) {
   valk_chase_lev_array_t *arr = atomic_load_explicit(&deque->array, memory_order_relaxed);
   valk_chase_lev_array_free(arr);
+  atomic_store_explicit(&deque->array, NULL, memory_order_relaxed);
   valk_chase_lev_garbage_t *g = deque->garbage;
   while (g) {
     valk_chase_lev_garbage_t *next = g->next;
@@ -65,6 +68,7 @@ void valk_chase_lev_destroy(valk_chase_lev_deque_t *deque) {
     free(g);
     g = next;
   }
+  deque->garbage = NULL;
 }
 
 void valk_chase_lev_push(valk_chase_lev_deque_t *deque, void *item) {

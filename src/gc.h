@@ -226,37 +226,17 @@ void valk_handle_table_visit(valk_handle_table_t *table,
 
 
 // ============================================================================
-// Evacuation Context
+// Evacuation (scratch -> heap)
 // ============================================================================
 
-typedef struct {
-  valk_mem_arena_t* scratch;
-  valk_gc_heap_t* heap;
-  valk_lval_t** worklist;
-  sz worklist_count;
-  sz worklist_capacity;
-  valk_lval_t** evacuated;
-  sz evacuated_count;
-  sz evacuated_capacity;
-  u64 values_copied;
-  sz bytes_copied;
-  u64 pointers_fixed;
-  valk_ptr_map_t ptr_map;
-} valk_evacuation_ctx_t;
-
-// ============================================================================
-// Checkpoint API
-// ============================================================================
-
-#define VALK_CHECKPOINT_THRESHOLD_DEFAULT 0.75f
-
-bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold);
-void valk_checkpoint(valk_mem_arena_t* scratch, valk_gc_heap_t* heap,
-                     valk_lenv_t* root_env);
 valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v);
-valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
-void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
-void valk_evac_worklist_push(valk_evacuation_ctx_t* ctx, valk_lval_t* v);
+
+// Remembered set: immortal (image-baked) lvals whose contents were mutated
+// at runtime to reference GC-heap data. The marker skips immortal lvals, so
+// mutated ones must be registered here (write barrier in the dict builtins)
+// to have their children traced each cycle.
+void valk_gc_remember_immortal(valk_lval_t *v);
+void valk_gc_visit_remembered(void (*visitor)(valk_lval_t *, void *), void *ctx);
 
 // ============================================================================
 // Parallel GC Infrastructure
@@ -291,7 +271,11 @@ bool valk_gc_mark_queue_empty(valk_gc_mark_queue_t* q);
 typedef struct valk_gc_thread_info {
   void* ctx;
   pthread_t thread_id;
-  bool active;
+  // _Atomic: read lock-free by the termination scan, steal loop, and
+  // wake_threads while registrants flip it under thread_mutex. The slot
+  // (ctx, wake_fn, mark_queue) is fully initialized before active=true;
+  // the atomic store/load pair provides the ordering.
+  _Atomic bool active;
   valk_gc_mark_queue_t mark_queue;
   void (*wake_fn)(void *wake_ctx);
   void *wake_ctx;
@@ -323,6 +307,11 @@ typedef struct valk_system {
 
   _Atomic valk_gc_phase_e phase;
   _Atomic u64 threads_registered;
+  // Cycle epoch: incremented by the STW coordinator under thread_mutex when
+  // it freezes the participant set. A thread whose ctx->stw_epoch matches
+  // was counted into the current cycle's barriers; anything else registered
+  // after the freeze and must sit out until IDLE.
+  _Atomic u64 stw_epoch;
 
   pthread_mutex_t thread_mutex;
   u64 thread_free_list[VALK_SYSTEM_MAX_THREADS];
@@ -448,7 +437,6 @@ static inline void valk_gc_root_cleanup(valk_gc_root_t *r) {
 void valk_diag_dump_on_timeout(void);
 
 void valk_gc_root_push_fn(valk_lval_t *val);
-void valk_gc_root_pop_fn(void);
 sz valk_gc_root_save(void);
 void valk_gc_root_restore(sz count);
 void valk_gc_safepoint_fn(void);

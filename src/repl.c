@@ -69,8 +69,6 @@ int main(int argc, char* argv[]) {
   // Set thread allocator to GC heap for persistent structures
   valk_thread_ctx.allocator = (void*)gc_heap;
   valk_thread_ctx.scratch = scratch;
-  valk_thread_ctx.checkpoint_threshold = VALK_CHECKPOINT_THRESHOLD_DEFAULT;
-  valk_thread_ctx.checkpoint_enabled = true;
 
   valk_coverage_init();
   if (valk_coverage_enabled()) {
@@ -93,7 +91,7 @@ int main(int argc, char* argv[]) {
     free(argv_items);
   }
 
-  // Set root environment for GC marking and checkpoint evacuation
+  // Set root environment for GC marking
   valk_gc_set_root(gc_heap, env);
   valk_thread_ctx.root_env = env;
 

@@ -306,9 +306,9 @@ See: https://notes.eatonphil.com/2024-08-20-deterministic-simulation-testing.htm
    ```
 
 3. **Check for GC coordination deadlocks** - common patterns:
-   - Event loop thread stuck in `valk_gc_safe_point_slow()` waiting for `gc_done`
-   - Main thread stuck in `valk_checkpoint_request_stw()` waiting for threads to pause
-   - Race between checkpoint release and next checkpoint request
+   - Event loop thread stuck in `valk_gc_safe_point_slow()` waiting at the phase barrier
+   - Coordinator stuck in `valk_gc_heap_request_stw()` waiting for threads to reach safepoints
+   - A registered thread blocked on a mutex/syscall that never reaches a safepoint
 
 4. **Check for shutdown ordering bugs** - if hang occurs at process exit:
    - `valk_aio_wait_for_shutdown()` waits for event loop thread to exit
@@ -393,10 +393,13 @@ If this doesn't fire, the child's completion path is missing the notify call.
 5. Tests pass
 
 ### GC Coordination Architecture
-- Main thread calls `valk_checkpoint()` between top-level expressions (repl.c)
-- `valk_checkpoint_request_stw()` sets phase to CHECKPOINT_REQUESTED
+- Allocation pressure sets `VALK_SP_GC_COLLECT`; threads collect at the next safepoint
+- `valk_gc_heap_request_stw()` CASes phase IDLE -> PREPARING, sets `VALK_SP_STW`
+  on every registered thread, then rendezvouses on the phase-counting barrier
 - Event loop threads respond via `__gc_wakeup_cb` -> `valk_gc_safe_point_slow()`
-- `valk_checkpoint_release_stw()` broadcasts `gc_done` to wake waiting threads
+  -> `valk_gc_participate_in_parallel_gc()` (4-barrier lockstep with coordinator)
+- Scratch values are evacuated eagerly at escape points via `valk_evacuate_to_heap()`
+  (there is no separate checkpoint mechanism)
 
 ### Key Concurrency Invariants
 - `valk_gc_thread_register()` must happen BEFORE `uv_sem_post` in event loop startup

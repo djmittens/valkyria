@@ -169,15 +169,10 @@ void valk_system_register_thread(valk_system_t *sys,
     sys->next_fresh_idx++;
   }
 
-  sys->threads[idx].ctx = &valk_thread_ctx;
-  sys->threads[idx].thread_id = pthread_self();
-  sys->threads[idx].active = true;
-  sys->threads[idx].wake_fn = wake_fn;
-  sys->threads[idx].wake_ctx = wake_ctx;
-  atomic_fetch_add(&sys->threads_registered, 1);
-
-  pthread_mutex_unlock(&sys->thread_mutex);
-
+  // Fully initialize the slot and thread context BEFORE making the thread
+  // visible (active=true / count increment). Stealers and the termination
+  // scan may touch the mark queue of any active slot at any time, and the
+  // coordinator may flag any active thread the instant the mutex drops.
   valk_thread_ctx.gc_thread_id = idx;
   valk_thread_ctx.gc_registered = true;
   atomic_store(&valk_thread_ctx.safepoint_flags, 0);
@@ -185,6 +180,28 @@ void valk_system_register_thread(valk_system_t *sys,
   valk_thread_ctx.root_stack_capacity = 256;
   valk_thread_ctx.root_stack_count = 0;
   valk_gc_mark_queue_init(&sys->threads[idx].mark_queue);
+
+  sys->threads[idx].ctx = &valk_thread_ctx;
+  sys->threads[idx].thread_id = pthread_self();
+  sys->threads[idx].wake_fn = wake_fn;
+  sys->threads[idx].wake_ctx = wake_ctx;
+
+  // A GC cycle in flight froze its participant set without us. We are not
+  // counted in its barriers, so we must not run until it finishes: self-set
+  // the STW flag (our stw_epoch != sys epoch marks us as a late registrant,
+  // so the safepoint slow path waits for IDLE instead of joining barriers).
+  if (atomic_load_explicit(&sys->phase, memory_order_acquire) !=
+      VALK_GC_PHASE_IDLE) {
+    atomic_store(&valk_thread_ctx.stw_epoch,
+                 atomic_load(&sys->stw_epoch) - 1);
+    atomic_fetch_or_explicit(&valk_thread_ctx.safepoint_flags, VALK_SP_STW,
+                              memory_order_release);
+  }
+
+  sys->threads[idx].active = true;
+  atomic_fetch_add(&sys->threads_registered, 1);
+
+  pthread_mutex_unlock(&sys->thread_mutex);
 
   VALK_DEBUG("Thread registered: idx=%llu", (unsigned long long)idx);
 }
@@ -211,6 +228,9 @@ void valk_system_unregister_thread(valk_system_t *sys) {
     sys->threads[idx].ctx = nullptr;
     sys->threads[idx].wake_fn = nullptr;
     sys->threads[idx].wake_ctx = nullptr;
+    // Phase is IDLE and we hold thread_mutex: no marker or stealer can be
+    // touching this queue. Registration re-inits it on slot reuse.
+    valk_gc_mark_queue_destroy(&sys->threads[idx].mark_queue);
     atomic_fetch_sub(&sys->threads_registered, 1);
     sys->thread_free_list[sys->thread_free_count++] = idx;
 
@@ -222,6 +242,7 @@ void valk_system_unregister_thread(valk_system_t *sys) {
     free(valk_thread_ctx.root_stack);
     valk_thread_ctx.root_stack = nullptr;
   }
+  valk_gc_tlab_release_thread();
   valk_thread_ctx.gc_registered = false;
 
   VALK_DEBUG("Thread unregistered: idx=%llu", (unsigned long long)idx);
@@ -364,38 +385,31 @@ void valk_gc_safe_point_slow(void) {
   if (flags & VALK_SP_STW) {
     atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_STW);
 
-    valk_gc_phase_e phase = atomic_load_explicit(&valk_sys->phase,
-                                                   memory_order_acquire);
+    for (;;) {
+      valk_gc_phase_e phase = atomic_load_explicit(&valk_sys->phase,
+                                                     memory_order_acquire);
+      if (phase == VALK_GC_PHASE_IDLE) return;
 
-    if (phase == VALK_GC_PHASE_PREPARING) {
-      while (atomic_load_explicit(&valk_sys->phase,
-                                   memory_order_acquire) == VALK_GC_PHASE_PREPARING) {
+      u64 my_epoch = atomic_load(&valk_thread_ctx.stw_epoch);
+      u64 sys_epoch = atomic_load(&valk_sys->stw_epoch);
+
+      if (my_epoch == sys_epoch) {
+        // Counted participant: the coordinator froze us into this cycle's
+        // barriers. PREPARING resolves to STW_REQUESTED; the coordinator
+        // cannot advance past STW_REQUESTED until we join.
+        if (phase == VALK_GC_PHASE_STW_REQUESTED) {
+          valk_barrier_wait(&valk_sys->barrier);
+          valk_gc_participate_in_parallel_gc();
+          return;
+        }
         sched_yield();
-      }
-      phase = atomic_load_explicit(&valk_sys->phase, memory_order_acquire);
-    }
-
-    if (phase == VALK_GC_PHASE_STW_REQUESTED) {
-      if (valk_thread_ctx.scratch && valk_thread_ctx.scratch->offset > 0 &&
-          valk_thread_ctx.heap && valk_thread_ctx.root_env) {
-        valk_checkpoint(valk_thread_ctx.scratch,
-                         valk_thread_ctx.heap,
-                         valk_thread_ctx.root_env);
+        continue;
       }
 
-      valk_barrier_wait(&valk_sys->barrier);
-      valk_gc_participate_in_parallel_gc();
-      return;
+      // Late registrant: not in this cycle's barrier count. Wait until the
+      // cycle finishes (phase IDLE) or a new cycle counts us (epoch match).
+      sched_yield();
     }
-
-    if (valk_thread_ctx.checkpoint_enabled &&
-        valk_thread_ctx.scratch && valk_thread_ctx.heap && valk_thread_ctx.root_env &&
-        valk_should_checkpoint(valk_thread_ctx.scratch, valk_thread_ctx.checkpoint_threshold)) {
-      valk_checkpoint(valk_thread_ctx.scratch,
-                       valk_thread_ctx.heap,
-                       valk_thread_ctx.root_env);
-    }
-    return;
   }
 
   if (flags & VALK_SP_GC_COLLECT) {
@@ -412,6 +426,52 @@ void valk_gc_safe_point_slow(void) {
 // ============================================================================
 // Root Enumeration
 // ============================================================================
+
+// ============================================================================
+// Remembered Set — mutable immortals referencing GC-heap data
+// ============================================================================
+// Image-baked (immortal) lvals can be MUTATED at runtime: a dict lval
+// serialized into the image gets grown by dict/set! and its data block moves
+// onto the GC heap. The marker skips immortal lvals entirely, so those heap
+// blocks/values have no other reference and are swept while live (observed
+// as munmapped dict blocks under the LSP). Classic old-gen -> young-gen
+// pointer problem; the write barrier in the dict builtins registers mutated
+// immortal lvals here, and rank-0 marks their children every cycle. Entries
+// are immortal so they are never removed; the set stays small (distinct
+// image dicts mutated at runtime).
+
+#define VALK_REMEMBERED_MAX 1024
+static pthread_mutex_t __remembered_lock = PTHREAD_MUTEX_INITIALIZER;
+static valk_lval_t *__remembered[VALK_REMEMBERED_MAX];
+static u64 __remembered_count = 0;
+
+void valk_gc_remember_immortal(valk_lval_t *v) {
+  if (!v) return;
+  pthread_mutex_lock(&__remembered_lock);
+  for (u64 i = 0; i < __remembered_count; i++) {
+    if (__remembered[i] == v) {
+      pthread_mutex_unlock(&__remembered_lock);
+      return;
+    }
+  }
+  // LCOV_EXCL_START - remembered set overflow requires >1024 distinct mutated immortals
+  if (__remembered_count >= VALK_REMEMBERED_MAX) {
+    VALK_ERROR("GC remembered set full; immortal %p not tracked", (void *)v);
+    pthread_mutex_unlock(&__remembered_lock);
+    return;
+  }
+  // LCOV_EXCL_STOP
+  __remembered[__remembered_count++] = v;
+  pthread_mutex_unlock(&__remembered_lock);
+}
+
+void valk_gc_visit_remembered(valk_gc_root_visitor_t visitor, void *ctx) {
+  pthread_mutex_lock(&__remembered_lock);
+  for (u64 i = 0; i < __remembered_count; i++) {
+    visitor(__remembered[i], ctx);
+  }
+  pthread_mutex_unlock(&__remembered_lock);
+}
 
 // LCOV_EXCL_BR_START - defensive null checks in root iteration
 void valk_gc_visit_thread_roots(valk_gc_root_visitor_t visitor, void *ctx) {
@@ -442,20 +502,18 @@ static void valk_env_root_cmap_cb(char *key, _Atomic(valk_lval_t *) *slot,
 }
 
 void valk_gc_visit_env_roots(valk_lenv_t *env, valk_gc_root_visitor_t visitor, void *ctx) {
-  if (env == nullptr) return;
+  for (; env != nullptr; env = env->parent) {
+    if (env->cmap) {
+      valk_env_root_visit_t v = {.visitor = visitor, .ctx = ctx};
+      valk_cmap_foreach((valk_cmap_t *)env->cmap, valk_env_root_cmap_cb, &v);
+    }
 
-  if (env->cmap) {
-    valk_env_root_visit_t v = {.visitor = visitor, .ctx = ctx};
-    valk_cmap_foreach((valk_cmap_t *)env->cmap, valk_env_root_cmap_cb, &v);
-  }
-
-  for (u64 i = 0; i < env->vals.count; i++) {
-    if (env->vals.items[i] != nullptr) {
-      visitor(env->vals.items[i], ctx);
+    for (u64 i = 0; i < env->vals.count; i++) {
+      if (env->vals.items[i] != nullptr) {
+        visitor(env->vals.items[i], ctx);
+      }
     }
   }
-
-  valk_gc_visit_env_roots(env->parent, visitor, ctx);
 }
 // LCOV_EXCL_BR_STOP
 
@@ -470,14 +528,20 @@ void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
   extern void valk_parse_cache_visit_roots(valk_gc_root_visitor_t, void *);
   valk_parse_cache_visit_roots(visitor, ctx);
 
+  // thread_mutex: late registrants may mutate the registry concurrently
+  // with this scan (they are excluded from the cycle but not from
+  // registering). Their critical section is bounded and never waits on GC.
+  pthread_mutex_lock(&valk_sys->thread_mutex);
   for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
     if (valk_sys->threads[i].active && valk_sys->threads[i].ctx != nullptr) {
       valk_thread_context_t *tc = valk_sys->threads[i].ctx;
-      if (tc->root_env != nullptr) {
-        valk_gc_visit_env_roots(tc->root_env, visitor, ctx);
+      valk_lenv_t *root_env = atomic_load(&tc->root_env);
+      if (root_env != nullptr) {
+        valk_gc_visit_env_roots(root_env, visitor, ctx);
       }
     }
   }
+  pthread_mutex_unlock(&valk_sys->thread_mutex);
 }
 // LCOV_EXCL_BR_STOP
 
@@ -754,10 +818,6 @@ void valk_gc_reset_after_fork(void) {
 
 void valk_gc_root_push_fn(valk_lval_t *val) {
   valk_gc_root_push(val);
-}
-
-void valk_gc_root_pop_fn(void) {
-  valk_gc_root_pop();
 }
 
 sz valk_gc_root_save(void) {
