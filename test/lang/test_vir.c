@@ -21,6 +21,24 @@ static valk_lenv_t *make_env(void) {
   return env;
 }
 
+static void free_vir_leftovers(vir_module_t *mod) {
+  for (vir_func_t *fn = mod->func_list; fn; fn = fn->next) {
+    for (u32 i = 0; i < fn->num_params; i++) {
+      free(fn->params[i]);
+      fn->params[i] = NULL;
+    }
+    for (vir_block_t *bb = fn->block_list; bb; bb = bb->next) {
+      for (vir_value_t *v = bb->first; v; v = v->next) {
+        if (v->opcode == VIR_ENV_GET || v->opcode == VIR_ENV_PUT ||
+            v->opcode == VIR_ENV_DEF) {
+          free(v->str_val);
+          v->str_val = NULL;
+        }
+      }
+    }
+  }
+}
+
 void test_vir_build_basic(VALK_TEST_ARGS()) {
   VALK_TEST();
   vir_module_t *mod = vir_module_new("test");
@@ -39,6 +57,7 @@ void test_vir_build_basic(VALK_TEST_ARGS()) {
   ASSERT_STR_EQ(fn->name, "test_fn");
 
   vir_builder_free(b);
+  free_vir_leftovers(mod);
   vir_module_free(mod);
   VALK_PASS();
 }
@@ -74,6 +93,7 @@ void test_vir_print(VALK_TEST_ARGS()) {
     "Should print env.get");
 
   vir_builder_free(b);
+  free_vir_leftovers(mod);
   vir_module_free(mod);
   VALK_PASS();
 }
@@ -111,6 +131,7 @@ void test_vir_if_cfg(VALK_TEST_ARGS()) {
   ASSERT_EQ(merge_bb->num_preds, 2);
 
   vir_builder_free(b);
+  free_vir_leftovers(mod);
   vir_module_free(mod);
   VALK_PASS();
 }
@@ -129,6 +150,7 @@ void test_vir_lower_num(VALK_TEST_ARGS()) {
   ASSERT_EQ(fn->entry->first->opcode, VIR_CONST_NUM);
 
   vir_builder_free(b);
+  free_vir_leftovers(mod);
   vir_module_free(mod);
   VALK_PASS();
 }
@@ -145,6 +167,7 @@ void test_vir_lower_if(VALK_TEST_ARGS()) {
   ASSERT_GT(fn->num_blocks, 1);
 
   vir_builder_free(b);
+  free_vir_leftovers(mod);
   vir_module_free(mod);
   VALK_PASS();
 }
@@ -181,6 +204,7 @@ void test_vir_gc_root_insertion(VALK_TEST_ARGS()) {
   ASSERT_TRUE(has_gc_root);
 
   vir_builder_free(b);
+  free_vir_leftovers(mod);
   vir_module_free(mod);
   VALK_PASS();
 }
@@ -209,6 +233,7 @@ void test_vir_to_llvm_basic(VALK_TEST_ARGS()) {
 
   valk_llvm_ctx_free(ctx);
   vir_builder_free(b);
+  free_vir_leftovers(vmod);
   vir_module_free(vmod);
   VALK_PASS();
 }
@@ -233,6 +258,7 @@ void test_vir_jit_arithmetic(VALK_TEST_ARGS()) {
 
   valk_jit_free(jit);
   vir_builder_free(vb);
+  free_vir_leftovers(vmod);
   vir_module_free(vmod);
   VALK_PASS();
 }
@@ -289,6 +315,7 @@ void test_vir_gc_safepoint_present(VALK_TEST_ARGS()) {
 
   valk_llvm_ctx_free(ctx);
   vir_builder_free(b);
+  free_vir_leftovers(vmod);
   vir_module_free(vmod);
   VALK_PASS();
 }

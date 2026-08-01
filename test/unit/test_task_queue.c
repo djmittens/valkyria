@@ -89,6 +89,7 @@ void test_task_queue_init_shutdown(VALK_TEST_ARGS()) {
   ASSERT_FALSE(sys.loops[0].task_queue.initialized);
 
   uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
   uv_loop_close(&loop);
   VALK_PASS();
 }
@@ -112,6 +113,7 @@ void test_task_queue_double_init(VALK_TEST_ARGS()) {
   valk_aio_task_queue_shutdown(&sys);
 
   uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
   uv_loop_close(&loop);
   VALK_PASS();
 }
@@ -157,6 +159,7 @@ void test_task_queue_enqueue_single(VALK_TEST_ARGS()) {
 
   valk_aio_task_queue_shutdown(&sys);
   uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
   uv_loop_close(&loop);
   VALK_PASS();
 }
@@ -188,6 +191,7 @@ void test_task_queue_enqueue_multiple(VALK_TEST_ARGS()) {
 
   valk_aio_task_queue_shutdown(&sys);
   uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
   uv_loop_close(&loop);
   VALK_PASS();
 }
@@ -217,6 +221,7 @@ void test_task_queue_with_context(VALK_TEST_ARGS()) {
 
   valk_aio_task_queue_shutdown(&sys);
   uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
   uv_loop_close(&loop);
   VALK_PASS();
 }
@@ -244,6 +249,7 @@ void test_task_queue_shutdown_drains(VALK_TEST_ARGS()) {
   ASSERT_FALSE(sys.loops[0].task_queue.initialized);
 
   uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
   uv_loop_close(&loop);
   VALK_PASS();
 }
@@ -277,6 +283,7 @@ void test_task_queue_shuttingdown_flag(VALK_TEST_ARGS()) {
 
   valk_aio_task_queue_shutdown(&sys);
   uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
   uv_loop_close(&loop);
   VALK_PASS();
 }
@@ -305,6 +312,7 @@ void test_task_queue_loop_enqueue_null_fn(VALK_TEST_ARGS()) {
 
   valk_aio_task_queue_shutdown(&sys);
   uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
   uv_loop_close(&loop);
   VALK_PASS();
 }

@@ -49,10 +49,15 @@ return {
       vim.wait(10)
     end
 
-    -- Re-open baseline, measure again.
+    -- Re-open baseline and let the async pipeline QUIESCE before measuring:
+    -- the churn's 30 publishDiagnostics arrive asynchronously and are
+    -- processed on nvim's main loop; measuring while they drain times
+    -- nvim's redraw queue, not the server (server threads are idle in
+    -- epoll throughout — verified by stack sampling). A true server leak
+    -- degrades permanently and is still caught after the drain.
     local baseline2 = lib.open_fixture("small.valk")
     lib.wait_for_lsp(baseline2)
-    vim.wait(200)
+    vim.wait(1500)
     local lat_after = measure_hover_burst(lib, baseline2, line, col + 1, 10)
 
     local before_p99 = lib.percentile(lat_before, 99)

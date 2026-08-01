@@ -391,12 +391,8 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
                 test->result.type == VALK_TEST_SKIP);
   }
 
-  // for (size_t i = 0; i < suite->results.count; i++) {
-  //   valk_test_result_t *result = &suite->results.items[i];
-  //   if (result->type != VALK_TEST_PASS) {
-  //     return 1;
-  //   }
-  // }
+  valk_slab_free(slab);
+  slab = nullptr;
 
   return result;
 }

@@ -76,3 +76,21 @@ leak:test_tcp_write_bufs
 
 # HTTP2 overload response may not be freed in unit tests
 leak:valk_http2_send_overload_response
+
+# LLVM keeps global target/context state alive until process exit; LSAN sees
+# it as reachable-at-exit inside libLLVM during --build tests. Third-party.
+leak:libLLVM
+
+# valk --build is a run-once tool: AOT candidate names (native_name strdups,
+# entry tables) are needed until the image dump and freed by process exit.
+leak:valk_build_emit_aot
+
+# Pipes and LSP readers have no teardown API by design: the uv handle owns
+# the lifetime and freeing on pipe/close would leave the Lisp REF dangling
+# (use-after-free on double close). One bounded allocation per pipe for the
+# process lifetime.
+leak:valk_builtin_pipe_stdin_open
+leak:valk_builtin_pipe_stdout_open
+leak:valk_builtin_pipe_lsp_reader
+leak:__lsp_reader_alloc_cb
+leak:__pipe_alloc_cb

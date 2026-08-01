@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -11,11 +12,26 @@
 #include "memory.h"
 #include "testing.h"
 
-// Per-message read timeout
-#define MSG_TIMEOUT_MS 5000
+// Sanitizer builds run 5-15x slower and the suite runs in parallel with 72
+// others; scale all deadline guards accordingly. Healthy tests finish fast
+// regardless — these bounds only decide when a hang is declared.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define SLOWDOWN 6
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define SLOWDOWN 6
+#else
+#define SLOWDOWN 1
+#endif
+#else
+#define SLOWDOWN 1
+#endif
 
-// Per-test hard timeout via alarm()
-#define TEST_TIMEOUT_SEC 10
+// Per-message read timeout
+#define MSG_TIMEOUT_MS (5000 * SLOWDOWN)
+
+// Per-test hard timeout via alarm().
+#define TEST_TIMEOUT_SEC (30 * SLOWDOWN)
 
 // ---------------------------------------------------------------------------
 // LSP framed message reader
@@ -39,7 +55,11 @@ static char *lsp_reader_next(lsp_reader_t *r, int timeout_ms) {
     char *header_end = memmem(r->buf, r->len, "\r\n\r\n", 4);
     if (header_end) {
       char *cl = memmem(r->buf, header_end - r->buf, "Content-Length: ", 16);
-      if (!cl) return NULL;
+      if (!cl) {
+        fprintf(stderr, "[lsp-harness] MALFORMED FRAMING, buf[0..%d]: %.*s\n",
+                r->len > 300 ? 300 : r->len, r->len > 300 ? 300 : r->len, r->buf);
+        return NULL;
+      }
       int content_length = atoi(cl + 16);
       if (content_length <= 0) return NULL;
 
@@ -62,9 +82,11 @@ static char *lsp_reader_next(lsp_reader_t *r, int timeout_ms) {
 
     struct pollfd pfd = {.fd = r->fd, .events = POLLIN};
     int ret = poll(&pfd, 1, timeout_ms - (int)elapsed);
+    if (ret < 0 && errno == EINTR) continue;  // sanitizer runtimes use signals
     if (ret <= 0) return NULL;
 
     int n = read(r->fd, r->buf + r->len, (int)sizeof(r->buf) - r->len);
+    if (n < 0 && errno == EINTR) continue;
     if (n <= 0) return NULL;
     r->len += n;
   }
@@ -216,6 +238,15 @@ static lsp_t lsp_spawn_with_stderr(const char *stderr_path) {
 }
 
 static lsp_t lsp_spawn(void) {
+  // Debug aid: divert every spawned server's stderr to a per-pid file.
+  const char *dir = getenv("VALK_LSP_TEST_STDERR_DIR");
+  if (dir) {
+    static int spawn_seq = 0;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/lsp_%d_%d.stderr", dir, getpid(),
+             spawn_seq++);
+    return lsp_spawn_with_stderr(path);
+  }
   return lsp_spawn_with_stderr(NULL);
 }
 
@@ -1382,9 +1413,12 @@ static void test_startup_race(VALK_TEST_ARGS()) {
 
 int main(void) {
   valk_mem_init_malloc();
-  // Set per-test framework timeout to match our alarm-based timeout
-  if (!getenv("VALK_TEST_TIMEOUT_SECONDS"))
-    setenv("VALK_TEST_TIMEOUT_SECONDS", "15", 0);
+  // Set per-test framework timeout above our alarm-based timeout
+  if (!getenv("VALK_TEST_TIMEOUT_SECONDS")) {
+    char tsec[16];
+    snprintf(tsec, sizeof(tsec), "%d", TEST_TIMEOUT_SEC + 15);
+    setenv("VALK_TEST_TIMEOUT_SECONDS", tsec, 0);
+  }
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
   valk_testsuite_add_test(suite, "lsp_initialize_shutdown", test_initialize_shutdown);
   valk_testsuite_add_test(suite, "lsp_didopen_hover", test_didopen_hover);

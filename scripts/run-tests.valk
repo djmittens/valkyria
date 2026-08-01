@@ -312,28 +312,32 @@
       (printf "----------------------------------------------------------------------\n")
       (map (\ {r} {
         (printf "\n--- %s ---\n" (plist/get r :name))
-        (= {stderr} (plist/get r :stderr))
-        (if (> (len stderr) 0)
-          {do
-            (= {lines} (str/split stderr "\n"))
-            (= {n} (len lines))
-            (= {show} (if (> n 50) {50} {n}))
-            (printf "  stderr (%ld lines, last %ld):\n" n show)
-            (= {start} (- n show))
-            (*print-lines-from* lines start n)}
-          {true})
+        (*print-capture* "stdout" (plist/get r :stdout))
+        (*print-capture* "stderr" (plist/get r :stderr))
       }) failed-suites)}
     {true})
 
   (== (len failed-suites) 0)
 })
 
+; start/end are 0-indexed [start, end); nth is 1-indexed.
 (fun {*print-lines-from* lines start end} {
   (if (>= start end)
     {true}
     {do
-      (printf "    %s\n" (nth start lines))
+      (printf "    %s\n" (nth (+ start 1) lines))
       (*print-lines-from* lines (+ start 1) end)})
+})
+
+(fun {*print-capture* label text} {
+  (if (> (len text) 0)
+    {do
+      (= {lines} (str/split text "\n"))
+      (= {n} (len lines))
+      (= {show} (if (> n 50) {50} {n}))
+      (printf "  %s (%ld lines, last %ld):\n" label n show)
+      (*print-lines-from* lines (- n show) n)}
+    {true})
 })
 
 ; --- Main ---
@@ -444,8 +448,9 @@
   (= {wall-frac} (/ (mod (plist/get result :wall-us) 1000000) 100000))
   (printf "[%ld/%ld] %s: %s (%ld.%lds)\n"
     (plist/get suite :idx) total-suites status (plist/get result :name) wall-s wall-frac)
-  ; Return trimmed result: drop stdout/tests (JUnit already written).
-  ; Keep stderr only for failed suites (print-summary needs it).
+  ; Return trimmed result: drop tests (JUnit already written).
+  ; Keep stdout+stderr only for failed suites (print-summary needs them:
+  ; assert failure messages go to the suite's stdout).
   (list :name (plist/get result :name) :kind (plist/get result :kind)
         :passed passed :exit-code (plist/get result :exit-code)
         :wall-us (plist/get result :wall-us)
@@ -453,6 +458,7 @@
         :test-passed (plist/get result :test-passed)
         :test-failed (plist/get result :test-failed)
         :test-skipped (plist/get result :test-skipped)
+        :stdout (if passed {""} {(plist/get result :stdout)})
         :stderr (if passed {""} {(plist/get result :stderr)}))
 }) indexed-suites)))
 (aio/stop aio)

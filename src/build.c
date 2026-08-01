@@ -449,11 +449,27 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   const char *cc = getenv("CC");
   if (!cc || !*cc) cc = "cc";
 
-  char *argv_cc[24];
+  char *argv_cc[26];
   int ai = 0;
   argv_cc[ai++] = (char *)cc;
   argv_cc[ai++] = (char *)"-std=gnu2x";
   argv_cc[ai++] = (char *)"-O1";
+  // Propagate the sanitizers this binary was built with: the produced
+  // executable links the (instrumented) libvalkyria.so next to us, which
+  // fails to link without the matching runtimes. The ASAN build config
+  // pairs address with undefined (see SANITIZE_ADDRESS_FLAGS).
+#if defined(__SANITIZE_ADDRESS__)
+  argv_cc[ai++] = (char *)"-fsanitize=address,undefined";
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+  argv_cc[ai++] = (char *)"-fsanitize=address,undefined";
+#elif __has_feature(thread_sanitizer)
+  argv_cc[ai++] = (char *)"-fsanitize=thread";
+#endif
+#endif
+#if defined(__SANITIZE_THREAD__)
+  argv_cc[ai++] = (char *)"-fsanitize=thread";
+#endif
   argv_cc[ai++] = inc_src;
   argv_cc[ai++] = inc_aio;
   argv_cc[ai++] = inc_sys;

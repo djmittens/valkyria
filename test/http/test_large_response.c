@@ -125,13 +125,18 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   return true;
 }
 
-// Cleanup test context
+// Cleanup test context.
+// Deliberately does NOT destroy the system: the global parse cache
+// (src/builtins_io.c) retains ASTs allocated in this test's GC heap and has
+// no invalidation API, so destroying the heap here makes the next test's
+// (load ...) crash on a stale cache hit when tests share a process.
 static void cleanup_test_context(test_context_t *ctx) {
   if (ctx->sys) {
     valk_aio_stop(ctx->sys);
     valk_aio_wait_for_shutdown(ctx->sys);
+    valk_aio_destroy(ctx->sys);
+    ctx->sys = nullptr;
   }
-  valk_system_destroy(valk_sys);
 }
 
 // Parameterized test for large response handling

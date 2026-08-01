@@ -516,9 +516,11 @@ static void test_concurrent_streams_same_connection(VALK_TEST_ARGS()) {
 
 #define NUM_CONCURRENT 10
   valk_async_handle_t *hreqs[NUM_CONCURRENT];
+  u8 *req_bufs[NUM_CONCURRENT];
 
   for (int i = 0; i < NUM_CONCURRENT; i++) {
     u8 *req_buf = malloc(sizeof(valk_mem_arena_t) + 4096);
+    req_bufs[i] = req_buf;
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 
@@ -538,6 +540,10 @@ static void test_concurrent_streams_same_connection(VALK_TEST_ARGS()) {
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
+
+  for (int i = 0; i < NUM_CONCURRENT; i++) {
+    free(req_bufs[i]);
+  }
 
 #undef NUM_CONCURRENT
   VALK_PASS();
@@ -1235,9 +1241,11 @@ static void test_parallel_requests_same_stream(VALK_TEST_ARGS()) {
 
 #define PARALLEL_REQUESTS 5
   valk_async_handle_t *hreqs[PARALLEL_REQUESTS];
+  u8 *req_bufs[PARALLEL_REQUESTS];
 
   for (int i = 0; i < PARALLEL_REQUESTS; i++) {
     u8 *req_buf = malloc(sizeof(valk_mem_arena_t) + 4096);
+    req_bufs[i] = req_buf;
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
 
@@ -1257,13 +1265,14 @@ static void test_parallel_requests_same_stream(VALK_TEST_ARGS()) {
     
   }
 
-#undef PARALLEL_REQUESTS
-
-  
-  
-
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
+
+  for (int i = 0; i < PARALLEL_REQUESTS; i++) {
+    free(req_bufs[i]);
+  }
+
+#undef PARALLEL_REQUESTS
 
   VALK_PASS();
 }
@@ -2766,16 +2775,18 @@ void test_rapid_client_disconnect_mid_request(VALK_TEST_ARGS()) {
 
   int port = valk_aio_http2_server_get_port_from_ref(result);
 
+  #define RAPID_REQS 5
+  u8 *req_bufs[3][RAPID_REQS] = {0};
   for (int i = 0; i < 3; i++) {
     valk_async_handle_t *hclient = valk_aio_http2_connect(sys, "127.0.0.1", port, "");
     valk_lval_t *client_result = valk_async_handle_await(hclient);
     if (LVAL_TYPE(client_result) != LVAL_ERR) {
       valk_aio_http2_client *client = client_result->ref.ptr;
 
-      #define RAPID_REQS 5
       valk_async_handle_t *hreqs[RAPID_REQS];
       for (int r = 0; r < RAPID_REQS; r++) {
         u8 *req_buf = malloc(sizeof(valk_mem_arena_t) + 4096);
+        req_bufs[i][r] = req_buf;
         valk_mem_arena_t *req_arena = (void *)req_buf;
         valk_mem_arena_init(req_arena, 4096);
         valk_http2_request_t *req = create_request(req_arena, "GET", "/rapid");
@@ -2785,7 +2796,6 @@ void test_rapid_client_disconnect_mid_request(VALK_TEST_ARGS()) {
       for (int r = 0; r < RAPID_REQS; r++) {
         (void)valk_async_handle_await(hreqs[r]);
       }
-      #undef RAPID_REQS
     }
   }
 
@@ -2794,6 +2804,13 @@ void test_rapid_client_disconnect_mid_request(VALK_TEST_ARGS()) {
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
+
+  for (int i = 0; i < 3; i++) {
+    for (int r = 0; r < RAPID_REQS; r++) {
+      free(req_bufs[i][r]);
+    }
+  }
+  #undef RAPID_REQS
 
   VALK_PASS();
 }
@@ -2826,8 +2843,10 @@ void test_multiple_parallel_streams_then_disconnect(VALK_TEST_ARGS()) {
 
   #define PARALLEL_STREAMS 10
   valk_async_handle_t *hreqs[PARALLEL_STREAMS];
+  u8 *req_bufs[PARALLEL_STREAMS];
   for (int i = 0; i < PARALLEL_STREAMS; i++) {
     u8 *req_buf = malloc(sizeof(valk_mem_arena_t) + 4096);
+    req_bufs[i] = req_buf;
     valk_mem_arena_t *req_arena = (void *)req_buf;
     valk_mem_arena_init(req_arena, 4096);
     char path[32];
@@ -2840,16 +2859,17 @@ void test_multiple_parallel_streams_then_disconnect(VALK_TEST_ARGS()) {
     valk_lval_t *res = valk_async_handle_await(hreqs[i]);
     ASSERT_TRUE(LVAL_TYPE(res) != LVAL_ERR);
   }
-  #undef PARALLEL_STREAMS
-
-  
-  
 
   usleep(50000);
 
 
   valk_aio_stop(sys);
   valk_aio_wait_for_shutdown(sys);
+
+  for (int i = 0; i < PARALLEL_STREAMS; i++) {
+    free(req_bufs[i]);
+  }
+  #undef PARALLEL_STREAMS
 
   VALK_PASS();
 }

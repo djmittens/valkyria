@@ -25,6 +25,19 @@ static valk_lval_t *eval_str(valk_lenv_t *env, const char *code) {
   return valk_lval_eval(env, parsed);
 }
 
+static void destroy_test_env(valk_lenv_t *env) {
+  valk_lval_t *ref = eval_str(env, "(do sys)");
+  if (LVAL_TYPE(ref) == LVAL_REF) {
+    valk_aio_system_t *aio = ref->ref.ptr;
+    valk_aio_stop(aio);
+    valk_aio_wait_for_shutdown(aio);
+    valk_aio_destroy(aio);
+  }
+  valk_thread_ctx.root_env = nullptr;
+  valk_gc_thread_unregister();
+  valk_system_destroy(valk_sys);
+}
+
 static void test_pipe_stdin_open_close(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -36,13 +49,13 @@ static void test_pipe_stdin_open_close(VALK_TEST_ARGS()) {
 
   valk_lenv_t *env = create_test_env();
   eval_str(env, "(= {sys} (aio/await (aio/start)))");
-  valk_lval_t *r = eval_str(env, "(pipe/stdin-open sys)");
+  eval_str(env, "(= {in} (pipe/stdin-open sys))");
+  valk_lval_t *r = eval_str(env, "(do in)");
   ASSERT_LVAL_TYPE(r, LVAL_REF);
 
-  eval_str(env, "(= {in} (pipe/stdin-open sys))");
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -77,7 +90,7 @@ static void test_pipe_stdout_open_write(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close out)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   dup2(saved, 1);
   close(saved);
@@ -111,7 +124,7 @@ static void test_pipe_on_data_callback(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -153,7 +166,7 @@ static void test_lsp_reader_single_message(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -190,7 +203,7 @@ static void test_lsp_reader_multiple_messages(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -230,7 +243,7 @@ static void test_lsp_reader_partial_data(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -267,7 +280,7 @@ static void test_lsp_reader_no_content_length(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -304,7 +317,7 @@ static void test_lsp_reader_zero_content_length(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -326,7 +339,7 @@ static void test_aio_dispatch_basic(VALK_TEST_ARGS()) {
   valk_lval_t *result = eval_str(env, "(+ d-result 0)");
   ASSERT_LVAL_NUM(result, 142);
 
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
   VALK_PASS();
 }
 
@@ -344,7 +357,7 @@ static void test_aio_dispatch_single_loop(VALK_TEST_ARGS()) {
   valk_lval_t *result = eval_str(env, "(+ d-result 0)");
   ASSERT_LVAL_NUM(result, 42);
 
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
   VALK_PASS();
 }
 
@@ -383,7 +396,7 @@ static void test_pipe_arg_validation(VALK_TEST_ARGS()) {
   r = eval_str(env, "(aio/dispatch sys (\\ {x} {x}) 1 42)");
   ASSERT_LVAL_ERROR(r);
 
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
   VALK_PASS();
 }
 
@@ -411,7 +424,7 @@ static void test_pipe_write_type_validation(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -461,7 +474,7 @@ static void test_lsp_reader_large_message(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -489,7 +502,7 @@ static void test_pipe_on_data_no_callback(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -520,7 +533,7 @@ static void test_lsp_reader_handler_error(VALK_TEST_ARGS()) {
 
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 50))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
@@ -538,7 +551,7 @@ static void test_dispatch_callback_error(VALK_TEST_ARGS()) {
 
   eval_str(env, "(aio/await (aio/sleep sys 300))");
 
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
   VALK_PASS();
 }
 
@@ -558,7 +571,7 @@ static void test_pipe_close_then_close(VALK_TEST_ARGS()) {
   eval_str(env, "(pipe/on-data in (\\ {chunk} {(def {cb-count} (+ cb-count 1))}))");
   eval_str(env, "(pipe/close in)");
   eval_str(env, "(aio/await (aio/sleep sys 100))");
-  eval_str(env, "(aio/stop sys)");
+  destroy_test_env(env);
 
   close(pfd[1]);
   dup2(saved, 0);
