@@ -82,66 +82,6 @@ void valk_lenv_free(valk_lenv_t* env) {
   free(env);
 }
 
-valk_lenv_t* valk_lenv_copy(valk_lenv_t* env) {
-  if (env == nullptr) {
-    return nullptr;
-  }
-  if (env->symbols.items == nullptr || env->vals.items == nullptr) {
-    return nullptr;
-  }
-
-  valk_lenv_t* res = valk_mem_alloc(sizeof(valk_lenv_t));
-  atomic_store(&res->flags, 0);
-  res->parent = nullptr;
-  res->allocator = valk_thread_ctx.allocator;
-  
-  u64 capacity = 16;
-  u64 count = 0;
-  res->symbols.items = valk_mem_alloc(sizeof(char*) * capacity);
-  res->vals.items = valk_mem_alloc(sizeof(valk_lval_t*) * capacity);
-  res->symbols.capacity = capacity;
-  res->vals.capacity = capacity;
-
-  for (valk_lenv_t* e = env; e != nullptr; e = e->parent) {
-    if (e->symbols.items == nullptr || e->vals.items == nullptr) break;
-    for (u64 i = 0; i < e->symbols.count; i++) {
-      if (e->symbols.items[i] == nullptr) continue;
-      
-      bool masked = false;
-      for (u64 j = 0; j < count; j++) {
-        if (res->symbols.items[j] && strcmp(e->symbols.items[i], res->symbols.items[j]) == 0) {
-          masked = true;
-          break;
-        }
-      }
-      
-      if (!masked) {
-        if (count >= capacity) {
-          u64 new_capacity = capacity * 2;
-          char** new_symbols = valk_mem_alloc(sizeof(char*) * new_capacity);
-          valk_lval_t** new_vals = valk_mem_alloc(sizeof(valk_lval_t*) * new_capacity);
-          memcpy(new_symbols, res->symbols.items, sizeof(char*) * count);
-          memcpy(new_vals, res->vals.items, sizeof(valk_lval_t*) * count);
-          res->symbols.items = new_symbols;
-          res->vals.items = new_vals;
-          capacity = new_capacity;
-          res->symbols.capacity = capacity;
-          res->vals.capacity = capacity;
-        }
-        
-        u64 slen = strlen(e->symbols.items[i]);
-        res->symbols.items[count] = valk_mem_alloc(slen + 1);
-        memcpy(res->symbols.items[count], e->symbols.items[i], slen + 1);
-        res->vals.items[count] = e->vals.items[i];
-        count++;
-      }
-    }
-  }
-
-  res->symbols.count = count;
-  res->vals.count = count;
-  return res;
-}
 // LCOV_EXCL_BR_STOP
 
 // LCOV_EXCL_BR_START - env lookup has defensive null checks for internal consistency
@@ -208,6 +148,26 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     VALK_DEBUG("env put: %s", key->str);
   }
   valk_lval_t* safe_val = __lenv_ensure_safe_val(env, val);
+
+  // INVARIANT: envs binding GC-heap values must live in GC-managed memory.
+  // The marker cannot walk an env block in malloc/foreign memory (mark_env
+  // stops there — no mark bit for dedup, unbounded recursion on cyclic
+  // closures), so a heap value bound in one is collected while live and
+  // corrupts silently at the next collection. Fail loudly at the write
+  // instead. Event-loop threads must eval under the scratch discipline
+  // (__run_task_in_scratch, pipe read callbacks) to keep this invariant.
+  {
+    valk_mem_allocator_t *ea = (valk_mem_allocator_t *)env->allocator;
+    if (ea && ea->type == VALK_ALLOC_MALLOC && safe_val &&
+        LVAL_ALLOC(safe_val) == LVAL_ALLOC_HEAP &&
+        !(safe_val->flags & LVAL_FLAG_IMMORTAL) &&
+        valk_thread_ctx.heap != NULL) {
+      VALK_ASSERT(false,
+                  "GC-heap value '%s' bound into malloc-backed env %p — "
+                  "unmarkable, will be collected while live",
+                  key->str ? key->str : "?", (void *)env);
+    }
+  }
 
   if (env->cmap) {
     // Concurrent (shared global) env: striped-lock map handles overwrite,

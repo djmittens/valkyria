@@ -72,9 +72,25 @@ static void __pipe_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
       if (pipe->callback_set) {
         valk_lval_t *cb = valk_handle_resolve(&valk_sys->handle_table, pipe->callback_handle);
         if (cb) {
-          valk_lval_t *args = valk_lval_cons(valk_lval_nil(), valk_lval_nil());
-          valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
-          (void)result;
+          // Evaluate under the loop scratch arena (same discipline as
+          // __run_task_in_scratch). Event-loop threads default to the
+          // malloc allocator; Lisp values allocated there are invisible
+          // to the GC marker (mark_env stops at non-heap env blocks)
+          // while still referencing GC-heap values, which then die at
+          // the first collection.
+          valk_mem_arena_t *scratch = valk_thread_ctx.scratch;
+          if (scratch) {
+            VALK_WITH_ALLOC((void *)scratch) {
+              valk_lval_t *args = valk_lval_cons(valk_lval_nil(), valk_lval_nil());
+              valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
+              (void)result;
+            }
+            valk_mem_arena_reset(scratch);
+          } else {
+            valk_lval_t *args = valk_lval_cons(valk_lval_nil(), valk_lval_nil());
+            valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
+            (void)result;
+          }
         }
       }
     }
@@ -95,11 +111,23 @@ static void __pipe_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
       char *copy = malloc(nread + 1);
       memcpy(copy, buf->base, nread);
       copy[nread] = '\0';
-      valk_lval_t *chunk = valk_lval_str(copy);
+      // Scratch discipline: see EOF branch above.
+      valk_mem_arena_t *scratch = valk_thread_ctx.scratch;
+      if (scratch) {
+        VALK_WITH_ALLOC((void *)scratch) {
+          valk_lval_t *chunk = valk_lval_str(copy);
+          valk_lval_t *args = valk_lval_cons(chunk, valk_lval_nil());
+          valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
+          (void)result;
+        }
+        valk_mem_arena_reset(scratch);
+      } else {
+        valk_lval_t *chunk = valk_lval_str(copy);
+        valk_lval_t *args = valk_lval_cons(chunk, valk_lval_nil());
+        valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
+        (void)result;
+      }
       free(copy);
-      valk_lval_t *args = valk_lval_cons(chunk, valk_lval_nil());
-      valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
-      (void)result;
     }
   }
 
@@ -335,11 +363,32 @@ static void __lsp_reader_try_parse(valk_lsp_reader_t *reader) {
       valk_lval_t *cb = valk_handle_resolve(&valk_sys->handle_table, reader->callback_handle);
       if (cb) {
       // LCOV_EXCL_STOP
-      valk_lval_t *body_str = valk_lval_str(reader->buf);
-        valk_lval_t *args = valk_lval_cons(body_str, valk_lval_nil());
-        valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
-        if (LVAL_TYPE(result) == LVAL_ERR) {
-          fprintf(stderr, "[valk-lsp] handler error: %s\n", result->str);
+        // Evaluate each message under the loop scratch arena, resetting it
+        // afterwards — the same discipline as __run_task_in_scratch. Without
+        // this the message handler evaluates with the loop thread's default
+        // malloc allocator: closures/envs it creates live outside the GC
+        // heap where mark_env cannot traverse them, so any GC-heap values
+        // they capture are missed by the marker and collected while live
+        // (first observed as "Cannot call non-function: UNDEFINED" dispatch
+        // failures immediately after the first large GC cycle).
+        valk_mem_arena_t *scratch = valk_thread_ctx.scratch;
+        if (scratch) {
+          VALK_WITH_ALLOC((void *)scratch) {
+            valk_lval_t *body_str = valk_lval_str(reader->buf);
+            valk_lval_t *args = valk_lval_cons(body_str, valk_lval_nil());
+            valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
+            if (LVAL_TYPE(result) == LVAL_ERR) {
+              fprintf(stderr, "[valk-lsp] handler error: %s\n", result->str);
+            }
+          }
+          valk_mem_arena_reset(scratch);
+        } else {
+          valk_lval_t *body_str = valk_lval_str(reader->buf);
+          valk_lval_t *args = valk_lval_cons(body_str, valk_lval_nil());
+          valk_lval_t *result = valk_lval_eval_call(cb->fun.env, cb, args);
+          if (LVAL_TYPE(result) == LVAL_ERR) {
+            fprintf(stderr, "[valk-lsp] handler error: %s\n", result->str);
+          }
         }
       }
 
@@ -385,7 +434,9 @@ static void __lsp_reader_read_cb(uv_stream_t *stream, ssize_t nread, const uv_bu
   }
   // LCOV_EXCL_STOP
 
-  sz needed = reader->buf_len + nread;
+  // +1: __lsp_reader_try_parse temporarily NUL-terminates the body at
+  // buf[content_length], which may sit one past the filled region.
+  sz needed = reader->buf_len + nread + 1;
   if (needed > reader->buf_cap) {
     while (reader->buf_cap < needed) reader->buf_cap *= 2;
     reader->buf = realloc(reader->buf, reader->buf_cap);

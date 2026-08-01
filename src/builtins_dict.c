@@ -1,7 +1,39 @@
 #include "builtins_internal.h"
 #include "dict.h"
 #include "gc.h"
+#include <pthread.h>
+#include <sched.h>
 #include <string.h>
+
+// Dicts bound in the shared global env are read and mutated from multiple
+// threads (LSP worker pools). All builtin dict operations on an lval are
+// serialized through a striped lock keyed by the lval pointer, which is
+// stable (the GC heap is non-moving) and shared by every accessor of the
+// same dict binding. dict_grow frees the old block, so reads must be
+// excluded during mutation, not just writes.
+//
+// Acquisition polls the GC safepoint instead of blocking: a lock holder may
+// trigger a synchronous STW collection while allocating, and the coordinator
+// waits for every registered thread to reach a safepoint. A waiter blocked
+// in pthread_mutex_lock would deadlock that rendezvous.
+#define DICT_LOCK_STRIPES 64
+static pthread_mutex_t dict_locks[DICT_LOCK_STRIPES];
+static pthread_once_t dict_locks_once = PTHREAD_ONCE_INIT;
+
+static void dict_locks_init(void) {
+  for (u32 i = 0; i < DICT_LOCK_STRIPES; i++)
+    pthread_mutex_init(&dict_locks[i], nullptr);
+}
+
+static pthread_mutex_t *dict_lock(valk_lval_t *d) {
+  pthread_once(&dict_locks_once, dict_locks_init);
+  pthread_mutex_t *m = &dict_locks[((uintptr_t)d >> 6) % DICT_LOCK_STRIPES];
+  while (pthread_mutex_trylock(m) != 0) {  // LCOV_EXCL_BR_LINE - contention timing
+    VALK_GC_SAFE_POINT();  // LCOV_EXCL_LINE - only taken under cross-thread contention
+    sched_yield();  // LCOV_EXCL_LINE
+  }
+  return m;
+}
 
 // ==========================================================================
 // Flat, single-allocation hash map with separate chaining.
@@ -112,13 +144,10 @@ static valk_dict_t *dict_grow(valk_dict_t *d, u64 need_str) {
   new_cells[new_cap - 1].next = DICT_EMPTY;
   nd->free_head = new_used < new_cap ? new_used : DICT_EMPTY;
 
-  if (on_heap) {
-    VALK_WITH_ALLOC((void *)valk_thread_ctx.heap) {
-      valk_mem_free(d);
-    }
-  } else {
-    valk_mem_free(d);
-  }
+  // The old block is NOT freed here. Freeing it immediately (munmap for
+  // large blocks) turns any aliasing lval that still points at it into a
+  // use-after-free. The GC reclaims it once no lval references it; until
+  // then stale readers see a consistent old snapshot.
   return nd;
 }
 
@@ -272,9 +301,15 @@ static valk_lval_t *valk_builtin_dict_put(valk_lenv_t *e, valk_lval_t *a) {
   const char *k = dict_key_str(key);
   LVAL_ASSERT(a, k != NULL, "dict/put! key must be String or Symbol");
 
+  pthread_mutex_t *lock = dict_lock(d);
   valk_dict_t *dp = d->dict.data;
   dict_put(&dp, k);
   d->dict.data = dp;
+  pthread_mutex_unlock(lock);
+  // Write barrier: an image-baked (immortal) dict mutated at runtime now
+  // references GC-heap data (grown block, interned strings). The marker
+  // skips immortal lvals, so register it in the remembered set.
+  if (d->flags & LVAL_FLAG_IMMORTAL) valk_gc_remember_immortal(d);
   return d;
 }
 
@@ -289,9 +324,12 @@ static valk_lval_t *valk_builtin_dict_set(valk_lenv_t *e, valk_lval_t *a) {
   const char *k = dict_key_str(key);
   LVAL_ASSERT(a, k != NULL, "dict/set! key must be String or Symbol");
 
+  pthread_mutex_t *lock = dict_lock(d);
   valk_dict_t *dp = d->dict.data;
   dict_set(&dp, k, val);
   d->dict.data = dp;
+  pthread_mutex_unlock(lock);
+  if (d->flags & LVAL_FLAG_IMMORTAL) valk_gc_remember_immortal(d);
   return d;
 }
 
@@ -307,7 +345,9 @@ static valk_lval_t *valk_builtin_dict_get(valk_lenv_t *e, valk_lval_t *a) {
   const char *k = dict_key_str(key);
   LVAL_ASSERT(a, k != NULL, "dict/get key must be String or Symbol");
 
+  pthread_mutex_t *lock = dict_lock(d);
   valk_lval_t *result = dict_get(d->dict.data, k);
+  pthread_mutex_unlock(lock);
   if (result != nullptr) return result;
 
   if (n == 3) return valk_lval_list_nth(a, 2);
@@ -324,7 +364,10 @@ static valk_lval_t *valk_builtin_dict_remove(valk_lenv_t *e, valk_lval_t *a) {
   const char *k = dict_key_str(key);
   LVAL_ASSERT(a, k != NULL, "dict/remove! key must be String or Symbol");
 
+  pthread_mutex_t *lock = dict_lock(d);
   dict_remove(d->dict.data, k);
+  pthread_mutex_unlock(lock);
+  if (d->flags & LVAL_FLAG_IMMORTAL) valk_gc_remember_immortal(d);
   return d;
 }
 
@@ -338,7 +381,10 @@ static valk_lval_t *valk_builtin_dict_has(valk_lenv_t *e, valk_lval_t *a) {
   const char *k = dict_key_str(key);
   LVAL_ASSERT(a, k != NULL, "dict/has? key must be String or Symbol");
 
-  return valk_lval_num(dict_has(d->dict.data, k) ? 1 : 0);
+  pthread_mutex_t *lock = dict_lock(d);
+  bool has = dict_has(d->dict.data, k);
+  pthread_mutex_unlock(lock);
+  return valk_lval_num(has ? 1 : 0);
 }
 
 static valk_lval_t *valk_builtin_dict_from_keys(valk_lenv_t *e, valk_lval_t *a) {
@@ -370,7 +416,10 @@ static valk_lval_t *valk_builtin_dict_count(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *d = valk_lval_list_nth(a, 0);
   DICT_ASSERT(a, d);
 
-  return valk_lval_num((long)d->dict.data->count);
+  pthread_mutex_t *lock = dict_lock(d);
+  long count = (long)d->dict.data->count;
+  pthread_mutex_unlock(lock);
+  return valk_lval_num(count);
 }
 
 static valk_lval_t *valk_builtin_dict_keys(valk_lenv_t *e, valk_lval_t *a) {
@@ -379,6 +428,7 @@ static valk_lval_t *valk_builtin_dict_keys(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *d_lval = valk_lval_list_nth(a, 0);
   DICT_ASSERT(a, d_lval);
 
+  pthread_mutex_t *lock = dict_lock(d_lval);
   valk_dict_t *d = d_lval->dict.data;
   valk_dict_cell_t *cells = dict_cells(d);
   u32 *buckets = dict_buckets(d);
@@ -391,6 +441,7 @@ static valk_lval_t *valk_builtin_dict_keys(valk_lenv_t *e, valk_lval_t *a) {
       ci = cells[ci].next;
     }
   }
+  pthread_mutex_unlock(lock);
 
   return result;
 }
@@ -401,6 +452,7 @@ static valk_lval_t *valk_builtin_dict_values(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *d_lval = valk_lval_list_nth(a, 0);
   DICT_ASSERT(a, d_lval);
 
+  pthread_mutex_t *lock = dict_lock(d_lval);
   valk_dict_t *d = d_lval->dict.data;
   valk_dict_cell_t *cells = dict_cells(d);
   u32 *buckets = dict_buckets(d);
@@ -414,6 +466,7 @@ static valk_lval_t *valk_builtin_dict_values(valk_lenv_t *e, valk_lval_t *a) {
       ci = cells[ci].next;
     }
   }
+  pthread_mutex_unlock(lock);
 
   return result;
 }
@@ -424,6 +477,7 @@ static valk_lval_t *valk_builtin_dict_entries(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *d_lval = valk_lval_list_nth(a, 0);
   DICT_ASSERT(a, d_lval);
 
+  pthread_mutex_t *lock = dict_lock(d_lval);
   valk_dict_t *d = d_lval->dict.data;
   valk_dict_cell_t *cells = dict_cells(d);
   u32 *buckets = dict_buckets(d);
@@ -440,6 +494,7 @@ static valk_lval_t *valk_builtin_dict_entries(valk_lenv_t *e, valk_lval_t *a) {
       ci = cells[ci].next;
     }
   }
+  pthread_mutex_unlock(lock);
 
   return result;
 }

@@ -328,26 +328,6 @@ void test_lenv_def(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_lenv_copy(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_lenv_t *orig = valk_lenv_empty();
-  valk_lval_t *key = valk_lval_sym("copy-key");
-  valk_lval_t *val = valk_lval_num(555);
-  valk_lenv_put(orig, key, val);
-
-  valk_lenv_t *copy = valk_lenv_copy(orig);
-  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
-  VALK_TEST_ASSERT(copy != orig, "copy should be different pointer");
-
-  valk_lval_t *result = valk_lenv_get(copy, key);
-  VALK_TEST_ASSERT(result != nullptr, "Should find value in copy");
-  VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Result should be NUM");
-  VALK_TEST_ASSERT(result->num == 555, "Value should be 555");
-
-  VALK_PASS();
-}
-
 void test_lval_type_name(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -987,55 +967,6 @@ void test_str_join_single(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(strcmp(result, "only") == 0, "single join should work");
 
   valk_mem_free(result);
-
-  VALK_PASS();
-}
-
-void test_lenv_copy_null(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_lenv_t *copy = valk_lenv_copy(nullptr);
-  VALK_TEST_ASSERT(copy == nullptr, "copy of nullptr env should be nullptr");
-
-  VALK_PASS();
-}
-
-void test_lenv_copy_with_parent_chain(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_lenv_t *grandparent = valk_lenv_empty();
-  valk_lenv_t *parent = valk_lenv_empty();
-  valk_lenv_t *child = valk_lenv_empty();
-  parent->parent = grandparent;
-  child->parent = parent;
-
-  valk_lval_t *gp_key = valk_lval_sym("gp-val");
-  valk_lval_t *gp_val = valk_lval_num(111);
-  valk_lenv_put(grandparent, gp_key, gp_val);
-
-  valk_lval_t *p_key = valk_lval_sym("p-val");
-  valk_lval_t *p_val = valk_lval_num(222);
-  valk_lenv_put(parent, p_key, p_val);
-
-  valk_lval_t *c_key = valk_lval_sym("c-val");
-  valk_lval_t *c_val = valk_lval_num(333);
-  valk_lenv_put(child, c_key, c_val);
-
-  valk_lenv_t *copy = valk_lenv_copy(child);
-  VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
-  VALK_TEST_ASSERT(copy->parent == nullptr, "copy should have flattened parent");
-
-  valk_lval_t *res_gp = valk_lenv_get(copy, gp_key);
-  VALK_TEST_ASSERT(LVAL_TYPE(res_gp) == LVAL_NUM, "Should find grandparent value");
-  VALK_TEST_ASSERT(res_gp->num == 111, "grandparent value should be correct");
-
-  valk_lval_t *res_p = valk_lenv_get(copy, p_key);
-  VALK_TEST_ASSERT(LVAL_TYPE(res_p) == LVAL_NUM, "Should find parent value");
-  VALK_TEST_ASSERT(res_p->num == 222, "parent value should be correct");
-
-  valk_lval_t *res_c = valk_lenv_get(copy, c_key);
-  VALK_TEST_ASSERT(LVAL_TYPE(res_c) == LVAL_NUM, "Should find child value");
-  VALK_TEST_ASSERT(res_c->num == 333, "child value should be correct");
 
   VALK_PASS();
 }
@@ -1839,35 +1770,6 @@ void test_lenv_get_null_env(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
-void test_lenv_copy_with_many_symbols(VALK_TEST_ARGS()) {
-  VALK_TEST();
-
-  valk_lenv_t *env = valk_lenv_empty();
-  for (int i = 0; i < 30; i++) {
-    char name[32];
-    snprintf(name, sizeof(name), "sym-%d", i);
-    valk_lval_t *key = valk_lval_sym(name);
-    valk_lval_t *val = valk_lval_num(i * 10);
-    valk_lenv_put(env, key, val);
-  }
-
-  valk_lenv_t *copy = valk_lenv_copy(env);
-  VALK_TEST_ASSERT(copy != nullptr, "Should copy env");
-  VALK_TEST_ASSERT(copy->symbols.count == 30, "Copy should have 30 symbols");
-
-  for (int i = 0; i < 30; i++) {
-    char name[32];
-    snprintf(name, sizeof(name), "sym-%d", i);
-    valk_lval_t *key = valk_lval_sym(name);
-    valk_lval_t *result = valk_lenv_get(copy, key);
-    VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Should find NUM");
-    VALK_TEST_ASSERT(result->num == i * 10, "Value should match");
-  }
-
-  valk_lenv_free(env);
-  VALK_PASS();
-}
-
 void test_lval_read_very_long_list(VALK_TEST_ARGS()) {
   VALK_TEST();
 
@@ -1908,9 +1810,7 @@ void test_lenv_masked_parent_symbol(VALK_TEST_ARGS()) {
   child->parent = parent;
   valk_lenv_put(child, key, valk_lval_num(20));
 
-  valk_lenv_t *copy = valk_lenv_copy(child);
-
-  valk_lval_t *result = valk_lenv_get(copy, key);
+  valk_lval_t *result = valk_lenv_get(child, key);
   VALK_TEST_ASSERT(LVAL_TYPE(result) == LVAL_NUM, "Should find NUM");
   VALK_TEST_ASSERT(result->num == 20, "Should be child value");
 
@@ -2184,7 +2084,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lenv_put_get", test_lenv_put_get);
   valk_testsuite_add_test(suite, "test_lenv_get_not_found", test_lenv_get_not_found);
   valk_testsuite_add_test(suite, "test_lenv_def", test_lenv_def);
-  valk_testsuite_add_test(suite, "test_lenv_copy", test_lenv_copy);
   valk_testsuite_add_test(suite, "test_lval_type_name", test_lval_type_name);
   valk_testsuite_add_test(suite, "test_lval_large_num", test_lval_large_num);
   valk_testsuite_add_test(suite, "test_lval_long_str", test_lval_long_str);
@@ -2233,8 +2132,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_ltype_name_all_types", test_ltype_name_all_types);
   valk_testsuite_add_test(suite, "test_str_join", test_str_join);
   valk_testsuite_add_test(suite, "test_str_join_single", test_str_join_single);
-  valk_testsuite_add_test(suite, "test_lenv_copy_null", test_lenv_copy_null);
-  valk_testsuite_add_test(suite, "test_lenv_copy_with_parent_chain", test_lenv_copy_with_parent_chain);
   valk_testsuite_add_test(suite, "test_lval_str_n_zero_length", test_lval_str_n_zero_length);
   valk_testsuite_add_test(suite, "test_lval_print_undefined", test_lval_print_undefined);
   valk_testsuite_add_test(suite, "test_lval_print_ref", test_lval_print_ref);
@@ -2286,7 +2183,6 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_lval_pop_deep_index", test_lval_pop_deep_index);
   valk_testsuite_add_test(suite, "test_lval_pop_last_element", test_lval_pop_last_element);
   valk_testsuite_add_test(suite, "test_lenv_get_null_env", test_lenv_get_null_env);
-  valk_testsuite_add_test(suite, "test_lenv_copy_with_many_symbols", test_lenv_copy_with_many_symbols);
   valk_testsuite_add_test(suite, "test_lval_read_very_long_list", test_lval_read_very_long_list);
   valk_testsuite_add_test(suite, "test_lval_print_nil", test_lval_print_nil);
   valk_testsuite_add_test(suite, "test_lenv_masked_parent_symbol", test_lenv_masked_parent_symbol);

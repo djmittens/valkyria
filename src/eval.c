@@ -287,9 +287,11 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
   }
 
   u32 depth = atomic_fetch_add(&g_eval_metrics.stack_depth, 1) + 1;
-  if (depth > g_eval_metrics.stack_depth_max) {
-    g_eval_metrics.stack_depth_max = depth;
-  }
+  u32 seen_max = atomic_load_explicit(&g_eval_metrics.stack_depth_max,
+                                       memory_order_relaxed);
+  while (depth > seen_max &&
+         !atomic_compare_exchange_weak(&g_eval_metrics.stack_depth_max,
+                                        &seen_max, depth)) {}
 
   if (func->fun.builtin) {
     atomic_fetch_add(&g_eval_metrics.builtin_calls, 1);

@@ -1,13 +1,18 @@
 #include "log.h"
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #if !defined(_WIN32)
 #include <strings.h>
 #endif
 
-static valk_log_level_e __valk_log_level = VALK_LOG_WARN;
-static int __valk_log_inited = 0;
+// Read on every log-site check from every thread; initialized lazily from
+// any thread. Atomic level + pthread_once keeps the fast path a single
+// relaxed load with no data race.
+static _Atomic valk_log_level_e __valk_log_level = VALK_LOG_WARN;
+static pthread_once_t __valk_log_once = PTHREAD_ONCE_INIT;
 
 valk_log_level_e valk_log_level_from_string(const char *s) {
   if (!s) return VALK_LOG_WARN;
@@ -19,26 +24,29 @@ valk_log_level_e valk_log_level_from_string(const char *s) {
   return VALK_LOG_WARN;
 }
 
-void valk_log_init(void) {
-  if (__valk_log_inited) return;
+static void __valk_log_init_once(void) {
   const char *env = getenv("VALK_LOG");
-  __valk_log_level = valk_log_level_from_string(env);
-  __valk_log_inited = 1;
+  atomic_store_explicit(&__valk_log_level, valk_log_level_from_string(env),
+                        memory_order_relaxed);
+}
+
+void valk_log_init(void) {
+  pthread_once(&__valk_log_once, __valk_log_init_once);
 }
 
 void valk_log_set_level(valk_log_level_e lvl) {
   valk_log_init();
-  __valk_log_level = lvl;
+  atomic_store_explicit(&__valk_log_level, lvl, memory_order_relaxed);
 }
 
 valk_log_level_e valk_log_get_level(void) {
   valk_log_init();
-  return __valk_log_level;
+  return atomic_load_explicit(&__valk_log_level, memory_order_relaxed);
 }
 
 int valk_log_would_log(valk_log_level_e lvl) {
   valk_log_init();
-  return lvl <= __valk_log_level;
+  return lvl <= atomic_load_explicit(&__valk_log_level, memory_order_relaxed);
 }
 
 static const char *lvl_name(valk_log_level_e lvl) {

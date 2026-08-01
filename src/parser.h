@@ -317,8 +317,6 @@ void valk_lenv_make_concurrent(valk_lenv_t *env);
 u64 valk_lenv_snapshot(valk_lenv_t *env, char ***out_names,
                        valk_lval_t ***out_vals);
 //// END LEnv Constructors ////
-valk_lenv_t *valk_lenv_copy(valk_lenv_t *env);
-
 valk_lval_t *valk_lenv_get(valk_lenv_t *env, valk_lval_t *key);
 
 void valk_lenv_put(valk_lenv_t *env, valk_lval_t *key, valk_lval_t *val);
@@ -349,7 +347,7 @@ typedef struct {
   _Atomic u64 function_calls;     // User-defined function invocations
   _Atomic u64 builtin_calls;      // Builtin function invocations
   _Atomic u32 stack_depth;        // Current call stack depth
-  u32 stack_depth_max;            // Peak call stack depth ever reached
+  _Atomic u32 stack_depth_max;    // Peak call stack depth ever reached
   _Atomic u64 closures_created;   // Lambda closures created
   _Atomic u64 env_lookups;        // Symbol resolution lookups
 } valk_eval_metrics_t;
