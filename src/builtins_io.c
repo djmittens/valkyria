@@ -1,5 +1,9 @@
 #include "builtins_internal.h"
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
@@ -16,6 +20,38 @@
 #include "type_env.h"
 
 extern void valk_register_file_builtins(valk_lenv_t *env);
+
+static char load_root[PATH_MAX];
+static bool load_root_ok = false;
+static pthread_once_t load_root_once = PTHREAD_ONCE_INIT;
+
+static void load_root_init(void) {
+  char buf[PATH_MAX];
+#ifdef __APPLE__
+  uint32_t bufsize = sizeof(buf);
+  if (_NSGetExecutablePath(buf, &bufsize) != 0) return;
+#else
+  ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+  if (n <= 0) return; // LCOV_EXCL_LINE
+  buf[n] = 0;
+#endif
+  char *slash = strrchr(buf, '/');
+  if (!slash) return; // LCOV_EXCL_LINE
+  *slash = 0;
+  char joined[PATH_MAX + 4];
+  snprintf(joined, sizeof(joined), "%s/..", buf);
+  load_root_ok = realpath(joined, load_root) != NULL;
+}
+
+static bool load_path_resolve(const char *path, char *resolved) {
+  if (realpath(path, resolved)) return true;
+  if (path[0] == '/') return false;
+  pthread_once(&load_root_once, load_root_init);
+  if (!load_root_ok) return false; // LCOV_EXCL_LINE
+  char joined[PATH_MAX * 2];
+  snprintf(joined, sizeof(joined), "%s/%s", load_root, path);
+  return realpath(joined, resolved) != NULL;
+}
 
 #define MODULE_CACHE_MAX 512
 #define MODULE_STATE_LOADING 1
@@ -201,6 +237,11 @@ static valk_lval_t *valk_builtin_set_module_prefix(valk_lenv_t *e,
 // via pop/rewrite). Returns the last form's value or the first error.
 static valk_lval_t *eval_loaded_ast(valk_lenv_t *target_env,
                                     valk_lval_t *ast) {
+  // The remaining AST is referenced only by this C frame while each
+  // top-level form is evaluated (and the loop below explicitly collects
+  // between forms) — without a root the collector sweeps the not-yet-
+  // evaluated tail of the file mid-load.
+  VALK_GC_ROOT(ast);
   // Pass 1: expand macros and eval macro defs into target_env. Macros and
   // regular defs live in the same env now, so (macro ...) just evals like
   // any other top-level form. A top-level `(module X)` macro here sets
@@ -237,6 +278,9 @@ static valk_lval_t *eval_loaded_ast(valk_lenv_t *target_env,
   valk_lval_t *last = nullptr;
   while (valk_lval_list_count(ast)) {
     valk_lval_t *x = valk_lval_pop(ast, 0);
+    // Popping unlinked x from the rooted ast; it must survive the
+    // allocations inside the type transform below.
+    VALK_GC_ROOT(x);
 
     x = valk_type_transform_expr(x);
     if (LVAL_TYPE(x) == LVAL_NIL) continue;
@@ -274,7 +318,7 @@ static valk_lval_t *valk_builtin_load(valk_lenv_t *e, valk_lval_t *a) {
   valk_coverage_record_file(filename);
 
   char resolved[PATH_MAX];
-  if (!realpath(filename, resolved))
+  if (!load_path_resolve(filename, resolved))
     return valk_lval_err("Could not resolve file (%s)", filename);
 
   pthread_mutex_lock(&module_cache_lock);
@@ -333,7 +377,7 @@ static valk_lval_t* valk_builtin_read(valk_lenv_t* e, valk_lval_t* a) {
 
 valk_lval_t *valk_load_file(valk_lenv_t *env, const char *path) {
   char resolved[PATH_MAX];
-  if (!realpath(path, resolved))
+  if (!load_path_resolve(path, resolved))
     return valk_lval_err("Could not resolve file (%s)", path);
   valk_lval_t *ast = parse_file_cached(resolved);
   if (LVAL_TYPE(ast) == LVAL_ERR) return ast;
@@ -357,7 +401,7 @@ static valk_lval_t *valk_builtin_parse_file(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
   const char *path = valk_lval_list_nth(a, 0)->str;
   char resolved[PATH_MAX];
-  if (!realpath(path, resolved))
+  if (!load_path_resolve(path, resolved))
     return valk_lval_err("Could not resolve file (%s)", path);
   return parse_file_cached(resolved);
 }
@@ -426,7 +470,7 @@ static valk_lval_t *valk_builtin_compile_process_file(valk_lenv_t *e,
   }
 
   char resolved[PATH_MAX];
-  if (!realpath(path, resolved))
+  if (!load_path_resolve(path, resolved))
     return valk_lval_err("Could not resolve file (%s)", path);
 
   valk_lval_t *ast = parse_file_cached(resolved);

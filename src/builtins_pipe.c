@@ -158,6 +158,12 @@ static valk_lval_t *valk_builtin_pipe_stdin_open(valk_lenv_t *e, valk_lval_t *a)
 
   valk_aio_system_t *sys = sys_arg->ref.ptr;
 
+  uv_handle_type type = uv_guess_handle(0);
+  if (type != UV_NAMED_PIPE && type != UV_TTY && type != UV_TCP)
+    return valk_lval_err(
+        "pipe/stdin-open: stdin is not a pipe/tty/socket (type %d); "
+        "refusing to attach it to the event loop", (int)type);
+
   valk_pipe_t *pipe = calloc(1, sizeof(valk_pipe_t));
   // LCOV_EXCL_START
   if (!pipe) return valk_lval_err("pipe/stdin-open: allocation failed");

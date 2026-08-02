@@ -99,13 +99,13 @@ int main(int argc, char* argv[]) {
   {
     valk_lval_t *r = valk_load_file(env, "stdlib/prelude.valk");
     if (LVAL_TYPE(r) == LVAL_ERR) {
-      fprintf(stderr, "Failed to load prelude: ");
-      valk_lval_println(r);
+      fprintf(stderr, "Failed to load prelude: %s\n", r->str);
+      return EXIT_FAILURE;
     }
     r = valk_load_file(env, "stdlib/aio/handles.valk");
     if (LVAL_TYPE(r) == LVAL_ERR) {
-      fprintf(stderr, "Failed to load handles: ");
-      valk_lval_println(r);
+      fprintf(stderr, "Failed to load handles: %s\n", r->str);
+      return EXIT_FAILURE;
     }
   }
 
