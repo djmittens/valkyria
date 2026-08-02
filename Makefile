@@ -182,27 +182,38 @@ test: build
 	$(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
 	-@$(MAKE) uat
 
-# Neovim-driven LSP user-acceptance tests. Rebuilds build/valk-lsp when
-# missing OR older than any LSP/stdlib source or the interpreter — a stale
-# binary silently tests old code (this has burned hours of debugging).
-# Drives nvim --headless against scenarios under test/lsp/uat/scenarios/.
-# Skips silently if nvim is not on PATH; set VALK_UAT_STRICT=1 to fail in
-# that case (CI use).
+# AOT-compile the LSP server to build/valk-lsp. Rebuilds when missing OR
+# older than any LSP/stdlib source or the interpreter — a stale binary
+# silently runs old code (this has burned hours of debugging). C changes
+# reach the server through build/valk, so `build` is a prerequisite.
+#
+# Usage:
+#   make lsp                          # rebuild if stale
+#   make lsp FORCE=1                  # rebuild unconditionally
+.PHONY: lsp
+lsp: build
+	@stale=0; \
+	if [ -n "$(FORCE)" ]; then stale=1; \
+	elif [ ! -x build/valk-lsp ]; then stale=1; \
+	elif [ -n "$$(find scripts/lsp stdlib -name '*.valk' -newer build/valk-lsp -print -quit 2>/dev/null)" ]; then stale=1; \
+	elif [ build/valk -nt build/valk-lsp ]; then stale=1; \
+	fi; \
+	if [ "$$stale" = 1 ]; then \
+		echo "[lsp] (re)building build/valk-lsp from scripts/lsp/build-main.valk"; \
+		build/valk --build scripts/lsp/build-main.valk -o build/valk-lsp; \
+	else \
+		echo "[lsp] build/valk-lsp is up to date"; \
+	fi
+
+# Neovim-driven LSP user-acceptance tests. Drives nvim --headless against
+# scenarios under test/lsp/uat/scenarios/. Skips silently if nvim is not on
+# PATH; set VALK_UAT_STRICT=1 to fail in that case (CI use).
 #
 # Usage:
 #   make uat                          # all scenarios
 #   make uat F=hover                  # only scenarios whose name matches `hover`
 .PHONY: uat
-uat: build
-	@stale=0; \
-	if [ ! -x build/valk-lsp ]; then stale=1; \
-	elif [ -n "$$(find scripts/lsp stdlib -name '*.valk' -newer build/valk-lsp -print -quit 2>/dev/null)" ]; then stale=1; \
-	elif [ build/valk -nt build/valk-lsp ]; then stale=1; \
-	fi; \
-	if [ "$$stale" = 1 ]; then \
-		echo "[uat] (re)building build/valk-lsp from scripts/lsp/build-main.valk"; \
-		build/valk --build scripts/lsp/build-main.valk -o build/valk-lsp; \
-	fi
+uat: lsp
 	@VALK_LSP_BIN=$(CURDIR)/build/valk-lsp test/lsp/uat/run.sh $(F)
 
 # C tests only
