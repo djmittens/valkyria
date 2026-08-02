@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS symbols (
   doc TEXT,
   sig TEXT,
   inferred_type TEXT,
-  exported INTEGER NOT NULL DEFAULT 1
+  exported INTEGER NOT NULL DEFAULT 1,
+  module TEXT
 );
 
 CREATE TABLE IF NOT EXISTS refs (
@@ -125,7 +126,9 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 
 ; === Lifecycle ===
 
-(def {SYMDB_VERSION} 5)
+; v6: varargs functions store arity=-1 (indexer change in lsp_index.c)
+; v7: symbols carry the module prefix; names are stored fully qualified
+(def {SYMDB_VERSION} 7)
 
 (sig 'symdb/init {-> Str Ref})
 (fun {symdb/init path} {do

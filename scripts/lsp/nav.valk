@@ -129,15 +129,28 @@
       (if (not (nil? local-def))
         {lsp/respond-def-offset id ctx:uri ctx:text local-def}
         {do
-          (= {defn} (if (nil? lsp/db) {nil} {symdb/find-definition-in lsp/db ctx:word path}))
-          (if (nil? defn) {lsp/send-response id (None)}
-            {lsp/send-response id
-              (list :uri (str "file://" (plist/get defn :path))
-                    :range (list
-                      :start (list :line (plist/get defn :line) :character (plist/get defn :col))
-                      :end (list :line (plist/get defn :line) :character (+ (plist/get defn :col) (len ctx:word)))))})})}
+          (= {sites} (if (nil? lsp/db) {nil}
+            {symdb/find-definition-sites lsp/db ctx:word path}))
+          (= {locs} (map (\ {d} {nav/def->lsp-location d (len ctx:word)}) sites))
+          (if (nil? locs) {lsp/send-response id (None)}
+            ; textDocument/definition accepts Location | Location[]. A name
+            ; defined in several files (e.g. a test mock shadowing the real
+            ; definition) is genuinely ambiguous — return every candidate and
+            ; let the editor present a picker rather than guessing one.
+            {if (== (len locs) 1)
+              {lsp/send-response id (head locs)}
+              {lsp/send-response id locs}})})}
   )
 })
+
+(sig 'nav/def->lsp-location {-> List Num List})
+(fun {nav/def->lsp-location d word-len} {do
+  (= {line} (plist/get d :line))
+  (= {col} (plist/get d :col))
+  (list :uri (str "file://" (plist/get d :path))
+        :range (list
+          :start (list :line line :character col)
+          :end (list :line line :character (+ col word-len))))})
 
 (sig 'lsp/find-local-def {-> List Str Num Num Str Str Num List})
 (fun {lsp/find-local-def ast text line col word path offset} {do

@@ -134,7 +134,7 @@
       (= {fid} (index-text db "(fun {f x & rest} {rest})"))
       (= {syms} (get-symbols db fid))
       (= {s} (head syms))
-      (test/assert-eq 1 s:arity "arity should stop at &")
+      (test/assert-eq -1 s:arity "varargs fun has no fixed arity (validator must not flag extra args)")
       (sqlite/close db)
       true
     })
@@ -279,6 +279,31 @@
         "SELECT sig FROM symbols WHERE name='add' AND sig LIKE '{->%'"))
       (test/assert (not (nil? sig-row)) "should have sig from sig declaration")
       (test/assert-eq "{-> Num Num Num}" sig-row:sig "sig should match")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "fun-row-stores-formals"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(fun {add x y} {+ x y})")
+      (= {row} (sqlite/query-maybe db
+        "SELECT sig FROM symbols WHERE name='add' AND sig LIKE '(fun %'"))
+      (test/assert (not (nil? row)) "fun row should store formals string")
+      (test/assert-eq "(fun {add x y} ...)" row:sig "formals should match")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "sig-does-not-clobber-formals"
+    {do
+      (= {db} (make-test-db))
+      (= {text} "(fun {add x y} {+ x y})\n(sig 'add {-> Num Num Num})")
+      (symdb/sync-document db "file:///t.valk" text)
+      (= {formals-row} (sqlite/query-maybe db
+        "SELECT sig FROM symbols WHERE name='add' AND sig LIKE '(fun %'"))
+      (test/assert (not (nil? formals-row)) "formals row should survive sig form")
+      (test/assert-eq "(fun {add x y} ...)" formals-row:sig "formals intact")
       (sqlite/close db)
       true
     })

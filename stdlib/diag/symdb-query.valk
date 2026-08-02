@@ -221,6 +221,22 @@
     name
 })
 
+; All distinct definition sites for a name, one row per file, preferring the
+; row that carries an arity (the `fun` over its paired `sig`). Same-file
+; definitions win outright: a local definition is never ambiguous with one
+; in another file. Only when the name is defined nowhere in `path` do we
+; report every workspace candidate, which lets the caller return a
+; multi-Location response instead of silently guessing.
+(sig 'symdb/find-definition-sites {-> Ref Str Str List})
+(fun {symdb/find-definition-sites db name path} {do
+  (= {best-per-file}
+    "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.kind != 0 AND s.id = (SELECT s2.id FROM symbols s2 WHERE s2.name=s.name AND s2.file_id=s.file_id AND s2.kind != 0 ORDER BY (CASE WHEN s2.arity >= 0 THEN 0 ELSE 1 END), s2.id LIMIT 1)")
+  (= {local} (if (nil? path) {nil}
+    {sqlite/query db (str best-per-file " AND f.path=?2") name path}))
+  (if (nil? local)
+    {sqlite/query db (str best-per-file " ORDER BY f.path") name}
+    {local})})
+
 (sig 'symdb/file-symbols {-> Ref Str List})
 (fun {symdb/file-symbols db path} {
   sqlite/query db
