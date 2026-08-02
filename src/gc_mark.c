@@ -237,6 +237,12 @@ static void mark_eval_stack_roots(valk_gc_mark_ctx_t *ctx) {
     if (stack) mark_one_eval_stack(stack, ctx);
     if (tc->saved_eval_envs[i]) mark_env(tc->saved_eval_envs[i], ctx);
   }
+
+  // Call envs held only by native (AOT/JIT) frames — pushed by compiled
+  // function prologues and the interpreter's call-env construction.
+  for (sz i = 0; i < tc->env_root_stack_count; i++) {
+    if (tc->env_root_stack[i]) mark_env(tc->env_root_stack[i], ctx);
+  }
 }
 
 static void mark_root_visitor2(valk_lval_t *val, void *user) {
@@ -657,7 +663,14 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
   atomic_fetch_add(&valk_sys->parallel_cycles, 1);
   atomic_fetch_add(&valk_sys->parallel_pause_ns_total, pause_ns);
 
-  atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_STW);
+  // Do NOT clear VALK_SP_STW here (this is the coordinator clearing the
+  // flag it set on itself via request_stw). A new cycle started by another
+  // thread between this cycle reaching IDLE and this line also sets the
+  // flag — clearing wiped that cycle's flag while its coordinator had
+  // already counted us as a participant, deadlocking its barrier (caught
+  // live: one thread flags=0/2 at the current epoch, 24/25 at the
+  // barrier). The stale self-flag is absorbed at the next safepoint: the
+  // STW branch clears it and returns as soon as it sees phase IDLE.
 
   VALK_DEBUG("GC cycle complete: reclaimed %zu bytes in %llu ns (%zu threads)",
              reclaimed, (unsigned long long)pause_ns, num_threads);

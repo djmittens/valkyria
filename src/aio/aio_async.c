@@ -246,13 +246,21 @@ static bool __reach_terminal(valk_async_handle_t *handle, valk_async_status_t ne
   return true;
 }
 
+// Handle results/errors outlive the task that produced them by design:
+// the handle lval can sit in an env (or a parent combinator) long after
+// the producing task's scratch arena is reset. Storing a scratch lval
+// here left handle->result dangling — the GC's mark phase then walked
+// freed arena memory and crashed (seen as SIGSEGV in mark_lval once the
+// growth-based trigger made collections frequent). Evacuation is a no-op
+// for values already on the heap.
 void valk_async_handle_complete(valk_async_handle_t *handle, valk_lval_t *result) {
   if (!handle) return;
 
   valk_async_status_t current = valk_async_handle_get_status(handle);
   if (valk_async_handle_is_terminal(current)) return;
 
-  atomic_store_explicit(&handle->result, result, memory_order_release);
+  atomic_store_explicit(&handle->result, valk_evacuate_to_heap(result),
+                        memory_order_release);
   __reach_terminal(handle, VALK_ASYNC_COMPLETED);
 }
 
@@ -262,7 +270,8 @@ void valk_async_handle_fail(valk_async_handle_t *handle, valk_lval_t *error) {
   valk_async_status_t current = valk_async_handle_get_status(handle);
   if (valk_async_handle_is_terminal(current)) return;
 
-  atomic_store_explicit(&handle->error, error, memory_order_release);
+  atomic_store_explicit(&handle->error, valk_evacuate_to_heap(error),
+                        memory_order_release);
   __reach_terminal(handle, VALK_ASYNC_FAILED);
 }
 

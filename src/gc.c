@@ -179,6 +179,9 @@ void valk_system_register_thread(valk_system_t *sys,
   valk_thread_ctx.root_stack = malloc(sizeof(valk_lval_t*) * 256);
   valk_thread_ctx.root_stack_capacity = 256;
   valk_thread_ctx.root_stack_count = 0;
+  valk_thread_ctx.env_root_stack = malloc(sizeof(valk_lenv_t*) * 256);
+  valk_thread_ctx.env_root_stack_capacity = 256;
+  valk_thread_ctx.env_root_stack_count = 0;
   valk_gc_mark_queue_init(&sys->threads[idx].mark_queue);
 
   sys->threads[idx].ctx = &valk_thread_ctx;
@@ -241,6 +244,12 @@ void valk_system_unregister_thread(valk_system_t *sys) {
   if (valk_thread_ctx.root_stack) {
     free(valk_thread_ctx.root_stack);
     valk_thread_ctx.root_stack = nullptr;
+  }
+  if (valk_thread_ctx.env_root_stack) {
+    free(valk_thread_ctx.env_root_stack);
+    valk_thread_ctx.env_root_stack = nullptr;
+    valk_thread_ctx.env_root_stack_count = 0;
+    valk_thread_ctx.env_root_stack_capacity = 0;
   }
   valk_gc_tlab_release_thread();
   valk_thread_ctx.gc_registered = false;
@@ -417,7 +426,15 @@ void valk_gc_safe_point_slow(void) {
     valk_gc_heap_t *heap = valk_thread_ctx.heap;
     if (heap) {
       valk_gc_heap_collect(heap);
-      atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_STW);
+      // Do NOT clear VALK_SP_STW here. The collect above set it on this
+      // thread (request_stw flags every registered thread, including the
+      // coordinator); that stale self-flag is absorbed harmlessly by the
+      // STW branch at the next safepoint (phase is IDLE by then). But a
+      // NEW cycle started by another thread in the window after collect
+      // returns also sets the flag — clearing it here erased that cycle's
+      // flag while its coordinator counted us as a participant, and the
+      // barrier waited forever for a thread parked in epoll (observed as
+      // the test runner deadlocking with 24/25 threads at the barrier).
     }
   }
 }
@@ -577,6 +594,17 @@ void valk_gc_set_thresholds(valk_gc_heap_t* heap,
 
 bool valk_gc_should_collect(valk_gc_heap_t* heap) {
   if (!heap) return false;
+
+  // Primary: growth relative to the live set surviving the last collection.
+  // Pause time and RSS stay proportional to live data regardless of the
+  // configured hard limit (see VALK_GC_GROWTH_FACTOR in gc_heap.h).
+  sz used = valk_gc_heap_used_bytes(heap);
+  sz trigger = heap->live_after_gc * VALK_GC_GROWTH_FACTOR;
+  if (trigger < VALK_GC_MIN_COLLECT_BYTES) trigger = VALK_GC_MIN_COLLECT_BYTES;
+  if (used >= trigger) return true;
+
+  // Backstop: percent of hard limit (also the only trigger before the
+  // first collection establishes a live-set baseline on tiny heaps).
   return valk_gc_heap_usage_pct(heap) >= heap->gc_threshold_pct;
 }
 
@@ -813,6 +841,13 @@ void valk_gc_reset_after_fork(void) {
   }
   valk_thread_ctx.root_stack_count = 0;
   valk_thread_ctx.root_stack_capacity = 0;
+
+  if (valk_thread_ctx.env_root_stack) {
+    free(valk_thread_ctx.env_root_stack);
+    valk_thread_ctx.env_root_stack = nullptr;
+  }
+  valk_thread_ctx.env_root_stack_count = 0;
+  valk_thread_ctx.env_root_stack_capacity = 0;
 }
 // LCOV_EXCL_STOP
 
@@ -826,6 +861,27 @@ sz valk_gc_root_save(void) {
 
 void valk_gc_root_restore(sz count) {
   valk_thread_ctx.root_stack_count = count;
+}
+
+// Env-root stack: see the field comment in memory.h. Called from compiled
+// function prologues and the interpreter's call-env construction.
+void valk_gc_env_root_push(valk_lenv_t *env) {
+  valk_thread_context_t *ctx = &valk_thread_ctx;
+  if (ctx->env_root_stack == nullptr) return;
+  if (ctx->env_root_stack_count >= ctx->env_root_stack_capacity) {
+    ctx->env_root_stack_capacity *= 2;
+    ctx->env_root_stack = realloc(ctx->env_root_stack,
+        sizeof(valk_lenv_t*) * ctx->env_root_stack_capacity);
+  }
+  ctx->env_root_stack[ctx->env_root_stack_count++] = env;
+}
+
+sz valk_gc_env_root_save(void) {
+  return valk_thread_ctx.env_root_stack_count;
+}
+
+void valk_gc_env_root_restore(sz count) {
+  valk_thread_ctx.env_root_stack_count = count;
 }
 
 void valk_gc_safepoint_fn(void) {

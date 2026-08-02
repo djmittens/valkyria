@@ -92,6 +92,10 @@ LLVMValueRef valk_codegen_try_direct_call(valk_llvm_ctx_t *c,
     // Stage 3: self-recursive tail call → feed body_bb phis + branch back.
     if (saved_tail && c->tco.fn && fast_fn == c->tco.fn &&
         argc == c->tco.nformals) {
+      // Drop this iteration's arg roots before looping; the prologue
+      // re-pushes the rebound phi values. Nothing between here and those
+      // pushes can hit a GC safepoint.
+      if (c->tco.roots_mark) valk_codegen_emit_root_restore(c, c->tco.roots_mark);
       LLVMBasicBlockRef cur_bb = LLVMGetInsertBlock(c->builder);
       for (u64 i = 0; i < argc; i++) {
         LLVMAddIncoming(c->tco.formal_phis[i], &arg_vals[i], &cur_bb, 1);
@@ -158,6 +162,12 @@ LLVMValueRef valk_codegen_try_direct_call(valk_llvm_ctx_t *c,
   LLVMTypeRef empty_ty = LLVMFunctionType(c->ptr_type, NULL, 0, 0);
   LLVMValueRef call_env = LLVMBuildCall2(c->builder, empty_ty,
     c->fn_lenv_empty, NULL, 0, "call_env");
+  // Root the env across formal binding (lenv_put allocates and can
+  // trigger a synchronous collect) and the callee's execution. Restored
+  // after the call returns — this call is never sibcalled (no tail-call
+  // hint on the direct slow path), so the restore is safe to emit here.
+  LLVMValueRef env_mark = valk_codegen_emit_env_root_save(c);
+  valk_codegen_emit_env_root_push(c, call_env);
 
   LLVMValueRef root_env = LLVMBuildLoad2(c->builder, c->ptr_type,
     root_env_global, "aot_root");
@@ -188,6 +198,7 @@ LLVMValueRef valk_codegen_try_direct_call(valk_llvm_ctx_t *c,
   }
   LLVMValueRef ret = LLVMBuildCall2(c->builder, native_ty, native_fn,
     &call_env, 1, "direct");
+  valk_codegen_emit_env_root_restore(c, env_mark);
   LLVMBasicBlockRef ok_end = LLVMGetInsertBlock(c->builder);
   LLVMBuildBr(c->builder, merge_bb);
 

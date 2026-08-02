@@ -75,6 +75,19 @@ static inline bool valk_stack_near_limit(void) {
                                : (sp >= valk_stack_limit_addr);
 }
 
+// Called from the prologue of every AOT/JIT-compiled function. Direct
+// native-to-native calls (fast variants and direct slow calls) bypass
+// valk_lval_eval_call entirely, so without this check deep Valk recursion
+// in compiled code ran straight through the guard and segfaulted on the
+// stack guard page (observed as valk-lsp SIGSEGV under semanticTokens
+// load). Returns NULL when there is headroom.
+valk_lval_t *valk_stack_guard(void) {
+  if (valk_stack_near_limit()) {
+    return valk_lval_err("maximum recursion depth exceeded (stack limit)");
+  }
+  return NULL;
+}
+
 void valk_eval_stack_init(valk_eval_stack_t *stack) {
   stack->frames = malloc(sizeof(valk_cont_frame_t) * VALK_EVAL_STACK_INIT_CAP);
   stack->count = 0;
@@ -261,6 +274,14 @@ static valk_lval_t* valk_quasiquote_expand(valk_lenv_t* env, valk_lval_t* form) 
 
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args);
 
+static void valk_eval_env_root_cleanup(sz *mark) {
+  valk_gc_env_root_restore(*mark);
+}
+
+static void valk_eval_root_cleanup(sz *mark) {
+  valk_gc_root_restore(*mark);
+}
+
 static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_t* func, valk_lval_t* args) {
   if (LVAL_TYPE(func) == LVAL_SYM && func->str[0] == ':') {
     u64 argc = valk_lval_list_count(args);
@@ -313,6 +334,18 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
   u64 num_formals = valk_lval_list_count(func->fun.formals);
 
   valk_lenv_t* call_env = valk_lenv_empty();
+  // Root the call env for the duration of this application. It is a heap
+  // object, and until the body is either running under the interpreter
+  // (continuation frames mark it) or a compiled prologue has rooted it,
+  // its only reference is this C frame — an allocation-triggered collect
+  // during formal binding or inside a native body would sweep its arrays.
+  // The cleanup also bulk-restores whatever roots compiled code pushed
+  // and leaked upward (sibcall chains cannot restore their own).
+  __attribute__((cleanup(valk_eval_env_root_cleanup)))
+  sz __env_root_mark = valk_gc_env_root_save();
+  __attribute__((cleanup(valk_eval_root_cleanup)))
+  sz __root_mark = valk_gc_root_save();
+  valk_gc_env_root_push(call_env);
   // LCOV_EXCL_BR_START - closures always have env, else branch rarely exercised
   if (func->fun.env) {
     call_env->parent = func->fun.env;

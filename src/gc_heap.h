@@ -245,6 +245,15 @@ typedef struct {
 #define VALK_GC_DEFAULT_SOFT_LIMIT  (768ULL * 1024 * 1024)
 #define VALK_GC_INITIAL_COMMIT      (16 * 1024 * 1024)
 
+// Growth-based collection trigger: collect once the heap reaches
+// GROWTH_FACTOR x the live set surviving the last collection (with a floor
+// so tiny live sets don't thrash). Keeps pause times and RSS proportional
+// to LIVE data instead of the configured limit — with a 4GB hard limit and
+// a 40MB live set, the old pct-of-limit policy accumulated 3.2GB of garbage
+// between collections and paused 400ms; this collects at ~128MB for ~15ms.
+#define VALK_GC_GROWTH_FACTOR       3
+#define VALK_GC_MIN_COLLECT_BYTES   (64ULL * 1024 * 1024)
+
 // ============================================================================
 // Main Heap Structure
 // ============================================================================

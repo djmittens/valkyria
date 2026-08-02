@@ -63,6 +63,10 @@ typedef struct {
     LLVMValueRef env_phi;
     LLVMValueRef *formal_phis;
     size_t nformals;
+    // Root-stack mark taken after the fast prologue's arg pushes; the
+    // TCO backedge restores to it so phi-loop iterations don't grow the
+    // root stack. See valk_codegen_emit_root_* in llvm_codegen.c.
+    LLVMValueRef roots_mark;
   } tco;
   bool in_tail;
 

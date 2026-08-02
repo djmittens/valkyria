@@ -240,6 +240,10 @@ valk_lval_t *valk_lval_join(valk_lval_t *a, valk_lval_t *b);
 valk_lval_t *valk_lval_eval(valk_lenv_t *env, valk_lval_t *lval);
 valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
                                  valk_lval_t *args);
+// Stack-overflow guard for AOT/JIT-compiled function prologues. Returns
+// NULL when there is headroom, or an error lval when the C stack is near
+// its limit (same contract as the check inside valk_lval_eval_call).
+valk_lval_t *valk_stack_guard(void);
 
 void valk_lval_print(valk_lval_t *val);
 

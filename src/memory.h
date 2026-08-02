@@ -343,6 +343,16 @@ typedef struct {
   struct valk_lval_t **root_stack;       // Explicit root stack for protecting temps during GC
   sz root_stack_count;
   sz root_stack_capacity;
+
+  // Env root stack: call envs whose only other reference is a native
+  // (AOT/JIT) frame. Compiled code does not update eval_env/eval_stack,
+  // so without these entries the marker never reaches envs held only in
+  // compiled frames and the sweeper frees their symbol/value arrays
+  // mid-call (observed as valk-lsp SIGSEGV in valk_lenv_get during
+  // deep validator recursion).
+  struct valk_lenv_t **env_root_stack;
+  sz env_root_stack_count;
+  sz env_root_stack_capacity;
   
   // Eval stack registry (precise root tracking for nested eval)
   void *eval_stacks[16];          // All active eval stacks (nested eval calls)

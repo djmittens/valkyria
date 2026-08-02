@@ -76,7 +76,7 @@ static void valk_async_within_child_resolved(valk_async_handle_t *child) {
     }
     valk_async_handle_cancel(within->comb.within.timeout_handle);
   } else if (child == within->comb.within.timeout_handle) { // LCOV_EXCL_BR_LINE - source vs timeout
-    atomic_store_explicit(&within->error, valk_lval_err(":timeout"), memory_order_release); // LCOV_EXCL_LINE - timeout path
+    atomic_store_explicit(&within->error, valk_evacuate_to_heap(valk_lval_err(":timeout")), memory_order_release); // LCOV_EXCL_LINE - timeout path
     valk_async_handle_cancel(within->comb.within.source_handle); // LCOV_EXCL_LINE - timeout path
   }
 
@@ -217,7 +217,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     valk_async_handle_t *timer = valk_async_handle_new(parent->sys, parent->env);
     if (!timer) {
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
-      atomic_store_explicit(&parent->error, valk_lval_err("Failed to allocate backoff timer"), memory_order_release);
+      atomic_store_explicit(&parent->error, valk_evacuate_to_heap(valk_lval_err("Failed to allocate backoff timer")), memory_order_release);
       valk_async_handle_finish(parent);
       return;
     }
@@ -226,7 +226,7 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
     if (!timer_data) {
       valk_async_handle_free(timer);
       atomic_store_explicit(&parent->status, VALK_ASYNC_FAILED, memory_order_release);
-      atomic_store_explicit(&parent->error, valk_lval_err("Failed to allocate timer data"), memory_order_release);
+      atomic_store_explicit(&parent->error, valk_evacuate_to_heap(valk_lval_err("Failed to allocate timer data")), memory_order_release);
       valk_async_handle_finish(parent);
       return;
     }
@@ -267,7 +267,7 @@ static void valk_async_retry_schedule_next(valk_async_handle_t *retry_handle) {
 
   if (LVAL_TYPE(result_val) != LVAL_HANDLE) {
     atomic_store_explicit(&retry_handle->status, VALK_ASYNC_FAILED, memory_order_release);
-    atomic_store_explicit(&retry_handle->error, valk_lval_err("aio/retry: fn must return a handle"), memory_order_release);
+    atomic_store_explicit(&retry_handle->error, valk_evacuate_to_heap(valk_lval_err("aio/retry: fn must return a handle")), memory_order_release);
     valk_async_handle_finish(retry_handle);
     return;
   }

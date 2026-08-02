@@ -104,13 +104,13 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
       valk_lval_eval_call(e, release_fn, release_args);
 
       atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_FAILED, memory_order_release);
-      atomic_store_explicit(&bracket_handle->error, use_result, memory_order_release);
+      atomic_store_explicit(&bracket_handle->error, valk_evacuate_to_heap(use_result), memory_order_release);
     } else {
       valk_lval_t *release_args = valk_lval_cons(resource, valk_lval_nil());
       valk_lval_eval_call(e, release_fn, release_args);
 
       atomic_store_explicit(&bracket_handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
-      atomic_store_explicit(&bracket_handle->result, use_result, memory_order_release);
+      atomic_store_explicit(&bracket_handle->result, valk_evacuate_to_heap(use_result), memory_order_release);
     }
 
     return valk_lval_handle(bracket_handle);
@@ -167,7 +167,7 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
 
   if (LVAL_TYPE(result) == LVAL_ERR) {
     atomic_store_explicit(&scope_handle->status, VALK_ASYNC_FAILED, memory_order_release);
-    atomic_store_explicit(&scope_handle->error, result, memory_order_release);
+    atomic_store_explicit(&scope_handle->error, valk_evacuate_to_heap(result), memory_order_release);
     return scope_lval;
   }
 
@@ -192,7 +192,7 @@ static valk_lval_t* valk_builtin_aio_scope(valk_lenv_t* e, valk_lval_t* a) {
   }
 
   atomic_store_explicit(&scope_handle->status, VALK_ASYNC_COMPLETED, memory_order_release);
-  atomic_store_explicit(&scope_handle->result, result, memory_order_release);
+  atomic_store_explicit(&scope_handle->result, valk_evacuate_to_heap(result), memory_order_release);
   return scope_lval;
 }
 

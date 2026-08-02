@@ -800,13 +800,14 @@ static valk_lval_t* valk_builtin_for_each_line(valk_lenv_t* e, valk_lval_t* a) {
   LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_STR);
   // LCOV_EXCL_BR_STOP
 
+  // No root needed for fn: it is an element of `a`, which
+  // valk_eval_apply_func_iter roots for the builtin's full extent.
   valk_lval_t* fn = valk_lval_list_nth(a, 1);
   // LCOV_EXCL_BR_START - type validation
   if (LVAL_TYPE(fn) != LVAL_FUN) {
     LVAL_RAISE(a, "for-each-line: second argument must be a function");
   }
   // LCOV_EXCL_BR_STOP
-  VALK_GC_ROOT(fn);
 
   const char* filename = valk_lval_list_nth(a, 0)->str;
   FILE* f = fopen(filename, "r");

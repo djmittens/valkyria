@@ -230,6 +230,102 @@ bool valk_llvm_body_is_fast_safe(valk_lval_t *body) {
   return true;
 }
 
+// --- GC root emission -------------------------------------------------
+// Compiled frames are invisible to the GC (it only walks eval_env /
+// eval_stack / root_stack). Envs and argument lvals live only in native
+// registers/stack here, so a collection triggered at any safepoint inside
+// a compiled call chain swept call envs mid-use (observed: valk-lsp
+// SIGSEGV in valk_lenv_get — env arrays zeroed under deep validator
+// recursion). Rooting responsibilities:
+//   - slow-call envs: rooted by their CONSTRUCTOR for the callee's full
+//     extent (valk_eval_apply_func_iter, or the direct-call site below in
+//     valk_codegen_try_direct_call) — never by the callee prologue.
+//   - fast-variant args: pushed by the fast prologue (nothing else
+//     references them; direct fast call sites pass them register-only).
+// Pops are NOT emitted at returns — that would sit between a tail call
+// and its ret and defeat sibcall optimization — instead
+// valk_eval_apply_func_iter bulk-restores both stacks when control
+// returns to the interpreter. TCO phi-loops restore at the backedge so
+// iterations don't grow the stack.
+
+static LLVMValueRef valk_codegen_get_runtime_fn(valk_llvm_ctx_t *ctx,
+                                                const char *name,
+                                                LLVMTypeRef ty) {
+  LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, name);
+  if (!fn) {
+    fn = LLVMAddFunction(ctx->module, name, ty);
+    LLVMSetLinkage(fn, LLVMExternalLinkage);
+  }
+  return fn;
+}
+
+void valk_codegen_emit_env_root_push(valk_llvm_ctx_t *ctx, LLVMValueRef env) {
+  LLVMTypeRef ty = LLVMFunctionType(ctx->void_type,
+    (LLVMTypeRef[]){ctx->ptr_type}, 1, 0);
+  LLVMValueRef fn = valk_codegen_get_runtime_fn(ctx, "valk_gc_env_root_push", ty);
+  LLVMBuildCall2(ctx->builder, ty, fn, &env, 1, "");
+}
+
+LLVMValueRef valk_codegen_emit_env_root_save(valk_llvm_ctx_t *ctx) {
+  LLVMTypeRef ty = LLVMFunctionType(ctx->i64_type, NULL, 0, 0);
+  LLVMValueRef fn = valk_codegen_get_runtime_fn(ctx, "valk_gc_env_root_save", ty);
+  return LLVMBuildCall2(ctx->builder, ty, fn, NULL, 0, "envroots.mark");
+}
+
+void valk_codegen_emit_env_root_restore(valk_llvm_ctx_t *ctx, LLVMValueRef mark) {
+  LLVMTypeRef ty = LLVMFunctionType(ctx->void_type,
+    (LLVMTypeRef[]){ctx->i64_type}, 1, 0);
+  LLVMValueRef fn = valk_codegen_get_runtime_fn(ctx, "valk_gc_env_root_restore", ty);
+  LLVMBuildCall2(ctx->builder, ty, fn, &mark, 1, "");
+}
+
+static void valk_codegen_emit_root_push(valk_llvm_ctx_t *ctx, LLVMValueRef val) {
+  LLVMTypeRef ty = LLVMFunctionType(ctx->void_type,
+    (LLVMTypeRef[]){ctx->ptr_type}, 1, 0);
+  LLVMValueRef fn = valk_codegen_get_runtime_fn(ctx, "valk_gc_root_push_fn", ty);
+  LLVMBuildCall2(ctx->builder, ty, fn, &val, 1, "");
+}
+
+static LLVMValueRef valk_codegen_emit_root_save(valk_llvm_ctx_t *ctx) {
+  LLVMTypeRef ty = LLVMFunctionType(ctx->i64_type, NULL, 0, 0);
+  LLVMValueRef fn = valk_codegen_get_runtime_fn(ctx, "valk_gc_root_save", ty);
+  return LLVMBuildCall2(ctx->builder, ty, fn, NULL, 0, "roots.mark");
+}
+
+void valk_codegen_emit_root_restore(valk_llvm_ctx_t *ctx, LLVMValueRef mark) {
+  LLVMTypeRef ty = LLVMFunctionType(ctx->void_type,
+    (LLVMTypeRef[]){ctx->i64_type}, 1, 0);
+  LLVMValueRef fn = valk_codegen_get_runtime_fn(ctx, "valk_gc_root_restore", ty);
+  LLVMBuildCall2(ctx->builder, ty, fn, &mark, 1, "");
+}
+
+// Emit the stack-overflow prologue: call valk_stack_guard(); if it
+// returns an error lval, return it immediately, otherwise fall through
+// to `cont_bb`. Leaves the builder positioned at `cont_bb`. Compiled
+// functions call each other directly (bypassing valk_lval_eval_call's
+// stack check), so every compiled prologue must carry its own guard or
+// deep Valk recursion segfaults on the stack guard page.
+static void valk_codegen_emit_stack_guard(valk_llvm_ctx_t *ctx,
+                                          LLVMValueRef fn,
+                                          LLVMBasicBlockRef cont_bb) {
+  LLVMTypeRef guard_ty = LLVMFunctionType(ctx->ptr_type, NULL, 0, 0);
+  LLVMValueRef guard_fn = LLVMGetNamedFunction(ctx->module, "valk_stack_guard");
+  if (!guard_fn) {
+    guard_fn = LLVMAddFunction(ctx->module, "valk_stack_guard", guard_ty);
+    LLVMSetLinkage(guard_fn, LLVMExternalLinkage);
+  }
+  LLVMValueRef g = LLVMBuildCall2(ctx->builder, guard_ty, guard_fn,
+                                  NULL, 0, "stack.guard");
+  LLVMBasicBlockRef err_bb =
+    LLVMAppendBasicBlockInContext(ctx->ctx, fn, "stack.err");
+  LLVMValueRef is_err = LLVMBuildICmp(ctx->builder, LLVMIntNE, g,
+    LLVMConstNull(ctx->ptr_type), "stack.is_err");
+  LLVMBuildCondBr(ctx->builder, is_err, err_bb, cont_bb);
+  LLVMPositionBuilderAtEnd(ctx->builder, err_bb);
+  LLVMBuildRet(ctx->builder, g);
+  LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
+}
+
 LLVMValueRef valk_llvm_compile_lambda_body_fast(valk_llvm_ctx_t *ctx,
                                                 valk_lval_t *body,
                                                 valk_lval_t *formals,
@@ -263,9 +359,7 @@ LLVMValueRef valk_llvm_compile_lambda_body_fast(valk_llvm_ctx_t *ctx,
   LLVMBasicBlockRef body_bb =
     LLVMAppendBasicBlockInContext(ctx->ctx, fn, "body");
   LLVMPositionBuilderAtEnd(ctx->builder, entry_bb);
-  LLVMBuildBr(ctx->builder, body_bb);
-
-  LLVMPositionBuilderAtEnd(ctx->builder, body_bb);
+  valk_codegen_emit_stack_guard(ctx, fn, body_bb);
 
   valk_codegen_sym_cache_enter(ctx, entry_bb);
 
@@ -326,6 +420,16 @@ LLVMValueRef valk_llvm_compile_lambda_body_fast(valk_llvm_ctx_t *ctx,
     LLVMPositionBuilderAtEnd(ctx->builder, err_bb);
     LLVMBuildRet(ctx->builder, first_err);
     LLVMPositionBuilderAtEnd(ctx->builder, cont_bb);
+  }
+
+  // Root the argument lvals for this activation. Re-executes on every TCO
+  // iteration: the backedge restores to `roots_mark` first, so the pushes
+  // re-fill the same slots with the rebound phi values and the stack does
+  // not grow across iterations. The save is idempotent for the same
+  // reason. No pop at returns — the interpreter boundary bulk-restores.
+  ctx->tco.roots_mark = valk_codegen_emit_root_save(ctx);
+  for (size_t i = 0; i < nformals; i++) {
+    valk_codegen_emit_root_push(ctx, formal_phis[i]);
   }
 
   LLVMValueRef result = valk_codegen_nil(ctx);
@@ -449,10 +553,19 @@ LLVMValueRef valk_llvm_compile_lambda_body(valk_llvm_ctx_t *ctx,
   LLVMSetLinkage(fn, LLVMExternalLinkage);
 
   LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx->ctx, fn, "entry");
+  LLVMBasicBlockRef body_bb = LLVMAppendBasicBlockInContext(ctx->ctx, fn, "body");
   LLVMPositionBuilderAtEnd(ctx->builder, entry);
+  valk_codegen_emit_stack_guard(ctx, fn, body_bb);
   valk_codegen_sym_cache_enter(ctx, entry);
 
   LLVMValueRef env_param = LLVMGetParam(fn, 0);
+  // The call env is NOT rooted here: every constructor of a slow-call env
+  // roots it for the callee's full extent — valk_eval_apply_func_iter
+  // pushes call_env before formal binding (restored via cleanup at exit),
+  // and the direct-call site in valk_codegen_try_direct_call pushes
+  // before binding and restores after the call returns. A prologue push
+  // would only duplicate those and leak one entry per frame until the
+  // interpreter boundary.
   LLVMValueRef result = valk_codegen_nil(ctx);
 
   // Mirror tree-walker body semantics (eval.c valk_eval_apply_func_iter

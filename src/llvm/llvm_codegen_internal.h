@@ -8,6 +8,12 @@
 // the public API (see llvm_codegen.h for that).
 
 LLVMValueRef valk_codegen_emit_global_string(valk_llvm_ctx_t *c, const char *s);
+
+// GC root emission (see llvm_codegen.c "GC root emission" comment).
+void valk_codegen_emit_env_root_push(valk_llvm_ctx_t *ctx, LLVMValueRef env);
+LLVMValueRef valk_codegen_emit_env_root_save(valk_llvm_ctx_t *ctx);
+void valk_codegen_emit_env_root_restore(valk_llvm_ctx_t *ctx, LLVMValueRef mark);
+void valk_codegen_emit_root_restore(valk_llvm_ctx_t *ctx, LLVMValueRef mark);
 LLVMValueRef valk_codegen_emit_make_sym(valk_llvm_ctx_t *c, const char *name);
 LLVMValueRef valk_codegen_emit_make_sym_inline(valk_llvm_ctx_t *c, const char *name);
 

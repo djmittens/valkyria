@@ -440,3 +440,8 @@ void valk_gc_root_push_fn(valk_lval_t *val);
 sz valk_gc_root_save(void);
 void valk_gc_root_restore(sz count);
 void valk_gc_safepoint_fn(void);
+
+// Env-root stack for call envs referenced only by native (AOT/JIT) frames.
+void valk_gc_env_root_push(valk_lenv_t *env);
+sz valk_gc_env_root_save(void);
+void valk_gc_env_root_restore(sz count);
