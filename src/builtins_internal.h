@@ -91,6 +91,8 @@
 valk_lval_t* valk_plist_get(valk_lval_t* plist, const char* key_str);
 valk_lval_t* valk_qexpr_to_cons(valk_lval_t* qexpr);
 valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a);
+valk_lval_t* valk_dict_lval_new(u32 capacity_hint);
+void valk_dict_lval_set(valk_lval_t* d, const char* key, valk_lval_t* value);
 
 void valk_register_math_builtins(valk_lenv_t *env);
 void valk_register_list_builtins(valk_lenv_t *env);

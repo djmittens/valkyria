@@ -57,6 +57,75 @@
     (sqlite/close db)
     true
   })
+  (test/case "sqlite-query-dict-basic"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (name TEXT, age INTEGER)")
+    (sqlite/exec db "INSERT INTO t VALUES (?, ?)" "alice" 30)
+    (sqlite/exec db "INSERT INTO t VALUES (?, ?)" "bob" 25)
+    (= {d} (sqlite/query-dict db "SELECT name, age FROM t"))
+    (test/assert (dict? d) "query-dict should return a dict")
+    (test/assert-eq 2 (dict/count d) "dict should have 2 entries")
+    (test/assert (dict/has? d "alice") "alice key present")
+    (= {row} (dict/get d "bob"))
+    (test/assert-eq 25 (plist/get row :age) "row plist value accessible")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-dict-duplicate-keys-last-wins"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (name TEXT, v INTEGER)")
+    (sqlite/exec db "INSERT INTO t VALUES ('x', 1)")
+    (sqlite/exec db "INSERT INTO t VALUES ('x', 2)")
+    (= {d} (sqlite/query-dict db "SELECT name, v FROM t ORDER BY v"))
+    (test/assert-eq 1 (dict/count d) "duplicate keys collapse")
+    (test/assert-eq 2 (plist/get (dict/get d "x") :v) "last row wins")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-dict-null-key-skipped"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (name TEXT, v INTEGER)")
+    (sqlite/exec db "INSERT INTO t VALUES (NULL, 1)")
+    (sqlite/exec db "INSERT INTO t VALUES ('a', 2)")
+    (= {d} (sqlite/query-dict db "SELECT name, v FROM t"))
+    (test/assert-eq 1 (dict/count d) "NULL-keyed row skipped")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-dict-empty"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (name TEXT)")
+    (= {d} (sqlite/query-dict db "SELECT name FROM t"))
+    (test/assert (dict? d) "empty result is still a dict")
+    (test/assert-eq 0 (dict/count d) "empty dict")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-dict-with-params"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (name TEXT, v INTEGER)")
+    (sqlite/exec db "INSERT INTO t VALUES ('a', 1)")
+    (sqlite/exec db "INSERT INTO t VALUES ('b', 2)")
+    (sqlite/exec db "INSERT INTO t VALUES ('c', 3)")
+    (= {d} (sqlite/query-dict db "SELECT name, v FROM t WHERE v > ?1" 1))
+    (test/assert-eq 2 (dict/count d) "params bind correctly")
+    (test/assert (not (dict/has? d "a")) "filtered row absent")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-dict-bad-sql-errors"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {r} (sqlite/query-dict db "SELECT FROM nope"))
+    (test/assert (error? r) "bad SQL should return an error")
+    (sqlite/close db)
+    true
+  })
   (test/case "sqlite-null-values"
     {do
     (= {db} (sqlite/open ":memory:"))

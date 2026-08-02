@@ -234,26 +234,15 @@
     {vd/BUILTIN_NAMES_CACHE}
 })
 
+; The UNION arm mirrors vd/strip-module-prefix in SQL: any name with a "/"
+; at index >= 1 also registers its post-slash base name. Building the dict
+; inside the C query builtin replaces a per-row Valk rebuild that cost
+; ~26ms per diagnostics run on a workspace-sized symbol table.
 (sig 'vd/load-known-set {-> Ref Dict})
 (fun {vd/load-known-set db} {
   if (nil? db) {(dict/new)}
-  {do
-    (= {rows} (sqlite/query db
-      "SELECT DISTINCT name FROM symbols"))
-    (= {d} (dict/new (len rows)))
-    (vd/build-known-set rows d)}
-})
-
-(sig 'vd/build-known-set {-> List Dict Dict})
-(fun {vd/build-known-set rows d} {
-  if (nil? rows) {d}
-  {do
-    (= {row} (head rows))
-    (= {name} row:name)
-    (dict/put! d name)
-    (= {base} (vd/strip-module-prefix name))
-    (if (not (nil? base)) {dict/put! d base} {nil})
-    (vd/build-known-set (tail rows) d)}
+  {sqlite/query-dict db
+    "SELECT DISTINCT name FROM symbols UNION SELECT DISTINCT substr(name, instr(name,'/')+1) AS name FROM symbols WHERE instr(name,'/') > 1"}
 })
 
 ; ---------------------------------------------------------------------------

@@ -358,6 +358,39 @@
       true
     })
 
+  (test/case "varargs-fun-extra-args-not-flagged"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {code} "(fun {va-fn a & as} {list a as})\n(va-fn 1 2 3)\n(va-fn 42)")
+      (= {_} (symdb/sync-document db "file:///va.valk" code))
+      (= {n} (diag-count-with-db db code))
+      (test/assert-eq 0 n "varargs fun accepts any argc >= fixed params")
+      (= {_} (sqlite/close db))
+      true
+    })
+
+  (test/case "bare-ctor-tag-in-qexpr-not-flagged"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {code} "(type {Person} {Person :name Str :age Num :email Str})\n(fun {tag-of p} {== (head p) (head {Person})})")
+      (= {_} (symdb/sync-document db "file:///tag.valk" code))
+      (= {n} (diag-count-with-db db code))
+      (test/assert-eq 0 n "bare {Ctor} tag reference is not a 0-field construction")
+      (= {_} (sqlite/close db))
+      true
+    })
+
+  (test/case "positional-ctor-wrong-count-still-flagged"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {code} "(type {Person} {Person :name Str :age Num :email Str})\n(fun {mk} {Person \"a\" 1})")
+      (= {_} (symdb/sync-document db "file:///ctor2.valk" code))
+      (= {n} (diag-count-with-db db code))
+      (test/assert (> n 0) "wrong positional field count inside code qexpr still flagged")
+      (= {_} (sqlite/close db))
+      true
+    })
+
   ; --- Param annotation skipping ---
 
   (test/case "skip-type-annotations"

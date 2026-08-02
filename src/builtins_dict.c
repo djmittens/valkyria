@@ -262,6 +262,27 @@ static bool dict_remove(valk_dict_t *d, const char *key) {
   return false;
 }
 
+// ---------- C-level construction (used by sqlite/query-dict) ----------
+
+valk_lval_t *valk_dict_lval_new(u32 capacity_hint) {
+  u32 cap = DICT_INITIAL_CAPACITY;
+  while (cap < capacity_hint)
+    cap *= 2;
+  u32 buckets = DICT_DEFAULT_BUCKETS;
+  while (buckets < cap)
+    buckets *= 2;
+  return valk_lval_dict(dict_alloc(buckets, cap, DICT_INITIAL_STRINGS));
+}
+
+void valk_dict_lval_set(valk_lval_t *d, const char *key, valk_lval_t *value) {
+  pthread_mutex_t *lock = dict_lock(d);
+  valk_dict_t *dp = d->dict.data;
+  dict_set(&dp, key, value);
+  d->dict.data = dp;
+  pthread_mutex_unlock(lock);
+  if (d->flags & LVAL_FLAG_IMMORTAL) valk_gc_remember_immortal(d);
+}
+
 // ---------- Builtin glue ----------
 
 static inline const char *dict_key_str(valk_lval_t *v) {

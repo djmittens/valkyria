@@ -237,8 +237,13 @@
   (= {scope} ctx3:scope)
   (= {globals} ctx3:globals)
   (= {known} ctx3:known)
+  ; A bare `{Ctor}` inside quoted data is the tag-reference idiom
+  ; ((head {Person}) compares tags) — not a zero-field construction.
   (if (vd/is-ctor-call name)
-    {vd/check-ctor-arity expr hd name argc tl ctx3}
+    {if (== argc 0)
+      {if (plist/get ctx3 :in-qexpr) {ctx3}
+        {vd/check-ctor-arity expr hd name argc tl ctx3}}
+      {vd/check-ctor-arity expr hd name argc tl ctx3}}
     {if (vd/is-known name scope globals known)
       {vd/check-arity expr hd name argc tl ctx3}
       {if (plist/get ctx3 :in-qexpr)
@@ -629,23 +634,13 @@
   (if (error? result) {nil} {reverse result:diags})
 })
 
+; Dict is built inside the C query builtin (last row per name wins, same
+; as the old per-row dict/set! loop) — saves ~14ms per diagnostics run.
 (sig 'vd/preload-arity-cache {-> Ref Dict})
 (fun {vd/preload-arity-cache db} {
   if (nil? db) {(dict/new)}
-  {do
-    (= {rows} (sqlite/query db
-      "SELECT name, arity, sig FROM symbols WHERE arity >= 0 OR sig IS NOT NULL"))
-    (vd/build-arity-dict rows (dict/new))}
-})
-
-(sig 'vd/build-arity-dict {-> List Dict Dict})
-(fun {vd/build-arity-dict rows d} {
-  if (nil? rows) {d}
-  {do
-    (= {r} (head rows))
-    (= {name} (plist/get r :name))
-    (dict/set! d name r)
-    (vd/build-arity-dict (tail rows) d)}
+  {sqlite/query-dict db
+    "SELECT name, arity, sig FROM symbols WHERE arity >= 0 OR sig IS NOT NULL"}
 })
 
 (sig 'vd/validate-with-known {-> Ref List Str Dict List})

@@ -301,6 +301,48 @@ static valk_lval_t *valk_builtin_sqlite_query(valk_lenv_t *e, valk_lval_t *a) {
 }
 
 // ---------------------------------------------------------------------------
+// sqlite/query-dict — SELECT returning a Dict keyed by the first column.
+// Value is the full row plist; on duplicate keys the last row wins. Rows
+// whose first column is NULL are skipped. Building the dict during the
+// step loop avoids a Valk-level per-row rebuild (the LSP known-set path
+// spent ~40ms/keystroke doing this in interpreted code).
+// ---------------------------------------------------------------------------
+
+static valk_lval_t *valk_builtin_sqlite_query_dict(valk_lenv_t *e,
+                                                    valk_lval_t *a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_GE(a, a, 2); // LCOV_EXCL_BR_LINE - arg validation
+
+  query_ctx_t ctx;
+  valk_lval_t *err = prepare_query(a, "sqlite/query-dict", &ctx);
+  if (err) return err;
+
+  if (ctx.ncols < 1) {
+    cleanup_query(&ctx);
+    LVAL_RAISE(a, "sqlite/query-dict: expected at least 1 column");
+  }
+
+  valk_lval_t *dict = valk_dict_lval_new(256);
+
+  int rc;
+  while ((rc = sqlite3_step(ctx.stmt)) == SQLITE_ROW) {
+    const unsigned char *key = sqlite3_column_text(ctx.stmt, 0);
+    if (!key) continue;
+    valk_lval_t *row = build_row_plist(ctx.stmt, ctx.ncols, ctx.col_keys);
+    valk_dict_lval_set(dict, (const char *)key, row);
+  }
+
+  if (rc != SQLITE_DONE) {
+    const char *msg = sqlite3_errmsg(ctx.db);
+    cleanup_query(&ctx);
+    LVAL_RAISE(a, "sqlite/query-dict: %s", msg);
+  }
+
+  cleanup_query(&ctx);
+  return dict;
+}
+
+// ---------------------------------------------------------------------------
 // sqlite/query-row — SELECT returning exactly one row (errors otherwise)
 // ---------------------------------------------------------------------------
 
@@ -555,6 +597,7 @@ void valk_register_sqlite_builtins(valk_lenv_t *env) {
   valk_lenv_put_builtin(env, "sqlite/exec", valk_builtin_sqlite_exec);
   valk_lenv_put_builtin(env, "sqlite/exec-script", valk_builtin_sqlite_exec_script);
   valk_lenv_put_builtin(env, "sqlite/query", valk_builtin_sqlite_query);
+  valk_lenv_put_builtin(env, "sqlite/query-dict", valk_builtin_sqlite_query_dict);
   valk_lenv_put_builtin(env, "sqlite/query-row", valk_builtin_sqlite_query_row);
   valk_lenv_put_builtin(env, "sqlite/query-maybe", valk_builtin_sqlite_query_maybe);
   valk_lenv_put_builtin(env, "sqlite/query-value", valk_builtin_sqlite_query_value);
