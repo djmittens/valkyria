@@ -4,14 +4,12 @@
 
 (load "stdlib/diag/symdb.valk")
 (load "stdlib/diag/validate.valk")
-(load "stdlib/ast/walk.valk")
 (load "scripts/lsp/constants.valk")
 (load "scripts/lsp/analysis.valk")
 (load "scripts/lsp/refs.valk")
 (load "scripts/lsp/hints.valk")
 (load "scripts/lsp/hints-fields.valk")
 (load "scripts/lsp/io.valk")
-(load "scripts/lsp/indexer.valk")
 (load "scripts/lsp/workspace.valk")
 (load "scripts/lsp/scan.valk")
 (load "scripts/lsp/nav.valk")
@@ -95,12 +93,24 @@
 (def {lsp/hint-version} 0)
 (def {lsp/diag-version} 0)
 
+; Done-callback for dispatched requests. A handler error used to be
+; swallowed by lsp/noop-cb — no response was ever sent for that id, so the
+; client waited on it forever (perceived as a hang/crash). JSON-RPC requires
+; a response for every request: surface handler failures as -32603.
+(sig 'lsp/request-done-cb {-> Str Any Fun})
+(fun {lsp/request-done-cb method id} {
+  \ {r} {if (error? r)
+    {do (stderr/write (str "[valk-lsp] handler error " method ": " r "\n"))
+        (lsp/send-error id -32603 (str "Internal error in " method))}
+    {}}
+})
+
 (sig 'lsp/dispatch-to-worker {-> Str Any List Nil})
 (fun {lsp/dispatch-to-worker method id params} {
   aio/dispatch lsp/sys
     (\ {_} {do (lsp/handle-readonly method id params) nil})
     nil
-    lsp/noop-cb
+    (lsp/request-done-cb method id)
 })
 
 ; Notifications (didOpen/didChange/didClose/didSave) run on the SAME single
@@ -120,12 +130,16 @@
     {_ nil}
 })
 
+; Notifications have no id to answer, but a failed handler means lost
+; document state (e.g. a didChange that never applied) — log loudly.
 (sig 'lsp/dispatch-notification {-> Str List Nil})
 (fun {lsp/dispatch-notification method params} {
   aio/dispatch lsp/sys
     (\ {_} {do (lsp/handle-notification method params) nil})
     nil
-    lsp/noop-cb
+    (\ {r} {if (error? r)
+      {stderr/write (str "[valk-lsp] notification error " method ": " r "\n")}
+      {}})
 })
 
 ; Debounced dispatch: when a newer request of the same family has already
@@ -146,7 +160,7 @@
             (list :data (dict/get lsp/last-good-tokens-cache (lsp/params-uri params))))
           nil}
       {do (lsp/handle-readonly method id params) nil}})
-    nil lsp/noop-cb)})
+    nil (lsp/request-done-cb method id))})
 
 (sig 'lsp/dispatch-hint-debounced {-> Str Any List Nil})
 (fun {lsp/dispatch-hint-debounced method id params} {do
@@ -158,7 +172,7 @@
             (dict/get lsp/last-good-hints-cache (lsp/params-uri params)))
           nil}
       {do (lsp/handle-readonly method id params) nil}})
-    nil lsp/noop-cb)})
+    nil (lsp/request-done-cb method id))})
 
 (sig 'lsp/dispatch-request {-> Str Any List Nil})
 (fun {lsp/dispatch-request method id params} {
@@ -256,7 +270,7 @@
     {"textDocument/references" (nav/handle-references id (lsp/to-tdp-params params))}
     {"textDocument/completion" (nav/handle-completion id (lsp/to-tdp-params params))}
     {"textDocument/documentSymbol" (nav/handle-document-symbols id (lsp/to-doc-params params))}
-    {"workspace/symbol" (nav/handle-workspace-symbols id params)}
+    {"workspace/symbol" (nav/handle-workspace-symbols id (QueryParams (plist/get params :query)))}
     {"textDocument/semanticTokens/full" (nav/handle-semantic-tokens id (lsp/to-doc-params params))}
     {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id (lsp/to-range-params params))}
     {"textDocument/prepareRename" (nav/handle-prepare-rename id (lsp/to-tdp-params params))}
@@ -280,7 +294,11 @@
 (sig 'lsp/on-message {-> Str Nil})
 (fun {lsp/on-message body} {do
   (= {msg} (json/parse body))
-  (if (nil? msg) {}
+  ; Unparseable JSON must be answered (id null) per JSON-RPC — silently
+  ; dropping it leaves the client waiting on whatever id it sent.
+  (if (or (nil? msg) (not (list? msg)))
+    {do (stderr/write "[valk-lsp] malformed message\n")
+        (lsp/send-error (None) -32700 "Parse error")}
     {do
       (= {method} msg:method)
       (= {id} msg:id)

@@ -25,10 +25,6 @@
 (type {FormSnippet}
   {:label Str :detail Str :snippet Str :sort Str})
 
-; Document snapshot — captured on main thread, passed to workers
-(type {DocSnapshot}
-  {:uri Str :text Str :version Num})
-
 ; Hint context for inlay hint walker
 (type {HintCtx}
   {:local List :db Ref})
@@ -198,14 +194,6 @@
     {})
   ast})
 
-; Returns the cached AST or nil without forcing a parse. Used by the
-; semantic-tokens handlers so they can emit lexer-only tokens before the
-; background parse has populated the cache (instant-highlight on open).
-(sig 'lsp/get-cached-ast {-> Str Any})
-(fun {lsp/get-cached-ast uri} {do
-  (= {cached} (dict/get lsp/ast-cache uri))
-  (if (nil? cached) {nil} {head (tail cached)})})
-
 ; Returns the AST suitable for semantic tokens / hover / etc. Prefers the
 ; current AST if it parsed cleanly; otherwise falls back to the most recent
 ; clean parse for this document. Returns nil only if no AST is available
@@ -217,22 +205,6 @@
     {do (= {last-good} (dict/get lsp/last-good-ast-cache uri))
         (if (nil? last-good) {current} {head (tail last-good)})}
     {current})})
-
-; Returns true if the AST returned by get-ast-for-display is the original
-; broken AST (no fallback was usable). Used to decide whether semantic
-; tokens should use the lexer fallback.
-(sig 'lsp/no-display-ast? {-> Str Num})
-(fun {lsp/no-display-ast? uri} {do
-  (= {last-good} (dict/get lsp/last-good-ast-cache uri))
-  (nil? last-good)})
-
-; Snapshot the current document state on the main thread
-(sig 'lsp/snapshot {-> Str List})
-(fun {lsp/snapshot uri} {do
-  (= {text} (lsp/doc-get uri))
-  (if (nil? text) {nil}
-    {list :uri uri :text text :version lsp/doc-version})
-})
 
 ; ---------------------------------------------------------------------------
 ; Incremental text sync — apply content changes to stored text

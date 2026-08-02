@@ -532,17 +532,11 @@
 ; Line/column to byte offset conversion
 ; ---------------------------------------------------------------------------
 
+; Delegates to the C scan. The old Valk implementation split the entire
+; document into a line list on every positional request (hover, definition,
+; references, completion, signature help, highlight, selection).
 (sig 'line-col->offset {-> Str Num Num Num})
 (fun {line-col->offset text line col} {
-  lc-offset-walk (str/split text "\n") line col 0 0
-})
-
-(sig 'lc-offset-walk {-> (List Str) Num Num Num Num Num})
-(fun {lc-offset-walk lines target-line target-col current-line offset} {
-  if (>= current-line target-line) {+ offset target-col}
-  {if (nil? lines) {offset}
-    {lc-offset-walk (tail lines) target-line target-col
-      (+ current-line 1)
-      (+ offset (len (head lines)) 1)}}
+  str/lc->offset text line col
 })
 

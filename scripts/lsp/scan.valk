@@ -48,11 +48,6 @@
       (lsp/scan-entries root (tail entries) acc)}
 })
 
-(sig 'lsp/index-file {-> Ref Str Num})
-(fun {lsp/index-file db path} {
-  lsp/seed-from-disk db path
-})
-
 (sig 'lsp/collect-workspace-files {-> Str List})
 (fun {lsp/collect-workspace-files root} {do
   (stderr/write (str "[valk-lsp] collecting workspace files: " root "\n"))
@@ -75,58 +70,6 @@
   (= {ast} (if (error? text) {nil} {parse text}))
   (if (or (error? text) (or (nil? ast) (error? ast))) {nil}
     {list :path path :text text :fp fp :ast ast})
-})
-
-; Commit file data to SQLite.
-; lsp/index-ast (C) does a single-pass walk producing:
-;   symbols, refs, nodes, semantic tokens, scoped refs, scopes, hints
-(sig 'lsp/commit-prepared {-> Ref List Num})
-(fun {lsp/commit-prepared db prep} {
-  if (nil? prep) {0}
-  {do
-    (= {path} (plist/get prep :path))
-    (= {fp} (plist/get prep :fp))
-    (= {fpath} (symdb/uri->path (str "file://" path)))
-    (= {existing} (sqlite/query-maybe db
-      "SELECT hash FROM files WHERE path=?1" fpath))
-    (if (and (not (nil? existing)) (and (not (error? existing)) (== existing:hash fp)))
-      {0}
-      {do
-        (= {text} (plist/get prep :text))
-        (= {ast} (plist/get prep :ast))
-        (sqlite/exec db
-          "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
-          fpath fp)
-    (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" fpath))
-    (if (not (nil? file-id)) {lsp/index-ast db file-id ast text} {})
-    1})}
-})
-
-; Fast index — symbols + refs only (for initial workspace scan)
-(sig 'lsp/commit-prepared-fast {-> Ref List Num})
-(fun {lsp/commit-prepared-fast db prep} {
-  if (nil? prep) {0}
-  {do
-    (= {path} (plist/get prep :path))
-    (= {fp} (plist/get prep :fp))
-    (= {fpath} (symdb/uri->path (str "file://" path)))
-    (= {existing} (sqlite/query-maybe db
-      "SELECT hash FROM files WHERE path=?1" fpath))
-    (if (and (not (nil? existing)) (and (not (error? existing)) (== existing:hash fp)))
-      {0}
-      {do
-        (= {text} (plist/get prep :text))
-        (= {ast} (plist/get prep :ast))
-        (sqlite/exec db
-          "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
-          fpath fp)
-     (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" fpath))
-    (if (not (nil? file-id))
-      {do (idx/index-file-fast db file-id ast text)
-          (lsp/index-ast db file-id ast text)
-          (lsp/precompute-file-data db (str "file://" path) ast text)}
-      {})
-    1})}
 })
 
 ; ---------------------------------------------------------------------------
@@ -220,99 +163,6 @@
         (if (and (not (nil? existing)) (== existing:hash fp))
           {rest}
           {qcons path rest})})}
-})
-
-; ---------------------------------------------------------------------------
-; Dependency-ordered workspace scan
-; Phase 1: dispatch all files to workers for read+parse+extract (parallel)
-; Phase 2: collect results, topo-sort by (load ...) deps, commit in order
-;          so hints can see dependency symbols in DB
-; ---------------------------------------------------------------------------
-
-; Extract (load "path") dependencies from file text (cheap string scan)
-(sig 'lsp/extract-loads {-> Str Str List})
-(fun {lsp/extract-loads text root} {
-  lsp/extract-loads-walk (str/split text "\n") root nil
-})
-
-(sig 'lsp/extract-loads-walk {-> List Str List List})
-(fun {lsp/extract-loads-walk lines root acc} {
-  if (nil? lines) {acc}
-  {lsp/extract-loads-walk (tail lines) root
-    (lsp/extract-load-line (head lines) root acc)}
-})
-
-(sig 'lsp/extract-load-line {-> Str Str List List})
-(fun {lsp/extract-load-line line root acc} {do
-  (= {idx} (str/index-of line "(load \""))
-  (if (< idx 0) {acc}
-    {do
-      (= {start} (+ idx 7))
-      (= {end} (str/index-of (str/slice line start (len line)) "\""))
-      (if (< end 0) {acc}
-        {do
-          (= {path} (str/slice line start (+ start end)))
-          (= {full} (if (str/starts-with? path "/") {path}
-            {str root "/" path}))
-          (qcons full acc)})})
-})
-
-; Topological sort: repeatedly extract files with no unresolved deps
-(sig 'lsp/topo-sort {-> List Dict List})
-(fun {lsp/topo-sort files dep-map} {
-  lsp/topo-pass files dep-map nil (dict/new) 0
-})
-
-(sig 'lsp/topo-pass {-> List Dict List Dict Num List})
-(fun {lsp/topo-pass remaining dep-map sorted emitted depth} {
-  if (nil? remaining) {sorted}
-  {if (> depth (len remaining)) {join sorted remaining}
-  {do
-    (= {ready} (filter (\ {f} {lsp/deps-satisfied f dep-map emitted}) remaining))
-    (if (nil? ready) {join sorted remaining}
-      {do
-        (map (\ {f} {dict/put! emitted f}) ready)
-        (lsp/topo-pass
-          (filter (\ {f} {not (dict/has? emitted f)}) remaining)
-          dep-map
-          (join sorted ready)
-          emitted
-          (+ depth 1))})}}
-})
-
-(sig 'lsp/deps-satisfied {-> Str Dict Dict Num})
-(fun {lsp/deps-satisfied path dep-map emitted} {do
-  (= {deps} (dict/get dep-map path))
-  (if (nil? deps) {1}
-    {lsp/all-emitted deps emitted})
-})
-
-(sig 'lsp/all-emitted {-> List Dict Num})
-(fun {lsp/all-emitted deps emitted} {
-  if (nil? deps) {1}
-  {if (dict/has? emitted (head deps)) {lsp/all-emitted (tail deps) emitted}
-    {0}}
-})
-
-; Build dep map: path -> list of dependency paths
-(sig 'lsp/build-dep-map {-> List Str Dict})
-(fun {lsp/build-dep-map files root} {do
-  (= {d} (dict/new))
-  (lsp/build-dep-map-walk files root d)
-  d
-})
-
-(sig 'lsp/build-dep-map-walk {-> List Str Dict Nil})
-(fun {lsp/build-dep-map-walk files root d} {
-  if (nil? files) {}
-  {do
-    (= {path} (head files))
-    (= {text} (read-file path))
-    (if (error? text) {}
-      {do
-        (= {deps} (lsp/extract-loads text root))
-        (if (not (nil? deps)) {dict/set! d path deps} {})})
-    (lsp/build-dep-map-walk (tail files) root d)}
 })
 
 ; Main scan entry point

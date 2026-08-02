@@ -1,0 +1,84 @@
+; Verifies the JSON-RPC error contract for dispatched requests using a REAL
+; aio system: a handler that fails must still produce a response (-32603)
+; for its request id instead of leaving the client waiting forever.
+; This cannot be tested with a stubbed aio/dispatch — only the C dispatch
+; completion path can bind an error value to a callback parameter.
+
+(load "stdlib/diag/symdb.valk")
+(load "scripts/lsp/analysis.valk")
+(load "stdlib/diag/validate.valk")
+(load "scripts/lsp/hints.valk")
+(load "scripts/lsp/lsp.valk")
+(load "stdlib/test/test.valk")
+
+(def {*captured-error*} nil)
+(def {*captured-response*} nil)
+
+(fun {lsp/send-error id code message} {do
+  (def {*captured-error*} (list :id id :code code :message message))
+  (aio/stop lsp/sys)
+  nil})
+
+(fun {lsp/send-response id result} {do
+  (def {*captured-response*} (list :id id :result result))
+  (aio/stop lsp/sys)
+  nil})
+
+(test/run (list
+
+  (test/case "dispatched-handler-error-sends-32603"
+    {do
+      (def {*captured-error*} nil)
+      (def {lsp/sys} (aio/await (aio/start {:num-threads 2})))
+      (def {lsp/initialized} 1)
+      (= {orig} lsp/handle-readonly)
+      (def {lsp/handle-readonly} (\ {method id params} {error "boom"}))
+      (lsp/dispatch-request "textDocument/hover" 43 nil)
+      (aio/run lsp/sys)
+      (def {lsp/handle-readonly} orig)
+      (test/assert (not (nil? *captured-error*))
+        "handler error must produce an error response")
+      (test/assert-eq -32603 (plist/get *captured-error* :code) "code -32603")
+      (test/assert-eq 43 (plist/get *captured-error* :id) "carries request id")
+    })
+
+  (test/case "dispatched-debounced-handler-error-sends-32603"
+    {do
+      (def {*captured-error*} nil)
+      (def {lsp/sys} (aio/await (aio/start {:num-threads 2})))
+      (def {lsp/initialized} 1)
+      (= {orig} lsp/handle-readonly)
+      (def {lsp/handle-readonly} (\ {method id params} {error "boom"}))
+      (lsp/dispatch-request "textDocument/semanticTokens/full" 44
+        (list :textDocument (list :uri "file:///x.valk")))
+      (aio/run lsp/sys)
+      (def {lsp/handle-readonly} orig)
+      (test/assert (not (nil? *captured-error*))
+        "debounced handler error must produce an error response")
+      (test/assert-eq -32603 (plist/get *captured-error* :code) "code -32603")
+      (test/assert-eq 44 (plist/get *captured-error* :id) "carries request id")
+    })
+
+  (test/case "dispatched-notification-error-does-not-crash-loop"
+    {do
+      (def {*captured-error*} nil)
+      (def {*captured-response*} nil)
+      (def {lsp/sys} (aio/await (aio/start {:num-threads 2})))
+      (def {lsp/initialized} 1)
+      (= {orig-notif} lsp/handle-notification)
+      (= {orig-read} lsp/handle-readonly)
+      (def {lsp/handle-notification} (\ {method params} {error "boom"}))
+      (def {lsp/handle-readonly} (\ {method id params} {lsp/send-response id (None)}))
+      ; Failed notification first, then a request: the request must still
+      ; be answered, proving the worker loop survived the failure.
+      (lsp/dispatch-notification "textDocument/didChange" nil)
+      (lsp/dispatch-request "textDocument/hover" 45 nil)
+      (aio/run lsp/sys)
+      (def {lsp/handle-notification} orig-notif)
+      (def {lsp/handle-readonly} orig-read)
+      (test/assert (nil? *captured-error*) "no error response for notifications")
+      (test/assert (not (nil? *captured-response*)) "subsequent request answered")
+      (test/assert-eq 45 (plist/get *captured-response* :id) "request id 45")
+    })
+
+) {:suite-name "LSP Dispatch Errors" :debug 0})

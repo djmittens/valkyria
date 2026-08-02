@@ -687,6 +687,21 @@
       (test/assert (nil? (last-error)) "unknown notif -> no error")
     })
 
+  (test/case "on-message-malformed-json-sends-parse-error"
+    {do
+      (reset-state)
+      (reset-captures)
+      (lsp/on-message "{this is not json")
+      (= {err} (last-error))
+      (test/assert (not (nil? err)) "malformed JSON must be answered, not dropped")
+      (test/assert-eq -32700 err:code "error code -32700")
+    })
+
+  ; Handler-error -> -32603 delivery is tested with a real aio system in
+  ; test_lsp_dispatch_errors.valk: the stubbed aio/dispatch above cannot
+  ; pass an error value into a Valk-level callback (only the C dispatch
+  ; completion path can bind an error to a lambda parameter).
+
   ; --- handle-rename with scoped refs ---
 
   (test/case "handle-rename-scoped"
