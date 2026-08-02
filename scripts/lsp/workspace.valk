@@ -39,12 +39,22 @@
 ; Core indexing — single function, does everything
 ; ---------------------------------------------------------------------------
 
+; Returns 1 when the stored hash for `path` matches, 0 when the file is
+; missing, changed, or the query itself failed (a closed/locked DB must
+; not be treated as "up to date").
+(sig 'lsp/hash-current? {-> Ref Str Str Num})
+(fun {lsp/hash-current? db path hash} {do
+  (= {existing} (sqlite/query-maybe db
+    "SELECT hash FROM files WHERE path=?1" path))
+  (if (nil? existing) {0}
+    {if (error? existing) {0}
+      {== existing:hash hash}})
+})
+
 (sig 'lsp/index-file-full {-> Ref Str Str Str Num})
 (fun {lsp/index-file-full db uri text hash} {do
   (= {path} (symdb/uri->path uri))
-  (= {existing} (sqlite/query-maybe db
-    "SELECT hash FROM files WHERE path=?1" path))
-  (if (if (not (nil? existing)) {== existing:hash hash} {0}) {0}
+  (if (lsp/hash-current? db path hash) {0}
     {do
       ; Single-parse path: get-ast hits the ast-cache for open documents,
       ; falls back to parse otherwise. Then sync-file-with-ast does
@@ -56,32 +66,24 @@
         {do (symdb/sync-file-with-ast db uri text hash ast) 1})})
 })
 
-(sig 'lsp/index-file-with-hints {-> Ref Str Str Str Num})
-(fun {lsp/index-file-with-hints db uri text hash} {do
-  (= {changed} (lsp/index-file-full db uri text hash))
-  (if (> changed 0)
-    {do
-      (= {ast} (lsp/get-ast uri text))
-      (if (not (error? ast))
-        {lsp/precompute-file-data db uri ast text}
-        {})}
-    {})
-  changed
-})
-
 ; ---------------------------------------------------------------------------
 ; Disk seeding (workspace scan at startup)
 ; ---------------------------------------------------------------------------
 
+; Check the stored hash BEFORE reading the file. This runs for every
+; (load ...) target on every diagnostics publish (lsp/ensure-loads-indexed);
+; unconditionally reading each dependency from disk cost a full read-file
+; per dep per keystroke batch.
 (sig 'lsp/seed-from-disk {-> Ref Str Num})
 (fun {lsp/seed-from-disk db path} {do
   (= {fp} (file/fingerprint path))
   (if (error? fp) {0}
-    {do
-      (= {text} (read-file path))
-      (if (error? text) {0}
-        {lsp/with-tx db
-          (\ {} {lsp/index-file-full db (str "file://" path) text fp})})})
+    {if (lsp/hash-current? db path fp) {0}
+      {do
+        (= {text} (read-file path))
+        (if (error? text) {0}
+          {lsp/with-tx db
+            (\ {} {lsp/index-file-full db (str "file://" path) text fp})})}})
 })
 
 ; Best-effort: index stdlib so go-to-def / hover on a builtin lands in
@@ -106,6 +108,9 @@
   (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
   (if (nil? file-id) {}
     {do
+      ; The symdb was just re-synced for this file; drop memoized sig
+      ; lookups so hint queries below observe the fresh rows.
+      (hint/reset-query-cache)
       (lsp/index-ast db file-id ast text)
       (= {local-params} (hint/collect-local-params ast))
       (= {hctx} (HintCtx local-params db))
@@ -230,17 +235,6 @@
           {do (stderr/write (str "[lsp] diag map error: " lsp-diags "\n")) nil}
           {lsp-diags})))})})
 
-(sig 'lsp/publish-diagnostics-fast {-> Str Str Nil})
-(fun {lsp/publish-diagnostics-fast uri text} {do
-  (= {ast} (lsp/get-ast uri text))
-  (= {parse-err} (lsp/ast-find-error ast))
-  (if (error? parse-err)
-    {lsp/send-notification "textDocument/publishDiagnostics"
-      (list :uri uri :diagnostics
-        (list (lsp/parse-error->diag (str parse-err) text)))}
-    {lsp/send-notification "textDocument/publishDiagnostics"
-      (list :uri uri :diagnostics nil)})})
-
 ; ---------------------------------------------------------------------------
 ; Pull-based diagnostics (textDocument/diagnostic, LSP 3.17)
 ; ---------------------------------------------------------------------------
@@ -293,9 +287,7 @@
     {do
       (= {hash} (str "mem:" (len text)))
       (= {path} (symdb/uri->path uri))
-      (= {existing} (sqlite/query-maybe db
-        "SELECT hash FROM files WHERE path=?1" path))
-      (if (if (not (nil? existing)) {== existing:hash hash} {0}) {}
+      (if (lsp/hash-current? db path hash) {}
         {do
           (= {ast} (parse text))
           ; `parse` returns a list of top-level forms and appends parse
@@ -348,7 +340,13 @@
       (lsp/seed-builtins lsp/db lsp/root-path)})
   (lsp/send-response id lsp/capabilities)})
 
-(def {lsp/noop-cb} (\ {_} {}))
+; Done-callback for fire-and-forget tasks (cache-ast/sync-doc/diagnostics).
+; These have no request id to answer, but a silent failure means stale
+; highlighting or diagnostics that never update — log it.
+(def {lsp/noop-cb} (\ {r} {
+  if (error? r)
+    {stderr/write (str "[valk-lsp] task error: " r "\n")}
+    {}}))
 
 ; Dispatches:
 ;   - lsp/sys worker: lsp/cache-ast to populate the in-process AST cache

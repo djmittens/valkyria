@@ -20,15 +20,22 @@
     {if (== sym-kind symdb/SYMKIND_TYPE) {"type"}
     {if (== sym-kind symdb/SYMKIND_CONSTRUCTOR) {"constructor"}
       {"symbol"}}}}))
+  (= {formals} (if (nil? formals) {nil}
+    {if (str/starts-with? formals "(fun ") {formals} {nil}}))
+  (= {typed} (if (nil? type-sig) {nil}
+    {hint/typed-sig-str name (hint/parse-sig-params formals) type-sig}))
   (= {sections} nil)
-  (= {sections} (if (not (nil? type-sig))
-    {qcons (str "```valk\n" name " : " type-sig "\n```") sections}
-    {sections}))
-  (= {sections} (if (not (nil? formals))
-    {qcons (str "```valk\n" formals "\n```") sections}
-    {if (nil? type-sig)
-      {qcons (str "```valk\n(" kind-label ") " word "\n```") sections}
-      {sections}}))
+  (= {sections} (if (not (nil? typed))
+    {qcons (str "```valk\n" typed "\n```") sections}
+    {do
+      (= {s} (if (not (nil? type-sig))
+        {qcons (str "```valk\n" name " : " type-sig "\n```") sections}
+        {sections}))
+      (if (not (nil? formals))
+        {qcons (str "```valk\n" formals "\n```") s}
+        {if (nil? type-sig)
+          {qcons (str "```valk\n(" kind-label ") " word "\n```") s}
+          {s}})}))
   (= {sections} (if (not (nil? doc))
     {qcons doc sections}
     {sections}))
@@ -350,26 +357,33 @@
     {6}}}}
 })
 
-(type {CompletionRow} {:name Str :kind Num :sig Str :doc Str})
+(type {CompletionRow} {:name Str :kind Num :sig Str :doc Str :rank Num})
 
+; rank comes from symdb/completion-symbols: 0 = prefix match, 1 = matches
+; after a module slash, 2 = plain substring. Encoded into sortText so
+; prefix matches list first ("1-" < "2-" < "3-"); snippets ("00".."12")
+; still sort ahead of everything.
 (sig 'make-sym-completion-item {-> CompletionRow List})
 (fun {make-sym-completion-item s} { do
   (= {name} s:name)
   (= {kind} s:kind)
   (= {type-sig} s:sig)
   (= {doc} s:doc)
+  (= {rank} (if (nil? s:rank) {0} {s:rank}))
   (= {detail-str} (if (nil? type-sig) {""} {type-sig}))
   (= {item} (list :label name
                    :kind (symkind->completion-kind kind)
                    :detail detail-str
-                   :sortText (str "1-" name)))
+                   :sortText (str (+ rank 1) "-" name)))
   (if (nil? doc) {item}
     {plist/set item :documentation (list :kind "markdown" :value doc)})
 })
 
 (sig 'row->completion-row {-> List CompletionRow})
-(fun {row->completion-row r} {
-  CompletionRow (plist/get r :name) (plist/get r :kind) (plist/get r :sig) (plist/get r :doc)
+(fun {row->completion-row r} {do
+  (= {rk} (plist/get r :rank))
+  (CompletionRow (plist/get r :name) (plist/get r :kind) (plist/get r :sig) (plist/get r :doc)
+                 (if (nil? rk) {0} {rk}))
 })
 
 (sig 'handle-completion {-> Num TextDocPosParams Nil})

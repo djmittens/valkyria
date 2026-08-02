@@ -199,12 +199,29 @@
 
   (test/case "hover-format-with-sig"
     {do
-      (= {info} (SymInfo "add" 1 2 "Adds numbers" "-> Num Num Num" "/test/math.valk" 10 0 "(add a b)"))
+      (= {info} (SymInfo "add" 1 2 "Adds numbers" "{-> Num Num Num}" "/test/math.valk" 10 0 "(fun {add a b} ...)"))
       (= {md} (hover/format-markdown info "add"))
       (test/assert (str/starts-with? md "```valk") "should start with code block")
-      (test/assert (not (== -1 (str/index-of md "-> Num Num Num"))) "should contain sig")
+      (test/assert (not (== -1 (str/index-of md "(fun {add a :: Num b :: Num -> Num})")))
+        "should combine params with types")
       (test/assert (not (== -1 (str/index-of md "Adds numbers"))) "should contain doc")
       (test/assert (not (== -1 (str/index-of md "math.valk:11"))) "should contain path:line")
+    })
+
+  (test/case "hover-format-sig-arity-mismatch"
+    {do
+      (= {info} (SymInfo "add" 1 2 nil "{-> Num Num Num}" "/test/math.valk" 10 0 "(fun {add a b c} ...)"))
+      (= {md} (hover/format-markdown info "add"))
+      (test/assert (not (== -1 (str/index-of md "add : {-> Num Num Num}"))) "should fall back to sig block")
+      (test/assert (not (== -1 (str/index-of md "(fun {add a b c} ...)"))) "should fall back to formals block")
+    })
+
+  (test/case "hover-format-compound-types"
+    {do
+      (= {info} (SymInfo "map2" 1 2 nil "{-> {-> a b} {List a} {List b}}" "/t.valk" 0 0 "(fun {map2 f xs} ...)"))
+      (= {md} (hover/format-markdown info "map2"))
+      (test/assert (not (== -1 (str/index-of md "(fun {map2 f :: {-> a b} xs :: {List a} -> {List b}})")))
+        "should combine compound types")
     })
 
   (test/case "hover-format-minimal"
@@ -216,9 +233,9 @@
 
   (test/case "hover-format-formals-no-sig"
     {do
-      (= {info} (SymInfo "f" 1 2 nil nil "/test.valk" 0 0 "(f a b)"))
+      (= {info} (SymInfo "f" 1 2 nil nil "/test.valk" 0 0 "(fun {f a b} ...)"))
       (= {md} (hover/format-markdown info "f"))
-      (test/assert (not (== -1 (str/index-of md "(f a b)"))) "should show formals")
+      (test/assert (not (== -1 (str/index-of md "(fun {f a b} ...)"))) "should show formals")
     })
 
   (test/case "hover-format-path-no-line"
@@ -290,7 +307,7 @@
 
   (test/case "make-sym-completion-item-with-sig"
     {do
-      (= {s} (CompletionRow :name "add" :kind SYMKIND_FUNCTION :sig "-> Num Num" :doc nil))
+      (= {s} (CompletionRow :name "add" :kind SYMKIND_FUNCTION :sig "-> Num Num" :doc nil :rank 0))
       (= {item} (make-sym-completion-item s))
       (test/assert-eq "add" item:label "label")
       (test/assert-eq 3 item:kind "function kind")
@@ -300,7 +317,7 @@
 
   (test/case "make-sym-completion-item-with-doc"
     {do
-      (= {s} (CompletionRow :name "x" :kind SYMKIND_VARIABLE :sig nil :doc "some doc"))
+      (= {s} (CompletionRow :name "x" :kind SYMKIND_VARIABLE :sig nil :doc "some doc" :rank 0))
       (= {item} (make-sym-completion-item s))
       (= {doc-obj} item:documentation)
       (test/assert (not (nil? doc-obj)) "should have documentation")
@@ -310,7 +327,9 @@
 
   (test/case "make-sym-completion-item-no-sig-no-doc"
     {do
-      (= {s} (CompletionRow :name "y" :kind SYMKIND_VARIABLE :sig nil :doc nil))
+      (= {s} (CompletionRow :name "y" :kind SYMKIND_VARIABLE :sig nil :doc nil :rank 2))
+      (test/assert-eq "3-y" (plist/get (make-sym-completion-item s) :sortText)
+        "substring rank sorts after prefix rank")
       (= {item} (make-sym-completion-item s))
       (test/assert-eq "" item:detail "no sig = empty detail")
       (test/assert (nil? item:documentation) "no doc field")

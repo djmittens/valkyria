@@ -236,6 +236,63 @@
       true
     })
 
+  ; --- sig type parsing / typed params ---
+
+  (test/case "parse-sig-types-simple"
+    {do
+      (= {types} (hint/parse-sig-types "{-> Num Str Num}"))
+      (test/assert-eq 3 (len types) "3 types")
+      (test/assert-eq "Num" (nth 1 types) "first type")
+      (test/assert-eq "Str" (nth 2 types) "second type")
+      true
+    })
+
+  (test/case "parse-sig-types-compound"
+    {do
+      (= {types} (hint/parse-sig-types "{-> {-> a b} {List a} {List b}}"))
+      (test/assert-eq 3 (len types) "3 types")
+      (test/assert-eq "{-> a b}" (nth 1 types) "fn type intact")
+      (test/assert-eq "{List a}" (nth 2 types) "list type intact")
+      (test/assert-eq "{List b}" (nth 3 types) "return type intact")
+      true
+    })
+
+  (test/case "parse-sig-types-not-arrow"
+    {do
+      (test/assert (nil? (hint/parse-sig-types "(fun {f x} ...)")) "non-arrow sig")
+      (test/assert (nil? (hint/parse-sig-types nil)) "nil sig")
+      true
+    })
+
+  (test/case "sig-typed-params-zip"
+    {do
+      (= {pairs} (hint/sig-typed-params (list "x" "y") "{-> Num Str Num}"))
+      (test/assert-eq 2 (len pairs) "2 pairs")
+      (test/assert-eq "x :: Num" (nth 1 pairs) "first pair")
+      (test/assert-eq "y :: Str" (nth 2 pairs) "second pair")
+      true
+    })
+
+  (test/case "sig-typed-params-arity-mismatch"
+    {do
+      (test/assert (nil? (hint/sig-typed-params (list "x") "{-> Num Str Num}"))
+        "too few params")
+      (test/assert (nil? (hint/sig-typed-params (list "x" "y" "z") "{-> Num Str Num}"))
+        "too many params")
+      (test/assert (nil? (hint/sig-typed-params nil "{-> Num}")) "no params")
+      true
+    })
+
+  (test/case "typed-sig-str-combined"
+    {do
+      (= {s} (hint/typed-sig-str "add" (list "x" "y") "{-> Num Num Num}"))
+      (test/assert-eq "(fun {add x :: Num y :: Num -> Num})" s "combined sig")
+      (= {s2} (hint/typed-sig-str "map2" (list "f" "xs") "{-> {-> a b} {List a} {List b}}"))
+      (test/assert-eq "(fun {map2 f :: {-> a b} xs :: {List a} -> {List b}})" s2
+        "combined compound sig")
+      true
+    })
+
   (test/case "parse-sig-type-only"
     {do
       (= {params} (hint/parse-sig-params "{-> Num Num Num}"))

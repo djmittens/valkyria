@@ -114,7 +114,6 @@
                   (= {arg-idx} (sig/count-args ctx:text name-end offset 0 0 0 0))
                   (= {active} (if (>= arg-idx (len fn-params))
                     {- (len fn-params) 1} {arg-idx}))
-                  (= {param-items} (map (\ {p} {list :label p}) fn-params))
                   ; Bypass SymInfo record access (which has odd
                   ; behavior for the :sig field returning ()) by
                   ; querying sqlite directly for the sig column.
@@ -124,9 +123,15 @@
                       name}))
                   (= {sig-str} (if (nil? sig-row) {nil} {plist/get sig-row :sig}))
                   (= {sig-doc} (if (nil? sig-row) {nil} {plist/get sig-row :doc}))
-                  (= {sig-label} (if (or (nil? sig-str) (== sig-str ""))
-                    {str "(" name " " (str/join fn-params " ") ")"}
-                    {str name " :: " sig-str}))
+                  (= {typed-params} (if (nil? sig-str) {nil}
+                    {hint/sig-typed-params fn-params sig-str}))
+                  (= {param-items} (map (\ {p} {list :label p})
+                    (if (nil? typed-params) {fn-params} {typed-params})))
+                  (= {sig-label} (if (not (nil? typed-params))
+                    {hint/typed-sig-str name fn-params sig-str}
+                    {if (or (nil? sig-str) (== sig-str ""))
+                      {str "(" name " " (str/join fn-params " ") ")"}
+                      {str name " :: " sig-str}}))
                   (= {sig-entry-base} (list :label sig-label
                                              :parameters param-items
                                              :activeParameter (if (< active 0) {0} {active})))
@@ -296,6 +301,40 @@
       {fold/walk-exprs tl text acc}})
 })
 
+; Approximate an expression's source end offset from real atom positions.
+; The previous approach ((len (str expr)) from the start position) both
+; re-serialized every nested node — O(n^2) over the file for folding and
+; selection — and drifted from the true extent whenever the source
+; contained comments or extra whitespace inside the expression. Atoms:
+; src-pos + printed length (+2 for string quotes). Lists: recurse into the
+; last element, keeping a best-so-far from earlier siblings in case the
+; trailing elements carry no source position (synthesized nodes).
+(sig 'fold/end-offset {-> Any Num})
+(fun {fold/end-offset expr} {
+  if (not (list? expr))
+    {do
+      (= {p} (src-pos expr))
+      (if (< p 0) {-1}
+        {+ p (len (str expr)) (if (str? expr) {2} {0})})}
+    {if (nil? expr) {-1}
+      {fold/end-scan expr -1}}
+})
+
+(sig 'fold/end-scan {-> List Num Num})
+(fun {fold/end-scan exprs best} {
+  if (nil? (tail exprs))
+    {do
+      (= {e} (fold/end-offset (head exprs)))
+      (if (>= e 0) {e} {best})}
+    {do
+      (= {h} (head exprs))
+      (= {p} (src-pos h))
+      (= {b} (if (< p 0) {best}
+        {if (list? h) {+ p 1}
+          {+ p (len (str h)) (if (str? h) {2} {0})}}))
+      (fold/end-scan (tail exprs) (if (> b best) {b} {best}))}
+})
+
 (sig 'fold/emit-range {-> List Str List List})
 (fun {fold/emit-range expr text acc} {do
   (= {start-pos} (src-pos expr))
@@ -303,14 +342,15 @@
     {do
       (= 'start-lc (offset->line-col text start-pos))
       (= 'start-line (head start-lc))
-      (= 'expr-str (str expr))
-      (= 'end-offset (+ start-pos (len expr-str)))
-      (= 'end-lc (offset->line-col text end-offset))
-      (= 'end-line (head end-lc))
-      (if (<= end-line start-line) {acc}
-        {qcons (list :startLine start-line
-                     :endLine end-line
-                     :kind "region") acc})})
+      (= 'end-offset (fold/end-offset expr))
+      (if (< end-offset 0) {acc}
+        {do
+          (= 'end-lc (offset->line-col text end-offset))
+          (= 'end-line (head end-lc))
+          (if (<= end-line start-line) {acc}
+            {qcons (list :startLine start-line
+                         :endLine end-line
+                         :kind "region") acc})})})
 })
 
 (sig 'handle-folding-range {-> Num DocParams Nil})
@@ -353,8 +393,9 @@
     (= {start} (src-pos expr))
     (if (< start 0) {acc}
       {do
-        (= {expr-str} (str expr))
-        (= {end} (+ start (len expr-str)))
+        ; +1 covers the closing delimiter after the last atom.
+        (= {end0} (fold/end-offset expr))
+        (= {end} (if (< end0 0) {start} {+ end0 1}))
         (if (if (>= offset start) {<= offset end} {0})
           {do
             (= {start-lc} (offset->line-col text start))

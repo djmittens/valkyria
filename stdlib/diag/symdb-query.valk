@@ -263,11 +263,15 @@
     "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc FROM symbols GROUP BY name ORDER BY name LIMIT 200"
 })
 
+; Substring match, ranked: exact-prefix first, then module-qualified names
+; whose base matches after the slash (typing "map" finds "list/map"), then
+; plain substring hits. Prefix-only LIKE made completion useless unless the
+; user typed a name from its first character.
 (sig 'symdb/completion-symbols {-> Ref Str List})
 (fun {symdb/completion-symbols db prefix} {
   sqlite/query db
-    "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc FROM symbols WHERE name LIKE ?1 GROUP BY name ORDER BY name LIMIT 100"
-    (str prefix "%")
+    "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc, MIN(CASE WHEN name LIKE ?1 || '%' THEN 0 WHEN name LIKE '%/' || ?1 || '%' THEN 1 ELSE 2 END) as rank FROM symbols WHERE name LIKE '%' || ?1 || '%' GROUP BY name ORDER BY rank, name LIMIT 100"
+    prefix
 })
 
 (sig 'symdb/find-refs {-> Ref Str List})

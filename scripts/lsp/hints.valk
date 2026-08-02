@@ -146,18 +146,101 @@
 })
 
 ; ---------------------------------------------------------------------------
-; Lazy per-name symdb lookup (0.05ms per query via prepared statement)
+; Combine param names with types from a "{-> T1 T2 R}" sig string
 ; ---------------------------------------------------------------------------
+
+(sig 'hint/scan-type-words {-> Str Num Num Num Num List})
+(fun {hint/scan-type-words text pos end depth wstart acc} {
+  if (>= pos end)
+    {reverse (if (< wstart pos) {qcons (str/slice text wstart pos) acc} {acc})}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (or (== ch "(") (== ch "{"))
+      {hint/scan-type-words text (+ pos 1) end (+ depth 1) wstart acc}
+    {if (or (== ch ")") (== ch "}"))
+      {hint/scan-type-words text (+ pos 1) end (- depth 1) wstart acc}
+    {if (if (== depth 0) {== ch " "} {0})
+      {hint/scan-type-words text (+ pos 1) end depth (+ pos 1)
+        (if (< wstart pos) {qcons (str/slice text wstart pos) acc} {acc})}
+      {hint/scan-type-words text (+ pos 1) end depth wstart acc}}})}
+})
+
+(sig 'hint/parse-sig-types {-> Str List})
+(fun {hint/parse-sig-types sig} {
+  if (nil? sig) {nil}
+  {if (< (len sig) 5) {nil}
+  {if (not (str/starts-with? sig "{-> ")) {nil}
+  {do
+    (= {inner} (str/slice sig 4 (- (len sig) 1)))
+    (hint/scan-type-words inner 0 (len inner) 0 0 nil)}}}
+})
+
+(sig 'hint/zip-typed-params {-> List List List})
+(fun {hint/zip-typed-params names types} {
+  if (nil? names) {nil}
+  {qcons (str (head names) " :: " (head types))
+    (hint/zip-typed-params (tail names) (tail types))}
+})
+
+(sig 'hint/sig-typed-params {-> List Str Any})
+(fun {hint/sig-typed-params params sig-str} {do
+  (= {types} (hint/parse-sig-types sig-str))
+  (if (nil? types) {nil}
+  {if (nil? params) {nil}
+  {if (not (== (len types) (+ (len params) 1))) {nil}
+  {hint/zip-typed-params params types}}})
+})
+
+(sig 'hint/typed-sig-str {-> Str List Str Any})
+(fun {hint/typed-sig-str name params sig-str} {do
+  (= {pairs} (hint/sig-typed-params params sig-str))
+  (if (nil? pairs) {nil}
+    {do
+      (= {types} (hint/parse-sig-types sig-str))
+      (str "(fun {" name " " (str/join pairs " ") " -> " (last types) "})")})
+})
+
+; ---------------------------------------------------------------------------
+; Lazy per-name symdb lookup, memoized per indexing run
+; ---------------------------------------------------------------------------
+; A file with hundreds of call sites used to issue one query per call even
+; when the same function repeated; the memo collapses that to one query per
+; distinct name. Reset at the start of every precompute run (see
+; lsp/precompute-file-data) so entries never outlive a symdb sync. Each
+; entry stores (db result) so a hit is only valid for the same connection —
+; ref equality is identity — which keeps callers with different DBs (tests,
+; lsp/db vs lsp/idx-db) from seeing each other's rows. A nil result is
+; still a valid entry ("queried, no row"), distinguished from a miss by the
+; entry's presence.
+
+(def {hint/query-cache} (dict/new))
+
+(sig 'hint/reset-query-cache {-> Nil})
+(fun {hint/reset-query-cache} {do
+  (def {hint/query-cache} (dict/new))
+  nil})
+
+(sig 'hint/cache-lookup {-> Ref Str Any})
+(fun {hint/cache-lookup db ck} {do
+  (= {hit} (dict/get hint/query-cache ck))
+  (if (nil? hit) {nil}
+    {if (== (head hit) db) {tail hit} {nil}})
+})
 
 (sig 'hint/query-db-params {-> Ref Str List})
 (fun {hint/query-db-params db name} {
   if (nil? db) {nil}
   {do
-    (= {row} (sqlite/query-maybe db
-      "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '(fun %' AND kind=1 LIMIT 1"
-      name))
-    (if (nil? row) {nil}
-      {hint/parse-sig-params row:sig})}
+    (= {ck} (str "p:" name))
+    (= {hit} (hint/cache-lookup db ck))
+    (if (not (nil? hit)) {head hit}
+      {do
+        (= {row} (sqlite/query-maybe db
+          "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '(fun %' AND kind=1 LIMIT 1"
+          name))
+        (= {result} (if (nil? row) {nil} {hint/parse-sig-params row:sig}))
+        (dict/set! hint/query-cache ck (list db result))
+        result})}
 })
 
 ; ---------------------------------------------------------------------------
@@ -420,11 +503,16 @@
 (fun {hint/query-sig-types db name} {
   if (nil? db) {nil}
   {do
-    (= {row} (sqlite/query-maybe db
-      "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
-      name))
-    (if (nil? row) {nil}
-      {hint/parse-prefix-sig row:sig})}
+    (= {ck} (str "s:" name))
+    (= {hit} (hint/cache-lookup db ck))
+    (if (not (nil? hit)) {head hit}
+      {do
+        (= {row} (sqlite/query-maybe db
+          "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
+          name))
+        (= {result} (if (nil? row) {nil} {hint/parse-prefix-sig row:sig}))
+        (dict/set! hint/query-cache ck (list db result))
+        result})}
 })
 
 (sig 'hint/infer-call-return-type {-> Str Ref Any})
@@ -531,7 +619,8 @@
 (sig 'hint/lookup-any-field-type {-> Str Ref Any})
 (fun {hint/lookup-any-field-type field-key db} {do
   (= {row} (sqlite/query-maybe db
-    (str "SELECT sig FROM symbols WHERE kind=4 AND sig LIKE '%" field-key " %' LIMIT 1")))
+    "SELECT sig FROM symbols WHERE kind=4 AND sig LIKE '%' || ?1 || ' %' LIMIT 1"
+    field-key))
   (if (nil? row) {nil}
     {hint/extract-field-from-sig row:sig field-key})
 })

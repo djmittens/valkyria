@@ -181,6 +181,25 @@
       (test/assert (not (nil? items)) "should have completion items from db")
     })
 
+  (test/case "handle-signature-help-typed-params"
+    {do
+      (setup-with-db)
+      (= {text} "(fun {add a b} {+ a b})\n(sig 'add {-> Num Num Num})\n(add 1 ")
+      (seed-doc "file:///test/sh.valk" text)
+      (reset-captures)
+      (features/handle-signature-help 38
+        (TextDocPosParams :textDocument (LspTextDoc :uri "file:///test/sh.valk") :position (LspPosition :line 2 :character 7)))
+      (= {resp} (last-response))
+      (= {result} resp:result)
+      (= {sig-entry} (head result:signatures))
+      (test/assert-eq "(fun {add a :: Num b :: Num -> Num})"
+        (plist/get sig-entry :label) "label combines params with types")
+      (= {param-items} (plist/get sig-entry :parameters))
+      (test/assert-eq "a :: Num" (plist/get (head param-items) :label)
+        "first param label typed")
+      (test/assert-eq 1 (plist/get sig-entry :activeParameter) "second arg active")
+    })
+
   (test/case "handle-code-action-with-db"
     {do
       (setup-with-db)
