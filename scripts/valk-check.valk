@@ -141,30 +141,47 @@
   (if (error? r) {nil} {r})
 })
 
+; Drop a no-longer-existing file's rows so its stale symbols don't leak
+; into validation of the remaining workspace.
+(fun {check/remove-stale db path} {do
+  (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
+  (if (error? fid) {nil}
+    {symdb/remove-file db fid})
+})
+
 ; Walk files; skip indexing work when fingerprint matches stored hash.
 ; Returns count of files that actually changed (needed re-indexing).
+; Deleted-but-tracked files (git ls-files lists them until the deletion is
+; staged) fingerprint as errors: purge them from the DB and continue —
+; propagating the error here used to abort the walk and leave every
+; remaining file stale, producing false diagnostics workspace-wide.
 (fun {check/sync-walk db files total idx changed} {
   if (nil? files) {changed}
   {do
     (= {path} (head files))
     (check/progress "indexing" (+ idx 1) total path)
     (= {fp} (file/fingerprint path))
-    (= {stored} (check/stored-hash db path))
-    (if (and (not (nil? stored)) (== stored fp))
-      {check/sync-walk db (tail files) total (+ idx 1) changed}
+    (if (error? fp)
       {do
-        (= {text} (read-file path))
-        (if (not (error? text))
+        (check/remove-stale db path)
+        (check/sync-walk db (tail files) total (+ idx 1) changed)}
+      {do
+        (= {stored} (check/stored-hash db path))
+        (if (and (not (nil? stored)) (== stored fp))
+          {check/sync-walk db (tail files) total (+ idx 1) changed}
           {do
-            (= {prefix} (check/module-prefix path))
-            (= {ast} (compile/process text prefix))
-            (if (error? ast) {nil}
+            (= {text} (read-file path))
+            (if (not (error? text))
               {do
-                (sqlite/exec db "BEGIN")
-                (check/sync-light db (str "file://" path) text fp ast)
-                (sqlite/exec db "COMMIT")})}
-          {nil})
-        (check/sync-walk db (tail files) total (+ idx 1) (+ changed 1))})}
+                (= {prefix} (check/module-prefix path))
+                (= {ast} (compile/process text prefix))
+                (if (error? ast) {nil}
+                  {do
+                    (sqlite/exec db "BEGIN")
+                    (check/sync-light db (str "file://" path) text fp ast)
+                    (sqlite/exec db "COMMIT")})}
+              {nil})
+            (check/sync-walk db (tail files) total (+ idx 1) (+ changed 1))})})}
 })
 
 (fun {check/sync-all db files} {do

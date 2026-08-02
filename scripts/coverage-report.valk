@@ -493,6 +493,7 @@
   (list "stdlib/http/api.valk" "stdlib utility library - many functions not exercised by tests")
   (list "stdlib/test/test.valk" "test framework - error/timeout/skip paths not exercised in normal runs")
   (list "src/lsp_index.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
+  (list "src/lsp_index_emit.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
   (list "src/gc_region.c" "GC region - branch coverage limited by OOM/edge-case paths")
   (list "src/type_env.c" "type environment - branch coverage limited by complex pattern matching")
   (list "scripts/lsp/main.valk" "LSP entry point - only 2 lines, coverage skew from small file")))
