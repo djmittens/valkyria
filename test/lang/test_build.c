@@ -316,6 +316,56 @@ void test_build_aot_closure_captures_formals(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// A macro applied inside a function body must be EXPANDED by the codegen,
+// not emitted as a call. `--build` only macro-expands top-level forms
+// (eval_script_capture_last); everything nested is left for the tree
+// walker, which expands it at eval time via the LVAL_FLAG_MACRO branch in
+// valk_lval_eval. The codegen had no such branch, so `(twice n)` compiled
+// to a funcall that applied the macro to already-evaluated arguments and
+// returned its template as data. Worse, the macro itself is an LVAL_FUN,
+// so is_aot_candidate compiled its expansion template as a native
+// function; calling that yielded an error, which is what actually
+// surfaced at runtime.
+//
+// `mk` covers the sharp edge: the only env-capturing form in its body
+// comes OUT of the expansion, so body_is_fast_safe must treat a macro
+// head as forbidden. Without that it compiled fast and `n` came back
+// unbound in the returned closure.
+void test_build_aot_expands_macros_in_bodies(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  const char *src = "/tmp/valk_build_test_macro.valk";
+  const char *out = "/tmp/valk_build_test_macro.bin";
+  const char *body =
+      "(macro {twice _x} {`(+ ,_x ,_x)})\n"
+      "(macro {quad _x} {`(twice (twice ,_x))})\n"
+      "(macro {mk-adder _n} {`(\\ {y} {+ y ,_n})})\n"
+      "(fun {simple n} {twice n})\n"
+      "(fun {nested n} {quad n})\n"
+      "(fun {in-if n} {if (== n 0) {0} {twice n}})\n"
+      "(fun {mk n} {(mk-adder n)})\n"
+      "(\\ {argv} {do\n"
+      "  (if (not (== (simple 21) 42)) {1}\n"
+      "  {if (not (== (nested 5) 20)) {2}\n"
+      "  {if (not (== (in-if 0) 0)) {3}\n"
+      "  {if (not (== (in-if 4) 8)) {4}\n"
+      "  {if (not (== ((mk 7) 100) 107)) {5}\n"
+      "  {0}}}}})\n"
+      "})\n";
+  VALK_TEST_ASSERT(write_valk(src, body) == 0, "write src");
+
+  VALK_TEST_ASSERT(run_valk_build(src, out) == 0, "valk --build succeeds");
+
+  int rc = run_produced(out, NULL);
+  VALK_TEST_ASSERT(rc == 0,
+                   "compiled macro calls match the evaluator (got %d: "
+                   "1=simple 2=nested 3,4=in qexpr branch 5=expansion "
+                   "captures formal)", rc);
+
+  unlink(src);
+  unlink(out);
+  VALK_PASS();
+}
+
 // `and`/`or` are builtins (so they are values) that the evaluator and the
 // codegen both recognise in head position and lower to branches. The two
 // paths must agree on the RESULT and differ only in whether operands past
@@ -381,6 +431,8 @@ int main(void) {
                           test_build_aot_survives_gc);
   valk_testsuite_add_test(suite, "build_aot_closure_captures_formals",
                           test_build_aot_closure_captures_formals);
+  valk_testsuite_add_test(suite, "build_aot_expands_macros_in_bodies",
+                          test_build_aot_expands_macros_in_bodies);
   valk_testsuite_add_test(suite, "build_aot_and_or_semantics",
                           test_build_aot_and_or_semantics);
   int rc = valk_testsuite_run(suite);

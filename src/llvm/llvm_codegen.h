@@ -121,7 +121,14 @@ LLVMValueRef valk_llvm_compile_lambda_body(valk_llvm_ctx_t *ctx,
 // call_env at runtime: no nested `\` / `fn` lambdas (closures capture env),
 // no `def` or `=` (local mutation touches env_param). Safe bodies may be
 // compiled via `valk_llvm_compile_lambda_body_fast`.
-bool valk_llvm_body_is_fast_safe(valk_lval_t *body);
+//
+// `env` is the build-time env used to recognise macro heads, whose
+// expansions this scan cannot see; pass NULL to skip that check.
+bool valk_llvm_body_is_fast_safe(valk_lenv_t *env, valk_lval_t *body);
+
+// Resolve `head` to a macro (LVAL_FUN carrying LVAL_FLAG_MACRO) in `env`,
+// or NULL if it is not a symbol, not bound, or not a macro.
+valk_lval_t *valk_codegen_macro_head(valk_lenv_t *env, valk_lval_t *head);
 
 // Compile a lambda body into a function with signature
 // `valk_lval_t *(*)(valk_lenv_t *env, valk_lval_t *formal_0, ...)` where

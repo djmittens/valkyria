@@ -29,6 +29,11 @@ static bool is_aot_candidate(valk_lval_t *v) {
   if (v->fun.builtin != nullptr) return false;
   if (!v->fun.body) return false;
   if (v->fun.native_name) return false;
+  // A macro is an LVAL_FUN, but its body is an expansion template, not
+  // code: compiling it produces a native fn that returns garbage for
+  // every call. Macro calls are expanded at codegen time instead, and
+  // the macro itself stays interpreted for runtime `eval`.
+  if (v->flags & LVAL_FLAG_MACRO) return false;
   return true;
 }
 
@@ -113,7 +118,7 @@ int valk_build_emit_aot(valk_lenv_t *env, const char *o_path,
     char name[64];
     snprintf(name, sizeof(name), "valk_aot_%zu", n);
 
-    bool safe = valk_llvm_body_is_fast_safe(v->fun.body);
+    bool safe = valk_llvm_body_is_fast_safe(env, v->fun.body);
     size_t nf = safe ? count_fast_formals(v->fun.formals) : SIZE_MAX;
     bool is_fast = safe && (nf != SIZE_MAX);
 

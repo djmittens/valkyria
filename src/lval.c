@@ -602,7 +602,8 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
 
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
 
-  res->flags = (lval->flags & (LVAL_TYPE_MASK | LVAL_FLAG_QUOTED | LVAL_FLAG_INTERNED | LVAL_SRC_POS_MASK)) |
+  res->flags = (lval->flags & (LVAL_TYPE_MASK | LVAL_FLAG_QUOTED | LVAL_FLAG_INTERNED |
+                               LVAL_FLAG_MACRO | LVAL_SRC_POS_MASK)) |
                valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
 
 #ifdef VALK_COVERAGE

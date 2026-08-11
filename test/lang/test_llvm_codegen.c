@@ -369,25 +369,72 @@ static valk_lval_t *body_of(const char *src) {
 void test_fast_safe_rejects_capturing_body(VALK_TEST_ARGS()) {
   VALK_TEST();
 
-  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(body_of("{\\ {q} {+ p q}}")),
+  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(nullptr, body_of("{\\ {q} {+ p q}}")),
     "body that IS a lambda captures the call env");
-  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(body_of("{fn {q} {+ p q}}")),
+  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(nullptr, body_of("{fn {q} {+ p q}}")),
     "body that IS an fn captures the call env");
-  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(body_of("{= {loc} 1}")),
+  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(nullptr, body_of("{= {loc} 1}")),
     "body that IS a `=` mutates the call env");
-  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(body_of("{def {g} 1}")),
+  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(nullptr, body_of("{def {g} 1}")),
     "body that IS a `def` mutates the env");
   VALK_TEST_ASSERT(
-    !valk_llvm_body_is_fast_safe(body_of("{do (= {loc} 1) (\\ {q} {loc})}")),
+    !valk_llvm_body_is_fast_safe(nullptr, body_of("{do (= {loc} 1) (\\ {q} {loc})}")),
     "sequence body containing a lambda still rejected");
 
-  VALK_TEST_ASSERT(valk_llvm_body_is_fast_safe(body_of("{+ x 1}")),
+  VALK_TEST_ASSERT(valk_llvm_body_is_fast_safe(nullptr, body_of("{+ x 1}")),
     "plain arithmetic body stays fast-safe");
   VALK_TEST_ASSERT(
-    valk_llvm_body_is_fast_safe(body_of("{if (== n 0) acc (loop (- n 1) acc)}")),
+    valk_llvm_body_is_fast_safe(nullptr, body_of("{if (== n 0) acc (loop (- n 1) acc)}")),
     "if/tail-call body stays fast-safe");
-  VALK_TEST_ASSERT(valk_llvm_body_is_fast_safe(body_of("{do (foo x) (bar x)}")),
+  VALK_TEST_ASSERT(valk_llvm_body_is_fast_safe(nullptr, body_of("{do (foo x) (bar x)}")),
     "capture-free sequence body stays fast-safe");
+
+  VALK_PASS();
+}
+
+// A macro head hides whatever its expansion contains. codegen_sexpr
+// expands it, so a body that looks capture-free can still emit a `\`
+// over the call env — the fast variant has no call env, and the
+// enclosing formals come back unbound. The scan can't expand to find
+// out (valk_macro_expand_one mutates the arg list), so a macro head is
+// rejected outright.
+void test_fast_safe_rejects_macro_head(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = make_env();
+  valk_lval_t *defs = valk_parse_text("(macro {mk-adder _n} {`(\\ {y} {+ y ,_n})})");
+  valk_lval_eval(env, defs->cons.head);
+
+  valk_lval_t *body = body_of("{(mk-adder n)}");
+  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(env, body),
+    "macro head rejected when the env knows it is a macro");
+  VALK_TEST_ASSERT(valk_llvm_body_is_fast_safe(nullptr, body),
+    "same body is not rejected without an env — the check is env-driven");
+
+  VALK_TEST_ASSERT(valk_llvm_body_is_fast_safe(env, body_of("{(not-a-macro n)}")),
+    "an ordinary call head stays fast-safe");
+
+  VALK_PASS();
+}
+
+// valk_lval_copy dropped LVAL_FLAG_MACRO from its preserved-flag mask, so
+// a copied macro silently became an ordinary function: its arguments
+// would be evaluated and its template returned as data instead of being
+// expanded.
+void test_lval_copy_preserves_macro_flag(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = make_env();
+  valk_lval_t *defs = valk_parse_text("(macro {twice _x} {`(+ ,_x ,_x)})");
+  valk_lval_eval(env, defs->cons.head);
+
+  valk_lval_t *m = valk_lenv_get(env, valk_lval_sym("twice"));
+  VALK_TEST_ASSERT(LVAL_TYPE(m) == LVAL_FUN && (m->flags & LVAL_FLAG_MACRO),
+    "macro is an LVAL_FUN carrying LVAL_FLAG_MACRO");
+
+  valk_lval_t *c = valk_lval_copy(m);
+  VALK_TEST_ASSERT((c->flags & LVAL_FLAG_MACRO) != 0,
+    "copy stays a macro");
 
   VALK_PASS();
 }
@@ -424,6 +471,10 @@ int main(void) {
   valk_testsuite_add_test(suite, "aot_emit_object", test_aot_emit_object);
   valk_testsuite_add_test(suite, "fast_safe_rejects_capturing_body",
                           test_fast_safe_rejects_capturing_body);
+  valk_testsuite_add_test(suite, "fast_safe_rejects_macro_head",
+                          test_fast_safe_rejects_macro_head);
+  valk_testsuite_add_test(suite, "lval_copy_preserves_macro_flag",
+                          test_lval_copy_preserves_macro_flag);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

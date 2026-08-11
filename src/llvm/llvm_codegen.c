@@ -2,6 +2,8 @@
 #include "llvm_codegen_internal.h"
 #include "llvm_jit.h"
 #include "../builtins_internal.h"
+#include "../gc.h"
+#include "../macro.h"
 #include <llvm-c/Analysis.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -129,6 +131,14 @@ void valk_llvm_ctx_free(valk_llvm_ctx_t *ctx) {
   free(ctx);
 }
 
+valk_lval_t *valk_codegen_macro_head(valk_lenv_t *env, valk_lval_t *head) {
+  if (!env || !head || LVAL_TYPE(head) != LVAL_SYM) return nullptr;
+  valk_lval_t *val = valk_lenv_get(env, head);
+  if (!val || LVAL_TYPE(val) != LVAL_FUN) return nullptr;
+  if (!(val->flags & LVAL_FLAG_MACRO)) return nullptr;
+  return val;
+}
+
 static LLVMValueRef codegen_sexpr(valk_llvm_ctx_t *c, valk_lval_t *expr,
                                   LLVMValueRef env_param) {
   valk_lval_t *head = expr->cons.head;
@@ -136,6 +146,20 @@ static LLVMValueRef codegen_sexpr(valk_llvm_ctx_t *c, valk_lval_t *expr,
   u64 argc = 0;
   if (rest && LVAL_TYPE(rest) == LVAL_CONS)
     argc = valk_codegen_cons_list_len(rest);
+
+  // Macro call. The tree-walker expands these at eval time (see the
+  // LVAL_FLAG_MACRO branch in valk_lval_eval); without this the head would
+  // fall through to valk_codegen_funcall and the emitted code would apply
+  // the macro as an ordinary function to already-evaluated arguments.
+  // Expand against the build-time env and compile the expansion, which is
+  // exactly what the interpreter would have evaluated.
+  if (valk_codegen_macro_head(c->build_env, head)) {
+    valk_lval_t *expanded = valk_macro_expand_one(c->build_env, expr);
+    if (expanded && expanded != expr) {
+      VALK_GC_ROOT(expanded);
+      return valk_codegen_expr(c, expanded, env_param);
+    }
+  }
 
   if (LVAL_TYPE(head) == LVAL_SYM) {
     if (valk_codegen_is_sym(head, "if"))
@@ -204,7 +228,13 @@ LLVMValueRef valk_llvm_compile_expr(valk_llvm_ctx_t *ctx,
 // build. Qexprs must be scanned too — qexpr branches are executed as
 // code at runtime. Over-scanning quoted *data* costs a slow-path compile
 // but never miscompiles.
-static bool body_has_forbidden_head(valk_lval_t *expr) {
+//
+// A macro head is also forbidden: codegen_sexpr expands it, and the
+// expansion may well contain `\`/`def`/`=`, which this scan would then
+// never have seen. Rejecting without expanding keeps the analysis
+// side-effect free (valk_macro_expand_one mutates the arg list's flags)
+// at the cost of compiling macro-using bodies down the slow path.
+static bool body_has_forbidden_head(valk_lenv_t *env, valk_lval_t *expr) {
   if (!expr) return false;
   if (LVAL_TYPE(expr) != LVAL_CONS) return false;
   valk_lval_t *head = expr->cons.head;
@@ -214,14 +244,15 @@ static bool body_has_forbidden_head(valk_lval_t *expr) {
         strcmp(s, "def") == 0 || strcmp(s, "=") == 0) {
       return true;
     }
+    if (valk_codegen_macro_head(env, head)) return true;
   }
   for (valk_lval_t *c = expr; c && LVAL_TYPE(c) == LVAL_CONS; c = c->cons.tail) {
-    if (body_has_forbidden_head(c->cons.head)) return true;
+    if (body_has_forbidden_head(env, c->cons.head)) return true;
   }
   return false;
 }
 
-bool valk_llvm_body_is_fast_safe(valk_lval_t *body) {
+bool valk_llvm_body_is_fast_safe(valk_lenv_t *env, valk_lval_t *body) {
   if (!body) return true;
   valk_lval_t *eff = body;
   if (LVAL_TYPE(eff) == LVAL_CONS && (eff->flags & LVAL_FLAG_QUOTED)) {
@@ -239,10 +270,10 @@ bool valk_llvm_body_is_fast_safe(valk_lval_t *body) {
   // formals came back unbound.
   valk_lval_t *first = eff->cons.head;
   if (!first || LVAL_TYPE(first) != LVAL_CONS)
-    return !body_has_forbidden_head(eff);
+    return !body_has_forbidden_head(env, eff);
   for (valk_lval_t *c = eff; c && LVAL_TYPE(c) == LVAL_CONS;
        c = c->cons.tail) {
-    if (body_has_forbidden_head(c->cons.head)) return false;
+    if (body_has_forbidden_head(env, c->cons.head)) return false;
   }
   return true;
 }
