@@ -639,13 +639,14 @@
       (= {rel} (if (str/starts-with? filepath source-root)
         {(str/slice filepath (+ (len source-root) 1) (len filepath))}
         {filepath}))
-      (if (not (str/starts-with? rel "src/")) {}
+      ; The shipped standard library lives in stdlib/, not src/ — src/ holds
+      ; only C. Matching on src/ here silently reduced the stdlib gate to an
+      ; empty set.
+      (if (not (str/starts-with? rel "stdlib/")) {}
         {(if (not (str/ends-with? rel ".valk")) {}
-          {(if (str/starts-with? rel "test/") {}
-            {(if (str/starts-with? rel "examples/") {}
-              {(if (> (fc/lines-found fc) 0) {(dict/set! result rel fc)}
-                {(if (> (fc/exprs-found fc) 0) {(dict/set! result rel fc)}
-                  {})})})})})})
+          {(if (> (fc/lines-found fc) 0) {(dict/set! result rel fc)}
+            {(if (> (fc/exprs-found fc) 0) {(dict/set! result rel fc)}
+              {})})})})
       (*filter-stdlib* (tail keys) files source-root result)})
 })
 

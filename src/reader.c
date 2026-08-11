@@ -412,6 +412,18 @@ valk_lval_t* valk_parse_file(const char* filename) {
 // so callers can inspect them. The reader's interactive multi-line variant
 // (valk_lval_read) is unaffected — that's what the REPL uses.
 valk_lval_t* valk_parse_text(const char* text) {
+  return valk_parse_text_named(text, nullptr);
+}
+
+valk_lval_t* valk_parse_text_named(const char* text, const char* filename) {
+  u16 file_id = 0;
+  if (filename != nullptr) {
+    valk_coverage_record_file(filename);
+#ifdef VALK_COVERAGE
+    file_id = valk_source_register_file(filename);
+#endif
+  }
+
   struct { valk_lval_t** items; u64 count; u64 capacity; } tmp = {0};
   da_init(&tmp); // LCOV_EXCL_BR_LINE - macro reinit check
 
@@ -420,7 +432,7 @@ valk_lval_t* valk_parse_text(const char* text) {
     .pos = 0,
     .line = 1,
     .line_start = 0,
-    .file_id = 0
+    .file_id = file_id
   };
 
   // LCOV_EXCL_BR_START - parse error handling and da_add branches
@@ -428,6 +440,11 @@ valk_lval_t* valk_parse_text(const char* text) {
     int before = ctx.pos;
     valk_lval_t* expr = valk_lval_read_ctx(&ctx);
     da_add(&tmp, expr);
+    if (LVAL_TYPE(expr) != LVAL_ERR && file_id != 0) {
+#ifdef VALK_COVERAGE
+      valk_coverage_mark_tree(expr);
+#endif
+    }
     if (LVAL_TYPE(expr) == LVAL_ERR) {
       // "End of input" errors mean we've consumed everything — no recovery
       // possible. Everything else (unclosed paren, unexpected char) should

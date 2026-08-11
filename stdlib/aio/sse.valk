@@ -1,4 +1,4 @@
-; src/modules/aio/sse.valk - Server-Sent Events
+; stdlib/aio/sse.valk - Server-Sent Events
 ; Load with: (load "stdlib/aio/sse.valk")
 ;
 ; SSE wrapper over generic stream/* builtins.

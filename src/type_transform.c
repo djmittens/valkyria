@@ -459,6 +459,9 @@ valk_lval_t *valk_tt_transform_expr(valk_type_env_t *env, valk_type_scope_t *sco
 
   // (type ...) and (sig ...) are registered elsewhere and erased here
   if (is_type_form(expr) || is_sig_form(expr)) {
+#ifdef VALK_COVERAGE
+    valk_coverage_unmark_tree(expr);
+#endif
     return valk_lval_nil();
   }
 
@@ -533,11 +536,17 @@ valk_lval_t *valk_type_transform_expr(valk_lval_t *expr) {
   if (is_type_form(expr)) {
     valk_lval_t *err = valk_type_env_register(env, expr);
     if (err != NULL) return err;
+#ifdef VALK_COVERAGE
+    valk_coverage_unmark_tree(expr);
+#endif
     return valk_lval_nil();
   }
 
   if (is_sig_form(expr)) {
     valk_type_env_register_sig(env, expr);
+#ifdef VALK_COVERAGE
+    valk_coverage_unmark_tree(expr);
+#endif
     return valk_lval_nil();
   }
 

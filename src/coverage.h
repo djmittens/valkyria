@@ -31,6 +31,8 @@ const char *valk_coverage_output_path(void);
 #ifdef VALK_COVERAGE
 #include "valk_thread.h"
 
+typedef struct valk_lval_t valk_lval_t;
+
 typedef struct valk_branch_t {
   u16 line;
   u32 true_count;
@@ -79,6 +81,13 @@ void valk_line_coverage_reset(void);
 
 void valk_coverage_mark_expr(u16 file_id, u16 line, u16 column, u16 end_column);
 void valk_coverage_record_expr(u16 file_id, u16 line, u16 column);
+// Declaration forms — (sig ...), (type ...) — are erased by the type
+// transform and never reach the evaluator, so a line marked for them can
+// never be hit. Retract those marks or the metric reports unreachable
+// denominators.
+void valk_coverage_unmark_line(u16 file_id, u16 line);
+void valk_coverage_mark_tree(valk_lval_t *lval);
+void valk_coverage_unmark_tree(valk_lval_t *lval);
 u64 valk_coverage_get_line_expr_count(u16 file_id, u16 line, u64 *hit, u64 *total);
 
 #define VALK_COVERAGE_RECORD_LINE(fid, line) valk_coverage_record_line(fid, line)

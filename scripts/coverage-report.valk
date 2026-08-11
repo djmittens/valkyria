@@ -267,8 +267,12 @@
 (fun {generate-index-html files output-dir source-root} {
   (= {file-keys} (dict/keys files))
 
-  (= {c-files} {})
-  (= {valk-files} {})
+  ; `=` binds in the innermost frame, so a nested helper cannot append to a
+  ; list owned by this frame — the writes land in the helper's own scope and
+  ; vanish on return. Accumulate through a dict, which is mutated in place.
+  (= {acc} (dict/new))
+  (dict/set! acc "c" {})
+  (dict/set! acc "valk" {})
 
   ; Generate per-file pages and categorize
   (fun {*gen-files* keys} {
@@ -282,20 +286,26 @@
             (= {rel} (if (str/starts-with? filepath source-root)
               {(str/slice filepath (+ (len source-root) 1) (len filepath))}
               {filepath}))
-            (if (or (or (or (str/starts-with? rel "test/")
-                            (str/starts-with? rel "vendor/"))
-                        (str/starts-with? rel "examples/"))
-                    (str/ends-with? rel ".h"))
+            ; A leading "/" means the path never resolved under source-root:
+            ; the transient scripts test_build writes to /tmp land here, and
+            ; their sources are gone by the time the report is read.
+            (if (or (or (or (or (or (str/starts-with? rel "test/")
+                                    (str/starts-with? rel "vendor/"))
+                                (str/starts-with? rel "examples/"))
+                            (str/starts-with? rel "scripts/"))
+                        (str/ends-with? rel ".h"))
+                    (str/starts-with? rel "/"))
               {(*gen-files* (tail keys))}
               {do
                 (= {link} (generate-file-html fc output-dir source-root))
                 (= {entry} (list :rel rel :fc fc :link link))
-                (if (str/ends-with? filepath ".valk")
-                  {(= {valk-files} (join valk-files (list entry)))}
-                  {(= {c-files} (join c-files (list entry)))})
+                (= {bucket} (if (str/ends-with? filepath ".valk") {"valk"} {"c"}))
+                (dict/set! acc bucket (join (dict/get acc bucket) (list entry)))
                 (*gen-files* (tail keys))})})})
   })
   (*gen-files* file-keys)
+  (= {c-files} (dict/get acc "c"))
+  (= {valk-files} (dict/get acc "valk"))
 
   ; Compute totals
   (= {c-lf} (*sum-entries* c-files fc/lines-found 0))
@@ -495,8 +505,7 @@
   (list "src/lsp_index.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
   (list "src/lsp_index_emit.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
   (list "src/gc_region.c" "GC region - branch coverage limited by OOM/edge-case paths")
-  (list "src/type_env.c" "type environment - branch coverage limited by complex pattern matching")
-  (list "scripts/lsp/main.valk" "LSP entry point - only 2 lines, coverage skew from small file")))
+  (list "src/type_env.c" "type environment - branch coverage limited by complex pattern matching")))
 
 (fun {is-blocked rel-path} {
   (*is-blocked-loop* KNOWN_BLOCKED rel-path)
@@ -516,7 +525,7 @@
 (print "COVERAGE GATE CHECK")
 (print "================================================================================")
 (printf "Runtime (src/*.c):    %s line, %s branch\n" (fmt-pct REQ_LINE) (fmt-pct REQ_BRANCH))
-(printf "Stdlib (src/*.valk):  %s expr, %s branch\n" (fmt-pct REQ_EXPR) (fmt-pct REQ_BRANCH))
+(printf "Stdlib (stdlib/*.valk):  %s expr, %s branch\n" (fmt-pct REQ_EXPR) (fmt-pct REQ_BRANCH))
 (print "")
 
 (= {gate-results} (dict/new))
@@ -566,7 +575,7 @@
     {do
       (= {rel} (head keys))
       (= {fc} (dict/get sl rel))
-      (= {filename} (if (str/starts-with? rel "src/") {(str/slice rel 4 (len rel))} {rel}))
+      (= {filename} rel)
       (= {expr-pct} (fc/expr-pct fc))
       (= {branch-pct} (fc/branch-pct fc))
       (= {expr-pass} (>= expr-pct REQ_EXPR))

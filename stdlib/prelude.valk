@@ -7,6 +7,8 @@
 (load "stdlib/builtins.valk")
 
 ; Function Definitions
+; Named function definition.
+(sig 'fun {-> QExpr QExpr A})
 (macro {fun _fn _body}
   {`(def {,(head _fn)} (\ ,(tail _fn) ,_body))})
 

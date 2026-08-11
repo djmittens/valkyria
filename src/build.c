@@ -449,7 +449,7 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   const char *cc = getenv("CC");
   if (!cc || !*cc) cc = "cc";
 
-  char *argv_cc[26];
+  char *argv_cc[32];
   int ai = 0;
   argv_cc[ai++] = (char *)cc;
   argv_cc[ai++] = (char *)"-std=gnu2x";
@@ -469,6 +469,13 @@ int valk_build(valk_lenv_t *env, const char *script_path,
 #endif
 #if defined(__SANITIZE_THREAD__)
   argv_cc[ai++] = (char *)"-fsanitize=thread";
+#endif
+  // VALK_COVERAGE widens valk_lval_t (see parser.h): the shim reads that
+  // struct directly, so it must agree with the library it links against or
+  // every field past `flags` lands at the wrong offset and the entry's
+  // result silently decays to exit code 0.
+#ifdef VALK_COVERAGE
+  argv_cc[ai++] = (char *)"-DVALK_COVERAGE";
 #endif
   argv_cc[ai++] = inc_src;
   argv_cc[ai++] = inc_aio;

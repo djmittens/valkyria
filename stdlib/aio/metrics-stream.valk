@@ -1,4 +1,4 @@
-; src/modules/aio/metrics-stream.valk
+; stdlib/aio/metrics-stream.valk
 ; Metrics streaming utilities for real-time monitoring
 ; Load with: (load "stdlib/aio/metrics-stream.valk")
 ;

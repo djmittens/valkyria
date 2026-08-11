@@ -136,8 +136,8 @@
     true
   })
   (test/case "debug-assets-path-configured"
-    {test/assert (== aio/debug-assets-path "src/modules/aio/debug/")
-    "assets path should be src/modules/aio/debug/"})
+    {test/assert (== aio/debug-assets-path "stdlib/aio/debug/")
+    "assets path should be stdlib/aio/debug/"})
   (test/case "debug-html-content-loaded"
     {do
     (test/assert (> (len aio/debug-html-content) 0)

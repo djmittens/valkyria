@@ -81,6 +81,12 @@ typedef struct valk_async_handle_t valk_async_handle_t;  // Async handle (define
 typedef struct valk_dict_t valk_dict_t;  // Dict data (defined in dict.h)
 valk_lval_t *valk_parse_file(const char *filename);
 valk_lval_t *valk_parse_text(const char *text);
+// Same as valk_parse_text, but attributes the parsed forms to `filename` so
+// they are visible to Valk-level coverage. Callers that already hold the file
+// text (the module loader's AST cache) must use this, not valk_parse_text:
+// forms parsed without a filename get file_id 0 and every coverage hook
+// silently drops them.
+valk_lval_t *valk_parse_text_named(const char *text, const char *filename);
 
 typedef enum {
   LVAL_UNDEFINED,

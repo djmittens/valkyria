@@ -1,4 +1,4 @@
-; src/modules/aio/debug-broadcaster.valk
+; stdlib/aio/debug-broadcaster.valk
 ; SSE broadcaster for debug diagnostics streams
 ; Load with: (load "stdlib/aio/debug-broadcaster.valk")
 

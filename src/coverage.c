@@ -418,6 +418,47 @@ void valk_coverage_mark_expr(u16 file_id, u16 line, u16 column, u16 end_column) 
   valk_mutex_unlock(&g_line_coverage.lock);
 }
 
+void valk_coverage_unmark_line(u16 file_id, u16 line) {
+  if (file_id == 0 || line == 0) return;
+  ensure_line_coverage_init();
+
+  valk_mutex_lock(&g_line_coverage.lock);
+
+  valk_line_coverage_file_t *fc = valk_coverage_get_file(file_id);
+  if (fc == nullptr) {
+    valk_mutex_unlock(&g_line_coverage.lock);
+    return;
+  }
+
+  // Drop every expression recorded on the line rather than matching the
+  // erased form's own (line, column): macro expansion can rebuild a form and
+  // inherit a source location that no longer matches the entry created while
+  // reading, so column identity is not reliable here.
+  if (fc->expr_buckets != nullptr) {
+    for (u32 b = 0; b < EXPR_HASH_SIZE; b++) {
+      valk_expr_t **link = &fc->expr_buckets[b];
+      while (*link != nullptr) {
+        valk_expr_t *expr = *link;
+        if (expr->line == line) {
+          if (expr->hit_count > 0 && fc->exprs_hit > 0) fc->exprs_hit--;
+          if (fc->exprs_found > 0) fc->exprs_found--;
+          *link = expr->next;
+          free(expr);
+          continue;
+        }
+        link = &expr->next;
+      }
+    }
+  }
+
+  if (line < fc->line_capacity && fc->line_counts[line] != UINT32_MAX) {
+    if (fc->line_counts[line] > 0 && fc->lines_hit > 0) fc->lines_hit--;
+    fc->line_counts[line] = UINT32_MAX;
+  }
+
+  valk_mutex_unlock(&g_line_coverage.lock);
+}
+
 void valk_coverage_record_expr(u16 file_id, u16 line, u16 column) {
   if (file_id == 0 || line == 0) return;
   ensure_line_coverage_init();

@@ -42,7 +42,7 @@ Use `valk_intern(env, val)` to copy values to GC heap.
 
 ### Testing
 - C tests: `test/test_*.c` using `testing.{c,h}`
-- Lisp tests: `test/test_*.valk` using `src/modules/test.valk`
+- Lisp tests: `test/test_*.valk` using `stdlib/test/test.valk`
 - Always run `make test`, not individual binaries
 
 ### Testing Philosophy (IMPORTANT)

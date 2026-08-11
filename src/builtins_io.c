@@ -174,9 +174,11 @@ static valk_lval_t *parse_file_cached(const char *resolved_path) {
                            : (valk_sys ? valk_sys->heap : NULL);
   valk_lval_t *ast;
   if (heap) {
-    VALK_WITH_ALLOC((void *)heap) { ast = valk_parse_text(text); }
+    VALK_WITH_ALLOC((void *)heap) {
+      ast = valk_parse_text_named(text, resolved_path);
+    }
   } else {
-    ast = valk_parse_text(text);
+    ast = valk_parse_text_named(text, resolved_path);
   }
   free(text);
   if (LVAL_TYPE(ast) == LVAL_ERR) return ast;

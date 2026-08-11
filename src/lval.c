@@ -390,6 +390,18 @@ void valk_coverage_mark_tree(valk_lval_t* lval) {
     valk_coverage_mark_tree(lval->cons.tail);
   }
 }
+
+void valk_coverage_unmark_tree(valk_lval_t* lval) {
+  if (lval == NULL) return;
+  if (LVAL_TYPE(lval) != LVAL_CONS) return;
+
+  valk_coverage_unmark_tree(lval->cons.head);
+  valk_coverage_unmark_tree(lval->cons.tail);
+
+  if (lval->cov_line > 0) {
+    valk_coverage_unmark_line(lval->cov_file_id, lval->cov_line);
+  }
+}
 #endif
 // LCOV_EXCL_STOP
 

@@ -1,10 +1,12 @@
-; src/modules/aio/debug.valk
+; stdlib/aio/debug.valk
 ; Debug dashboard routes for Valkyria AIO system
 ; Load with: (load "stdlib/aio/debug.valk")
 
+(load "stdlib/aio/sse.valk")
+(load "stdlib/aio/debug-broadcaster.valk")
 
 ; Base path for debug assets (relative to where valk is run from)
-(def {aio/debug-assets-path} "src/modules/aio/debug/")
+(def {aio/debug-assets-path} "stdlib/aio/debug/")
 
 ; Load and cache the HTML content from external files at module load time
 ; Files are: head.html + style.css + body.html + script.js + footer.html
