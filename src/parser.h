@@ -213,6 +213,9 @@ static inline void valk_lval_set_immortal(valk_lval_t *v) {
 valk_lval_t *valk_lval_ref(const char *type, void *ptr, void (*free)(void *));
 
 valk_lval_t *valk_lval_num(long x);
+// Always allocates; never returns the shared small-int cache. Required for
+// values that carry per-occurrence metadata (source positions).
+valk_lval_t *valk_lval_num_uncached(long x);
 valk_lval_t *valk_lval_err(const char *fmt, ...);
 valk_lval_t *valk_lval_sym(const char *sym);
 valk_lval_t *valk_lval_str(const char *str);

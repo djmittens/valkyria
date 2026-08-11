@@ -20,6 +20,14 @@ static char valk_lval_str_unescape(char x);
 
 static char* lval_str_unescapable = "abfnrtv\\\'\"";
 
+// Immortal singletons (nil, small-int cache) are shared process-wide: stamping
+// a source position on one would make every occurrence in every file report
+// the offset of whichever occurrence was parsed last.
+static inline void reader_set_src_pos(valk_lval_t* v, int pos) {
+  if (v->flags & LVAL_FLAG_IMMORTAL) return;
+  LVAL_SRC_POS_SET(v, pos);
+}
+
 // ---------------------------------------------------------------------------
 // Leaf parsers — shared by ctx reader
 // ---------------------------------------------------------------------------
@@ -57,12 +65,12 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
     if (isNum) {
       errno = 0;
       long x = strtol(sym, nullptr, 10);
-      res = errno != ERANGE ? valk_lval_num(x)
+      res = errno != ERANGE ? valk_lval_num_uncached(x)
                             : valk_lval_err("Invalid number format %s", sym);
     } else {
       res = valk_lval_sym(sym);
     }
-    LVAL_SRC_POS_SET(res, start);
+    reader_set_src_pos(res, start);
     *i += len;
     free(sym);
     return res;
@@ -111,7 +119,7 @@ static valk_lval_t* valk_lval_read_str(int* i, const char* s) {
 
   *i = end + 1;
   valk_lval_t *result = valk_lval_str(tmp);
-  LVAL_SRC_POS_SET(result, start);
+  reader_set_src_pos(result, start);
   return result;
 }
 
@@ -222,7 +230,7 @@ static valk_lval_t *valk_lval_read_ctx(valk_parse_ctx_t *ctx) {
     ctx->pos++;
   }
 
-  if (LVAL_SRC_POS(res) < 0) LVAL_SRC_POS_SET(res, saved_pos);
+  if (LVAL_SRC_POS(res) < 0) reader_set_src_pos(res, saved_pos);
 
   parse_ctx_skip_whitespace(ctx);
   return res;
@@ -288,7 +296,6 @@ static valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
   ctx->pos++;
 
   valk_lval_t *result = valk_lval_nil();
-  LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col); // LCOV_EXCL_BR_LINE - coverage macro
   for (u64 j = count; j > 0; j--) {
     if (is_quoted) {
       result = valk_lval_qcons(elements[j - 1], result);
@@ -298,7 +305,7 @@ static valk_lval_t *valk_lval_read_expr_ctx(valk_parse_ctx_t *ctx) {
     LVAL_SET_SOURCE_LOC(result, ctx->file_id, saved_line, saved_col); // LCOV_EXCL_BR_LINE - coverage macro
   }
 
-  LVAL_SRC_POS_SET(result, saved_pos);
+  reader_set_src_pos(result, saved_pos);
   return result;
 }
 

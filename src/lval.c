@@ -268,16 +268,20 @@ valk_lval_t* valk_lval_dict(valk_dict_t* data) {
   return res;
 }
 
-valk_lval_t* valk_lval_num(long x) {
-  if (__valk_singletons_initialized && x >= VALK_NUM_CACHE_MIN && x <= VALK_NUM_CACHE_MAX) {
-    return &__valk_num_cache[x - VALK_NUM_CACHE_MIN];
-  }
+valk_lval_t* valk_lval_num_uncached(long x) {
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
       LVAL_NUM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
   res->num = x;
   return res;
+}
+
+valk_lval_t* valk_lval_num(long x) {
+  if (__valk_singletons_initialized && x >= VALK_NUM_CACHE_MIN && x <= VALK_NUM_CACHE_MAX) {
+    return &__valk_num_cache[x - VALK_NUM_CACHE_MIN];
+  }
+  return valk_lval_num_uncached(x);
 }
 
 // TODO(main): look into UTF-8 support

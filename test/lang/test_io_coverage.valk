@@ -171,6 +171,22 @@
     (test/assert (num? pos) "src-pos returns a number")
     true
   })
+  (test/case "src-pos-num-literals-are-distinct"
+    {do
+    (= {e} (head (parse "(f 0 1 0)")))
+    (= {a} (nth 2 e))
+    (= {b} (nth 4 e))
+    (test/assert-eq 3 (src-pos a) "first 0 keeps its own offset")
+    (test/assert-eq 7 (src-pos b) "second 0 keeps its own offset")
+    true
+  })
+  (test/case "src-pos-not-stamped-on-singletons"
+    {do
+    (parse "(f {} 1 {})")
+    (test/assert-eq -1 (src-pos nil) "nil singleton is never stamped")
+    (test/assert-eq -1 (src-pos (+ 0 1)) "cached num singleton is never stamped")
+    true
+  })
   (test/case "qcons-basic"
     {do
     (= {result} (qcons 1 (list 2 3)))
