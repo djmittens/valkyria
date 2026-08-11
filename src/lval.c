@@ -392,6 +392,38 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   extern valk_eval_metrics_t g_eval_metrics;
   atomic_fetch_add(&g_eval_metrics.closures_created, 1);
 
+  // Validate the formals BEFORE allocating. Bailing out after the
+  // allocation would leave a live object already tagged LVAL_FUN whose
+  // fun.env / fun.body / fun.name are uninitialized, and the next GC mark
+  // would follow those pointers.
+  //
+  // `&` must be followed by exactly one symbol to bind the rest to. This
+  // was only checked when the lambda was CALLED, so `(\ {x &} {x})` built
+  // a function that could never be applied.
+  int arity = 0;
+  bool is_variadic = false;
+  u64 nformals = valk_lval_list_count(formals);
+  for (u64 i = 0; i < nformals; i++) {
+    valk_lval_t* formal = valk_lval_list_nth(formals, i);
+    if (LVAL_TYPE(formal) == LVAL_SYM && strcmp(formal->str, "&") == 0) {
+      if (i + 2 != nformals) {
+        return valk_lval_err(
+            "Invalid function format: & must be followed by exactly one "
+            "varargs name");
+      }
+      if (LVAL_TYPE(valk_lval_list_nth(formals, i + 1)) != LVAL_SYM) {
+        return valk_lval_err(
+            "Invalid function format: & must be followed by a symbol");
+      }
+      is_variadic = true;
+      break;
+    }
+    arity++;
+  }
+  if (is_variadic) {
+    arity = -(arity + 1);
+  }
+
   valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
   res->flags =
       LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
@@ -399,21 +431,6 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   INHERIT_SOURCE_LOC(res, body);
 
   res->fun.builtin = nullptr;
-
-  int arity = 0;
-  bool is_variadic = false;
-  for (u64 i = 0; i < valk_lval_list_count(formals); i++) {
-    valk_lval_t* formal = valk_lval_list_nth(formals, i);
-    if (LVAL_TYPE(formal) == LVAL_SYM && strcmp(formal->str, "&") == 0) {
-      is_variadic = true;
-      break;
-    }
-    arity++;
-  }
-
-  if (is_variadic) {
-    arity = -(arity + 1);
-  }
 
   res->fun.arity = arity;
   static const char* lambda_name = "<lambda>";

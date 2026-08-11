@@ -934,11 +934,12 @@ static void test_ctx_with_deadline_too_few_args(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  // Need at least 2 args to reach the special form handler (otherwise single-elem eval)
-  // ctx/with-deadline with only timeout but no body should error
+  // The body is optional — an empty body is nil, the same way (do) is.
+  // This asserted an error and test_parser_continuations.valk asserted nil
+  // for the same expression; the two suites disagreed because the .valk one
+  // had never run. The timeout itself is still required.
   valk_lval_t *result = parse_and_eval("(ctx/with-deadline 1000)");
-  ASSERT_LVAL_ERROR(result);
-  ASSERT_STR_CONTAINS(result->str, "requires timeout-ms and body");
+  ASSERT_LVAL_TYPE(result, LVAL_NIL);
 
   VALK_PASS();
 }
@@ -969,7 +970,7 @@ static void test_ctx_with_too_few_args(VALK_TEST_ARGS()) {
 
   valk_lval_t *result = parse_and_eval("(ctx/with \"key\")");
   ASSERT_LVAL_ERROR(result);
-  ASSERT_STR_CONTAINS(result->str, "requires key, value, and body");
+  ASSERT_STR_CONTAINS(result->str, "requires a key and a value");
 
   VALK_PASS();
 }
@@ -1395,8 +1396,15 @@ static void test_cmp_wrong_count(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(== 1)");
-  ASSERT_LVAL_ERROR(result);
+  // Comparisons chain over adjacent pairs now, so a single operand is
+  // vacuously true — there is no pair to falsify, same as (< 1). Zero
+  // operands is still an arity error.
+  valk_lval_t *one = parse_and_eval("(== 1)");
+  ASSERT_LVAL_TYPE(one, LVAL_NUM);
+  ASSERT_LVAL_NUM(one, 1);
+
+  valk_lval_t *none = parse_and_eval("(==)");
+  ASSERT_LVAL_ERROR(none);
 
   VALK_PASS();
 }
@@ -2324,8 +2332,13 @@ static void test_ord_wrong_count(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(> 1)");
-  ASSERT_LVAL_ERROR(result);
+  // One operand forms no pair, so the chain is vacuously true.
+  valk_lval_t *one = parse_and_eval("(> 1)");
+  ASSERT_LVAL_TYPE(one, LVAL_NUM);
+  ASSERT_LVAL_NUM(one, 1);
+
+  valk_lval_t *none = parse_and_eval("(>)");
+  ASSERT_LVAL_ERROR(none);
 
   VALK_PASS();
 }
@@ -2335,7 +2348,8 @@ static void test_cmp_wrong_count_too_few(VALK_TEST_ARGS()) {
   setup_env();
 
   valk_lval_t *result = parse_and_eval("(== 1)");
-  ASSERT_LVAL_ERROR(result);
+  ASSERT_LVAL_TYPE(result, LVAL_NUM);
+  ASSERT_LVAL_NUM(result, 1);
 
   VALK_PASS();
 }
@@ -2344,8 +2358,15 @@ static void test_cmp_wrong_count_too_many(VALK_TEST_ARGS()) {
   VALK_TEST();
   setup_env();
 
-  valk_lval_t *result = parse_and_eval("(== 1 2 3)");
-  ASSERT_LVAL_ERROR(result);
+  // No longer an arity error: == is an all-equal chain. 1, 2 and 3 are
+  // simply not all equal.
+  valk_lval_t *mixed = parse_and_eval("(== 1 2 3)");
+  ASSERT_LVAL_TYPE(mixed, LVAL_NUM);
+  ASSERT_LVAL_NUM(mixed, 0);
+
+  valk_lval_t *same = parse_and_eval("(== 7 7 7)");
+  ASSERT_LVAL_TYPE(same, LVAL_NUM);
+  ASSERT_LVAL_NUM(same, 1);
 
   VALK_PASS();
 }

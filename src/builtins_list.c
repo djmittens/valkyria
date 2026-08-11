@@ -131,6 +131,11 @@ static valk_lval_t* valk_builtin_repeat(valk_lenv_t* e, valk_lval_t* a) {
   valk_lval_t* func = valk_lval_list_nth(a, 0);
   long count = valk_lval_list_nth(a, 1)->num;
 
+  // A negative count would declare a negative-length VLA below, which is
+  // undefined behaviour. Repeating something a negative number of times is
+  // the same as not repeating it.
+  if (count <= 0) return valk_lval_nil();
+
   valk_lval_t* res[count];
   valk_lval_t* nil = valk_lval_nil();
 
