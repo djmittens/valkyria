@@ -500,6 +500,45 @@ void test_slab_release_ptr(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void harness_probe_test(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  printf("probe output\n");
+  fflush(stdout);
+  VALK_PASS();
+}
+
+// valk_testsuite_run used to free the slab backing every test's captured
+// _stdout/_stderr rings before returning. valk_testsuite_print then read those
+// rings, so reporting any FAILING test dereferenced freed memory and crashed
+// the reporter - losing exactly the output you needed. The rings must stay
+// valid until valk_testsuite_free.
+void test_testsuite_io_outlives_run(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_test_suite_t *inner = valk_testsuite_empty("inner");
+  valk_testsuite_add_test(inner, "probe", harness_probe_test);
+
+  valk_testsuite_run(inner);
+
+  VALK_TEST_ASSERT(inner->_io_slab != nullptr,
+                   "suite must still own the IO slab after run");
+
+  valk_test_t *t = &inner->tests.items[0];
+  VALK_TEST_ASSERT(t->_stdout != nullptr, "captured stdout ring must survive run");
+  VALK_TEST_ASSERT(t->_stderr != nullptr, "captured stderr ring must survive run");
+
+  // The exact dereference valk_print_io performs. On the broken harness this
+  // is a read of freed memory (ASAN flags it; release builds segfault).
+  volatile size_t cap_out = t->_stdout->capacity;
+  volatile size_t cap_err = t->_stderr->capacity;
+  VALK_TEST_ASSERT(cap_out > 0, "stdout ring capacity readable after run");
+  VALK_TEST_ASSERT(cap_err > 0, "stderr ring capacity readable after run");
+
+  valk_testsuite_free(inner);
+
+  VALK_PASS();
+}
+
 static valk_slab_t *concurrent_slab = nullptr;
 static _Atomic int concurrent_errors = 0;
 
@@ -607,6 +646,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_smaps_collect_basic", test_smaps_collect_basic);
   valk_testsuite_add_test(suite, "test_arena_print_stats_null", test_arena_print_stats_null);
   valk_testsuite_add_test(suite, "test_slab_release_ptr", test_slab_release_ptr);
+  valk_testsuite_add_test(suite, "test_testsuite_io_outlives_run", test_testsuite_io_outlives_run);
   valk_testsuite_add_test(suite, "test_slab_concurrent", test_slab_concurrent);
   valk_testsuite_add_test(suite, "test_allocator_malloc", test_allocator_malloc);
   valk_testsuite_add_test(suite, "test_allocator_malloc_calloc", test_allocator_malloc_calloc);

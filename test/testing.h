@@ -140,6 +140,12 @@ typedef struct valk_test_suite_t {
   } fixtures;
   
   valk_fork_handler_f *fork_child_handler;
+
+  // Backing store for every test's captured _stdout/_stderr rings. Owned by
+  // the suite because valk_testsuite_print reads those rings *after*
+  // valk_testsuite_run returns; freeing it at the end of run() left every
+  // test->_stdout dangling, so reporting a failing test crashed the reporter.
+  valk_slab_t *_io_slab;
 } valk_test_suite_t;
 
 valk_test_suite_t *valk_testsuite_empty(const char *filename);

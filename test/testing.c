@@ -114,6 +114,13 @@ void valk_testsuite_free(valk_test_suite_t *suite) {
 
   valk_mem_free(suite->filename);
 
+  // Freed last: every test->_stdout / _stderr points into this slab, and
+  // valk_testsuite_print runs between run() and free().
+  if (suite->_io_slab != nullptr) {
+    valk_slab_free(suite->_io_slab);
+    suite->_io_slab = nullptr;
+  }
+
   valk_mem_free(suite);
 }
 
@@ -357,11 +364,20 @@ void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
 }
 
 int valk_testsuite_run(valk_test_suite_t *suite) {
-  static size_t ring_size = 0;
-  static valk_slab_t *slab = nullptr;
-  if (slab == nullptr) {
-    ring_size = 16384;
-    slab = valk_slab_new(sizeof(valk_ring_t) + ring_size, 1024);
+  const size_t ring_size = 16384;
+
+  // Two rings per test, sized to this suite so acquisition can never fail.
+  // The previous fixed 1024-item slab silently returned nullptr past 512
+  // tests, and the caller dereferenced it unchecked.
+  if (suite->_io_slab == nullptr) {
+    size_t needed = suite->tests.count * 2;
+    if (needed == 0) needed = 2;
+    suite->_io_slab = valk_slab_new(sizeof(valk_ring_t) + ring_size, needed);
+    if (suite->_io_slab == nullptr) {
+      fprintf(stderr, "failed to allocate IO capture slab for %zu tests\n",
+              suite->tests.count);
+      return 1;
+    }
   }
 
   bool result = 0;
@@ -369,9 +385,16 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
   for (size_t i = 0; i < suite->tests.count; i++) {
     valk_test_t *test = &suite->tests.items[i];
 
-    test->_stdout = (void *)valk_slab_aquire(slab)->data;
+    valk_slab_item_t *out_item = valk_slab_aquire(suite->_io_slab);
+    valk_slab_item_t *err_item = valk_slab_aquire(suite->_io_slab);
+    if (out_item == nullptr || err_item == nullptr) {
+      fprintf(stderr, "IO capture slab exhausted at test %zu (%s)\n", i,
+              test->name);
+      return 1;
+    }
+    test->_stdout = (void *)out_item->data;
     valk_ring_init(test->_stdout, ring_size);
-    test->_stderr = (void *)valk_slab_aquire(slab)->data;
+    test->_stderr = (void *)err_item->data;
     valk_ring_init(test->_stderr, ring_size);
 
 #if VALK_TEST_FORK_COMPILED
@@ -391,9 +414,8 @@ int valk_testsuite_run(valk_test_suite_t *suite) {
                 test->result.type == VALK_TEST_SKIP);
   }
 
-  valk_slab_free(slab);
-  slab = nullptr;
-
+  // The slab is NOT freed here: valk_testsuite_print reads every test's
+  // captured rings out of it. Ownership belongs to valk_testsuite_free.
   return result;
 }
 
