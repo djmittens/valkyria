@@ -373,6 +373,53 @@ void test_build_aot_expands_macros_in_bodies(VALK_TEST_ARGS()) {
 // codegen path is the one that can silently diverge: an earlier attempt
 // implemented these as prelude macros, which the tree walker expanded and
 // the compiler emitted as a call to the macro object.
+// `{f}` is a CALL of f with zero arguments, not a reference to f — the
+// tree walker applies a one-element S-expression whose value is a
+// function (CONT_SINGLE_ELEM in eval.c). Codegen used to compile only the
+// element, so every zero-arg call in tail position quietly returned the
+// lambda object instead of calling it, in both lambda bodies and `if`
+// branches. Nothing errored; the wrong value just propagated. This is how
+// `(\ {argv} {lsp/start})` produced an LSP binary that did nothing.
+//
+// Each check below exits with a distinct code so a failure says which
+// shape regressed, and the non-function cases pin the pass-through half:
+// `{precomputed}` must still yield the value, not attempt a call.
+void test_build_aot_zero_arg_call_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  const char *src = "/tmp/valk_build_test_zeroarg.valk";
+  const char *out = "/tmp/valk_build_test_zeroarg.bin";
+  const char *body =
+      "(def {precomputed} 42)\n"
+      "(fun {work} {do 7})\n"
+      "(fun {via-body} {work})\n"
+      "(fun {via-if x} {if x {work} {0}})\n"
+      "(fun {via-value} {precomputed})\n"
+      "(fun {via-if-value x} {if x {precomputed} {0}})\n"
+      "(fun {mk} {\\ {} {do 9}})\n"
+      "(fun {via-if-call x} {if x {(mk)} {0}})\n"
+      "(\\ {argv} {do\n"
+      "  (if (not (== (via-body) 7)) {1}\n"
+      "  {if (not (== (via-if 1) 7)) {2}\n"
+      "  {if (not (== (via-value) 42)) {3}\n"
+      "  {if (not (== (via-if-value 1) 42)) {4}\n"
+      "  {if (not (== (via-if-call 1) 9)) {5}\n"
+      "  {0}}}}})\n"
+      "})\n";
+  VALK_TEST_ASSERT(write_valk(src, body) == 0, "write src");
+  VALK_TEST_ASSERT(run_valk_build(src, out) == 0, "valk --build succeeds");
+
+  int rc = run_produced(out, NULL);
+  VALK_TEST_ASSERT(rc == 0,
+                   "compiled zero-arg calls match the evaluator (got %d: "
+                   "1 body call, 2 if-branch call, 3 body value, "
+                   "4 if-branch value, 5 if-branch call result)",
+                   rc);
+
+  unlink(src);
+  unlink(out);
+  VALK_PASS();
+}
+
 void test_build_aot_and_or_semantics(VALK_TEST_ARGS()) {
   VALK_TEST();
   const char *src = "/tmp/valk_build_test_andor.valk";
@@ -435,6 +482,8 @@ int main(void) {
                           test_build_aot_expands_macros_in_bodies);
   valk_testsuite_add_test(suite, "build_aot_and_or_semantics",
                           test_build_aot_and_or_semantics);
+  valk_testsuite_add_test(suite, "build_aot_zero_arg_call_body",
+                          test_build_aot_zero_arg_call_body);
   int rc = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
   valk_testsuite_free(suite);

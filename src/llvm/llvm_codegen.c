@@ -307,6 +307,42 @@ static LLVMValueRef valk_codegen_get_runtime_fn(valk_llvm_ctx_t *ctx,
   return fn;
 }
 
+// `(f)` is not `f`. The tree walker evaluates the single element and then,
+// via CONT_SINGLE_ELEM, applies the result to zero arguments if it is a
+// function. Compiling only the element made every zero-argument call in
+// tail position return the function object instead of calling it — silently,
+// with no error, in both lambda bodies and `if` branches.
+//
+// A literal can never be a function, so the runtime check is emitted only
+// for elements whose value isn't statically known: symbols and nested
+// calls. `{0}` / `{}` / `{"s"}` branches compile exactly as before.
+static bool single_elem_may_be_fun(valk_lval_t *elem) {
+  if (!elem) return false;
+  switch (LVAL_TYPE(elem)) {
+    case LVAL_NUM:
+    case LVAL_STR:
+    case LVAL_NIL:
+      return false;
+    case LVAL_CONS:
+      return !(elem->flags & LVAL_FLAG_QUOTED);
+    default:
+      return true;
+  }
+}
+
+LLVMValueRef valk_codegen_single_elem(valk_llvm_ctx_t *c, valk_lval_t *elem,
+                                      LLVMValueRef env_param) {
+  LLVMValueRef value = valk_codegen_expr(c, elem, env_param);
+  if (!single_elem_may_be_fun(elem)) return value;
+  LLVMTypeRef ty = LLVMFunctionType(c->ptr_type,
+    (LLVMTypeRef[]){c->ptr_type, c->ptr_type}, 2, 0);
+  LLVMValueRef fn = valk_codegen_get_runtime_fn(c, "valk_eval_single_elem", ty);
+  LLVMValueRef args[] = {env_param, value};
+  LLVMValueRef ret = LLVMBuildCall2(c->builder, ty, fn, args, 2, "single_elem");
+  if (c->in_tail) LLVMSetTailCall(ret, 1);
+  return ret;
+}
+
 void valk_codegen_emit_env_root_push(valk_llvm_ctx_t *ctx, LLVMValueRef env) {
   LLVMTypeRef ty = LLVMFunctionType(ctx->void_type,
     (LLVMTypeRef[]){ctx->ptr_type}, 1, 0);
@@ -499,7 +535,7 @@ LLVMValueRef valk_llvm_compile_lambda_body_fast(valk_llvm_ctx_t *ctx,
       }
     } else if (count == 1) {
       ctx->in_tail = true;
-      result = valk_codegen_expr(ctx, first, env_param);
+      result = valk_codegen_single_elem(ctx, first, env_param);
     } else {
       ctx->in_tail = true;
       result = valk_codegen_expr(ctx, eff, env_param);
@@ -643,7 +679,7 @@ LLVMValueRef valk_llvm_compile_lambda_body(valk_llvm_ctx_t *ctx,
       }
     } else if (count == 1) {
       ctx->in_tail = true;
-      result = valk_codegen_expr(ctx, first, env_param);
+      result = valk_codegen_single_elem(ctx, first, env_param);
     } else {
       ctx->in_tail = true;
       result = valk_codegen_expr(ctx, eff, env_param);

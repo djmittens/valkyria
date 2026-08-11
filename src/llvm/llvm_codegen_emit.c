@@ -132,13 +132,18 @@ bool valk_codegen_is_num_literal(valk_lval_t *expr, i64 *out) {
   return true;
 }
 
-valk_lval_t *valk_codegen_unwrap_branch_qexpr(valk_lval_t *branch) {
+valk_lval_t *valk_codegen_unwrap_branch_qexpr(valk_lval_t *branch,
+                                              bool *out_single) {
+  if (out_single) *out_single = false;
   if (!branch) return branch;
   if (LVAL_TYPE(branch) != LVAL_CONS) return branch;
   if (!(branch->flags & LVAL_FLAG_QUOTED)) return branch;
   valk_lval_t *cons = valk_qexpr_to_cons(branch);
   if (cons && LVAL_TYPE(cons) == LVAL_CONS && cons->cons.tail &&
       LVAL_TYPE(cons->cons.tail) == LVAL_NIL) {
+    // A one-element branch keeps one-element S-expression semantics: the
+    // caller must emit the zero-arg apply, not just the element's value.
+    if (out_single) *out_single = true;
     return cons->cons.head;
   }
   return cons;

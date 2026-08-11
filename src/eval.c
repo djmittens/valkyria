@@ -88,6 +88,17 @@ valk_lval_t *valk_stack_guard(void) {
   return NULL;
 }
 
+// Second half of a one-element S-expression: `(f)` evaluates `f` and then,
+// if that produced a function, applies it to zero arguments. Compiled code
+// emits the evaluation inline and calls this for the apply step, so the
+// tree walker's CONT_SINGLE_ELEM frame and codegen stay in lockstep.
+valk_lval_t *valk_eval_single_elem(valk_lenv_t *env, valk_lval_t *value) {
+  if (value && LVAL_TYPE(value) == LVAL_FUN) {
+    return valk_lval_eval_call(env, value, valk_lval_nil());
+  }
+  return value;
+}
+
 void valk_eval_stack_init(valk_eval_stack_t *stack) {
   stack->frames = malloc(sizeof(valk_cont_frame_t) * VALK_EVAL_STACK_INIT_CAP);
   stack->count = 0;

@@ -30,7 +30,16 @@ u64 valk_codegen_cons_list_len(valk_lval_t *list);
 valk_lval_t *valk_codegen_cons_list_nth(valk_lval_t *list, u64 idx);
 bool valk_codegen_is_sym(valk_lval_t *expr, const char *name);
 bool valk_codegen_is_num_literal(valk_lval_t *expr, i64 *out);
-valk_lval_t *valk_codegen_unwrap_branch_qexpr(valk_lval_t *branch);
+// Unwraps a `{...}` branch to the expression to compile. Sets *out_single
+// when the branch held exactly one element, in which case the caller must
+// use valk_codegen_single_elem rather than valk_codegen_expr.
+valk_lval_t *valk_codegen_unwrap_branch_qexpr(valk_lval_t *branch,
+                                              bool *out_single);
+// Compile `elem` as the sole element of a one-element S-expression: the
+// value, then the zero-arg apply the tree walker performs when that value
+// turns out to be a function (CONT_SINGLE_ELEM in eval.c).
+LLVMValueRef valk_codegen_single_elem(valk_llvm_ctx_t *c, valk_lval_t *elem,
+                                      LLVMValueRef env_param);
 
 LLVMValueRef valk_codegen_emit_load_num_field(valk_llvm_ctx_t *c,
                                               LLVMValueRef lval_ptr,

@@ -264,6 +264,8 @@ valk_lval_t *valk_lval_eval_call(valk_lenv_t *env, valk_lval_t *func,
 // NULL when there is headroom, or an error lval when the C stack is near
 // its limit (same contract as the check inside valk_lval_eval_call).
 valk_lval_t *valk_stack_guard(void);
+// Apply step of a one-element S-expression, for compiled code. See eval.c.
+valk_lval_t *valk_eval_single_elem(valk_lenv_t *env, valk_lval_t *value);
 
 void valk_lval_print(valk_lval_t *val);
 

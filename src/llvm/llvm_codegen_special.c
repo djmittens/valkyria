@@ -84,6 +84,12 @@ LLVMValueRef valk_codegen_and_or(valk_llvm_ctx_t *c, valk_lval_t *args,
   return result;
 }
 
+static LLVMValueRef codegen_branch(valk_llvm_ctx_t *c, valk_lval_t *expr,
+                                   bool single, LLVMValueRef env_param) {
+  return single ? valk_codegen_single_elem(c, expr, env_param)
+                : valk_codegen_expr(c, expr, env_param);
+}
+
 LLVMValueRef valk_codegen_if(valk_llvm_ctx_t *c, valk_lval_t *args, u64 argc,
                              LLVMValueRef env_param) {
   if (argc < 2) return valk_codegen_nil(c);
@@ -92,8 +98,10 @@ LLVMValueRef valk_codegen_if(valk_llvm_ctx_t *c, valk_lval_t *args, u64 argc,
   valk_lval_t *then_expr = valk_codegen_cons_list_nth(args, 1);
   valk_lval_t *else_expr = argc > 2 ? valk_codegen_cons_list_nth(args, 2) : NULL;
 
-  then_expr = valk_codegen_unwrap_branch_qexpr(then_expr);
-  else_expr = valk_codegen_unwrap_branch_qexpr(else_expr);
+  bool then_single = false;
+  bool else_single = false;
+  then_expr = valk_codegen_unwrap_branch_qexpr(then_expr, &then_single);
+  else_expr = valk_codegen_unwrap_branch_qexpr(else_expr, &else_single);
 
   bool saved_tail = c->in_tail;
 
@@ -126,13 +134,13 @@ LLVMValueRef valk_codegen_if(valk_llvm_ctx_t *c, valk_lval_t *args, u64 argc,
   if (saved_tail) {
     LLVMPositionBuilderAtEnd(c->builder, then_bb);
     c->in_tail = true;
-    LLVMValueRef then_val = valk_codegen_expr(c, then_expr, env_param);
+    LLVMValueRef then_val = codegen_branch(c, then_expr, then_single, env_param);
     LLVMBuildRet(c->builder, then_val);
 
     LLVMPositionBuilderAtEnd(c->builder, else_bb);
     c->in_tail = true;
     LLVMValueRef else_val = else_expr
-        ? valk_codegen_expr(c, else_expr, env_param)
+        ? codegen_branch(c, else_expr, else_single, env_param)
         : valk_codegen_nil(c);
     LLVMBuildRet(c->builder, else_val);
 
@@ -146,14 +154,14 @@ LLVMValueRef valk_codegen_if(valk_llvm_ctx_t *c, valk_lval_t *args, u64 argc,
   LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(c->ctx, fn, merge_name);
 
   LLVMPositionBuilderAtEnd(c->builder, then_bb);
-  LLVMValueRef then_val = valk_codegen_expr(c, then_expr, env_param);
+  LLVMValueRef then_val = codegen_branch(c, then_expr, then_single, env_param);
   LLVMBuildBr(c->builder, merge_bb);
   LLVMBasicBlockRef then_end = LLVMGetInsertBlock(c->builder);
 
   LLVMPositionBuilderAtEnd(c->builder, else_bb);
   LLVMValueRef else_val;
   if (else_expr) {
-    else_val = valk_codegen_expr(c, else_expr, env_param);
+    else_val = codegen_branch(c, else_expr, else_single, env_param);
   } else {
     else_val = valk_codegen_nil(c);
   }
