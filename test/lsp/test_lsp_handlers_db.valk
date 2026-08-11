@@ -66,6 +66,7 @@
 ; --- State reset helper ---
 
 (fun {reset-state} {do
+  (if (ref? lsp/db) {sqlite/close lsp/db} {nil})
   (def {lsp/documents} (dict/new))
   (def {lsp/db} nil)
   (def {lsp/root-path} nil)
@@ -223,3 +224,5 @@
     })
 
 ) {:suite-name "LSP Handlers DB" :debug 0})
+
+(if (ref? lsp/db) {sqlite/close lsp/db} {nil})

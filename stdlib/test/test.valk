@@ -472,13 +472,21 @@
 
         (= {test-handle} (test-body))
 
-        ; Validate that test body returned a handle - fail fast if not
-        (if (not (handle? test-handle))
+        ; Validate that test body returned a handle - fail fast if not.
+        ; An error body must be forked on explicitly: under BYOL error
+        ; propagation `(handle? err)` returns the error, which would
+        ; short-circuit the rest of this function and silently abandon
+        ; every remaining test in the suite with exit 0.
+        (= {is-err} (if (error? test-handle) {1} {0}))
+        (= {is-handle} (if (== is-err 1) {0} {if (handle? test-handle) {1} {0}}))
+        (if (== is-handle 0)
           {(do
             (= {captured} (test/capture-stop cap))
             (printf "\n\nFATAL: test-async body must return a handle!\n")
             (printf "  Test: %s\n" test-name)
-            (printf "  Got:  %s\n\n" (str test-handle))
+            (printf "  Got:  ")
+            (print test-handle)
+            (printf "\n")
             (*test-print-captured* test-name captured)
             (shutdown 1))}
           {true})

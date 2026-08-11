@@ -384,6 +384,7 @@
     (= {r1} (nth 1 rows))
     (= {v} r1:val)
     (test/assert (num? v) "float column returns a number")
+    (sqlite/close db)
     true
   })
   (test/case "sqlite-null-column-via-query"

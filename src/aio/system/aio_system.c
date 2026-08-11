@@ -9,6 +9,10 @@ void valk_aio_destroy(valk_aio_system_t *sys);
 extern void __loop_stop_cb(uv_async_t *h);
 extern void __gc_wakeup_cb(uv_async_t *handle);
 
+static void __subsystem_stop(void *ctx) { valk_aio_stop(ctx); }
+static void __subsystem_wait(void *ctx) { valk_aio_wait_for_shutdown(ctx); }
+static void __subsystem_destroy(void *ctx) { valk_aio_destroy(ctx); }
+
 const char *valk_aio_system_config_validate(const valk_aio_system_config_t *cfg) {
   if (cfg->max_connections < 1 || cfg->max_connections > 100000)
     return "max_connections must be between 1 and 100,000";
@@ -241,9 +245,9 @@ valk_aio_system_t *valk_aio_start_with_config(valk_aio_system_config_t *config) 
 
   if (valk_sys->initialized) {
     valk_system_add_subsystem(valk_sys,
-                             (void(*)(void*))valk_aio_stop,
-                             (void(*)(void*))valk_aio_wait_for_shutdown,
-                             (void(*)(void*))valk_aio_destroy,
+                             __subsystem_stop,
+                             __subsystem_wait,
+                             __subsystem_destroy,
                              sys);
   }
 

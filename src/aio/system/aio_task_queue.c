@@ -60,6 +60,15 @@ static void __task_queue_close_cb(uv_handle_t *handle) {
   (void)handle;
 }
 
+static void __drain_unrun_tasks(valk_aio_task_queue_t *tq) {
+  void *item;
+  while ((item = valk_mpmc_pop(&tq->queue)) != nullptr) {
+    valk_aio_task_item_t *task = (valk_aio_task_item_t *)item;
+    if (task->drop) task->drop(task->ctx);
+    free(task);
+  }
+}
+
 // Per-loop task queue init/shutdown
 void valk_aio_loop_task_queue_init(valk_aio_loop_t *loop) {
   valk_aio_task_queue_t *tq = &loop->task_queue;
@@ -91,10 +100,7 @@ void valk_aio_loop_task_queue_shutdown(valk_aio_loop_t *loop) {
     uv_close((uv_handle_t *)&tq->notify, __task_queue_close_cb);
   }
 
-  void *item;
-  while ((item = valk_mpmc_pop(&tq->queue)) != NULL) {
-    free(item);
-  }
+  __drain_unrun_tasks(tq);
 
   tq->initialized = false;
 }
@@ -102,28 +108,38 @@ void valk_aio_loop_task_queue_shutdown(valk_aio_loop_t *loop) {
 void valk_aio_loop_task_queue_destroy(valk_aio_loop_t *loop) {
   valk_aio_task_queue_t *tq = &loop->task_queue;
   if (!tq->queue.buffer) return;
-  void *item;
-  while ((item = valk_mpmc_pop(&tq->queue)) != NULL) {
-    free(item);
-  }
+  __drain_unrun_tasks(tq);
   valk_mpmc_destroy(&tq->queue);
 }
 
-bool valk_aio_loop_enqueue_task(valk_aio_loop_t *loop, valk_aio_task_fn fn, void *ctx) {
-  if (!loop || !fn) return false;
-  if (loop->sys && loop->sys->shuttingDown) return false;
+bool valk_aio_loop_enqueue_task_owned(valk_aio_loop_t *loop, valk_aio_task_fn fn,
+                                      void *ctx, valk_aio_task_fn drop) {
+  if (!loop || !fn) { // LCOV_EXCL_BR_LINE - defensive, callers always pass both
+    if (drop) drop(ctx); // LCOV_EXCL_LINE
+    return false; // LCOV_EXCL_LINE
+  }
+  if (loop->sys && loop->sys->shuttingDown) {
+    if (drop) drop(ctx);
+    return false;
+  }
 
   valk_aio_task_item_t *task = malloc(sizeof(valk_aio_task_item_t));
   task->fn = fn;
+  task->drop = drop;
   task->ctx = ctx;
 
-  if (!valk_mpmc_push(&loop->task_queue.queue, task)) {
+  if (!valk_mpmc_push(&loop->task_queue.queue, task)) { // LCOV_EXCL_BR_LINE - queue full
     VALK_ERROR("Loop %u task queue full, dropping task", loop->id); // LCOV_EXCL_LINE
+    if (drop) drop(ctx); // LCOV_EXCL_LINE
     free(task); // LCOV_EXCL_LINE
     return false; // LCOV_EXCL_LINE
   }
   uv_async_send(&loop->task_queue.notify);
   return true;
+}
+
+bool valk_aio_loop_enqueue_task(valk_aio_loop_t *loop, valk_aio_task_fn fn, void *ctx) {
+  return valk_aio_loop_enqueue_task_owned(loop, fn, ctx, nullptr);
 }
 
 // Backward-compat: system-level wrappers delegate to loop 0

@@ -533,6 +533,13 @@ static void __dispatch_completion_on_loop0(void *ctx) {
   free(comp);
 }
 
+static void __dispatch_completion_drop(void *ctx) {
+  dispatch_completion_t *comp = (dispatch_completion_t *)ctx;
+  valk_handle_release(&valk_sys->handle_table, comp->cb_handle);
+  valk_handle_release(&valk_sys->handle_table, comp->result_handle);
+  free(comp);
+}
+
 static void __dispatch_worker(void *ctx) {
   VALK_GC_SAFE_POINT();
 
@@ -560,7 +567,9 @@ static void __dispatch_worker(void *ctx) {
   comp->cb_handle = dctx->cb_handle;
   comp->result_handle = valk_handle_create(&valk_sys->handle_table, heap_result);
 
-  valk_aio_loop_enqueue_task(&dctx->sys->loops[0], __dispatch_completion_on_loop0, comp);
+  valk_aio_loop_enqueue_task_owned(&dctx->sys->loops[0],
+                                   __dispatch_completion_on_loop0, comp,
+                                   __dispatch_completion_drop);
 
   free(dctx);
 }

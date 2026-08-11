@@ -281,6 +281,7 @@ typedef void (*valk_aio_task_fn)(void *ctx);
 
 typedef struct valk_aio_task_item {
   valk_aio_task_fn fn;
+  valk_aio_task_fn drop;
   void *ctx;
 } valk_aio_task_item_t;
 
@@ -482,6 +483,10 @@ void valk_aio_loop_task_queue_init(valk_aio_loop_t *loop);
 void valk_aio_loop_task_queue_shutdown(valk_aio_loop_t *loop);
 void valk_aio_loop_task_queue_destroy(valk_aio_loop_t *loop);
 bool valk_aio_loop_enqueue_task(valk_aio_loop_t *loop, valk_aio_task_fn fn, void *ctx);
+// Same, but `drop` releases `ctx` if the task is refused or dropped unrun at
+// shutdown. It is never called for a task that runs.
+bool valk_aio_loop_enqueue_task_owned(valk_aio_loop_t *loop, valk_aio_task_fn fn,
+                                      void *ctx, valk_aio_task_fn drop);
 
 // Per-loop event loop thread (implemented in aio_uv.c)
 void __loop_thread_fn(void *arg);

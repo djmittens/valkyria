@@ -500,14 +500,16 @@
     {do
     (= {sys} (aio/await (aio/start)))
     (test/assert (not (== sys nil)) "aio/start should succeed")
-    (= {result} (aio/schedule sys 1 (\ {} {42})))
+    (= {result} (aio/await (aio/schedule sys 1 (\ {} {42}))))
+    (test/assert-eq 42 result "scheduled callback result")
     (= {_} (aio/stop sys))
     true
   })
   (test/case "aio/schedule with zero delay"
     {do
     (= {sys} (aio/await (aio/start)))
-    (= {result} (aio/schedule sys 0 (\ {} {"immediate"})))
+    (= {result} (aio/await (aio/schedule sys 0 (\ {} {"immediate"}))))
+    (test/assert-eq "immediate" result "zero-delay callback result")
     (= {_} (aio/stop sys))
     true
   })

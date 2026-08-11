@@ -110,6 +110,15 @@ static valk_lval_t *valk_builtin_capture_stop(valk_lenv_t *e,
   // LCOV_EXCL_BR_STOP
 
   valk_capture_state_t *state = ref->ref.ptr;
+  if (state == nullptr) {
+    valk_lval_t *done[] = {
+      valk_lval_sym(":stdout"), valk_lval_str_n("", 0),
+      valk_lval_sym(":stderr"), valk_lval_str_n("", 0),
+    };
+    return valk_lval_qlist(done, 4);
+  }
+  ref->ref.ptr = nullptr;
+  ref->ref.free = nullptr;
 
   fflush(stdout);
   fflush(stderr);
@@ -118,16 +127,13 @@ static valk_lval_t *valk_builtin_capture_stop(valk_lenv_t *e,
   dup2(state->saved_stderr, STDERR_FILENO);
   close(state->saved_stdout);
   close(state->saved_stderr);
-  state->saved_stdout = -1;
-  state->saved_stderr = -1;
 
   u64 out_len, err_len;
   char *out_data = read_fd_contents(state->capture_stdout, &out_len);
   char *err_data = read_fd_contents(state->capture_stderr, &err_len);
   close(state->capture_stdout);
   close(state->capture_stderr);
-  state->capture_stdout = -1;
-  state->capture_stderr = -1;
+  free(state);
 
   valk_lval_t *out_str = valk_lval_str_n(out_data, out_len);
   valk_lval_t *err_str = valk_lval_str_n(err_data, err_len);

@@ -196,15 +196,18 @@ void valk_async_handle_on_cleanup(valk_async_handle_t *handle,
 }
 
 void valk_async_handle_run_resource_cleanups(valk_async_handle_t *handle) {
-  if (!handle || !handle->resource_cleanup_count) return; // LCOV_EXCL_BR_LINE - defensive null check
-  for (i32 i = (i32)handle->resource_cleanup_count - 1; i >= 0; i--) {
-    valk_async_cleanup_entry_t *entry = &handle->resource_cleanups[i];
-    entry->fn(entry->data, entry->ctx);
-  }
-  handle->resource_cleanup_count = 0;
-  free(handle->resource_cleanups);
+  if (!handle || !handle->resource_cleanups) return; // LCOV_EXCL_BR_LINE - defensive null check
+  // Claim the list before running it: a cleanup may re-enter (or a late
+  // registration may race a completion), and each entry must run once.
+  valk_async_cleanup_entry_t *entries = handle->resource_cleanups;
+  u16 count = handle->resource_cleanup_count;
   handle->resource_cleanups = nullptr;
+  handle->resource_cleanup_count = 0;
   handle->resource_cleanup_capacity = 0;
+  for (i32 i = (i32)count - 1; i >= 0; i--) {
+    entries[i].fn(entries[i].data, entries[i].ctx);
+  }
+  free(entries);
 }
 
 // LCOV_EXCL_BR_START - defensive null/capacity checks

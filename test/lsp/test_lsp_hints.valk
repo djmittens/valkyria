@@ -678,6 +678,7 @@
       (= {text} "(fun {add a b} {+ a b})")
       (= {hints} (hint/collect text db nil))
       (= {labels} (map (\ {h} {h:label}) hints))
+      (sqlite/close db)
       (test/assert (member? ":: Num" labels) "param gets :: Num from db")
       true
     })
@@ -688,6 +689,7 @@
       (= {text} "(fun {add a b} {+ a b})")
       (= {hints} (hint/collect text db nil))
       (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
+      (sqlite/close db)
       (test/assert-eq 0 (len type-hints) "no sig no type hints")
       true
     })
@@ -701,6 +703,7 @@
       (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (= {param-hints} (filter (\ {h} {str/starts-with? h:label "::"}) type-hints))
       (= {h} (head param-hints))
+      (sqlite/close db)
       (test/assert (not (nil? h)) "param type hint exists")
       (test/assert (not (nil? h:paddingLeft)) "paddingLeft set on param type hint")
       true
@@ -713,6 +716,7 @@
       (= {text} "(fun {add a b} {+ a b})")
       (= {hints} (hint/collect text db nil))
       (= {labels} (map (\ {h} {h:label}) hints))
+      (sqlite/close db)
       (test/assert (member? "-> Num" labels) "return type hint emitted")
       true
     })
@@ -728,6 +732,7 @@
       (= {hints} (hint/collect text db nil))
       (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (= {labels} (map (\ {h} {h:label}) type-hints))
+      (sqlite/close db)
       (test/assert (member? ":: Str" labels) "field access should show field type")
       true
     })
@@ -740,6 +745,7 @@
       (= {hints} (hint/collect text db nil))
       (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (= {labels} (map (\ {h} {h:label}) type-hints))
+      (sqlite/close db)
       (test/assert (member? ":: Num" labels) "ctor field should show Num")
       true
     })
@@ -764,6 +770,7 @@
       (= {hints} (hint/collect text db nil))
       (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (= {labels} (map (\ {h} {h:label}) type-hints))
+      (sqlite/close db)
       (test/assert (member? ":: Str" labels) "cross-file field should resolve via db")
       true
     })
@@ -776,6 +783,7 @@
       (= {hints} (hint/collect text db nil))
       (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (= {labels} (map (\ {h} {h:label}) type-hints))
+      (sqlite/close db)
       (test/assert (member? ":: Num" labels) "return type inferred field should show Num")
       true
     })
@@ -790,6 +798,7 @@
       (= {hints} (hint/collect text db nil))
       (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
       (= {labels} (map (\ {h} {h:label}) type-hints))
+      (sqlite/close db)
       (test/assert (not (member? ":: Any" labels)) "Any field type should be suppressed")
       true
     })

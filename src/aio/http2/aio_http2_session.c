@@ -700,7 +700,20 @@ static int __handle_async_response(nghttp2_session *session, i32 stream_id,
     .req = req, .handle = handle, .http_ctx = http_ctx
   };
 
-  return async_state_handlers[handle->status](&ctx);
+  valk_async_status_t status = handle->status;
+  int rc = async_state_handlers[status](&ctx);
+
+  // A handler that resolved synchronously (aio/pure, aio/fail, an already
+  // settled chain) reached its terminal state before the cleanup above was
+  // attached, so its completion path has already run and will not run again.
+  // The response has been sent by now, so release the stream arena here
+  // instead of waiting for the handle's last unref. Streamed responses keep
+  // the arena until the stream itself finishes.
+  if (!req->stream_response && status != VALK_ASYNC_PENDING &&
+      status != VALK_ASYNC_RUNNING) {
+    valk_async_handle_run_resource_cleanups(handle);
+  }
+  return rc;
 }
 // LCOV_EXCL_BR_STOP
 
