@@ -94,6 +94,7 @@ build-coverage: build-coverage/.cmake
 .PHONY: check
 check: build
 	build/valk scripts/valk-check.valk -- $(or $(DIR),.)
+	build/valk scripts/check-no-globals.valk
 
 # Homebrew's llvm formula is keg-only, so run-clang-tidy is installed but
 # not linked into PATH — fall back to the formula's bin before giving up.
@@ -205,9 +206,13 @@ TEST_RUN_ARGS = $(TEST_RUN_BASE)
 # one filter, one JUnit tree and one summary with C and Valk — there is no
 # second test system to invoke. `lsp` is a prerequisite because the UAT
 # suites run against build/valk-lsp; without it they skip with a note.
+# `check` is NOT prefixed with `-`. It used to be, so a parse error or a
+# global-mutation violation printed "Error 2 (ignored)" and `make test` went
+# on to exit 0 — the same way `-@$(MAKE) uat` let a red UAT sit in the tree.
+# A gate that cannot fail the build is not a gate.
 .PHONY: test
 test: build lsp
-	-@$(MAKE) check
+	@$(MAKE) check
 	$(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
 
 # AOT-compile the LSP server to build/valk-lsp. Rebuilds when missing OR

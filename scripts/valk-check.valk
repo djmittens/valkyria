@@ -232,6 +232,23 @@
     {join a b}}
 })
 
+; `parse` reports an unterminated form by returning an Error VALUE inside the
+; form list, not by failing outright — the reader must stay tolerant of
+; incomplete input because the LSP reparses on every keystroke. Only a
+; whole-result error was being checked, so anything the reader could partially
+; recover from validated clean: a truncated file from a bad merge or a partial
+; write reported "all clear".
+; Returns the message as a plain STRING, "" when the file is clean. It must
+; not hand the error VALUE back: every ordinary builtin propagates an error
+; argument, so `(nil? err)` at the call site would return the error, poison
+; the enclosing `if`, and abort the walk mid-run.
+(fun {check/first-parse-error forms} {
+  (if (nil? forms) {""}
+    {if (error? (head forms))
+      {str (head forms)}
+      {(check/first-parse-error (tail forms))}})
+})
+
 (fun {check/validate-walk db files with-types cache total idx total-lines total-errors total-warnings} {
   if (nil? files) {list :lines total-lines :errors total-errors
                         :warnings total-warnings}
@@ -249,9 +266,10 @@
           {do
             (= {lines} (+ 1 (len (str/split text "\n"))))
             (= {ast} (parse text))
-            (if (error? ast)
+            (= {perr} (if (error? ast) {(str ast)} {(check/first-parse-error ast)}))
+            (if (> (len perr) 0)
               {do (check/progress-clear)
-                  (eprintln (str path ":1:1: error: " ast))
+                  (eprintln (str path ":1:1: error: " perr))
                   (check/validate-walk db (tail files) with-types cache total (+ idx 1)
                     (+ total-lines lines) (+ total-errors 1) total-warnings)}
               {do

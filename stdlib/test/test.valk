@@ -1,6 +1,9 @@
 ; Simple test framework for Valkyria
 ; Supports both sync and async tests with timeout enforcement
 
+; lint:allow-globals *test-default-timeout-ms* *test-default-suite-timeout-ms* *test-json-output*
+;   Framework configuration, written once at load and read-only after.
+
 ; Default timeouts (milliseconds)
 (def {*test-default-timeout-ms*} 5000)       ; 5 seconds per test
 (def {*test-default-suite-timeout-ms*} 60000) ; 60 seconds for entire suite

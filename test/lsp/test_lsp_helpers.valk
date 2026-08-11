@@ -5,6 +5,11 @@
 (load "scripts/lsp/lsp.valk")
 (load "stdlib/test/test.valk")
 
+; lint:allow-globals *captured-responses* *captured-errors* *captured-notifications* *aio-stopped* *aio-dispatched*
+;   Response-capture spies. This suite runs single-threaded against a
+;   stubbed dispatch, so the handler under test and the assertions are
+;   the same thread — there is no reader to race with.
+
 ; Short-name aliases so tests can call helpers directly. Names without `/`
 ; get module-prefixed at load time (lsp/<file>/<name>); names with `/`
 ; stay at their literal value (sig/extract-name is already top-level-bound).

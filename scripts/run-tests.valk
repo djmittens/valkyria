@@ -327,6 +327,10 @@
   (write-file (str junit-dir "/" safe-name ".xml") xml)
 })
 
+(fun {name-listed? name names} {
+  (> (len (filter (\ {n} {(== n name)}) names)) 0)
+})
+
 ; --- Summary printing ---
 
 (fun {print-summary results wall-us junit-dir} {
@@ -344,15 +348,73 @@
   (= {wall-s-whole} (/ wall-us 1000000))
   (= {wall-s-frac} (/ (mod wall-us 1000000) 100000))
 
+  ; Suites that exited 0 while their own JSONL says a test failed. The two
+  ; should never disagree, but when they do it is the exit code that is
+  ; wrong, and trusting it alone lets a suite go green while printing its
+  ; own failures. Computed before the banner so the banner cannot claim
+  ; ALL PASSED on a run that is about to exit 1.
+  (= {silent-failures} (filter (\ {r} {
+    (and (plist/get r :passed) (> (plist/get r :test-failed) 0))
+  }) results))
+
+  ; Suites that exited 0 having run NOTHING. A .valk suite whose file fails
+  ; to parse prints the reader error and still exits 0, so it lands here as
+  ; a pass with zero tests — test/aio/test_aio_config.valk hid a missing
+  ; paren and 10 dead test cases this way, and test/http/test_shutdown.valk
+  ; called `shutdown` before test/run and so never reported.
+  ;
+  ; Examples are exempt (demo scripts, checked only for a clean exit), as
+  ; are the suites named below: they assert by running to completion rather
+  ; than by registering cases. Listing them here keeps that decision visible
+  ; instead of letting "no results" mean "fine" for everyone. A stale entry
+  ; is harmless — the exemption only applies while a suite reports nothing,
+  ; so one that later grows real cases is checked normally.
+  (= {smoke-suites} {
+    "test_gc_aio_hang"                  ; bare regression program: alarm(5) + exit code
+    "lang/test_test_framework_empty"    ; exercises the framework's own empty-registry path
+    "lang/test_printf_closure_bug"      ; closure repro, verified by not crashing
+    "http/test_lisp_50mb_handler"       ; large-payload smoke
+    "http/test_large_response_handler"  ; large-payload smoke
+    "stress/test_large_response"        ; throughput smoke
+    "stress/test_large_download_stress" ; throughput smoke
+    "stress/test_checkpoint_timer_stress"
+  })
+  (= {empty-suites} (filter (\ {r} {
+    (and (plist/get r :passed)
+         (and (== (plist/get r :test-count) 0)
+              (and (!= (plist/get r :kind) "example")
+                   (not (name-listed? (plist/get r :name) smoke-suites)))))
+  }) results))
+
   (print "")
   (printf "======================================================================\n")
-  (if (== (len failed-suites) 0)
+  (if (and (== (len failed-suites) 0)
+           (and (== (len silent-failures) 0) (== (len empty-suites) 0)))
     {printf "  ALL PASSED: %ld suites, %ld tests in %ld.%lds\n" total total-tests wall-s-whole wall-s-frac}
     {printf "  FAILED: %ld/%ld suites, %ld test failures in %ld.%lds\n"
             (len failed-suites) total total-failed wall-s-whole wall-s-frac})
   (printf "  Tests: %ld passed, %ld failed, %ld skipped\n" total-passed total-failed total-skipped)
   (printf "  JUnit: %s/\n" junit-dir)
   (printf "======================================================================\n")
+
+  (if (> (len silent-failures) 0)
+    {do
+      (printf "\nSUITES REPORTING FAILURES BUT EXITING 0:\n\n")
+      (map (\ {r} {
+        (printf "  [%s] %s - %ld failed test(s) but exit 0\n"
+          (plist/get r :kind) (plist/get r :name) (plist/get r :test-failed))
+      }) silent-failures)}
+    {true})
+
+  (if (> (len empty-suites) 0)
+    {do
+      (printf "\nSUITES THAT RAN NO TESTS (exit 0, zero results):\n\n")
+      (map (\ {r} {
+        (printf "  [%s] %s\n" (plist/get r :kind) (plist/get r :name))
+        (*print-capture* "stdout" (plist/get r :stdout))
+        (*print-capture* "stderr" (plist/get r :stderr))
+      }) empty-suites)}
+    {true})
 
   (if (> (len failed-suites) 0)
     {do
@@ -373,7 +435,8 @@
       }) failed-suites)}
     {true})
 
-  (== (len failed-suites) 0)
+  (and (== (len failed-suites) 0)
+       (and (== (len silent-failures) 0) (== (len empty-suites) 0)))
 })
 
 ; start/end are 0-indexed [start, end); nth is 1-indexed.
@@ -518,8 +581,11 @@
   (printf "[%ld/%ld] %s: %s (%ld.%lds)\n"
     (plist/get suite :idx) total status (plist/get result :name) wall-s wall-frac)
   ; Return trimmed result: drop tests (JUnit already written).
-  ; Keep stdout+stderr only for failed suites (print-summary needs them:
-  ; assert failure messages go to the suite's stdout).
+  ; Keep stdout+stderr for failed suites (print-summary needs them: assert
+  ; failure messages go to the suite's stdout) and for suites that produced
+  ; no results at all — for those the output is the ONLY evidence of why,
+  ; and it is usually a reader error the suite then exited 0 on.
+  (= {keep-output} (or (not passed) (== (plist/get result :test-count) 0)))
   (list :name (plist/get result :name) :kind (plist/get result :kind)
         :passed passed :exit-code (plist/get result :exit-code)
         :wall-us (plist/get result :wall-us)
@@ -527,8 +593,8 @@
         :test-passed (plist/get result :test-passed)
         :test-failed (plist/get result :test-failed)
         :test-skipped (plist/get result :test-skipped)
-        :stdout (if passed {""} {(plist/get result :stdout)})
-        :stderr (if passed {""} {(plist/get result :stderr)}))
+        :stdout (if keep-output {(plist/get result :stdout)} {""})
+        :stderr (if keep-output {(plist/get result :stderr)} {""}))
 })
 
 ; Two phases. Everything runs in parallel except suites that declare

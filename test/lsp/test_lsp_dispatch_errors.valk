@@ -4,6 +4,11 @@
 ; This cannot be tested with a stubbed aio/dispatch — only the C dispatch
 ; completion path can bind an error value to a callback parameter.
 
+; lint:allow-globals *captured-error* *captured-response*
+;   Response-capture spies. The real aio system runs the handler, but the
+;   test blocks on the completion before reading, so the write and the
+;   read are ordered by the handle, not concurrent.
+
 (load "stdlib/diag/symdb.valk")
 (load "scripts/lsp/analysis.valk")
 (load "stdlib/diag/validate.valk")
