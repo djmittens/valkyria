@@ -12,6 +12,7 @@ test/lang/test_env_coverage.valk
 test/aio/test_aio_combinator_coverage.valk
 test/metrics/test_metrics_builtins_comprehensive.valk
 test/parser/test_parser_builtin_coverage.valk
+test/parser/test_parser_errors.valk
 test/lang/test_dict.valk
 test/lang/test_sqlite.valk
 test/lang/test_stdio.valk

@@ -85,7 +85,7 @@
   })
   (test/case "lambda-no-body-error"
     {do
-    (= {result} (error? (eval (read "(\)"))))
+    (= {result} (error? (eval (read "(\\)"))))
     (test/assert result "lambda with no args errors")
     true
   })

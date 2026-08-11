@@ -341,6 +341,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "vir_gc_safepoint_present", test_vir_gc_safepoint_present);
 
   int result = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
   valk_testsuite_free(suite);
   return result;
 }

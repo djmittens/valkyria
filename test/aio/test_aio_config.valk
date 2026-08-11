@@ -28,14 +28,19 @@
       :max-connections 200
       :max-concurrent-streams 50
       :arena-pool-size 100
-    }))
+    })))
     (test/assert (not (== test-sys nil)) "aio/start with full config should succeed")
     true
   })
+  ; 0 is NOT invalid: valk_aio_system_config_resolve treats 0 as "unset" for
+  ; every field and substitutes the default (max_connections 0 -> 16) before
+  ; validation runs. This case asserted that 0 was rejected, which never held;
+  ; the file had an unbalanced paren so the suite never ran and nobody found
+  ; out. Use a value that survives resolve and trips the documented range.
   (test/case "aio-config-invalid-returns-error"
     {do
-    (= {test-sys} (aio/await (aio/start {:max-connections 0})))
-    (test/assert (error? test-sys) "aio/start with invalid config should return error")
+    (= {test-sys} (aio/await (aio/start {:max-connections 200000})))
+    (test/assert (error? test-sys) "aio/start above the max-connections limit should return error")
     true
   })
   (test/case "aio-config-backwards-compat"
@@ -72,7 +77,7 @@
       :arena-pool-size 50
       :arena-size 1048576
       :max-request-body-size 524288
-    }))
+    })))
     (test/assert (not (== test-sys nil)) "aio/start with all config options should succeed")
     true
   }))

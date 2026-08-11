@@ -305,14 +305,14 @@
   (test/case "varargs-ampersand-alone-in-call"
     {do
     ; Create lambda with just & as last formal
-    (= {result} (error? (eval (read "((\ {&} {1}) 1 2 3)"))))
+    (= {result} (error? (eval (read "((\\ {&} {1}) 1 2 3)"))))
     (test/assert result "varargs & without name should error on call")
     true
   })
   (test/case "varargs-ampersand-alone-partial"
     {do
     ; Create partial application that would hit this path
-    (= {result} (error? (eval (read "((\ {x &} {x}) 1)"))))
+    (= {result} (error? (eval (read "((\\ {x &} {x}) 1)"))))
     (test/assert result "varargs & without name should error in partial")
     true
   })
@@ -357,13 +357,13 @@
   })
   (test/case "gc-stats-runs"
     {do
-    (gc-stats)
+    (mem/gc/stats)
     (test/assert true "gc-stats runs without error")
     true
   })
   (test/case "gc-collect-runs"
     {do
-    (= {result} (gc-collect))
+    (= {result} (mem/gc/collect))
     (test/assert (>= result 0) "gc-collect returns bytes reclaimed")
     true
   })
@@ -377,36 +377,36 @@
   })
   (test/case "gc-threshold-pct-get"
     {do
-    (= {pct} (gc-threshold-pct))
+    (= {pct} (mem/gc/threshold))
     (test/assert (and (>= pct 1) (<= pct 100)) "gc-threshold-pct returns valid percentage")
     true
   })
   (test/case "gc-threshold-pct-set-restore"
     {do
-    (= {old-pct} (gc-threshold-pct))
-    (= {returned} (set-gc-threshold-pct 50))
-    (= {new-pct} (gc-threshold-pct))
+    (= {old-pct} (mem/gc/threshold))
+    (= {returned} (mem/gc/set-threshold 50))
+    (= {new-pct} (mem/gc/threshold))
     ; Restore original
-    (set-gc-threshold-pct old-pct)
+    (mem/gc/set-threshold old-pct)
     (test/assert-eq old-pct returned "set-gc-threshold-pct returns old value")
     (test/assert-eq 50 new-pct "gc-threshold-pct was changed")
     true
   })
   (test/case "gc-threshold-pct-clamp-low"
     {do
-    (= {old-pct} (gc-threshold-pct))
-    (set-gc-threshold-pct 0)
-    (= {clamped} (gc-threshold-pct))
-    (set-gc-threshold-pct old-pct)
+    (= {old-pct} (mem/gc/threshold))
+    (mem/gc/set-threshold 0)
+    (= {clamped} (mem/gc/threshold))
+    (mem/gc/set-threshold old-pct)
     (test/assert-eq 1 clamped "gc-threshold-pct clamps to minimum 1")
     true
   })
   (test/case "gc-threshold-pct-clamp-high"
     {do
-    (= {old-pct} (gc-threshold-pct))
-    (set-gc-threshold-pct 200)
-    (= {clamped} (gc-threshold-pct))
-    (set-gc-threshold-pct old-pct)
+    (= {old-pct} (mem/gc/threshold))
+    (mem/gc/set-threshold 200)
+    (= {clamped} (mem/gc/threshold))
+    (mem/gc/set-threshold old-pct)
     (test/assert-eq 100 clamped "gc-threshold-pct clamps to maximum 100")
     true
   })
@@ -478,7 +478,8 @@
   })
   (test/case "escape-carriage-return"
     {do
-    (= {s} "")
+    (= {s} "
+")
     (test/assert-eq 1 (len s) "carriage return escape has length 1")
     true
   })
@@ -573,19 +574,23 @@
   })
   (test/case "heap-hard-limit-returns-value"
     {do
-    (= {limit} (heap-hard-limit))
+    (= {limit} (mem/heap/hard-limit))
     (test/assert (> limit 0) "heap-hard-limit returns positive value")
     true
   })
+  ; The runtime type-inspection builtin is `type-of`; the bare name `type`
+  ; is the ADT declaration form (`(type Name {variant ...})`), which is why
+  ; the validator flagged every line of this case as a malformed type decl.
+  ; The qexpr type also reports as "List" now.
   (test/case "type-builtin-all-types"
     {do
-    (test/assert-eq "Number" (type 42) "type of number")
-    (test/assert-eq "String" (type "hello") "type of string")
-    (test/assert-eq "Q-Expression" (type {1 2 3}) "type of qexpr")
-    (test/assert-eq "Symbol" (type (head {foo})) "type of symbol")
-    (test/assert-eq "Nil" (type nil) "type of nil")
-    (test/assert-eq "Function" (type +) "type of builtin function")
-    (test/assert-eq "Function" (type (\ {x} {x})) "type of lambda")
+    (test/assert-eq "Number" (type-of 42) "type of number")
+    (test/assert-eq "String" (type-of "hello") "type of string")
+    (test/assert-eq "List" (type-of {1 2 3}) "type of qexpr")
+    (test/assert-eq "Symbol" (type-of (head {foo})) "type of symbol")
+    (test/assert-eq "Nil" (type-of nil) "type of nil")
+    (test/assert-eq "Function" (type-of +) "type of builtin function")
+    (test/assert-eq "Function" (type-of (\ {x} {x})) "type of lambda")
     true
   })
   (test/case "read-symbol"
@@ -789,13 +794,13 @@
   })
   (test/case "str-nth"
     {do
-    (= {result} (str/nth "hello" 0))
+    (= {result} (str/slice "hello" 0 1))
     (test/assert-eq "h" result "str/nth gets first char")
     true
   })
   (test/case "str-nth-last"
     {do
-    (= {result} (str/nth "hello" 4))
+    (= {result} (str/slice "hello" 4 5))
     (test/assert-eq "o" result "str/nth gets last char")
     true
   })
@@ -896,9 +901,10 @@
   })
   (test/case "print-improper-list"
     {do
-    ; cons without proper tail creates improper list
-    (= {result} (str (cons 1 2)))
-    (test/assert-eq "(1 . 2)" result "improper list prints with dot notation")
+    ; cons requires a list tail. Improper (dotted) pairs were removed, so
+    ; there is no "(1 . 2)" representation to print any more — building one
+    ; is an error rather than a value with special printing.
+    (test/assert (error? (cons 1 2)) "cons rejects a non-list tail")
     true
   })
   (test/case "read-negative-number"
@@ -921,7 +927,7 @@
     (= {result} (partial-f 2 3 4 5))
     (test/assert-eq 1 (nth 1 result) "first arg is bound")
     (test/assert-eq 2 (nth 2 result) "second arg is bound")
-    (test/assert-eq 2 (len (nth 3 result)) "varargs has remaining elements")
+    (test/assert-eq 3 (len (nth 3 result)) "varargs has remaining elements")
     true
   })
   (test/case "partial-application-with-varargs-empty"

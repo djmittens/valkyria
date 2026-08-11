@@ -426,6 +426,7 @@ int main(void) {
                           test_fast_safe_rejects_capturing_body);
 
   int result = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
   valk_testsuite_free(suite);
   return result;
 }

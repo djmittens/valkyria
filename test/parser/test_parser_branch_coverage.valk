@@ -127,7 +127,7 @@
   })
   (test/case "lambda-ampersand-at-end-error"
     {do
-    (= {result} (eval (read "(\ {x &} {x})")))
+    (= {result} (eval (read "(\\ {x &} {x})")))
     (test/assert (error? result) "& at end of formals should error")
     true
   })
@@ -156,10 +156,11 @@
   })
   (test/case "lambda-partial-with-varargs"
     {do
+    ; {x & rest} has one REQUIRED formal, so (f 1) is a complete call with
+    ; an empty rest — not a partial application waiting for more.
     (= {f} (\ {x & rest} {cons x rest}))
-    (= {g} (f 1))
-    (= {result} (g 2 3 4))
-    (test/assert-eq 4 (len result) "partial with varargs collects rest")
+    (test/assert-eq 1 (len (f 1)) "all required args supplied: rest is empty")
+    (test/assert-eq 4 (len (f 1 2 3 4)) "extra args collect into rest")
     true
   })
   (test/case "do-single-expression"
@@ -170,12 +171,11 @@
   })
   (test/case "do-side-effects-before-last"
     {do
-    (= {counter} 0)
     (= {result} (do
-      (def {counter} 1)
-      (def {counter} 2)
-      (def {counter} 3)
-      counter))
+      (def {do-counter} 1)
+      (def {do-counter} 2)
+      (def {do-counter} 3)
+      do-counter))
     (test/assert-eq 3 result "do evaluates all but returns last")
     true
   })
@@ -300,13 +300,13 @@
   })
   (test/case "repeat-zero-times"
     {do
-    (= {result} (repeat 0 42))
+    (= {result} (repeat (\ {i} {42}) 0))
     (test/assert (== result nil) "repeat 0 times is nil")
     true
   })
   (test/case "repeat-negative-times"
     {do
-    (= {result} (repeat -5 42))
+    (= {result} (repeat (\ {i} {42}) -5))
     (test/assert (== result nil) "repeat negative times is nil")
     true
   })

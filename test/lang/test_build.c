@@ -340,6 +340,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "build_aot_closure_captures_formals",
                           test_build_aot_closure_captures_formals);
   int rc = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
   valk_testsuite_free(suite);
   return rc;
 }

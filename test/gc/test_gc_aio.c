@@ -134,6 +134,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "gc_coordination_thread_count", test_gc_coordination_thread_count);
 
   int result = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
   valk_testsuite_free(suite);
   return result;
 }

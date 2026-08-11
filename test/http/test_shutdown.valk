@@ -1,6 +1,12 @@
+; `shutdown` initiates a graceful shutdown and returns the exit code it was
+; given. It used to be called at TOP LEVEL here, before test/run — so the
+; shutdown was already in progress by the time the suite tried to report,
+; and this file produced no results at all while still exiting 0. Call it
+; inside the case, the way test/lang/test_exit_alias.valk does.
 (load "stdlib/test/test.valk")
+
 (def {aio} (aio/await (aio/start)))
-(def {result} (shutdown 0))
+
 (test/run (list
-  (test/case "shutdown-returns-code" {(== result 0)})
+  (test/case "shutdown-returns-its-code" {(do (= {r} (shutdown 0)) (== r 0))})
 ) {:suite-name "Shutdown"})

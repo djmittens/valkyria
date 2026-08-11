@@ -530,6 +530,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "load_twice", test_image_load_twice);
 
   int result = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
   valk_testsuite_free(suite);
   return result;
 }

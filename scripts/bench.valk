@@ -148,7 +148,7 @@
 
        (if (error? resp)
          {(def {errors} (+ errors 1))}
-         {(def {successes} (+ successes 1)}))
+         {(def {successes} (+ successes 1))})
        (if (>= done cfg-total)
          {(print-results)}
          {(maybe-send-next)})

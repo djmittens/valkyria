@@ -200,17 +200,17 @@
   })
   (test/case "varargs-ampersand-at-end"
     {do
-    (= {result} (error? (eval (read "((\ {&} {1}) 1)"))))
+    (= {result} (error? (eval (read "((\\ {&} {1}) 1)"))))
     (test/assert result "ampersand at end of formals errors")
     true
   })
   (test/case "varargs-with-partial"
     {do
+    ; One required formal, so (f 1 2 3 4) applies in a single call.
     (= {f} (\ {x & rest} {list x rest}))
-    (= {p} (f 1))
-    (= {result} (p 2 3 4))
-    (test/assert-eq 1 (nth 1 result) "partial varargs x is 1")
-    (test/assert-eq 3 (len (nth 2 result)) "partial varargs rest has 3 elements")
+    (= {result} (f 1 2 3 4))
+    (test/assert-eq 1 (nth 1 result) "varargs x is 1")
+    (test/assert-eq 3 (len (nth 2 result)) "varargs rest has 3 elements")
     true
   })
   (test/case "quote-wrong-arg-count"

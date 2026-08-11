@@ -91,6 +91,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "jit_cache_distinct_sources", test_jit_cache_distinct_sources);
   valk_testsuite_add_test(suite, "jit_cache_env_sensitivity", test_jit_cache_env_sensitivity);
   int rc = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
   valk_testsuite_free(suite);
   return rc;
 }

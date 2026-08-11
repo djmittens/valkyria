@@ -113,7 +113,7 @@
   })
   (test/case "varargs-ampersand-not-followed"
     {do
-    (= {result} (error? (eval (read "((\ {&} {1}) 1 2)"))))
+    (= {result} (error? (eval (read "((\\ {&} {1}) 1 2)"))))
     (test/assert result "ampersand not followed by name should error")
     true
   })
@@ -124,7 +124,7 @@
     (= {result} (partial 2 3 4 5))
     (test/assert-eq 1 (nth 1 result) "first arg is x")
     (test/assert-eq 2 (nth 2 result) "second arg is y")
-    (test/assert-eq 2 (len (nth 3 result)) "rest has 2 elements")
+    (test/assert-eq 3 (len (nth 3 result)) "rest has 3 elements")
     true
   })
   (test/case "function-without-closure-env"
@@ -172,7 +172,8 @@
   (test/case "print-string-with-all-escapes"
     {do
     (= {s} "tab:	here
-newlinecarriage\backslash\"quote")
+newline
+carriage\backslash\"quote")
     (print s)
     true
   })
