@@ -95,9 +95,25 @@ build-coverage: build-coverage/.cmake
 check: build
 	build/valk scripts/valk-check.valk -- $(or $(DIR),.)
 
+# Homebrew's llvm formula is keg-only, so run-clang-tidy is installed but
+# not linked into PATH — fall back to the formula's bin before giving up.
+# run-clang-tidy resolves clang-tidy through PATH, so pass the sibling
+# binary explicitly — otherwise the keg-only case fails one step later.
+RUN_CLANG_TIDY := $(shell command -v run-clang-tidy 2>/dev/null || \
+	ls "$$(brew --prefix llvm 2>/dev/null)/bin/run-clang-tidy" 2>/dev/null)
+CLANG_TIDY_BIN := $(shell command -v clang-tidy 2>/dev/null || \
+	ls "$$(brew --prefix llvm 2>/dev/null)/bin/clang-tidy" 2>/dev/null)
+
 .PHONY: lint
 lint : build/.cmake
-	run-clang-tidy -p build -j $(JOBS) \
+	@if [ -z "$(RUN_CLANG_TIDY)" ]; then \
+		echo "make lint: run-clang-tidy not found."; \
+		echo "  macOS:  brew install llvm"; \
+		echo "  Debian: apt install clang-tidy"; \
+		exit 1; \
+	fi
+	$(RUN_CLANG_TIDY) -p build -j $(JOBS) \
+		$(if $(CLANG_TIDY_BIN),-clang-tidy-binary=$(CLANG_TIDY_BIN),) \
 		-extra-arg=-std=c23 \
 		$(if $(filter Darwin,$(UNAME)),-extra-arg=-isysroot -extra-arg=$$(xcrun --show-sdk-path),) \
 		-source-filter='$(CURDIR)/(src|test)/.*\.c$$' \
