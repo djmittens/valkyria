@@ -279,8 +279,35 @@
 ; Method handlers — notifications
 ; ---------------------------------------------------------------------------
 
+; The server reports every position as a byte offset into the line, so it
+; can only serve a client that offers utf-8 in general.positionEncodings.
+; Per spec a client that omits the capability supports utf-16 only.
+(sig 'lsp/client-accepts-utf8 {-> List Num})
+(fun {lsp/client-accepts-utf8 caps} {do
+  (= {encodings} (plist/get (plist/get caps :general) :positionEncodings))
+  (if (nil? encodings) {0} {lsp/list-has-utf8 encodings})})
+
+(sig 'lsp/list-has-utf8 {-> List Num})
+(fun {lsp/list-has-utf8 encodings} {
+  if (nil? encodings) {0}
+  {if (== (str (head encodings)) "utf-8") {1}
+    {lsp/list-has-utf8 (tail encodings)}}})
+
 (sig 'handle-initialize {-> Num InitParams Nil})
-(fun {handle-initialize id params} {do
+(fun {handle-initialize id params} {
+  if (== (lsp/client-accepts-utf8 params:capabilities) 0)
+    {do
+      (stderr/write
+        (str "[valk-lsp] client does not offer utf-8 in "
+             "general.positionEncodings; refusing to initialize rather than "
+             "reporting byte columns a utf-16 client would misread\n"))
+      (lsp/send-init-error id
+        (str "valk-lsp requires positionEncoding utf-8. This client offered "
+             "only utf-16, which the server does not implement."))}
+    {lsp/init-workspace id params}})
+
+(sig 'lsp/init-workspace {-> Num InitParams Nil})
+(fun {lsp/init-workspace id params} {do
   (= {root-uri} params:rootUri)
   (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
   (if (not (nil? root-uri))
@@ -308,6 +335,9 @@
       (def {lsp/db} (symdb/init ":memory:"))
       (def {lsp/db-path} ":memory:")
       (lsp/seed-builtins lsp/db lsp/root-path)})
+  ; Only a completed handshake flips the flag: a rejected initialize must
+  ; leave the server answering -32002, not serving requests.
+  (def {lsp/initialized} 1)
   (lsp/send-response id lsp/capabilities)})
 
 ; Done-callback for fire-and-forget tasks (cache-ast/sync-doc/diagnostics).

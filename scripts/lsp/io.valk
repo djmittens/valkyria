@@ -40,7 +40,7 @@
 (type {OpenParams} {:textDocument LspTextDocText})
 (type {ChangeParams} {:textDocument LspTextDoc :contentChanges List})
 (type {SaveParams} {:textDocument LspTextDoc :text Str})
-(type {InitParams} {:rootUri Str})
+(type {InitParams} {:rootUri Str :capabilities List})
 (type {RangeParams} {:textDocument LspTextDoc :range LspRange})
 (type {HintParams} {:textDocument LspTextDoc :range LspRange})
 (type {RenameParams} {:textDocument LspTextDoc :position LspPosition :newName Str})
@@ -58,6 +58,9 @@
 (def {lsp/idx-sys} nil)
 (def {lsp/out} nil)
 (def {lsp/initialized} 0)
+; Set by `shutdown`. Requests after it are InvalidRequest, and `exit`
+; without it is a protocol violation the server reports via exit code 1.
+(def {lsp/shutdown-requested} 0)
 
 (sig 'lsp/write-message {-> List Nil})
 (fun {lsp/write-message json-body} {do
@@ -73,6 +76,15 @@
   {lsp/write-message
     (list :jsonrpc "2.0" :id id
           :error (list :code code :message message))})
+
+; `initialize` failures carry an InitializeError payload; retry:false stops
+; the client from re-sending a request that can never succeed.
+(sig 'lsp/send-init-error {-> Num Str Nil})
+(fun {lsp/send-init-error id message}
+  {lsp/write-message
+    (list :jsonrpc "2.0" :id id
+          :error (list :code -32602 :message message
+                       :data (list :retry :false)))})
 
 (sig 'lsp/send-notification {-> Str List Nil})
 (fun {lsp/send-notification method params}

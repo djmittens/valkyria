@@ -4,4 +4,6 @@
 ; which would execute the server at build time instead of at runtime.
 
 (load "scripts/lsp/lsp.valk")
-(\ {argv} {do (lsp/start) 0})
+; lsp/start returns the LSP exit code (0 after `shutdown`, else 1), and
+; --build uses the entry's numeric result as the process exit status.
+(\ {argv} {lsp/start})

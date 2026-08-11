@@ -315,4 +315,62 @@
       true
     })
 
+  ; === Position encoding: utf-8 (byte) columns ===
+  ; The server advertises positionEncoding "utf-8" and refuses clients that
+  ; don't offer it, so every character index on the wire is a BYTE index.
+  ; These pin that down on multi-byte text, where a utf-16 reading would
+  ; differ: "é" is 2 bytes / 1 utf-16 unit, "—" is 3 / 1, "😀" is 4 / 2.
+
+  (test/case "offset-to-line-col-counts-bytes"
+    {do
+      ; "é" occupies bytes 0-1, so "x" starts at byte 2.
+      (= {lc} (offset->line-col "éx" 2))
+      (test/assert-eq 0 (head lc) "line 0")
+      (test/assert-eq 2 (head (tail lc)) "col is the byte index, not 1")
+      true
+    })
+
+  (test/case "offset-to-line-col-astral-plane"
+    {do
+      ; "😀" is 4 bytes in utf-8 and would be 2 code units in utf-16.
+      (= {lc} (offset->line-col "😀y" 4))
+      (test/assert-eq 4 (head (tail lc)) "col 4 in bytes (2 in utf-16)")
+      true
+    })
+
+  (test/case "lc-to-offset-is-inverse-on-multibyte"
+    {do
+      (= {text} "(= {x} \"ünïcødé — \") (f x)\nsecond")
+      (= {off} (str/index-of text "(f x)"))
+      (= {lc} (offset->line-col text off))
+      (test/assert-eq off (str/lc->offset text (head lc) (head (tail lc)))
+        "line/col -> offset must invert offset -> line/col past multi-byte text")
+      true
+    })
+
+  (test/case "lc-to-offset-multibyte-second-line"
+    {do
+      (= {text} "héllo — wörld\n(target)")
+      (= {off} (str/index-of text "(target)"))
+      (= {lc} (offset->line-col text off))
+      (test/assert-eq 1 (head lc) "target is on line 1")
+      (test/assert-eq off (str/lc->offset text 1 (head (tail lc)))
+        "a multi-byte first line must not shift line-1 offsets")
+      true
+    })
+
+  (test/case "offsets-to-line-cols-multibyte"
+    {do
+      ; Batched variant used by inlay hints: must agree with the scalar one.
+      (= {text} "wörld — 1\nsecond — 2")
+      (= {a} (str/index-of text "1"))
+      (= {b} (str/index-of text "2"))
+      (= {lcs} (offsets->line-cols text (list a b))) 
+      (= {first} (nth 1 lcs))
+      (= {second} (nth 2 lcs))
+      (test/assert-eq (offset->line-col text a) first "batched == scalar (1st)")
+      (test/assert-eq (offset->line-col text b) second "batched == scalar (2nd)")
+      true
+    })
+
 ) {:suite-name "LSP Utilities" :debug 0})

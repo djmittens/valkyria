@@ -305,8 +305,14 @@
       (if (nil? method) {}
         {match method
             {"initialize" (do (stderr/write (str "[valk-lsp] <- initialize\n"))
-                              (workspace/handle-initialize id (InitParams (plist/get params :rootUri)))
-                              (def {lsp/initialized} 1))}
+                              ; A second initialize is InvalidRequest per spec.
+                              ; Re-running the handler would reopen the symdb
+                              ; and re-seed builtins under the live server.
+                              (if (== lsp/initialized 1)
+                                {lsp/send-error id -32600 "Server already initialized"}
+                                {workspace/handle-initialize id
+                                  (InitParams (plist/get params :rootUri)
+                                              (plist/get params :capabilities))}))}
             {"initialized" (do
               ; Dispatch workspace scan to lsp/idx-sys, not lsp/sys. All
               ; done-callbacks (including sqlite writes) land on idx-sys
@@ -333,11 +339,18 @@
                       (lsp/progress-begin tok "Indexing workspace" (len files))
                       (lsp/scan-all lsp/idx-db files tok)}})}
                 {}))}
-            {"shutdown" (lsp/send-response id (None))}
+            {"shutdown" (do (def {lsp/shutdown-requested} 1)
+                            (lsp/send-response id (None)))}
             {"exit" (aio/stop lsp/sys)}
+            ; JSON-RPC ids are `integer | string`, so the guard is "has an
+            ; id", not "has a numeric id" — a string-id request that goes
+            ; unanswered hangs that client forever.
             {_ (if (== lsp/initialized 0)
-                 {if (num? id)
+                 {if (not (nil? id))
                    {lsp/send-error id -32002 "Server not initialized"} {}}
+               {if (== lsp/shutdown-requested 1)
+                 {if (not (nil? id))
+                   {lsp/send-error id -32600 "Server is shut down"} {}}
                  {match method
                    {"textDocument/didOpen" (lsp/dispatch-notification method params)}
                    {"textDocument/didChange" (lsp/dispatch-notification method params)}
@@ -346,10 +359,14 @@
                    {"$/cancelRequest" {}}
                    {_ (if (not (nil? id))
                           {lsp/dispatch-request method id params}
-                                                  {})}})}})})})
+                                                  {})}}})}})})})
 
 
-(sig 'lsp/start {-> Nil})
+; Returns the process exit code: 0 if the client sent `shutdown` before
+; `exit`, 1 otherwise. The spec makes that distinction observable so a
+; supervisor can tell a clean stop from a client that dropped the
+; protocol.
+(sig 'lsp/start {-> Num})
 (fun {lsp/start} {do
   (stderr/write "[valk-lsp] starting (threaded)\n")
   ; Two loops: loop 0 owns stdin/stdout + notification handlers; loop 1
@@ -377,4 +394,5 @@
   (if (and (not (nil? lsp/idx-db)) (== lsp/idx-db-own 1))
     {symdb/close lsp/idx-db} {})
   (if (not (nil? lsp/db)) {symdb/close lsp/db} {})
-  (stderr/write "[valk-lsp] shutdown\n")})
+  (stderr/write "[valk-lsp] shutdown\n")
+  (if (== lsp/shutdown-requested 1) {0} {1})})

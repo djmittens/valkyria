@@ -254,7 +254,7 @@ static lsp_t lsp_spawn(void) {
 static char *lsp_initialize(lsp_t *lsp) {
   lsp_write(lsp->write_fd,
     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
-    "\"params\":{\"capabilities\":{}}}");
+    "\"params\":{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-8\"]}}}}");
   char *resp = lsp_read_response(&lsp->reader, 1, MSG_TIMEOUT_MS);
   if (!resp) return NULL;
   lsp_write(lsp->write_fd,
@@ -329,7 +329,7 @@ static void test_initialize_shutdown(VALK_TEST_ARGS()) {
 
   lsp_write(lsp.write_fd,
     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
-    "\"params\":{\"capabilities\":{}}}");
+    "\"params\":{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-8\"]}}}}");
   char *resp = lsp_read_response(&lsp.reader, 1, MSG_TIMEOUT_MS);
   VALK_TEST_ASSERT(resp != NULL, "should get initialize response");
   if (!resp) { lsp_kill(&lsp); test_timeout_stop(); return; }
@@ -467,6 +467,145 @@ static void test_string_request_id(VALK_TEST_ARGS()) {
     "error code should be -32601 (method not found)");
   free(resp);
   END_TEST();
+}
+
+// The server reports byte columns and says so via positionEncoding "utf-8".
+// It can only pick an encoding the client offered, and it has no utf-16 code
+// path, so a utf-16-only client must be refused instead of being served
+// positions it would misread on every non-ASCII line.
+static void test_initialize_requires_utf8(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  signal(SIGPIPE, SIG_IGN);
+  test_timeout_start(TEST_TIMEOUT_SEC);
+  lsp_t lsp = lsp_spawn();
+  alarm_child_pid = lsp.pid;
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+    "\"params\":{\"capabilities\":{\"general\":{"
+    "\"positionEncodings\":[\"utf-16\"]}}}}");
+  char *resp = lsp_read_response(&lsp.reader, 1, MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "should answer initialize");
+  if (!resp) { lsp_kill(&lsp); test_timeout_stop(); return; }
+  VALK_TEST_ASSERT(strstr(resp, "\"error\"") != NULL,
+    "utf-16-only client must be rejected");
+  VALK_TEST_ASSERT(strstr(resp, "\"result\"") == NULL,
+    "a rejected handshake must not advertise capabilities");
+  VALK_TEST_ASSERT(strstr(resp, "\"retry\":false") != NULL,
+    "InitializeError data should tell the client not to retry");
+  free(resp);
+
+  // And the handshake must not have completed: further requests still get
+  // ServerNotInitialized rather than being served.
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\","
+    "\"params\":{}}");
+  resp = lsp_read_response(&lsp.reader, 2, MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "should answer post-rejection request");
+  if (!resp) { lsp_kill(&lsp); test_timeout_stop(); return; }
+  VALK_TEST_ASSERT(strstr(resp, "-32002") != NULL,
+    "rejected handshake leaves the server uninitialized");
+  free(resp);
+
+  lsp_kill(&lsp);
+  test_timeout_stop();
+  VALK_PASS();
+}
+
+// A client that omits general.positionEncodings supports utf-16 only, per
+// spec. Same rejection as an explicit utf-16-only list.
+static void test_initialize_rejects_missing_encodings(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  signal(SIGPIPE, SIG_IGN);
+  test_timeout_start(TEST_TIMEOUT_SEC);
+  lsp_t lsp = lsp_spawn();
+  alarm_child_pid = lsp.pid;
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+    "\"params\":{\"capabilities\":{}}}");
+  char *resp = lsp_read_response(&lsp.reader, 1, MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "should answer initialize");
+  if (!resp) { lsp_kill(&lsp); test_timeout_stop(); return; }
+  VALK_TEST_ASSERT(strstr(resp, "\"error\"") != NULL,
+    "absent positionEncodings means utf-16 only, which is unsupported");
+  free(resp);
+
+  lsp_kill(&lsp);
+  test_timeout_stop();
+  VALK_PASS();
+}
+
+// exit after shutdown is a clean stop (0); exit without shutdown is the
+// client dropping the protocol (1). The distinction is what lets a
+// supervisor tell "editor closed" from "editor crashed".
+static void test_exit_code_clean_shutdown(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  signal(SIGPIPE, SIG_IGN);
+  test_timeout_start(TEST_TIMEOUT_SEC);
+  lsp_t lsp = lsp_spawn();
+  alarm_child_pid = lsp.pid;
+
+  char *init = lsp_initialize(&lsp);
+  VALK_TEST_ASSERT(init != NULL, "initialize");
+  if (!init) { lsp_kill(&lsp); test_timeout_stop(); return; }
+  free(init);
+
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":{}}");
+  char *resp = lsp_read_response(&lsp.reader, 9, MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "should get shutdown response");
+  if (!resp) { lsp_kill(&lsp); test_timeout_stop(); return; }
+  VALK_TEST_ASSERT(strstr(resp, "\"result\":null") != NULL,
+    "shutdown result must be null");
+  free(resp);
+
+  // Requests after shutdown are InvalidRequest, not served.
+  lsp_write(lsp.write_fd,
+    "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"textDocument/hover\","
+    "\"params\":{}}");
+  resp = lsp_read_response(&lsp.reader, 10, MSG_TIMEOUT_MS);
+  VALK_TEST_ASSERT(resp != NULL, "post-shutdown request must be answered");
+  if (!resp) { lsp_kill(&lsp); test_timeout_stop(); return; }
+  VALK_TEST_ASSERT(strstr(resp, "-32600") != NULL, "error code -32600");
+  free(resp);
+
+  lsp_write(lsp.write_fd, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+  close(lsp.write_fd);
+  lsp.write_fd = -1;
+  int status;
+  waitpid(lsp.pid, &status, 0);
+  close(lsp.read_fd);
+  VALK_TEST_ASSERT(WIFEXITED(status), "child should exit normally");
+  VALK_TEST_ASSERT(WEXITSTATUS(status) == 0,
+    "exit after shutdown must be status 0");
+  test_timeout_stop();
+  VALK_PASS();
+}
+
+static void test_exit_code_without_shutdown(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  signal(SIGPIPE, SIG_IGN);
+  test_timeout_start(TEST_TIMEOUT_SEC);
+  lsp_t lsp = lsp_spawn();
+  alarm_child_pid = lsp.pid;
+
+  char *init = lsp_initialize(&lsp);
+  VALK_TEST_ASSERT(init != NULL, "initialize");
+  if (!init) { lsp_kill(&lsp); test_timeout_stop(); return; }
+  free(init);
+
+  lsp_write(lsp.write_fd, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+  close(lsp.write_fd);
+  lsp.write_fd = -1;
+  int status;
+  waitpid(lsp.pid, &status, 0);
+  close(lsp.read_fd);
+  VALK_TEST_ASSERT(WIFEXITED(status), "child should exit normally");
+  VALK_TEST_ASSERT(WEXITSTATUS(status) == 1,
+    "exit without shutdown must be status 1");
+  test_timeout_stop();
+  VALK_PASS();
 }
 
 static void test_semantic_tokens(VALK_TEST_ARGS()) {
@@ -752,7 +891,7 @@ static char *lsp_initialize_with_root(lsp_t *lsp, const char *root_path) {
   char msg[1024];
   snprintf(msg, sizeof(msg),
     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
-    "\"params\":{\"rootUri\":\"file://%s\",\"capabilities\":{},\"processId\":null}}",
+    "\"params\":{\"rootUri\":\"file://%s\",\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-8\"]}},\"processId\":null}}",
     root_path);
   lsp_write(lsp->write_fd, msg);
   char *resp = lsp_read_response(&lsp->reader, 1, MSG_TIMEOUT_MS);
@@ -1426,6 +1565,10 @@ int main(void) {
   valk_testsuite_add_test(suite, "lsp_not_initialized_error", test_not_initialized_error);
   valk_testsuite_add_test(suite, "lsp_unknown_method_error", test_unknown_method_error);
   valk_testsuite_add_test(suite, "lsp_string_request_id", test_string_request_id);
+  valk_testsuite_add_test(suite, "lsp_initialize_requires_utf8", test_initialize_requires_utf8);
+  valk_testsuite_add_test(suite, "lsp_initialize_rejects_missing_encodings", test_initialize_rejects_missing_encodings);
+  valk_testsuite_add_test(suite, "lsp_exit_code_clean_shutdown", test_exit_code_clean_shutdown);
+  valk_testsuite_add_test(suite, "lsp_exit_code_without_shutdown", test_exit_code_without_shutdown);
   valk_testsuite_add_test(suite, "lsp_semantic_tokens", test_semantic_tokens);
   valk_testsuite_add_test(suite, "lsp_didchange_diagnostics", test_didchange_diagnostics);
   valk_testsuite_add_test(suite, "lsp_signature_help", test_signature_help);

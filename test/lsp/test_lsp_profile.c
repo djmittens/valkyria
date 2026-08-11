@@ -255,11 +255,12 @@ static void run_profile(const char *label, const char *bin_path,
     snprintf(init_msg, sizeof(init_msg),
       "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
       "\"params\":{\"rootUri\":\"file://%s\",\"processId\":null,\"capabilities\":{"
+      "\"general\":{\"positionEncodings\":[\"utf-8\"]},"
       "\"window\":{\"workDoneProgress\":true}}}}", root_path);
   } else {
     snprintf(init_msg, sizeof(init_msg),
       "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
-      "\"params\":{\"processId\":null,\"capabilities\":{}}}");
+      "\"params\":{\"processId\":null,\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-8\"]}}}}");
   }
   long t_init_send = valk_get_micros();
   lsp_write(lsp.write_fd, init_msg);

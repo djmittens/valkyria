@@ -1,0 +1,14 @@
+; Unicode fixture — multi-byte text sits to the LEFT of the symbols the
+; scenario clicks on, so every interesting column differs between utf-8
+; (bytes) and utf-16 (code units): é is 2/1, — is 3/1, 日 is 3/1, 😀 is 4/2.
+; If the position-encoding contract ever slips, these positions land on the
+; wrong symbol or mid-codepoint.
+
+(sig 'uni/greet {-> Str Str})
+(fun {uni/greet name} {str "héllo — " name})
+
+(sig 'uni/shout {-> Str Str})
+(fun {uni/shout name} {str "日本語 😀 " (uni/greet name)})
+
+(sig 'uni/tail {-> Str})
+(fun {uni/tail} {str "ünïcødé — ø" (uni/shout "wörld")})

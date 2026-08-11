@@ -36,6 +36,12 @@
   nil
 })
 
+(fun {lsp/send-init-error id message} {do
+  (def {*captured-errors*}
+    (qcons (list :id id :code -32602 :message message) *captured-errors*))
+  nil
+})
+
 (fun {lsp/send-request id method params} {nil})
 (fun {aio/stop sys} {def {*aio-stopped*} 1})
 (fun {aio/dispatch sys fn arg cb} {do (= {r} (fn arg)) (cb r)})
@@ -66,6 +72,8 @@
 ; --- State reset helper ---
 
 (fun {reset-state} {do
+  (def {lsp/initialized} 0)
+  (def {lsp/shutdown-requested} 0)
   (def {lsp/documents} (dict/new))
   (def {lsp/db} nil)
   (def {lsp/idx-db} nil)
@@ -300,6 +308,33 @@
                            :end (list :line 1 :character 5))
               :text "\nnew")))
       (test/assert-eq "line1\nnew\nline3" result "replace across lines")
+    })
+
+  ; The incremental splice turns the client's `character` into a byte
+  ; offset directly. With positionEncoding utf-8 that is exactly right;
+  ; if the encoding contract ever slips, an edit after multi-byte text
+  ; lands mid-codepoint and corrupts the document.
+  (test/case "apply-one-change-after-multibyte"
+    {do
+      (= {text} "héllo — wörld")
+      ; Byte index of "wörld": "héllo" is 6 bytes, " — " is 5, so 11.
+      (= {result} (lsp/apply-one-change text
+        (list :range (list :start (list :line 0 :character 11)
+                           :end (list :line 0 :character 17))
+              :text "earth")))
+      (test/assert-eq "héllo — earth" result
+        "byte columns must cut cleanly around multi-byte text")
+    })
+
+  (test/case "apply-one-change-multibyte-first-line"
+    {do
+      (= {text} "; kommentar — ä\n(f x)")
+      (= {result} (lsp/apply-one-change text
+        (list :range (list :start (list :line 1 :character 3)
+                           :end (list :line 1 :character 4))
+              :text "y")))
+      (test/assert-eq "; kommentar — ä\n(f y)" result
+        "a multi-byte line above must not shift the edit below it")
     })
 
   (test/case "apply-changes-empty"
@@ -633,12 +668,62 @@
       (test/assert-eq 0 *aio-stopped* "shutdown should not stop, exit does")
     })
 
+  (test/case "dispatch-shutdown-result-is-json-null"
+    {do
+      (reset-state)
+      (reset-captures)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}")
+      (= {resp} (last-response))
+      (test/assert-eq "{\"result\":null}"
+        (json/encode (list :result resp:result))
+        "shutdown result must encode as JSON null")
+      (test/assert-eq 1 lsp/shutdown-requested "shutdown records the request")
+    })
+
+  (test/case "dispatch-request-after-shutdown-is-invalid"
+    {do
+      (reset-state)
+      (reset-captures)
+      (def {lsp/initialized} 1)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}")
+      (reset-captures)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{}}")
+      (= {err} (last-error))
+      (test/assert (not (nil? err)) "post-shutdown request must be answered")
+      (test/assert-eq -32600 err:code "error code -32600")
+      (test/assert (nil? (last-response)) "post-shutdown request is not served")
+    })
+
+  (test/case "dispatch-notification-after-shutdown-is-silent"
+    {do
+      (reset-state)
+      (reset-captures)
+      (def {lsp/initialized} 1)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}")
+      (reset-captures)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{}}")
+      (test/assert (nil? (last-error)) "notifications get no error response")
+      (test/assert (nil? (last-response)) "notifications get no response")
+    })
+
   (test/case "dispatch-exit"
     {do
       (reset-state)
       (reset-captures)
       (lsp/on-message "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")
       (test/assert-eq 1 *aio-stopped* "exit should call aio/stop")
+    })
+
+  (test/case "dispatch-double-initialize-is-invalid"
+    {do
+      (reset-state)
+      (reset-captures)
+      (def {lsp/initialized} 1)
+      (lsp/on-message "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"initialize\",\"params\":{}}")
+      (= {err} (last-error))
+      (test/assert (not (nil? err)) "second initialize must be rejected")
+      (test/assert-eq -32600 err:code "error code -32600")
+      (test/assert (nil? (last-response)) "no capabilities on re-initialize")
     })
 
   (test/case "dispatch-initialized"
@@ -659,6 +744,57 @@
       (= {err} (last-error))
       (test/assert (not (nil? err)) "should send error")
       (test/assert-eq -32002 err:code "error code -32002")
+    })
+
+  (test/case "dispatch-not-initialized-string-id"
+    {do
+      (reset-state)
+      (reset-captures)
+      (def {lsp/initialized} 0)
+      ; JSON-RPC ids may be strings. Dropping those left the client
+      ; waiting on an id that never gets answered.
+      (lsp/on-message
+        "{\"jsonrpc\":\"2.0\",\"id\":\"req-1\",\"method\":\"textDocument/hover\",\"params\":{}}")
+      (= {err} (last-error))
+      (test/assert (not (nil? err)) "string-id request must be answered")
+      (test/assert-eq -32002 err:code "error code -32002")
+      (test/assert-eq "req-1" err:id "error echoes the string id")
+    })
+
+  (test/case "position-encoding-utf8-offered"
+    {do
+      (test/assert-eq 1
+        (lsp/client-accepts-utf8
+          (list :general (list :positionEncodings (list "utf-16" "utf-8"))))
+        "utf-8 anywhere in the list is accepted")
+    })
+
+  (test/case "position-encoding-utf8-absent"
+    {do
+      (test/assert-eq 0
+        (lsp/client-accepts-utf8
+          (list :general (list :positionEncodings (list "utf-16" "utf-32"))))
+        "no utf-8 offered")
+      (test/assert-eq 0 (lsp/client-accepts-utf8 (list :general (list)))
+        "missing positionEncodings defaults to utf-16 only")
+      (test/assert-eq 0 (lsp/client-accepts-utf8 nil)
+        "missing capabilities defaults to utf-16 only")
+    })
+
+  (test/case "initialize-rejected-without-utf8"
+    {do
+      (reset-state)
+      (reset-captures)
+      (def {lsp/initialized} 0)
+      (lsp/on-message
+        (str "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":"
+             "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-16\"]}}}}"))
+      (= {err} (last-error))
+      (test/assert (not (nil? err)) "utf-16-only client must be refused")
+      (test/assert-eq -32602 err:code "error code -32602")
+      (test/assert (nil? (last-response)) "no capabilities are advertised")
+      (test/assert-eq 0 lsp/initialized
+        "a refused handshake leaves the server uninitialized")
     })
 
   (test/case "dispatch-cancel-request"
