@@ -320,8 +320,11 @@
      :foldingRangeProvider :true
      :selectionRangeProvider :true
      :codeLensProvider {:resolveProvider :false}
-     :codeActionProvider {:codeActionKinds {"quickfix"}}
-     :diagnosticProvider {:interFileDependencies :true :workspaceDiagnostics :false}}
+     ; No :diagnosticProvider. Diagnostics are push-only
+     ; (textDocument/publishDiagnostics). Advertising the 3.17 pull model
+     ; as well makes clients run both: neovim files push and pull results
+     ; into separate namespaces, so every diagnostic renders twice.
+     :codeActionProvider {:codeActionKinds {"quickfix"}}}
    :serverInfo
      {:name "valk-lsp"}})
 

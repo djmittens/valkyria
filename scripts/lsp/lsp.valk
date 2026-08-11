@@ -91,7 +91,6 @@
 
 (def {lsp/sem-version} 0)
 (def {lsp/hint-version} 0)
-(def {lsp/diag-version} 0)
 
 ; Done-callback for dispatched requests. A handler error used to be
 ; swallowed by lsp/noop-cb — no response was ever sent for that id, so the
@@ -283,7 +282,6 @@
     {"textDocument/selectionRange" (features/handle-selection-range id (lsp/to-selection-params params))}
     {"textDocument/codeLens" (features/handle-code-lens id (lsp/to-doc-params params))}
     {"textDocument/codeAction" (features/handle-code-action id (lsp/to-code-action-params params))}
-    {"textDocument/diagnostic" (workspace/handle-pull-diagnostics id (lsp/to-doc-params params))}
     {_ (if (not (nil? id))
          {lsp/send-error id -32601 (str "Method not found: " method)} {})}
 })

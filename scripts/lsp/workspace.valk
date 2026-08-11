@@ -240,40 +240,6 @@
           {lsp-diags})))})})
 
 ; ---------------------------------------------------------------------------
-; Pull-based diagnostics (textDocument/diagnostic, LSP 3.17)
-; ---------------------------------------------------------------------------
-
-(sig 'lsp/compute-diagnostics {-> Str Str List})
-(fun {lsp/compute-diagnostics uri text} {do
-  (= {ast} (lsp/get-ast uri text))
-  (= {parse-err} (lsp/ast-find-error ast))
-  (if (error? parse-err)
-    {list (lsp/parse-error->diag (str parse-err) text)}
-    {do
-      (lsp/ensure-loads-indexed lsp/db ast)
-      (= {diags} (vd/validate-with-known lsp/db ast text (lsp/get-known-set)))
-      (if (error? diags)
-        {do (stderr/write (str "[lsp] validate error: " diags "\n"))
-            nil}
-        {do
-          (= {mapped} (map make-lsp-diag diags))
-          (if (error? mapped)
-            {do (stderr/write (str "[lsp] diag map error: " mapped "\n")) nil}
-            {mapped})})})})
-
-(sig 'handle-pull-diagnostics {-> Num DocParams Nil})
-(fun {handle-pull-diagnostics id params} {do
-  (= {td} params:textDocument)
-  (= {uri} td:uri)
-  (= {text} (lsp/doc-get uri))
-  (if (nil? text)
-    {lsp/send-response id (list :kind "full" :items nil)}
-    {do
-      (= {items} (lsp/compute-diagnostics uri text))
-      (lsp/send-response id (list :kind "full" :items
-        (if (error? items) {nil} {items})))})})
-
-; ---------------------------------------------------------------------------
 ; Sync document to symdb
 ; ---------------------------------------------------------------------------
 
@@ -394,13 +360,7 @@
       {do (lsp/sync-doc lsp/idx-db uri text) nil}})
     nil
     lsp/noop-cb)
-  (def {lsp/diag-version} (+ lsp/diag-version 1))
-  (= {dv} lsp/diag-version)
-  (aio/dispatch lsp/idx-sys
-    (\ {_} {if (not (== lsp/diag-version dv)) {nil}
-      {do (lsp/publish-diagnostics lsp/idx-db uri text) nil}})
-    nil
-    lsp/noop-cb)})
+  (lsp/schedule-publish-diagnostics uri)})
 
 ; Coalesce dispatches via "pending" flags. While a dispatched task is
 ; queued/running, suppress new dispatches of the same kind. The
@@ -559,7 +519,6 @@
         {})
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (def {lsp/diag-version} (+ lsp/diag-version 1))
       (lsp/schedule-cache-ast uri)
       (lsp/schedule-sync-doc uri)
       (lsp/schedule-publish-diagnostics uri)})})
@@ -603,11 +562,5 @@
         nil
         (\ {_} {if (not (== lsp/doc-version v)) {}
           {lsp/refresh-semantic-tokens}}))
-      (def {lsp/diag-version} (+ lsp/diag-version 1))
-      (= {dv} lsp/diag-version)
-      (aio/dispatch lsp/idx-sys
-        (\ {_} {if (not (== lsp/diag-version dv)) {nil}
-          {do (lsp/publish-diagnostics lsp/idx-db uri save-text) nil}})
-        nil
-        lsp/noop-cb)})})
+      (lsp/schedule-publish-diagnostics uri)})})
 

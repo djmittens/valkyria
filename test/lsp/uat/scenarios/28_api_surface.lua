@@ -5,7 +5,7 @@
 --
 --   - textDocument/semanticTokens/range (only /full was tested before)
 --   - textDocument/documentLink
---   - textDocument/diagnostic (pull-based, separate from publish)
+--   - diagnostics are delivered by exactly one model (push, not pull)
 --   - textDocument/codeLens
 --   - workspace/symbol
 --
@@ -52,25 +52,33 @@ return {
     lib.assert_truthy(res ~= nil, "documentLink returned nil instead of []")
   end,
 
-  pull_diagnostic_returns_same_as_publish = function(lib)
-    -- textDocument/diagnostic is the pull-based API. It should return
-    -- the same set of diagnostics that publishDiagnostics would push.
+  diagnostics_use_a_single_delivery_model = function(lib)
+    -- A server that both pushes publishDiagnostics and advertises
+    -- diagnosticProvider makes neovim run both models. Push and pull
+    -- results land in separate diagnostic namespaces, so the buffer
+    -- renders every diagnostic twice. Assert one namespace only.
     local bufnr = lib.open_fixture("diagnostics_bad.valk")
     lib.wait_for_lsp(bufnr)
-    -- Wait for the push-based publish first.
     lib.wait_for_diagnostics(bufnr, 1, 5000)
-    local pushed = vim.diagnostic.get(bufnr)
+    lib.settle_diagnostics(bufnr, 5000)
 
-    local res = lib.request(bufnr, "textDocument/diagnostic",
-      { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
-    lib.assert_truthy(res, "pull diagnostic returned nil")
-    -- The response is a DocumentDiagnosticReport — `items` field
-    -- holds the diags, `kind` says full vs unchanged.
-    local items = res.items or res
-    lib.assert_truthy(items, "pull diagnostic missing items")
-    -- Loose check: pull and push both report at least one diag.
-    lib.assert_truthy(#items >= 1 or #pushed >= 1,
-      "pull-diag returned empty but push-diag had entries")
+    local seen = {}
+    local namespaces = 0
+    for _, d in ipairs(vim.diagnostic.get(bufnr)) do
+      if not seen[d.namespace] then
+        seen[d.namespace] = true
+        namespaces = namespaces + 1
+      end
+    end
+    lib.assert_eq(namespaces, 1,
+      "diagnostics arrived in " .. namespaces .. " namespaces (push+pull duplicates)")
+
+    local by_key = {}
+    for _, d in ipairs(vim.diagnostic.get(bufnr)) do
+      local key = d.lnum .. ":" .. d.col .. ":" .. d.message
+      lib.assert_truthy(not by_key[key], "duplicate diagnostic: " .. key)
+      by_key[key] = true
+    end
   end,
 
   code_lens_advertised_provider_returns_list_or_nil = function(lib)
