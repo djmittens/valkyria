@@ -355,6 +355,10 @@ static valk_lenv_t* valk_evacuate_env_clone(valk_evacuation_ctx_t* ctx,
   if (!dst) return src;
   memset(dst, 0, sizeof(valk_lenv_t));
   dst->allocator = ctx->heap;
+  // Carry the key-ownership flag across. The clone below shares src's interned
+  // key pointers, so losing the flag here would leave dst claiming to own
+  // strings it does not — and valk_lenv_free would free intern-table memory.
+  atomic_store(&dst->flags, atomic_load(&src->flags));
   // Concurrent (global) envs are heap-allocated and never evacuated here, but
   // carry the map pointer through defensively so it is never silently dropped.
   dst->cmap = src->cmap;
@@ -369,9 +373,19 @@ static valk_lenv_t* valk_evacuate_env_clone(valk_evacuation_ctx_t* ctx,
       dst->symbols.capacity = src->symbols.capacity;
       ctx->bytes_copied += array_size;
 
+      // Interned keys live in the global intern table, not the GC heap: they
+      // are permanent and canonical, so copying them would both waste a
+      // malloc+memcpy per binding AND break pointer-compare lookups by
+      // producing a second string with the same contents.
+      const bool keys_interned =
+          (atomic_load(&src->flags) & LENV_FLAG_KEYS_INTERNED) != 0;
       for (u64 i = 0; i < src->symbols.count; i++) {
         char* sym = src->symbols.items[i];
         if (sym == nullptr) { dst->symbols.items[i] = nullptr; continue; }
+        if (keys_interned) {
+          dst->symbols.items[i] = sym;
+          continue;
+        }
         u64 len = strlen(sym) + 1;
         char* new_str = nullptr;
         VALK_WITH_ALLOC((void*)ctx->heap) {

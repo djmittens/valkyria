@@ -43,7 +43,8 @@ static struct {
   u64 count;
   u64 capacity;
   pthread_mutex_t lock;
-} __sym_table;
+} __sym_table = {.strings = NULL, .count = 0, .capacity = 0,
+                 .lock = PTHREAD_MUTEX_INITIALIZER};
 
 static u64 sym_hash(const char *s) {
   u64 h = 14695981039346656037ULL;
@@ -69,8 +70,29 @@ static void sym_table_grow(void) {
   __sym_table.capacity = new_cap;
 }
 
+// The table is statically initialized empty and grown on first use under its
+// own lock. It used to be allocated inside valk_lval_init_singletons, which
+// forced valk_sym_intern to be a silent pass-through until that ran — and a
+// pass-through returns a NON-canonical pointer. Anything keyed on pointer
+// identity (the env key arrays, the global concurrent map) degrades silently in
+// that window: two distinct strings can end up sharing a pointer. Removing the
+// init step makes "interned" an unconditional guarantee.
+//
+// Deliberately NOT pthread_once: this is reachable from inside singleton setup,
+// and a nested pthread_once on the same gate traps with
+// _os_once_gate_recursive_abort.
 static const char *sym_intern_str(const char *name) {
   pthread_mutex_lock(&__sym_table.lock);
+  if (__sym_table.capacity == 0) {
+    __sym_table.strings = calloc(SYM_TABLE_INITIAL_CAP, sizeof(const char *));
+    // LCOV_EXCL_START - OOM
+    if (!__sym_table.strings) {
+      pthread_mutex_unlock(&__sym_table.lock);
+      return name;
+    }
+    // LCOV_EXCL_STOP
+    __sym_table.capacity = SYM_TABLE_INITIAL_CAP;
+  }
   u64 mask = __sym_table.capacity - 1;
   u64 idx = sym_hash(name) & mask;
   while (__sym_table.strings[idx] != NULL) {
@@ -94,14 +116,17 @@ static const char *sym_intern_str(const char *name) {
   return istr;
 }
 
-u64 valk_sym_intern_count(void) {
-  return __sym_table.count;
-}
+u64 valk_sym_intern_count(void) { return __sym_table.count; }
 
 const char *valk_sym_intern(const char *name) {
-  if (!__valk_singletons_initialized) return name;
   return sym_intern_str(name);
 }
+
+// Interning is now unconditional (the table initializes lazily), so this is
+// always true. Kept as the single place callers ask the question, in case the
+// table ever needs a real teardown.
+bool valk_sym_intern_active(void) { return true; }
+
 
 void valk_lval_init_singletons(void) {
   if (__valk_singletons_initialized) return;
@@ -117,10 +142,6 @@ void valk_lval_init_singletons(void) {
     __valk_num_cache[i].num = val;
   }
 
-  __sym_table.capacity = SYM_TABLE_INITIAL_CAP;
-  __sym_table.count = 0;
-  __sym_table.strings = calloc(SYM_TABLE_INITIAL_CAP, sizeof(const char *));
-  pthread_mutex_init(&__sym_table.lock, NULL);
 }
 
 
@@ -286,16 +307,8 @@ valk_lval_t* valk_lval_sym(const char* sym) {
   res->flags =
       LVAL_SYM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
-  if (__valk_singletons_initialized) {
-    res->str = (char *)sym_intern_str(sym);
-    res->flags |= LVAL_FLAG_INTERNED;
-  } else {
-    u64 slen = strlen(sym);
-    if (slen > 200) slen = 200;
-    res->str = valk_mem_alloc(slen + 1);
-    memcpy(res->str, sym, slen);
-    res->str[slen] = '\0';
-  }
+  res->str = (char *)sym_intern_str(sym);
+  res->flags |= LVAL_FLAG_INTERNED;
   return res;
 }
 

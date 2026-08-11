@@ -103,6 +103,23 @@ typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 // Used by image-loaded envs so overlay-level defs don't attempt to mutate
 // the immortal image buffer.
 #define LENV_FLAG_FROZEN (1ULL << 0)
+// KEYS_INTERNED: every string in `symbols.items` is a pointer into the global
+// symbol intern table (see valk_sym_intern), so lookups can compare key
+// POINTERS instead of calling strcmp, and the env does not own the strings.
+//
+// Why this matters: lenv_get walks the parent chain, so every reference to a
+// global or builtin first MISSES against the whole current frame — and a miss
+// is the worst case for a linear scan, since it compares against every entry.
+// Hot AST walkers have 8-16 bindings per frame, so a single global reference
+// cost ~10-25 strcmps. Profiling a document validation showed 388k lookups and
+// ~95% of on-CPU samples in strcmp.
+//
+// An env is either ALL-interned (this flag set: strings are permanent, never
+// freed, pointer-comparable) or ALL-owned (flag clear: strings are private
+// copies that the env frees). Never mixed — free() cannot tell the two apart
+// per entry. Image-loaded envs point at the image buffer, so they stay
+// all-owned and fall back to strcmp.
+#define LENV_FLAG_KEYS_INTERNED (1ULL << 1)
 
 struct valk_lenv_t {
   _Atomic u64 flags;
@@ -261,6 +278,7 @@ typedef struct {
 void valk_lval_init_singletons(void);
 u64 valk_sym_intern_count(void);
 const char *valk_sym_intern(const char *name);
+bool valk_sym_intern_active(void);
 
 #ifdef VALK_COVERAGE
 

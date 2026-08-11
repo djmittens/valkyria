@@ -101,8 +101,14 @@ static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
     }
     mark_ptr_only(env->symbols.items, ctx);
     mark_ptr_only(env->vals.items, ctx);
-    for (u64 i = 0; i < env->symbols.count; i++) {
-      mark_ptr_only(env->symbols.items[i], ctx);
+    // Interned keys are permanent intern-table allocations, not GC objects.
+    // Marking them is not just pointless: mark_ptr_only falls through to
+    // valk_gc_mark_large_object, which takes heap->large_lock and walks the
+    // large-object list for every key on every mark.
+    if (!(atomic_load(&env->flags) & LENV_FLAG_KEYS_INTERNED)) {
+      for (u64 i = 0; i < env->symbols.count; i++) {
+        mark_ptr_only(env->symbols.items[i], ctx);
+      }
     }
     for (u64 i = 0; i < env->vals.count; i++) {
       mark_lval(env->vals.items[i], ctx);

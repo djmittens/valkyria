@@ -11,6 +11,7 @@
 
 extern valk_eval_metrics_t g_eval_metrics;
 
+
 static void valk_lenv_init(valk_lenv_t* env);
 
 // Promote `env` to use a concurrent hash map for its bindings. Used for the
@@ -45,6 +46,9 @@ valk_lenv_t* valk_lenv_empty(void) {
 }
 
 static void valk_lenv_init(valk_lenv_t* env) {
+  // A fresh env has no keys, so "all keys interned" holds vacuously. lenv_put
+  // clears the bit if it ever has to store a non-interned copy.
+  atomic_fetch_or(&env->flags, LENV_FLAG_KEYS_INTERNED);
   env->parent = nullptr;
   env->symbols.count = 0;
   env->symbols.capacity = 0;
@@ -62,8 +66,11 @@ void valk_lenv_free(valk_lenv_t* env) {
   valk_mem_allocator_t* alloc = (valk_mem_allocator_t*)env->allocator;
   if (alloc && alloc->type != VALK_ALLOC_MALLOC) return;
 
+  // Interned keys are owned by the global intern table and outlive every env.
+  const bool keys_interned =
+      (atomic_load(&env->flags) & LENV_FLAG_KEYS_INTERNED) != 0;
   for (u64 i = 0; i < env->symbols.count; i++) {
-    if (env->symbols.items && env->symbols.items[i]) {
+    if (!keys_interned && env->symbols.items && env->symbols.items[i]) {
       free(env->symbols.items[i]);
     }
     if (env->vals.items && env->vals.items[i]) {
@@ -86,7 +93,11 @@ void valk_lenv_free(valk_lenv_t* env) {
 
 // LCOV_EXCL_BR_START - env lookup has defensive null checks for internal consistency
 valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
-  atomic_fetch_add(&g_eval_metrics.env_lookups, 1);
+  // Relaxed: this is a pure statistics counter read only after the work it
+  // measures has quiesced. The default seq_cst ordering put a full barrier on
+  // the single hottest path in the interpreter (~388k executions per document
+  // walk in the LSP).
+  atomic_fetch_add_explicit(&g_eval_metrics.env_lookups, 1, memory_order_relaxed);
 
   if (env == NULL) {
     return valk_lval_err("LEnv: Cannot lookup `%s` in NULL environment", key->str);
@@ -96,17 +107,37 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
     return valk_lval_err("LEnv: Expected symbol for lookup, got %s", valk_ltype_name(LVAL_TYPE(key)));
   }
 
+  const char* kstr = key->str;
+  // Relaxed: both flag bits are set at construction, before the object is
+  // published, and are never cleared. Nothing synchronizes through them, and
+  // seq_cst acquire loads on the interpreter's hottest path cost real time
+  // (~20M executions per LSP document walk).
+  const bool key_interned =
+      (atomic_load_explicit(&key->flags, memory_order_relaxed) &
+       LVAL_FLAG_INTERNED) != 0;
+
   while (env) {
     if (env->cmap) {
       // Concurrent (shared global) env: lock-free hash lookup.
-      valk_lval_t* v = valk_cmap_get((valk_cmap_t*)env->cmap, key->str);
+      // key_interned lets us skip re-canonicalizing on the hottest path.
+      valk_lval_t* v = key_interned
+        ? valk_cmap_get_interned((valk_cmap_t*)env->cmap, kstr)
+        : valk_cmap_get((valk_cmap_t*)env->cmap, kstr);
       if (v != nullptr) return v;
+    } else if (key_interned &&
+               (atomic_load_explicit(&env->flags, memory_order_relaxed) &
+                LENV_FLAG_KEYS_INTERNED)) {
+      // Both sides are canonical intern-table pointers, so equality of the
+      // strings is equality of the pointers. This is the whole point of the
+      // flag: it turns the miss scan (the common case for global/builtin
+      // names) from N strcmps into N pointer compares.
+      char* const* items = env->symbols.items;
+      for (u64 i = 0; i < env->symbols.count; i++) {
+        if (items[i] == kstr) return env->vals.items[i];
+      }
     } else {
       for (u64 i = 0; i < env->symbols.count; i++) {
-        if (strcmp(key->str, env->symbols.items[i]) == 0) {
-          if (valk_log_would_log(VALK_LOG_TRACE)) {
-            VALK_TRACE("env get idx=%zu key=%s", i, env->symbols.items[i]);
-          }
+        if (strcmp(kstr, env->symbols.items[i]) == 0) {
           return env->vals.items[i];
         }
       }
@@ -114,7 +145,7 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
     env = env->parent;
   }
 
-  return valk_lval_err("LEnv: Symbol `%s` is not bound", key->str);
+  return valk_lval_err("LEnv: Symbol `%s` is not bound", kstr);
 }
 // LCOV_EXCL_BR_STOP
 
@@ -176,11 +207,33 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     return;
   }
 
+  // Resolve the key to its canonical intern-table pointer up front, so both
+  // the overwrite search below and the stored key are pointer-comparable.
+  // Before singleton init valk_sym_intern is a pass-through, so in that window
+  // the env has to keep owning a private copy; storing a non-canonical pointer
+  // would silently break every later pointer compare.
+  const char *ikey = key->str;
+  bool env_interned = (atomic_load(&env->flags) & LENV_FLAG_KEYS_INTERNED) != 0;
+  if (env_interned) {
+    if (atomic_load(&key->flags) & LVAL_FLAG_INTERNED) {
+      // already canonical
+    } else if (valk_sym_intern_active()) {
+      ikey = valk_sym_intern(key->str);
+    } else {
+      // Demote this env to owning its keys, for good: mixing interned and
+      // owned strings would make valk_lenv_free unable to tell which to free.
+      atomic_fetch_and(&env->flags, ~(u64)LENV_FLAG_KEYS_INTERNED);
+      env_interned = false;
+    }
+  }
+
   for (u64 i = 0; i < env->symbols.count; i++) {
     if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {  // LCOV_EXCL_BR_LINE - defensive check
       break;
     }
-    if (strcmp(key->str, env->symbols.items[i]) == 0) {
+    bool hit = env_interned ? (env->symbols.items[i] == ikey)
+                            : (strcmp(key->str, env->symbols.items[i]) == 0);
+    if (hit) {
       env->vals.items[i] = safe_val;
       return;
     }
@@ -196,15 +249,21 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   }
 
   VALK_WITH_ALLOC(env_alloc) {
-    u64 slen = strlen(key->str);
-    char* new_symbol = valk_mem_alloc(slen + 1);
-    // LCOV_EXCL_START - memory allocation never fails in practice
-    if (!new_symbol) {
-      VALK_RAISE("valk_lenv_put: failed to allocate symbol string for '%s'", key->str);
-      return;
+    // Interned keys are permanent malloc'd strings owned by the intern table,
+    // so there is nothing to allocate or copy here — which also removes a
+    // malloc + memcpy per binding per call frame from the hot path.
+    char* new_symbol = (char*)ikey;
+    if (!env_interned) {
+      u64 slen = strlen(key->str);
+      new_symbol = valk_mem_alloc(slen + 1);
+      // LCOV_EXCL_START - memory allocation never fails in practice
+      if (!new_symbol) {
+        VALK_RAISE("valk_lenv_put: failed to allocate symbol string for '%s'", key->str);
+        return;
+      }
+      // LCOV_EXCL_STOP
+      memcpy(new_symbol, key->str, slen + 1);
     }
-    // LCOV_EXCL_STOP
-    memcpy(new_symbol, key->str, slen + 1);
 
     if (env->symbols.count >= env->symbols.capacity) {
       u64 new_capacity =
@@ -212,7 +271,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
       char** new_items = valk_mem_alloc(sizeof(char*) * new_capacity);
       // LCOV_EXCL_START - memory allocation never fails in practice
       if (!new_items) {
-        valk_mem_free(new_symbol);
+        if (!env_interned) valk_mem_free(new_symbol);
         VALK_RAISE("valk_lenv_put: failed to allocate symbols array (capacity=%llu)", new_capacity);
         return;
       }
@@ -230,7 +289,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
           valk_mem_alloc(sizeof(valk_lval_t*) * new_capacity);
       // LCOV_EXCL_START - memory allocation never fails in practice
       if (!new_items) {
-        valk_mem_free(new_symbol);
+        if (!env_interned) valk_mem_free(new_symbol);
         VALK_RAISE("valk_lenv_put: failed to allocate vals array (capacity=%llu)", new_capacity);
         return;
       }

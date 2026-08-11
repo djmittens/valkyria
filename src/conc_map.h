@@ -58,6 +58,11 @@ typedef struct valk_cmap {
 valk_cmap_t *valk_cmap_new(void *allocator, u64 initial_capacity);
 
 // Lock-free lookup. Returns the value for `key`, or nullptr if absent.
+// Lookup. Keys are hashed and compared BY POINTER (see conc_map.c), so:
+//   valk_cmap_get_interned - caller guarantees `key` is a canonical
+//                            valk_sym_intern pointer. One integer compare.
+//   valk_cmap_get          - any string; interns first, then delegates.
+valk_lval_t *valk_cmap_get_interned(valk_cmap_t *m, const char *key);
 valk_lval_t *valk_cmap_get(valk_cmap_t *m, const char *key);
 
 // Insert or overwrite `key` -> `val`. The key is copied into the map's

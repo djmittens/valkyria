@@ -1196,8 +1196,13 @@ static void test_symbol_copy_truncation(VALK_TEST_ARGS()) {
   ASSERT_LVAL_TYPE(copy, LVAL_SYM);
   // Symbol should be truncated to 200 chars
   ASSERT_TRUE(strlen(copy->str) <= 200);
-  // Original and copy should be different strings
-  ASSERT_TRUE(copy->str != sym->str);
+  // Copying an interned symbol SHARES the interned string rather than
+  // duplicating it — symbol identity is pointer identity (see the intern table
+  // in lval.c and the invariant documented in image.h). This used to assert the
+  // pointers differed, which only held because interning was inactive until
+  // valk_lval_init_singletons ran.
+  ASSERT_TRUE(copy->str == sym->str);
+  ASSERT_TRUE(atomic_load(&copy->flags) & LVAL_FLAG_INTERNED);
 
   VALK_PASS();
 }

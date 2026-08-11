@@ -26,7 +26,7 @@
 // ============================================================================
 
 #define VALK_IMAGE_MAGIC "VALKIMG\0"
-#define VALK_IMAGE_VERSION 3u
+#define VALK_IMAGE_VERSION 4u
 
 #define VALK_IMAGE_ROOT_LVAL 0u
 #define VALK_IMAGE_ROOT_ENV  1u
@@ -47,6 +47,7 @@ typedef struct {
   u64 fixup_count;
   u64 stub_count;
   u64 sym_count;
+  u64 env_count;
 } valk_image_header_t;
 
 #define IMG_MAX_TABLE_BYTES (((size_t)1) << 30)
@@ -72,6 +73,12 @@ typedef struct {
   u64 sy_len;
   u64 sy_cap;
 
+  // Offsets of every dumped env. Load re-interns each env's key strings so
+  // symbol identity stays pointer identity across a dump/load round trip.
+  u64 *envs;
+  u64 en_len;
+  u64 en_cap;
+
   // src pointer -> (offset + 1) so a valid offset of 0 survives ptr_map's
   // nullptr-means-absent convention.
   valk_ptr_map_t pm;
@@ -89,8 +96,11 @@ static bool img_builder_init(valk_image_builder_t *b) {
   b->stubs = malloc(b->st_cap * sizeof(u64));
   b->sy_cap = 64;
   b->syms = malloc(b->sy_cap * sizeof(u64));
-  if (!b->buf || !b->fixups || !b->stubs || !b->syms) {
-    free(b->buf); free(b->fixups); free(b->stubs); free(b->syms);
+  b->en_cap = 64;
+  b->en_len = 0;
+  b->envs = malloc(b->en_cap * sizeof(u64));
+  if (!b->buf || !b->fixups || !b->stubs || !b->syms || !b->envs) {
+    free(b->buf); free(b->fixups); free(b->stubs); free(b->syms); free(b->envs);
     memset(b, 0, sizeof(*b));
     return false;
   }
@@ -103,6 +113,7 @@ static void img_builder_free(valk_image_builder_t *b) {
   free(b->fixups);
   free(b->stubs);
   free(b->syms);
+  free(b->envs);
   valk_ptr_map_free(&b->pm);
 }
 
@@ -153,6 +164,16 @@ static void img_add_sym(valk_image_builder_t *b, u64 sym_offset) {
     b->syms = na; b->sy_cap = ncap;
   }
   b->syms[b->sy_len++] = sym_offset;
+}
+
+static void img_add_env(valk_image_builder_t *b, u64 env_offset) {
+  if (b->en_len >= b->en_cap) {
+    u64 ncap = b->en_cap * 2;
+    u64 *na = realloc(b->envs, ncap * sizeof(u64));
+    if (!na) { b->error = true; return; }
+    b->envs = na; b->en_cap = ncap;
+  }
+  b->envs[b->en_len++] = env_offset;
 }
 
 // Copy a null-terminated C string into the buffer. Dedupes via pm.
@@ -354,6 +375,7 @@ static u64 img_dump_lenv(valk_image_builder_t *b, valk_lenv_t *env) {
   img_align(b, alignof(valk_lenv_t));
   u64 off = img_reserve(b, sizeof(valk_lenv_t));
   valk_ptr_map_put(&b->pm, env, (void*)(uintptr_t)(off + 1));
+  img_add_env(b, off);
 
   memcpy(b->buf + off, env, sizeof(valk_lenv_t));
 
@@ -443,6 +465,7 @@ static int img_write_file(valk_image_builder_t *b, u64 root_off, u32 root_kind,
     .fixup_count = b->fx_len,
     .stub_count = b->st_len,
     .sym_count = b->sy_len,
+    .env_count = b->en_len,
   };
   memcpy(hdr.magic, VALK_IMAGE_MAGIC, 8);
 
@@ -455,6 +478,8 @@ static int img_write_file(valk_image_builder_t *b, u64 root_off, u32 root_kind,
       fwrite(b->stubs, sizeof(u64), b->st_len, f) != b->st_len) rc = -3;
   if (!rc && b->sy_len &&
       fwrite(b->syms, sizeof(u64), b->sy_len, f) != b->sy_len) rc = -3;
+  if (!rc && b->en_len &&
+      fwrite(b->envs, sizeof(u64), b->en_len, f) != b->en_len) rc = -3;
 
   fclose(f);
   return rc;
@@ -509,6 +534,8 @@ typedef struct {
   u64 stub_count;
   u64 *syms;
   u64 sym_count;
+  u64 *envs;
+  u64 env_count;
 } valk_image_loaded_t;
 
 // Copy `n` bytes from a memory cursor into `dst`, bounds-checked. Returns
@@ -585,6 +612,7 @@ static bool img_read_bytes(const u8 *bytes, size_t len,
   out->fixup_count = hdr.fixup_count;
   out->stub_count = hdr.stub_count;
   out->sym_count = hdr.sym_count;
+  out->env_count = hdr.env_count;
 
   if (hdr.buf_size > 0) {
     out->buf = malloc(hdr.buf_size);
@@ -598,6 +626,8 @@ static bool img_read_bytes(const u8 *bytes, size_t len,
                           hdr.stub_count, sizeof(u64))) goto fail;
   if (!img_alloc_and_read(&cur, end, (void **)&out->syms,
                           hdr.sym_count, sizeof(u64))) goto fail;
+  if (!img_alloc_and_read(&cur, end, (void **)&out->envs,
+                          hdr.env_count, sizeof(u64))) goto fail;
 
   for (u64 i = 0; i < out->fixup_count; i++) {
     if (out->fixups[i] > out->buf_size ||
@@ -619,6 +649,13 @@ static bool img_read_bytes(const u8 *bytes, size_t len,
     if (out->syms[i] > out->buf_size ||
         out->syms[i] + sizeof(valk_lval_t) > out->buf_size) {
       VALK_ERROR("valk_image_load: sym[%llu] out of range", (unsigned long long)i);
+      goto fail;
+    }
+  }
+  for (u64 i = 0; i < out->env_count; i++) {
+    if (out->envs[i] > out->buf_size ||
+        out->envs[i] + sizeof(valk_lenv_t) > out->buf_size) {
+      VALK_ERROR("valk_image_load: env[%llu] out of range", (unsigned long long)i);
       goto fail;
     }
   }
@@ -716,6 +753,28 @@ static void img_apply_stub_map(valk_image_loaded_t *ld, valk_lval_t **rep) {
   free(pairs);
 }
 
+// Symbol identity is pointer identity everywhere at runtime (env key arrays,
+// the global concurrent map). A dumped image stores key STRINGS inline, so on
+// load those pointers address the image buffer, not the intern table — two
+// spellings of the same symbol would compare unequal. Re-intern every env key
+// here, at load, and mark the env so lookups can pointer-compare.
+//
+// Without this the AOT server took ~6.8M strcmp-scanning lookups per document
+// walk: every stdlib/LSP closure env came from the image and was therefore
+// excluded from the fast path.
+static void img_reintern_envs(valk_image_loaded_t *ld) {
+  for (u64 i = 0; i < ld->env_count; i++) {
+    valk_lenv_t *env = (valk_lenv_t *)(ld->buf + ld->envs[i]);
+    if (env->symbols.items != nullptr) {
+      for (u64 k = 0; k < env->symbols.count; k++) {
+        if (env->symbols.items[k] == nullptr) continue;
+        env->symbols.items[k] = (char *)valk_sym_intern(env->symbols.items[k]);
+      }
+    }
+    atomic_fetch_or(&env->flags, LENV_FLAG_KEYS_INTERNED);
+  }
+}
+
 static void img_reintern_syms(valk_image_loaded_t *ld) {
   for (u64 i = 0; i < ld->sym_count; i++) {
     valk_lval_t *sym = (valk_lval_t*)(ld->buf + ld->syms[i]);
@@ -758,14 +817,17 @@ static bool img_finalize(valk_image_loaded_t *ld, valk_lenv_t *registry,
   free(rep);
 
   img_reintern_syms(ld);
+  // After fixups: symbols.items is a real pointer only once fixups are applied.
+  img_reintern_envs(ld);
 
   *root_out = ld->buf;
   return true;
 }
 
 static void img_loaded_free_tables(valk_image_loaded_t *ld) {
-  free(ld->fixups); free(ld->stubs); free(ld->syms);
+  free(ld->fixups); free(ld->stubs); free(ld->syms); free(ld->envs);
   ld->fixups = nullptr; ld->stubs = nullptr; ld->syms = nullptr;
+  ld->envs = nullptr;
 }
 
 static void img_loaded_free_all(valk_image_loaded_t *ld) {

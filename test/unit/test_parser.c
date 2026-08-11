@@ -889,7 +889,11 @@ void test_lval_copy_sym(VALK_TEST_ARGS()) {
   VALK_TEST_ASSERT(copy != nullptr, "copy should not be nullptr");
   VALK_TEST_ASSERT(LVAL_TYPE(copy) == LVAL_SYM, "copy type should be SYM");
   VALK_TEST_ASSERT(strcmp(copy->str, "my-symbol") == 0, "copy value should match");
-  VALK_TEST_ASSERT(copy->str != orig->str, "copy should have its own string");
+  // Symbol strings have static lifetime: valk_lval_sym is the only constructor
+  // of an LVAL_SYM and it always interns, so a copy SHARES the string rather
+  // than owning one. This previously asserted the opposite, which only held
+  // because interning was inactive until valk_lval_init_singletons ran.
+  VALK_TEST_ASSERT(copy->str == orig->str, "copy should share the interned string");
 
   VALK_PASS();
 }
@@ -2007,7 +2011,12 @@ void test_lval_copy_sym_long_truncation(VALK_TEST_ARGS()) {
   char *long_str = malloc(300);
   memset(long_str, 'a', 299);
   long_str[299] = '\0';
-  free(orig->str);
+  // Do NOT free orig->str: symbol strings are interned, so it belongs to the
+  // process-wide intern table and freeing it would leave every other holder of
+  // that symbol pointing at freed memory. Clearing LVAL_FLAG_INTERNED is what
+  // makes this lval an owner of its own string, which is the case whose
+  // truncation behaviour this test exercises.
+  atomic_fetch_and(&orig->flags, ~(u64)LVAL_FLAG_INTERNED);
   orig->str = long_str;
 
   valk_lval_t *copy = valk_lval_copy(orig);
