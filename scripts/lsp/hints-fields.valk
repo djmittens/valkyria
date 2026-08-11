@@ -23,6 +23,7 @@
 (fun {hint/collect-from-ast ast text db range} {
   if (error? ast) {nil}
   {do
+    (hint/set-module-from-ast ast)
     (= {local-params} (hint/collect-local-params ast))
     (= {ctx} (list :local local-params :db db))
     (= {raw-hints} (hint/walk-exprs ast ctx nil))

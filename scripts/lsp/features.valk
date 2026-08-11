@@ -80,6 +80,7 @@
 
 (sig 'sig/lookup-params {-> Str List Any Any})
 (fun {sig/lookup-params name ast db} {do
+  (hint/set-module-from-ast ast)
   (= {local} (hint/collect-local-params ast))
   (= {params} (plist/get local name))
   (if (not (nil? params)) {params}
@@ -88,6 +89,7 @@
 
 (sig 'sig/lookup-params-db-first {-> Str Ref List Any})
 (fun {sig/lookup-params-db-first name db ast} {do
+  (hint/set-module-from-ast ast)
   (= {db-params} (hint/query-db-params db name))
   (if (not (nil? db-params)) {db-params}
     {do

@@ -115,6 +115,7 @@
       ; The symdb was just re-synced for this file; drop memoized sig
       ; lookups so hint queries below observe the fresh rows.
       (hint/reset-query-cache)
+      (hint/set-module-from-ast ast)
       (lsp/index-ast db file-id ast text)
       (= {local-params} (hint/collect-local-params ast))
       (= {hctx} (HintCtx local-params db))

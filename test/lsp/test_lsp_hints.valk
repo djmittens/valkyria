@@ -683,6 +683,31 @@
       true
     })
 
+  (test/case "param-type-pipeline-module-qualified"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "m/add" "{-> Num Num Num}")
+      (= {text} "(module m)\n(fun {add a b} {+ a b})")
+      (= {hints} (hint/collect text db nil))
+      (= {labels} (map (\ {h} {h:label}) hints))
+      (sqlite/close db)
+      (test/assert (member? ":: Num" labels) "module-local param gets type from qualified sig")
+      (test/assert (member? "-> Num" labels) "module-local return type hint emitted")
+      true
+    })
+
+  (test/case "param-type-pipeline-no-module-no-qualify"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "m/add" "{-> Num Num Num}")
+      (= {text} "(fun {add a b} {+ a b})")
+      (= {hints} (hint/collect text db nil))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
+      (sqlite/close db)
+      (test/assert-eq 0 (len type-hints) "no module decl means no qualified lookup")
+      true
+    })
+
   (test/case "param-type-pipeline-no-sig"
     {do
       (= {db} (make-sig-db))

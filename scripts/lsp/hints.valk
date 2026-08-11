@@ -220,11 +220,70 @@
   (def {hint/query-cache} (dict/new))
   nil})
 
+; ---------------------------------------------------------------------------
+; Module qualification — mirrors the indexer (lsp_index_emit.c valk_lspi_qualify)
+; ---------------------------------------------------------------------------
+; A file with `(module X)` has its top-level defs stored in symdb as `X/name`,
+; matching the runtime rewrite. The AST still spells them bare, so a lookup by
+; the bare name misses every module-local sig — that is why params of
+; `(fun {handle-initialize id params} ...)` got no type hints while
+; `lsp/sync-doc` (written pre-qualified) did. Try the qualified name first,
+; since the module binding shadows any global of the same name.
+
+(def {hint/module-prefix} "")
+
+(sig 'hint/module-of-form {-> Any Str})
+(fun {hint/module-of-form form} {
+  if (not (list? form)) {""}
+  {if (< (len form) 2) {""}
+  {if (not (== (ast/head-name form) "module")) {""}
+  {do
+    (= {m} (head (tail form)))
+    (if (sym? m) {str m} {if (str? m) {m} {""}})}}}
+})
+
+(sig 'hint/find-module-prefix {-> List Str})
+(fun {hint/find-module-prefix exprs} {
+  if (nil? exprs) {""}
+  {do
+    ; `parse` keeps parse errors as LVAL_ERR elements of the top-level
+    ; list, so a mid-edit document puts one in this walk. Under BYOL an
+    ; error argument short-circuits the call itself, so the guard has to
+    ; sit here rather than inside hint/module-of-form: without it the
+    ; error becomes hint/module-prefix and poisons every hint and
+    ; signature-help lookup until the document parses cleanly again.
+    (= {form} (head exprs))
+    (= {p} (if (error? form) {""} {hint/module-of-form form}))
+    (if (> (len p) 0) {p} {hint/find-module-prefix (tail exprs)})}
+})
+
+(sig 'hint/set-module-from-ast {-> List Nil})
+(fun {hint/set-module-from-ast ast} {do
+  (def {hint/module-prefix}
+    (if (error? ast) {""} {if (list? ast) {hint/find-module-prefix ast} {""}}))
+  nil})
+
+(sig 'hint/qualify {-> Str Str})
+(fun {hint/qualify name} {
+  if (== (len hint/module-prefix) 0) {name}
+  {if (<= (len name) 0) {name}
+  {if (>= (str/index-of name "/") 0) {name}
+  {if (== (str/slice name 0 1) ":") {name}
+  {str hint/module-prefix "/" name}}}}
+})
+
 (sig 'hint/cache-lookup {-> Ref Str Any})
 (fun {hint/cache-lookup db ck} {do
   (= {hit} (dict/get hint/query-cache ck))
   (if (nil? hit) {nil}
     {if (== (head hit) db) {tail hit} {nil}})
+})
+
+(sig 'hint/query-params-row {-> Ref Str Any})
+(fun {hint/query-params-row db name} {
+  sqlite/query-maybe db
+    "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '(fun %' AND kind=1 LIMIT 1"
+    name
 })
 
 (sig 'hint/query-db-params {-> Ref Str List})
@@ -235,9 +294,9 @@
     (= {hit} (hint/cache-lookup db ck))
     (if (not (nil? hit)) {head hit}
       {do
-        (= {row} (sqlite/query-maybe db
-          "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '(fun %' AND kind=1 LIMIT 1"
-          name))
+        (= {qname} (hint/qualify name))
+        (= {row} (if (== qname name) {nil} {hint/query-params-row db qname}))
+        (= {row} (if (nil? row) {hint/query-params-row db name} {row}))
         (= {result} (if (nil? row) {nil} {hint/parse-sig-params row:sig}))
         (dict/set! hint/query-cache ck (list db result))
         result})}
@@ -499,6 +558,13 @@
         {hint/parse-sig-tokens (tail tokens) 0 nil nil}})}
 })
 
+(sig 'hint/query-sig-row {-> Ref Str Any})
+(fun {hint/query-sig-row db name} {
+  sqlite/query-maybe db
+    "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
+    name
+})
+
 (sig 'hint/query-sig-types {-> Ref Str List})
 (fun {hint/query-sig-types db name} {
   if (nil? db) {nil}
@@ -507,9 +573,9 @@
     (= {hit} (hint/cache-lookup db ck))
     (if (not (nil? hit)) {head hit}
       {do
-        (= {row} (sqlite/query-maybe db
-          "SELECT sig FROM symbols WHERE name=?1 AND sig LIKE '{-> %' LIMIT 1"
-          name))
+        (= {qname} (hint/qualify name))
+        (= {row} (if (== qname name) {nil} {hint/query-sig-row db qname}))
+        (= {row} (if (nil? row) {hint/query-sig-row db name} {row}))
         (= {result} (if (nil? row) {nil} {hint/parse-prefix-sig row:sig}))
         (dict/set! hint/query-cache ck (list db result))
         result})}
