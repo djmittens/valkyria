@@ -61,6 +61,29 @@ jobs:
         run: |
           build/valk scripts/run-tests.valk -- --build-dir build-coverage --junit-dir build/junit --examples
       
+      # UAT drives the real LSP server through real neovim. It was previously
+      # not run in CI at all, so user-facing LSP regressions could land freely.
+      # VALK_UAT_STRICT makes a missing nvim a hard failure rather than a
+      # silent skip, which is the whole point of running it here.
+      - name: Install Neovim
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y neovim
+          else
+            brew install neovim
+          fi
+          nvim --version | head -1
+
+      # Run separately from the step above because that one targets
+      # build-coverage, which has no valk-lsp; `make uat` builds and uses
+      # build/valk-lsp. JUNIT points at the same directory the other suites
+      # report into, so the collector below sees UAT results too.
+      - name: Run LSP UAT (JUnit XML output)
+        env:
+          VALK_UAT_STRICT: "1"
+        run: |
+          make uat JUNIT=${{ github.workspace }}/build/junit
+
       - name: Generate Coverage Report
         env:
           VALK_HEAP_HARD_LIMIT: "2147483648"

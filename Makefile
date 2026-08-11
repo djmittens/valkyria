@@ -166,9 +166,10 @@ asan: build-asan
 # All test targets use the unified runner which auto-discovers tests, runs them
 # in parallel, and produces JUnit XML. No hardcoded test lists needed.
 #
-# Common options (pass via Makefile variables):
+#   Common options (pass via Makefile variables):
+#   JUNIT=dir          JUnit output directory (default test-report/<timestamp>)
 #   F=pattern          Substring filter for suite names
-#   ONLY=c|valk        Only C or Valk tests
+#   ONLY=c|valk|uat    Restrict to one suite kind
 #   J=N                Parallel job count (0 = auto, currently ignored)
 #   TEST=name          Shorthand for F=name (single test)
 
@@ -188,15 +189,26 @@ TEST_RUN_ONLY =
 ifneq ($(ONLY),)
   TEST_RUN_ONLY = --only $(ONLY)
 endif
-TEST_RUN_BASE = $(TEST_RUN_FILTER) $(TEST_RUN_ONLY)
+# JUNIT=dir pins the JUnit output directory (default: test-report/<timestamp>).
+# CI sets it so every suite kind — C, Valk and UAT — reports into one
+# collected directory.
+TEST_RUN_JUNIT =
+ifneq ($(JUNIT),)
+  TEST_RUN_JUNIT = --junit-dir $(JUNIT)
+endif
+TEST_RUN_BASE = $(TEST_RUN_FILTER) $(TEST_RUN_ONLY) $(TEST_RUN_JUNIT)
 TEST_RUN_ARGS = $(TEST_RUN_BASE)
 
-# Default test target (all C + Valk + stress)
+# Default test target (all C + Valk + stress + UAT)
+#
+# UAT is discovered by the unified runner like any other suite, so it shares
+# one filter, one JUnit tree and one summary with C and Valk — there is no
+# second test system to invoke. `lsp` is a prerequisite because the UAT
+# suites run against build/valk-lsp; without it they skip with a note.
 .PHONY: test
-test: build
+test: build lsp
 	-@$(MAKE) check
 	$(TEST_RUN) --build-dir build $(TEST_RUN_ARGS)
-	-@$(MAKE) uat
 
 # AOT-compile the LSP server to build/valk-lsp. Rebuilds when missing OR
 # older than any LSP/stdlib source or the interpreter — a stale binary
@@ -221,16 +233,22 @@ lsp: build
 		echo "[lsp] build/valk-lsp is up to date"; \
 	fi
 
-# Neovim-driven LSP user-acceptance tests. Drives nvim --headless against
-# scenarios under test/lsp/uat/scenarios/. Skips silently if nvim is not on
-# PATH; set VALK_UAT_STRICT=1 to fail in that case (CI use).
+# Neovim-driven LSP user-acceptance tests, on their own. This is just the
+# unified runner restricted to `--only uat`; `make test` already includes
+# them. Each scenario file under test/lsp/uat/scenarios/ is one suite, run
+# in its own nvim + valk-lsp + fixture workspace. Correctness scenarios are
+# scheduled by the runner's pmap; scenarios flagged `_latency = true` are
+# marked exclusive and run alone afterwards so their budgets stay meaningful.
+#
+# Skips with a note if nvim is not on PATH; VALK_UAT_STRICT=1 makes that
+# fatal (CI use).
 #
 # Usage:
 #   make uat                          # all scenarios
-#   make uat F=hover                  # only scenarios whose name matches `hover`
+#   make uat F=hover                  # only suites whose name matches `hover`
 .PHONY: uat
 uat: lsp
-	@VALK_LSP_BIN=$(CURDIR)/build/valk-lsp test/lsp/uat/run.sh $(F)
+	$(TEST_RUN) --build-dir build --only uat $(TEST_RUN_ARGS)
 
 # C tests only
 .PHONY: test-c
@@ -271,12 +289,12 @@ test-valk-tsan: build-tsan
 # Example demos as tests
 .PHONY: test-examples
 test-examples: build
-	$(TEST_RUN) --build-dir build --examples --filter "^example/"
+	$(TEST_RUN) --build-dir build --examples --filter "example/"
 
 # Examples with ASAN
 .PHONY: test-examples-asan
 test-examples-asan: build-asan
-	$(TEST_RUN) --build-dir build-asan --examples --filter "^example/" \
+	$(TEST_RUN) --build-dir build-asan --examples --filter "example/" \
 		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt
 
 # Comprehensive: all tests + ASAN + examples

@@ -140,6 +140,62 @@
       }) examples)})
 })
 
+; Neovim-driven LSP acceptance scenarios. Each file under
+; test/lsp/uat/scenarios/ becomes one suite, running in its own nvim +
+; valk-lsp + fixture workspace, so UAT schedules through the same pmap,
+; filter, JUnit tree and summary as every other suite. Scenarios flagged
+; `_latency = true` assert percentile budgets and are marked :exclusive —
+; a p99 measured while the rest of the suite saturates the box describes
+; the scheduler, not the editor experience.
+;
+; Absent nvim or an unbuilt server is a skip, not a failure: UAT needs
+; tools a plain `make build` does not produce. Set VALK_UAT_STRICT=1 (CI)
+; to make it fatal instead.
+; --only names one kind: c, valk, uat, example. Empty means all of them.
+(fun {want-kind? only kind} {(or (== only "") (== only kind))})
+
+; "" when UAT can run, otherwise the reason it cannot. Reported by the
+; caller so the skip stays a plain value instead of mutated global state.
+(fun {uat-blocked-reason build-dir} {
+  (= {lsp-bin} (str build-dir "/valk-lsp"))
+  (select
+    {(not (file/exists? "test/lsp/uat/scenarios")) "no scenarios directory"}
+    {(not (file/exists? lsp-bin)) (str "no LSP binary at " lsp-bin " (run 'make lsp')")}
+    {(!= (plist/get (exec "nvim" "--version") :exit-code) 0) "nvim not found on PATH"}
+    {true ""})
+})
+
+(fun {uat-suites build-dir blocked} {
+  (if (== blocked "")
+    {(discover-uat-tests build-dir)}
+    {if (== (env/get "VALK_UAT_STRICT") nil)
+      {do (stderr/write (str "note: skipping UAT — " blocked "\n")) {}}
+      {do (stderr/write (str "error: UAT unavailable — " blocked "\n")) (shutdown 1)}})
+})
+
+(fun {discover-uat-tests build-dir} {
+  (= {dir} "test/lsp/uat/scenarios")
+  (= {runner} (realpath "test/lsp/uat/runner.lua"))
+  (= {lsp-abs} (realpath (str build-dir "/valk-lsp")))
+  (= {files} (filter (\ {e} {
+    (if (not (== (plist/get e :type) "file")) {false}
+      {(str/ends-with? (plist/get e :name) ".lua")})
+  }) (list-dir dir)))
+  (map (\ {e} {
+    (= {n} (plist/get e :name))
+    (= {stem} (str/slice n 0 (- (len n) 4)))
+    (= {latency} (if (str/contains? (read-file (str dir "/" n)) "_latency = true")
+                   {1} {0}))
+    ; `env` carries the per-suite variables because exec has no env
+    ; parameter and env/set is process-global — which would race across
+    ; pmap workers.
+    (list :name (str "uat/" stem) :kind "uat" :exclusive latency
+          :cmd (list "env" (str "VALK_LSP_BIN=" lsp-abs)
+                     (str "VALK_UAT_SCENARIO=" stem)
+                     "nvim" "--headless" "-l" runner))
+  }) files)
+})
+
 (fun {filter-suites suites pattern} {
   (if (== pattern "")
     {suites}
@@ -375,24 +431,37 @@
   {true})
 
 ; Discover suites
-(= {suites} {})
-(if (== (plist/get opts :stress-only) 1)
-  {do
-    (= {all-valk} (discover-valk-tests build-dir 1))
-    (= {suites} (filter (\ {s} {(str/starts-with? (plist/get s :name) "stress/")}) all-valk))}
-  {do
-    (if (!= only "valk")
-      {(= {suites} (join suites (discover-c-tests build-dir)))}
-      {true})
-    (if (!= only "c")
-      {(= {suites} (join suites (discover-valk-tests build-dir (if (== (plist/get opts :no-stress) 1) {0} {1}))))}
-      {true})
-    (if (== (plist/get opts :examples) 1)
-      {(= {suites} (join suites (discover-examples build-dir)))}
-      {true})})
+(fun {discover-all-suites build-dir opts only uat-blocked} {
+  (if (== (plist/get opts :stress-only) 1)
+    {filter (\ {s} {(str/starts-with? (plist/get s :name) "stress/")})
+            (discover-valk-tests build-dir 1)}
+    {do
+      (= {suites} {})
+      (if (want-kind? only "c")
+        {(= {suites} (join suites (discover-c-tests build-dir)))}
+        {true})
+      (if (want-kind? only "valk")
+        {(= {suites} (join suites (discover-valk-tests build-dir (if (== (plist/get opts :no-stress) 1) {0} {1}))))}
+        {true})
+      (if (want-kind? only "uat")
+        {(= {suites} (join suites (uat-suites build-dir uat-blocked)))}
+        {true})
+      (if (and (== (plist/get opts :examples) 1) (want-kind? only "example"))
+        {(= {suites} (join suites (discover-examples build-dir)))}
+        {true})
+      suites})
+})
 
+(= {uat-blocked} (if (want-kind? only "uat") {(uat-blocked-reason build-dir)} {""}))
+(= {suites} (discover-all-suites build-dir opts only uat-blocked))
+
+; A UAT-only selection on a box with no nvim is a skip, not an error —
+; otherwise `make uat` fails the build wherever the tooling is absent,
+; which is exactly the case the skip exists to cover.
 (if (== (len suites) 0)
-  {do (stderr/write "error: no test suites found\n") (shutdown 1)}
+  {if (!= uat-blocked "")
+    {do (stderr/write "no suites to run (UAT skipped)\n") (shutdown 0)}
+    {do (stderr/write "error: no test suites found\n") (shutdown 1)}}
   {true})
 
 (= {suites} (filter-suites suites filter-pat))
@@ -420,26 +489,26 @@
 (= {c-count} (len (filter (\ {s} {(== (plist/get s :kind) "c")}) suites)))
 (= {v-count} (len (filter (\ {s} {(== (plist/get s :kind) "valk")}) suites)))
 (= {e-count} (len (filter (\ {s} {(== (plist/get s :kind) "example")}) suites)))
+(= {u-count} (len (filter (\ {s} {(== (plist/get s :kind) "uat")}) suites)))
 (= {parts} {})
 (if (> c-count 0) {(= {parts} (join parts (list (str c-count " C"))))} {true})
 (if (> v-count 0) {(= {parts} (join parts (list (str v-count " Valk"))))} {true})
 (if (> e-count 0) {(= {parts} (join parts (list (str e-count " examples"))))} {true})
+(if (> u-count 0) {(= {parts} (join parts (list (str u-count " UAT"))))} {true})
 
 (= {san-label} (if (> (len sanitizer) 0) {(str " [" (str/upper sanitizer) "]")} {""}))
 (printf "Running %ld suites (%s, %ld workers)%s\n" (len suites) (str/join parts ", ") ncpus san-label)
 (printf "JUnit output: %s/\n\n" junit-dir)
 
-; Tag suites with their 1-based index
-(= {total-suites} (len suites))
-(= {indexed-suites} (plist/get (foldl (\ {acc suite} {
-  (= {i} (plist/get acc :i))
-  (list :i (+ i 1) :out (join (plist/get acc :out) (list (join suite (list :idx (+ i 1))))))
-}) (list :i 0 :out {}) suites) :out))
+; Tag suites with 1-based indices, continuing from `start`.
+(fun {index-suites suites start} {
+  (plist/get (foldl (\ {acc suite} {
+    (= {i} (plist/get acc :i))
+    (list :i (+ i 1) :out (join (plist/get acc :out) (list (join suite (list :idx (+ i 1))))))
+  }) (list :i start :out {}) suites) :out)
+})
 
-; Run all suites in parallel
-(= {start-us} (time-us {}))
-(= {aio} (aio/await (aio/start (list :num-threads ncpus))))
-(= {results} (aio/await (aio/pmap aio (\ {suite} {
+(fun {run-and-report suite junit-dir total} {
   (= {result} (run-one-suite suite))
   (write-junit result junit-dir)
   (= {passed} (plist/get result :passed))
@@ -447,7 +516,7 @@
   (= {wall-s} (/ (plist/get result :wall-us) 1000000))
   (= {wall-frac} (/ (mod (plist/get result :wall-us) 1000000) 100000))
   (printf "[%ld/%ld] %s: %s (%ld.%lds)\n"
-    (plist/get suite :idx) total-suites status (plist/get result :name) wall-s wall-frac)
+    (plist/get suite :idx) total status (plist/get result :name) wall-s wall-frac)
   ; Return trimmed result: drop tests (JUnit already written).
   ; Keep stdout+stderr only for failed suites (print-summary needs them:
   ; assert failure messages go to the suite's stdout).
@@ -460,8 +529,40 @@
         :test-skipped (plist/get result :test-skipped)
         :stdout (if passed {""} {(plist/get result :stdout)})
         :stderr (if passed {""} {(plist/get result :stderr)}))
-}) indexed-suites)))
-(aio/stop aio)
+})
+
+; Two phases. Everything runs in parallel except suites that declare
+; :exclusive, which run alone afterwards — they measure wall-clock budgets
+; and a co-tenant would be measuring the machine, not the code.
+(fun {run-all-suites suites junit-dir ncpus} {
+  (= {total} (len suites))
+  (= {parallel} (index-suites
+    (filter (\ {s} {(!= (plist/get s :exclusive) 1)}) suites) 0))
+  (= {exclusive} (index-suites
+    (filter (\ {s} {(== (plist/get s :exclusive) 1)}) suites) (len parallel)))
+
+  (= {results} {})
+  (if (> (len parallel) 0)
+    {do
+      (= {aio} (aio/await (aio/start (list :num-threads ncpus))))
+      (= {results} (aio/await (aio/pmap aio (\ {suite} {
+        (run-and-report suite junit-dir total)
+      }) parallel)))
+      (aio/stop aio)}
+    {true})
+
+  (if (> (len exclusive) 0)
+    {do
+      (printf "\n-- %ld exclusive suite(s), running serially --\n" (len exclusive))
+      (= {results} (join results (map (\ {suite} {
+        (run-and-report suite junit-dir total)
+      }) exclusive)))}
+    {true})
+  results
+})
+
+(= {start-us} (time-us {}))
+(= {results} (run-all-suites suites junit-dir ncpus))
 
 (= {end-us} (time-us {}))
 (= {wall-us} (- end-us start-us))

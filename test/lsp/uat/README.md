@@ -7,29 +7,72 @@ typing load.
 
 ## Running
 
-```sh
-make uat                # all scenarios
-make uat F=hover        # only scenarios matching `hover`
-make test               # also runs UAT (skips silently if nvim missing)
+UAT has no runner of its own. `scripts/run-tests.valk` discovers
+`scenarios/*.lua` the same way it discovers C binaries and `test_*.valk`
+files, so these share one filter, one JUnit tree and one summary with every
+other suite.
 
-# Direct:
-test/lsp/uat/run.sh
-test/lsp/uat/run.sh hover                 # filter by lua pattern
-VALK_UAT_STRICT=1 test/lsp/uat/run.sh     # fail if nvim missing (CI use)
-NVIM=/path/to/nvim test/lsp/uat/run.sh    # override nvim binary
-VALK_LSP_BIN=/path/to/lsp test/lsp/uat/run.sh
+```sh
+make test                   # C + Valk + UAT, one report
+make uat                    # same runner, restricted to --only uat
+make uat F=hover            # suites whose name contains `hover` (substring)
+make test F=hover           # identical filter semantics across all kinds
 ```
 
-The runner reuses **one nvim session** across all scenarios for speed
-(~12s for 13 scenarios). Each scenario opens its own buffer (`bwipeout!`
-+ `edit!`) so unsaved-edit state from a prior test cannot leak.
+### Execution model
+
+One scenario **file** is one suite, and each runs in its own nvim process
+with its own valk-lsp and its own workspace, so suites cannot interfere.
+
+Suites are scheduled by the runner's `aio/pmap` alongside everything else,
+except scenarios marked `_latency = true`, which are tagged `:exclusive` and
+run alone after the parallel batch finishes. A p95 measured while the rest of
+the suite saturates the box describes the scheduler, not the editor.
+
+Within a process, tests run in sorted order. `pairs()` order over a
+string-keyed table varies between runs, and that non-determinism used to turn
+any cross-test state dependency into a flaky failure.
+
+Splitting is per scenario **file**, never per test: tests in a file may share
+fixtures and a `_setup`.
+
+If `nvim` is not on `PATH`, or `build/valk-lsp` has not been built, UAT
+discovery emits a note and contributes zero suites. `VALK_UAT_STRICT=1` turns
+that skip into an error (CI use).
+
+## Waiting: use conditions, not sleeps
+
+`vim.wait(N)` as a synchronization device is banned in scenarios. A fixed sleep
+must be sized for the worst case, so it is simultaneously slower than necessary
+and too short under load — sluggish and flaky from the same line. Removing them
+took the suite from 62s to 15s and uncovered two real server bugs that the
+sleeps had been masking.
+
+| Need | Use |
+|---|---|
+| "the server has processed my edit" | `lib.sync(bufnr)` — round trip; notifications and requests share one FIFO queue |
+| "the symbol index caught up" | `lib.require_symbol_indexed` / `wait_for_symbol_gone` (same file) |
+| a symbol from **another** file | `lib.require_workspace_symbol` — `documentSymbol` only reports the requested document |
+| "the workspace scan finished" | `lib.wait_for_workspace_scan` — the server sends `$/progress` `kind="end"` |
+| a specific diagnostic | `lib.wait_for_diagnostic_containing` |
+| "there should be no errors" | `lib.settle_diagnostics` — waits for the publish the edit provoked, then assert on it |
+| "the client went quiet" | `lib.wait_for_quiescence` |
+| any other condition | `lib.wait_until` / `lib.require_until` |
+
+Two things are **not** synchronization and are allowed to be a duration:
+`lib.keystroke_gap()` (a workload parameter — a latency percentile is
+meaningless without a defined input rate) and the poll interval inside
+`wait_until`.
+
+Never sleep "to let didChange flush": nvim's `Client:request` calls
+`changetracking.flush()` before sending every request, so a queued didChange
+always reaches the server ahead of your next request.
 
 ## Layout
 
 ```
 test/lsp/uat/
-├── run.sh                  # bash entry: spawn nvim, parse results, set exit
-├── runner.lua              # nvim Lua: scenario discovery + dispatch
+├── runner.lua              # nvim Lua: workspace, dispatch, JSONL on stdout
 ├── lib.lua                 # helpers: open_fixture, request, assert_*, etc.
 ├── scenarios/
 │   ├── 01_cold_start.lua   # latency: open → first response < 2s
@@ -93,13 +136,30 @@ Helpers in `lib.lua`:
 
 ## Output
 
-Each test emits one JSON line to `$VALK_UAT_RESULTS` (set by the
-wrapper). The bash wrapper parses for `"status":"fail"` and sets the
-exit code accordingly:
+`runner.lua` writes one JSON line per test to **stdout**, in the same
+`{"test","status","us","suite"}` schema `test/testing.c` and
+`stdlib/test/test.valk` emit. That is the whole integration: `run-tests.valk`
+parses it with the same `parse-jsonl-tests` it uses for every other suite, and
+writes JUnit into the run's `test-report/<timestamp>/` directory.
 
-- `0` — all passed, or skipped (no nvim and `VALK_UAT_STRICT` unset)
-- `1` — at least one scenario failed
-- `2` — environment broken (no LSP binary, no results file produced)
+Human-readable progress goes to **stderr**, which `run-tests.valk` prints only
+for suites that failed — including the grouped failure block at the end of the
+scenario's output. Keep stdout free of anything but JSONL.
+
+`runner.lua` exit codes (they become the suite's exit code):
+
+- `0` — every test in the scenario passed
+- `1` — at least one test failed
+- `2` — environment broken (no `VALK_LSP_BIN`, unseedable workspace, no such
+  scenario), or the parent runner died and the watchdog took us down
+
+## Adding a latency scenario
+
+Set `_latency = true` in the returned table if the scenario asserts a
+wall-clock budget or a percentile. That moves it into the serial phase. Also
+make sure the percentile has enough samples to mean something — at n=12, "p95"
+is just the maximum, which is typically a cold-cache outlier rather than the
+steady state you meant to measure.
 
 ## Why scenarios are not unit tests
 
