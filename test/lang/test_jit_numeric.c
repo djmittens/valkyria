@@ -121,10 +121,12 @@ void test_jit_numeric_negative_divisor(VALK_TEST_ARGS()) {
   valk_jit_t *jit = valk_jit_new();
 
   valk_lval_t *r = valk_jit_eval_string(jit, env, "(/ 100 -5)");
-  // Builtin's "Division By Zero" error path triggers on y <= 0; matches
-  // tree-walker semantics. Confirm we go through it (LVAL_ERR), not LLVM
-  // sdiv producing -20.
-  ASSERT_LVAL_TYPE(r, LVAL_ERR);
+  // A negative divisor is ordinary division. Both this and the tree walker
+  // used to treat every y <= 0 as "Division By Zero" — the JIT grew a
+  // y <= 0 guard specifically to mirror the builtin's bug, and this test
+  // pinned it. Only y == 0 is an error now.
+  ASSERT_LVAL_TYPE(r, LVAL_NUM);
+  ASSERT_LVAL_NUM(r, -20);
 
   valk_jit_free(jit);
   VALK_PASS();
@@ -199,6 +201,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "jit_numeric_nested", test_jit_numeric_nested);
   valk_testsuite_add_test(suite, "jit_numeric_arity_not_specialized", test_jit_numeric_arity_not_specialized);
   int rc = valk_testsuite_run(suite);
+  valk_testsuite_print(suite);
   valk_testsuite_free(suite);
   return rc;
 }

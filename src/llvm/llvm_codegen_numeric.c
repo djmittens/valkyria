@@ -116,8 +116,11 @@ LLVMValueRef valk_codegen_try_numeric_binop(valk_llvm_ctx_t *c,
     LLVMValueRef acc = nums[0];
     for (u64 i = 1; i < argc; i++) {
       if (op == BINOP_DIV) {
+        // Only a zero divisor needs the builtin's error path. This used to
+        // divert every y <= 0 to the slow path to mirror the builtin, which
+        // rejected negative divisors as "Division By Zero"; both are fixed.
         LLVMValueRef zero = LLVMConstInt(c->i64_type, 0, 1);
-        LLVMValueRef bad = LLVMBuildICmp(c->builder, LLVMIntSLE,
+        LLVMValueRef bad = LLVMBuildICmp(c->builder, LLVMIntEQ,
           nums[i], zero, "div_bad");
         char fast2_name[32];
         snprintf(fast2_name, sizeof fast2_name, "num.div.%llu",
