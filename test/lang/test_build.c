@@ -273,6 +273,49 @@ void test_build_aot_survives_gc(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// A closure returned from a compiled function must capture the enclosing
+// function's FORMALS, not just its locals. The AOT fast variant keeps
+// formals in SSA registers and passes the AOT root env as env_param, so
+// any `\` it emits closes over the root env — the formals are invisible.
+// valk_llvm_body_is_fast_safe is what keeps such bodies off the fast
+// path, and it used to miss the case where the body IS the lambda
+// (`{\ {q} {+ p q}}` parses as one expression spread over the body list,
+// so scanning only the elements never saw the `\` head). Locals and
+// two-level nesting kept working because those bodies do contain a
+// forbidden head as an element. Symptom in the wild: lsp/request-done-cb
+// lost `method` and `id`, so failed handlers answered with id = null and
+// clients hung until their request timeout.
+void test_build_aot_closure_captures_formals(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  const char *src = "/tmp/valk_build_test_capture.valk";
+  const char *out = "/tmp/valk_build_test_capture.bin";
+  const char *body =
+      "(def {mk-param} (\\ {p} {\\ {q} {+ p q}}))\n"
+      "(def {mk-local} (\\ {x} {do (= {loc} (+ x 1)) (\\ {q} {+ loc q})}))\n"
+      "(def {mk-nested} (\\ {a} {\\ {b} {\\ {q} {+ a (+ b q)}}}))\n"
+      "(\\ {argv} {do\n"
+      "  (= {f} (mk-param 10))\n"
+      "  (= {g} (mk-local 20))\n"
+      "  (= {h} ((mk-nested 1) 2))\n"
+      "  (if (not (== (f 5) 15)) {1}\n"
+      "  {if (not (== (g 5) 26)) {2}\n"
+      "  {if (not (== (h 5) 8)) {3}\n"
+      "  {0}}})\n"
+      "})\n";
+  VALK_TEST_ASSERT(write_valk(src, body) == 0, "write src");
+
+  VALK_TEST_ASSERT(run_valk_build(src, out) == 0, "valk --build succeeds");
+
+  int rc = run_produced(out, NULL);
+  VALK_TEST_ASSERT(rc == 0,
+                   "returned closures see their captures (got %d: "
+                   "1=formal 2=local 3=nested lost)", rc);
+
+  unlink(src);
+  unlink(out);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -294,6 +337,8 @@ int main(void) {
                           test_build_aot_tco_mutual_recursion);
   valk_testsuite_add_test(suite, "build_aot_survives_gc",
                           test_build_aot_survives_gc);
+  valk_testsuite_add_test(suite, "build_aot_closure_captures_formals",
+                          test_build_aot_closure_captures_formals);
   int rc = valk_testsuite_run(suite);
   valk_testsuite_free(suite);
   return rc;

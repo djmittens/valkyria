@@ -221,11 +221,22 @@ bool valk_llvm_body_is_fast_safe(valk_lval_t *body) {
   if (LVAL_TYPE(eff) == LVAL_CONS && (eff->flags & LVAL_FLAG_QUOTED)) {
     eff = valk_qexpr_to_cons(eff);
   }
-  if (eff && LVAL_TYPE(eff) == LVAL_CONS) {
-    for (valk_lval_t *c = eff; c && LVAL_TYPE(c) == LVAL_CONS;
-         c = c->cons.tail) {
-      if (body_has_forbidden_head(c->cons.head)) return false;
-    }
+  if (!eff || LVAL_TYPE(eff) != LVAL_CONS) return true;
+  // Mirror the body dispatch in valk_llvm_compile_lambda_body{,_fast}: a
+  // body whose first element is a list is a SEQUENCE of expressions, but
+  // one whose first element is an atom is a SINGLE expression spread over
+  // the body list — `{\ {x} {...}}` is (\ {x} {...}), not three
+  // statements. Scanning only the elements in that case never sees the
+  // head, so a body that is itself a `\`/`fn`/`def`/`=` form was
+  // classified fast-safe; the fast variant then built its closure over
+  // the AOT root env instead of the call env and the enclosing function's
+  // formals came back unbound.
+  valk_lval_t *first = eff->cons.head;
+  if (!first || LVAL_TYPE(first) != LVAL_CONS)
+    return !body_has_forbidden_head(eff);
+  for (valk_lval_t *c = eff; c && LVAL_TYPE(c) == LVAL_CONS;
+       c = c->cons.tail) {
+    if (body_has_forbidden_head(c->cons.head)) return false;
   }
   return true;
 }

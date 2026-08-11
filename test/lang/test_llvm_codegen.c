@@ -356,6 +356,42 @@ void test_aot_emit_object(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// A body list whose first element is an atom is ONE expression spread
+// over the list — `{\ {q} {+ p q}}` is (\ {q} {+ p q}), not three
+// statements. Classifying that as fast-safe made the fast variant build
+// the returned closure over the AOT root env instead of the call env, so
+// the enclosing function's formals came back unbound at runtime.
+static valk_lval_t *body_of(const char *src) {
+  valk_lval_t *exprs = valk_parse_text(src);
+  return exprs->cons.head;
+}
+
+void test_fast_safe_rejects_capturing_body(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(body_of("{\\ {q} {+ p q}}")),
+    "body that IS a lambda captures the call env");
+  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(body_of("{fn {q} {+ p q}}")),
+    "body that IS an fn captures the call env");
+  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(body_of("{= {loc} 1}")),
+    "body that IS a `=` mutates the call env");
+  VALK_TEST_ASSERT(!valk_llvm_body_is_fast_safe(body_of("{def {g} 1}")),
+    "body that IS a `def` mutates the env");
+  VALK_TEST_ASSERT(
+    !valk_llvm_body_is_fast_safe(body_of("{do (= {loc} 1) (\\ {q} {loc})}")),
+    "sequence body containing a lambda still rejected");
+
+  VALK_TEST_ASSERT(valk_llvm_body_is_fast_safe(body_of("{+ x 1}")),
+    "plain arithmetic body stays fast-safe");
+  VALK_TEST_ASSERT(
+    valk_llvm_body_is_fast_safe(body_of("{if (== n 0) acc (loop (- n 1) acc)}")),
+    "if/tail-call body stays fast-safe");
+  VALK_TEST_ASSERT(valk_llvm_body_is_fast_safe(body_of("{do (foo x) (bar x)}")),
+    "capture-free sequence body stays fast-safe");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_lval_init_singletons();
@@ -386,6 +422,8 @@ int main(void) {
   valk_testsuite_add_test(suite, "jit_recursive_function", test_jit_recursive_function);
   valk_testsuite_add_test(suite, "aot_emit_ir", test_aot_emit_ir);
   valk_testsuite_add_test(suite, "aot_emit_object", test_aot_emit_object);
+  valk_testsuite_add_test(suite, "fast_safe_rejects_capturing_body",
+                          test_fast_safe_rejects_capturing_body);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_free(suite);
