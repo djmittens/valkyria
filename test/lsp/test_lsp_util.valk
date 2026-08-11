@@ -131,6 +131,32 @@
       true
     })
 
+  ; files.path is the identity of a source file, so a symlinked path and
+  ; its physical target MUST map to the same string — otherwise the same
+  ; file gets two rows and re-indexing one leaves the other's symbols
+  ; resolvable forever (deleted defs never produce diagnostics).
+  (test/case "uri-resolves-symlinked-dir"
+    {do
+      (= {base} (str "/tmp/valk-canon-" (str (rand 1000000))))
+      (= {real-dir} (str base "/real"))
+      (= {link-dir} (str base "/link"))
+      (mkdir-p real-dir)
+      (write-file (str real-dir "/f.valk") "(def {x} 1)\n")
+      (symlink real-dir link-dir)
+      (= {via-real} (symdb/uri->path (str "file://" real-dir "/f.valk")))
+      (= {via-link} (symdb/uri->path (str "file://" link-dir "/f.valk")))
+      (test/assert-eq via-real via-link
+        "symlinked path must canonicalize to the same path as its target")
+      ; A file that does not exist yet (unsaved buffer) still has to
+      ; canonicalize through its parent directory.
+      (= {new-real} (symdb/uri->path (str "file://" real-dir "/new.valk")))
+      (= {new-link} (symdb/uri->path (str "file://" link-dir "/new.valk")))
+      (test/assert-eq new-real new-link
+        "nonexistent file must canonicalize via its parent dir")
+      (exec "rm" "-rf" base)
+      true
+    })
+
   ; === str/starts-with? ===
 
   (test/case "starts-with-true"

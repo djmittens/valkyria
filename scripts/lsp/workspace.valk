@@ -74,8 +74,12 @@
 ; (load ...) target on every diagnostics publish (lsp/ensure-loads-indexed);
 ; unconditionally reading each dependency from disk cost a full read-file
 ; per dep per keystroke batch.
+; Canonicalize first: the hash probe keys on files.path, which is always
+; physical, so a symlinked input path would miss the row and re-index on
+; every publish.
 (sig 'lsp/seed-from-disk {-> Ref Str Num})
-(fun {lsp/seed-from-disk db path} {do
+(fun {lsp/seed-from-disk db raw-path} {do
+  (= {path} (symdb/canon-path raw-path))
   (= {fp} (file/fingerprint path))
   (if (error? fp) {0}
     {if (lsp/hash-current? db path fp) {0}
@@ -420,24 +424,116 @@
 ; lsp/idx-sys completion does a tiny bounce-back dispatch to lsp/sys
 ; whose completion clears the flag. One extra dispatch per coalesced
 ; batch is negligible vs the queue depth it saves.
-(def {lsp/cache-ast-pending} 0)
-(def {lsp/sync-doc-pending} 0)
-(def {lsp/publish-diag-pending} 0)
+; Coalescing state, keyed BY URI.
+;
+; Two bugs in the original single-global-flag version:
+;
+;   1. No trailing edge. `if pending == 0 { launch } ` alone drops any
+;      didChange that arrives mid-flight and never reschedules, so the last
+;      edit of a burst is silently lost: the user stops typing and keeps stale
+;      squigglies and a stale symbol index until they type again.
+;
+;   2. Not per-URI. One global flag means an edit to A in flight causes an edit
+;      to B to be dropped — and a naive trailing-edge relaunch would then
+;      re-run A, never B. Editing two files in a session loses work in
+;      whichever one loses the race.
+;
+; `inflight[uri]` = a job is running; `dirty[uri]` = newer text arrived that no
+; running job has observed. Launch clears dirty and sets inflight; completion
+; clears inflight and relaunches iff dirty was set again meanwhile.
+;
+; Synchronization is unchanged in spirit: every read/write below happens on
+; lsp/sys loop 0 — handle-did-change runs there, and the lsp/idx-sys
+; completions bounce back through a no-op dispatch before touching state.
+(def {lsp/cache-ast-inflight} (dict/new))
+(def {lsp/cache-ast-dirty} (dict/new))
+(def {lsp/sync-doc-inflight} (dict/new))
+(def {lsp/sync-doc-dirty} (dict/new))
+(def {lsp/publish-diag-inflight} (dict/new))
+(def {lsp/publish-diag-dirty} (dict/new))
 
-; Bounce a flag-clear back to lsp/sys loop 0 via a no-op dispatch.
-; Used as the completion callback of an lsp/idx-sys dispatch when we
-; need to safely write to a single-loop-owned global from a different
-; aio system.
-(sig 'lsp/clear-sync-doc-pending {-> Nil})
-(fun {lsp/clear-sync-doc-pending} {
-  aio/dispatch lsp/sys (\ {_} {}) nil
-    (\ {_} {def {lsp/sync-doc-pending} 0})
+(sig 'lsp/coalesce-busy? {-> Ref Str Num})
+(fun {lsp/coalesce-busy? inflight uri}
+  {== (dict/get inflight uri 0) 1})
+
+; Returns 1 when the caller should launch a job for `uri`, 0 when one is
+; already running (in which case the URI is left marked dirty so the running
+; job's completion relaunches it).
+(sig 'lsp/coalesce-claim {-> Ref Ref Str Num})
+(fun {lsp/coalesce-claim inflight dirty uri} {
+  if (lsp/coalesce-busy? inflight uri)
+    {do (dict/set! dirty uri 1) 0}
+    {do (dict/set! inflight uri 1) (dict/remove! dirty uri) 1}
 })
 
-(sig 'lsp/clear-publish-diag-pending {-> Nil})
-(fun {lsp/clear-publish-diag-pending} {
+; Returns 1 when newer text arrived while the job ran and it must relaunch.
+(sig 'lsp/coalesce-release {-> Ref Ref Str Num})
+(fun {lsp/coalesce-release inflight dirty uri} {do
+  (dict/set! inflight uri 0)
+  (if (== (dict/get dirty uri 0) 1)
+    {do (dict/remove! dirty uri) 1}
+    {0})
+})
+
+; Bounce a state update back to lsp/sys loop 0 via a no-op dispatch. Used as
+; the completion callback of an lsp/idx-sys dispatch when we need to touch
+; single-loop-owned state from a different aio system.
+(sig 'lsp/clear-sync-doc-pending {-> Str Nil})
+(fun {lsp/clear-sync-doc-pending uri} {
   aio/dispatch lsp/sys (\ {_} {}) nil
-    (\ {_} {def {lsp/publish-diag-pending} 0})
+    (\ {_} {if (== (lsp/coalesce-release lsp/sync-doc-inflight
+                                        lsp/sync-doc-dirty uri) 1)
+      {lsp/schedule-sync-doc uri} {}})
+})
+
+(sig 'lsp/clear-publish-diag-pending {-> Str Nil})
+(fun {lsp/clear-publish-diag-pending uri} {
+  aio/dispatch lsp/sys (\ {_} {}) nil
+    (\ {_} {if (== (lsp/coalesce-release lsp/publish-diag-inflight
+                                         lsp/publish-diag-dirty uri) 1)
+      {lsp/schedule-publish-diagnostics uri} {}})
+})
+
+; Coalesced schedulers. Each is safe to call on every didChange: the first call
+; launches, calls while a job is in flight are absorbed, and the completion
+; relaunches once if newer text arrived meanwhile. The job body always reads
+; the LATEST doc, so an absorbed batch collapses into one pass.
+(sig 'lsp/schedule-cache-ast {-> Str Nil})
+(fun {lsp/schedule-cache-ast uri} {
+  if (== (lsp/coalesce-claim lsp/cache-ast-inflight lsp/cache-ast-dirty uri) 0) {}
+    {aio/dispatch lsp/sys
+      (\ {_} {do
+        (= {latest} (lsp/doc-get uri))
+        (if (nil? latest) {nil} {do (lsp/cache-ast uri latest) nil})})
+      nil
+      (\ {_} {do
+        (lsp/refresh-semantic-tokens)
+        (if (== (lsp/coalesce-release lsp/cache-ast-inflight
+                                      lsp/cache-ast-dirty uri) 1)
+          {lsp/schedule-cache-ast uri} {})})}
+})
+
+(sig 'lsp/schedule-sync-doc {-> Str Nil})
+(fun {lsp/schedule-sync-doc uri} {
+  if (== (lsp/coalesce-claim lsp/sync-doc-inflight lsp/sync-doc-dirty uri) 0) {}
+    {aio/dispatch lsp/idx-sys
+      (\ {_} {do
+        (= {latest} (lsp/doc-get uri))
+        (if (nil? latest) {nil} {do (lsp/sync-doc lsp/idx-db uri latest) nil})})
+      nil
+      (\ {_} {lsp/clear-sync-doc-pending uri})}
+})
+
+(sig 'lsp/schedule-publish-diagnostics {-> Str Nil})
+(fun {lsp/schedule-publish-diagnostics uri} {
+  if (== (lsp/coalesce-claim lsp/publish-diag-inflight
+                             lsp/publish-diag-dirty uri) 0) {}
+    {aio/dispatch lsp/idx-sys
+      (\ {_} {do
+        (= {latest} (lsp/doc-get uri))
+        (if (nil? latest) {nil} {do (lsp/publish-diagnostics lsp/idx-db uri latest) nil})})
+      nil
+      (\ {_} {lsp/clear-publish-diag-pending uri})}
 })
 
 (sig 'handle-did-change {-> ChangeParams Nil})
@@ -463,38 +559,10 @@
         {})
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (if (== lsp/cache-ast-pending 0)
-        {do
-          (def {lsp/cache-ast-pending} 1)
-          (aio/dispatch lsp/sys
-            (\ {_} {do
-              (= {latest} (lsp/doc-get uri))
-              (if (nil? latest) {nil} {do (lsp/cache-ast uri latest) nil})})
-            nil
-            (\ {_} {do (def {lsp/cache-ast-pending} 0)
-                       (lsp/refresh-semantic-tokens)}))}
-        {})
-      (if (== lsp/sync-doc-pending 0)
-        {do
-          (def {lsp/sync-doc-pending} 1)
-          (aio/dispatch lsp/idx-sys
-            (\ {_} {do
-              (= {latest} (lsp/doc-get uri))
-              (if (nil? latest) {nil} {do (lsp/sync-doc lsp/idx-db uri latest) nil})})
-            nil
-            (\ {_} {lsp/clear-sync-doc-pending}))}
-        {})
       (def {lsp/diag-version} (+ lsp/diag-version 1))
-      (if (== lsp/publish-diag-pending 0)
-        {do
-          (def {lsp/publish-diag-pending} 1)
-          (aio/dispatch lsp/idx-sys
-            (\ {_} {do
-              (= {latest} (lsp/doc-get uri))
-              (if (nil? latest) {nil} {do (lsp/publish-diagnostics lsp/idx-db uri latest) nil})})
-            nil
-            (\ {_} {lsp/clear-publish-diag-pending}))}
-        {})})})
+      (lsp/schedule-cache-ast uri)
+      (lsp/schedule-sync-doc uri)
+      (lsp/schedule-publish-diagnostics uri)})})
 
 (sig 'handle-did-close {-> DocParams Nil})
 (fun {handle-did-close params} {do

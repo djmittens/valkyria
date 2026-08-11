@@ -154,11 +154,46 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 
 ; === Helpers ===
 
+; `files.path` is the identity of a source file, so it MUST be a
+; physical path. Editors are inconsistent about symlinks: neovim
+; resolves them when opening a buffer but echoes root_uri verbatim, so a
+; workspace under a symlinked directory (macOS /tmp and /var, home-dir
+; symlinks, git worktrees) yields BOTH /var/x.valk and
+; /private/var/x.valk. Two rows for one file means re-indexing one row
+; leaves the other's symbols in the table forever — deleted definitions
+; stay resolvable and undefined-symbol diagnostics never fire.
+(def {symdb/canon-cache} (dict/new))
+
+(sig 'canon-path {-> Str Str})
+(fun {canon-path p} {do
+  (= {hit} (dict/get symdb/canon-cache p))
+  (if (not (nil? hit)) {hit}
+    {do
+      (= {out} (canon-resolve p))
+      (dict/set! symdb/canon-cache p out)
+      out})
+})
+
+; realpath(2) fails when the leaf doesn't exist yet (unsaved buffer), so
+; fall back to canonicalizing the parent directory and re-attaching the
+; basename. That yields the same answer the file would get once written.
+(sig 'canon-resolve {-> Str Str})
+(fun {canon-resolve p} {do
+  (= {r} (realpath p))
+  (if (not (error? r)) {r}
+    {do
+      (= {i} (str/last-index-of p "/"))
+      (if (< i 1) {p}
+        {do
+          (= {dir} (realpath (str/slice p 0 i)))
+          (if (error? dir) {p} {str dir (str/slice p i (len p))})})})
+})
+
 (sig 'uri->path {-> Str Str})
 (fun {uri->path uri} {
   if (< (len uri) 7) {uri}
     {if (== (str/slice uri 0 7) "file://")
-      {str/slice uri 7 (len uri)}
+      {canon-path (str/slice uri 7 (len uri))}
       {uri}}
 })
 
