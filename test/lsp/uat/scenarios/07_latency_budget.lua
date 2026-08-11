@@ -5,13 +5,19 @@
 -- Budgets here are DELIBERATELY generous; they're meant to catch a
 -- 10× slowdown, not micro-optimize. Tighten as the LSP improves.
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   hover_p95_under_load = function(lib)
     local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
-    -- Wait a beat for the workspace scan to advance; otherwise the
-    -- first few hovers race the scan and skew the distribution.
-    vim.wait(1500)
+    -- The first hovers must not race the workspace scan or they skew the
+    -- distribution. Wait for the scan to actually report completion.
+    lib.wait_for_workspace_scan(10000)
 
     -- Grab a sample of column positions from the buffer.
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -45,7 +51,7 @@ return {
   semantic_tokens_full_under_500ms = function(lib)
     local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(500)
+    lib.wait_for_workspace_scan(10000)
     local _, ms = lib.request(bufnr, "textDocument/semanticTokens/full",
       { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
     lib.assert_lt(ms, 500,

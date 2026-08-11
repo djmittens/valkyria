@@ -40,7 +40,7 @@ return {
     -- and re-emitted.
     local bufnr = lib.open_fixture("diagnostics_clean.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)
+    lib.settle_diagnostics(bufnr, 5000)
 
     local n = vim.api.nvim_buf_line_count(bufnr)
     -- Type a benign comment line at EOF, char by char.
@@ -50,7 +50,7 @@ return {
     local samples = {}
     for i = 1, #txt do
       vim.api.nvim_buf_set_text(bufnr, n, i - 1, n, i - 1, { txt:sub(i, i) })
-      vim.wait(15)
+      lib.keystroke_gap()  -- flicker is observed at a defined typing rate
       if i % 4 == 0 then
         local diags = vim.diagnostic.get(bufnr)
         local errors = 0
@@ -82,7 +82,7 @@ return {
     -- offset->lc conversion overflows or returns nil.
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     local last_line = vim.api.nvim_buf_line_count(bufnr) - 1
     local last_line_text = vim.api.nvim_buf_get_lines(bufnr, last_line, last_line + 1, false)[1] or ""
@@ -100,7 +100,7 @@ return {
     -- and segfault.
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     local fake_line = vim.api.nvim_buf_line_count(bufnr) + 100
     local res, _, err = lib.request(bufnr, "textDocument/hover",

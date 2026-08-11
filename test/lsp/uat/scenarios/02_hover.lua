@@ -4,7 +4,13 @@
 -- "successful" response (nil result, no error) — which is why these
 -- assertions check the body, not just the response shape.
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   hover_user_function_shows_signature = function(lib)
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)

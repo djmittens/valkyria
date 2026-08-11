@@ -68,33 +68,43 @@ return {
     -- the WorkspaceEdit covers main.valk and aux.valk too.
     local bufnr = lib.open_fixture("multi/utils.valk")
     lib.wait_for_lsp(bufnr)
-    -- Wait for ALL the workspace files that reference utils/double
-    -- to be indexed so the LSP can include their refs in the edit.
-    vim.wait(2500)
 
     local line, col = lib.find_text(bufnr, "{utils/double x}")
-    local res = lib.request(bufnr, "textDocument/rename", {
-      textDocument = { uri = lib.bufuri(bufnr) },
-      position = lib.pos(line, col + 2),
-      newName = "utils/twice",
-    }, 5000)
-    lib.assert_truthy(res, "cross-file rename returned nil")
-    local changes = res.changes
-    if not changes and res.documentChanges then
-      changes = {}
-      for _, dc in ipairs(res.documentChanges) do
-        if dc.textDocument and dc.edits then
-          changes[dc.textDocument.uri] = dc.edits
+    local function rename_files()
+      local res = lib.request(bufnr, "textDocument/rename", {
+        textDocument = { uri = lib.bufuri(bufnr) },
+        position = lib.pos(line, col + 2),
+        newName = "utils/twice",
+      }, 5000)
+      if not res then return nil end
+      local changes = res.changes
+      if not changes and res.documentChanges then
+        changes = {}
+        for _, dc in ipairs(res.documentChanges) do
+          if dc.textDocument and dc.edits then
+            changes[dc.textDocument.uri] = dc.edits
+          end
         end
       end
+      if not changes then return nil end
+      local files = {}
+      for uri, _ in pairs(changes) do
+        local f = uri:match("([^/]+)$")
+        if f then files[f] = true end
+      end
+      return files
     end
-    lib.assert_truthy(changes, "cross-file rename: no changes")
-    -- Count distinct files in the change set.
-    local files = {}
-    for uri, _ in pairs(changes) do
-      local f = uri:match("([^/]+)$")
-      if f then files[f] = true end
-    end
+
+    -- The referencing files enter the index as the startup scan progresses,
+    -- so retry until the edit spans more than utils.valk instead of sleeping
+    -- a fixed 2.5s and hoping the scan got there.
+    local files = select(2, lib.wait_until(function()
+      local f = rename_files()
+      if f and f["utils.valk"] and (f["main.valk"] or f["aux.valk"]) then return f end
+      return nil
+    end, 5000, 25)) or rename_files()
+
+    lib.assert_truthy(files, "cross-file rename returned nil")
     lib.assert_truthy(files["utils.valk"],
       "cross-file rename missing utils.valk: " .. vim.inspect(files))
     -- Soft requirement: at least one of main.valk/aux.valk also

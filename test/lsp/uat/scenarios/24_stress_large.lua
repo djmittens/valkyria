@@ -17,7 +17,13 @@ end
 -- O(N²) regression). Tightening these budgets is a separate optimization
 -- task; the suite's job here is to catch full breakage, not micro-perf.
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   large_file_indexes_within_15s = function(lib)
     local content = generate_large(200)
     local path = lib.write_temp("large.valk", content)
@@ -44,7 +50,7 @@ return {
     local path = lib.write_temp("large_sem.valk", content)
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
-    vim.wait(500)
+    lib.require_symbol_indexed(bufnr, "^fn150$", 15000)
     local _, ms = lib.request(bufnr, "textDocument/semanticTokens/full",
       { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
     lib.assert_lt(ms, 5000,

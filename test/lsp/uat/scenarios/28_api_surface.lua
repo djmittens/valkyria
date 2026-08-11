@@ -20,7 +20,7 @@ return {
     -- returns must be valid relative-encoded LSP token data.
     local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)
+    lib.wait_for_workspace_scan(10000)
 
     local total_lines = vim.api.nvim_buf_line_count(bufnr)
     local res = lib.request(bufnr, "textDocument/semanticTokens/range", {
@@ -41,7 +41,7 @@ return {
     -- provider, so it must respond — empty list is acceptable.
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     local res, _, err = lib.request(bufnr, "textDocument/documentLink",
       { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
@@ -116,7 +116,7 @@ return {
     -- whether to even prompt the user.
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     -- Position the request at column 0 of line 0 — should be on
     -- whitespace or a paren, not on an identifier.
@@ -140,7 +140,7 @@ return {
     -- for) must not crash. Some servers' uri->doc lookup explodes.
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     local fake_uri = "file:///does/not/exist/never.valk"
     local res, _, err = lib.request(bufnr, "textDocument/hover", {

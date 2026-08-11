@@ -16,12 +16,18 @@ local SEED = table.concat({
   "",
 }, "\n")
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   hover_during_typing_returns_for_just_typed_symbol = function(lib)
     local path = lib.write_temp("incremental.valk", SEED)
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)  -- let initial index settle
+    lib.require_symbol_indexed(bufnr, "^add$", 5000)
 
     -- Find the blank line we'll type into.
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -37,13 +43,12 @@ return {
       local ch = text:sub(i, i)
       vim.api.nvim_buf_set_text(bufnr, target_line, i - 1,
                                  target_line, i - 1, { ch })
-      vim.wait(20)  -- ~50 keystrokes/s
+      lib.keystroke_gap()
     end
 
     -- After typing, hover on `add` (which we just typed) should still
     -- resolve to the existing top-level `add` function. The LSP must
     -- have processed didChange and re-parsed.
-    vim.wait(100)
     local add_line, add_col = lib.find_text(bufnr, "(add 10 20)")
     local res, elapsed, err = lib.request(bufnr, "textDocument/hover",
       lib.tdp(lib.bufuri(bufnr), add_line, add_col + 1), 5000)
@@ -56,7 +61,7 @@ return {
     local path = lib.write_temp("incremental_completion.valk", SEED)
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)
+    lib.require_symbol_indexed(bufnr, "^add$", 5000)
 
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local target_line = nil
@@ -71,10 +76,9 @@ return {
     for i = 1, #prefix do
       vim.api.nvim_buf_set_text(bufnr, target_line, i - 1,
                                  target_line, i - 1, { prefix:sub(i, i) })
-      vim.wait(20)
+      lib.keystroke_gap()
     end
 
-    vim.wait(100)
     local res = lib.request(bufnr, "textDocument/completion", {
       textDocument = { uri = lib.bufuri(bufnr) },
       position = lib.pos(target_line, #prefix),

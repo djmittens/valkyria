@@ -24,7 +24,13 @@ local function measure_hover_burst(lib, bufnr, line, col, n)
   return lat
 end
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   hover_latency_does_not_degrade_after_open_close_churn = function(lib)
     -- Open and close 30 distinct buffers, then measure hover
     -- latency on a fresh-opened buffer. If close-time cleanup is
@@ -44,9 +50,8 @@ return {
         ("(def {item_%d} %d)\n"):format(i, i))
       local b = lib.open_path(p)
       lib.wait_for_lsp(b)
-      vim.wait(20)
+      lib.sync(b)  -- each didOpen fully handled before the next churn step
       lib.close_buffer(b)
-      vim.wait(10)
     end
 
     -- Re-open baseline and let the async pipeline QUIESCE before measuring:
@@ -57,7 +62,9 @@ return {
     -- degrades permanently and is still caught after the drain.
     local baseline2 = lib.open_fixture("small.valk")
     lib.wait_for_lsp(baseline2)
-    vim.wait(1500)
+    -- Wait for the client to actually go quiet rather than assuming 1.5s is
+    -- enough for the churn backlog to drain.
+    lib.wait_for_quiescence(150, 10000)
     local lat_after = measure_hover_burst(lib, baseline2, line, col + 1, 10)
 
     local before_p99 = lib.percentile(lat_before, 99)
@@ -77,7 +84,7 @@ return {
     -- cache; if those grow, latency creeps up.
     local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(500)
+    lib.wait_for_workspace_scan(10000)
 
     local function measure(n)
       local lat = {}
@@ -97,9 +104,11 @@ return {
     for i = 1, 100 do
       local ch = ((i % 26) + 96)  -- a-z cycling
       vim.api.nvim_buf_set_text(bufnr, n, 0, n, 0, { string.char(ch) })
-      vim.wait(5)
     end
-    vim.wait(300)  -- let cache catch up
+    -- Flush the trailing edit and wait for the server to finish reacting to it,
+    -- so `after` measures a settled server rather than one still draining.
+    lib.settle_diagnostics(bufnr, 5000)
+    lib.wait_for_quiescence(100, 5000)
 
     local after = measure(5)
     local before_p50 = lib.percentile(before, 50)

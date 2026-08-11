@@ -31,7 +31,13 @@ local function token_fits(data, lines)
   return true
 end
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   rapid_typing_tokens_stay_valid = function(lib)
     local bufnr = lib.open_fixture("typing_seed.valk")
     lib.wait_for_lsp(bufnr)
@@ -41,7 +47,13 @@ return {
     -- Find the blank line between (fun ...) and (def ...). Hard-coded
     -- line numbers are brittle; locate the blank line by scanning so
     -- the test survives whitespace edits to the fixture.
-    local insert_text = "(let {x 1 y "
+    -- Long enough that p95 is an actual percentile. At 12 keystrokes p95 IS
+    -- the max, so the assertion was really "no single sample exceeded the
+    -- budget" — and the one sample that did was the first request after open,
+    -- i.e. a cold-cache cost that 01_cold_start already measures on purpose.
+    -- Steady-state typing is what this scenario is for, so give it enough
+    -- samples to describe steady state.
+    local insert_text = "(let {x 1 y 2 z 3 w 4} (+ x y z w (* x y) (* z w)))"
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local insert_line = nil
     local saw_fun = false
@@ -60,12 +72,12 @@ return {
     for i = 1, #insert_text do
       local ch = insert_text:sub(i, i)
       vim.api.nvim_buf_set_text(bufnr, insert_line, i - 1, insert_line, i - 1, { ch })
-      -- Wait long enough for nvim's deferred LSP didChange to flush
-      -- through the client's outgoing pipe. The default change-tracking
-      -- debounce is ~150ms; without this the server hasn't yet seen
-      -- the edit when our sem-tokens request arrives, and serializes
-      -- the request behind the impending didChange notification.
-      vim.wait(50)
+      -- Simulated keystroke gap: this scenario reports a p95, so the input rate
+      -- has to be defined for the number to mean anything. It is NOT here to
+      -- let didChange flush — nvim's Client:request flushes changetracking
+      -- before sending (client.lua:732), so the server has necessarily seen
+      -- this edit by the time it handles the request.
+      lib.keystroke_gap()
       local res, elapsed, err = lib.request(bufnr, "textDocument/semanticTokens/full",
         { textDocument = { uri = lib.bufuri(bufnr) } }, 3000)
       table.insert(latencies, elapsed)
@@ -85,8 +97,9 @@ return {
     -- Generous bound — the validator + symdb are heavy. Tighten later.
     lib.assert_lt(p95, 300,
       ("p95 token latency %d ms exceeds budget"):format(p95))
-    io.stderr:write(("[uat] rapid-typing: median %d ms, p95 %d ms across %d edits\n")
-      :format(lib.percentile(latencies, 50), p95, #latencies))
+    io.stderr:write(("[uat] rapid-typing: median %d ms, p95 %d ms, max %d ms across %d edits\n")
+      :format(lib.percentile(latencies, 50), p95,
+              lib.percentile(latencies, 100), #latencies))
   end,
 
   -- The real "editing experience" workload: type a sequence of
@@ -101,7 +114,7 @@ return {
   hover_during_typing_keeps_p99_under_budget = function(lib)
     local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(500)
+    lib.wait_for_workspace_scan(10000)
 
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local target = nil
@@ -115,7 +128,7 @@ return {
     for i = 1, #sample do
       local ch = sample:sub(i, i)
       vim.api.nvim_buf_set_text(bufnr, target, i - 1, target, i - 1, { ch })
-      vim.wait(10)
+      lib.keystroke_gap()  -- defined input rate; see lib.TYPING_CADENCE_MS
       local _, elapsed = lib.request(bufnr, "textDocument/hover",
         lib.tdp(lib.bufuri(bufnr), target, math.max(0, i - 1)), 3000)
       table.insert(latencies, elapsed)

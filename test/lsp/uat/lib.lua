@@ -30,7 +30,9 @@ local function open_with_fresh_buffer(path)
     -- Detach LSP client first to avoid stale didClose ordering.
     pcall(vim.cmd, "bwipeout! " .. existing)
   end
-  vim.cmd("edit! " .. vim.fn.fnameescape(path))
+  -- `silent` keeps the `"path" NL, NB` file message out of stderr, which
+  -- is where the test report lives.
+  vim.cmd("silent edit! " .. vim.fn.fnameescape(path))
   vim.cmd("filetype detect")
   return vim.api.nvim_get_current_buf()
 end
@@ -48,17 +50,16 @@ end
 -- Times out after `timeout_ms` and errors. Returns the client.
 function M.wait_for_lsp(bufnr, timeout_ms)
   timeout_ms = timeout_ms or 10000
-  local deadline = vim.uv.hrtime() + timeout_ms * 1e6
-  while vim.uv.hrtime() < deadline do
-    local clients = vim.lsp.get_clients({ bufnr = bufnr })
-    for _, c in ipairs(clients) do
-      if c.server_capabilities and c.initialized ~= false then
-        return c
-      end
+  local ok, client = M.wait_until(function()
+    for _, c in ipairs(vim.lsp.get_clients({ bufnr = bufnr })) do
+      if c.server_capabilities and c.initialized ~= false then return c end
     end
-    vim.wait(20)
+    return nil
+  end, timeout_ms)
+  if not ok then
+    error(("LSP did not attach to buf %d within %dms"):format(bufnr, timeout_ms))
   end
-  error(("LSP did not attach to buf %d within %dms"):format(bufnr, timeout_ms))
+  return client
 end
 
 -- ---------------------------------------------------------------------------
@@ -181,7 +182,7 @@ function M.open_path(path)
   if existing > 0 and vim.api.nvim_buf_is_valid(existing) then
     pcall(vim.cmd, "bwipeout! " .. existing)
   end
-  vim.cmd("edit! " .. vim.fn.fnameescape(path))
+  vim.cmd("silent edit! " .. vim.fn.fnameescape(path))
   vim.cmd("filetype detect")
   return vim.api.nvim_get_current_buf()
 end
@@ -192,7 +193,10 @@ end
 -- ran during normal startup, which `nvim --headless -l` skips.
 -- Be explicit: write to disk + manually send the notification.
 function M.save_buffer(bufnr)
-  vim.api.nvim_buf_call(bufnr, function() vim.cmd("write!") end)
+  -- `silent` — the default "N lines, M bytes written" message goes to
+  -- stderr under --headless and interleaves with the test report,
+  -- corrupting the PASS/FAIL lines it lands in the middle of.
+  vim.api.nvim_buf_call(bufnr, function() vim.cmd("silent write!") end)
   local clients = vim.lsp.get_clients({ bufnr = bufnr })
   if #clients == 0 then
     error("save_buffer: no LSP client attached to buf " .. bufnr)
@@ -208,10 +212,10 @@ function M.save_buffer(bufnr)
   for _, c in ipairs(clients) do
     c:notify("textDocument/didSave", params)
   end
-  -- Give the server a beat to process the notification before the
-  -- caller fires the next request. Without this, requests can race
-  -- the didSave-triggered re-index.
-  vim.wait(50)
+  -- Barrier, not a sleep: the round trip proves the server dequeued the
+  -- didSave. (The re-index it *enqueues* runs on lsp/idx-sys and still needs
+  -- an outcome poll — see wait_for_symbol_indexed / wait_for_symbol_gone.)
+  M.sync(bufnr)
 end
 
 -- Close a buffer (sending didClose). open_path/open_fixture already
@@ -228,7 +232,7 @@ end
 function M.append_line(bufnr, text)
   local n = vim.api.nvim_buf_line_count(bufnr)
   vim.api.nvim_buf_set_lines(bufnr, n, n, false, { text })
-  vim.wait(50)  -- let didChange flush
+  M.sync(bufnr)  -- didChange handled before the caller's next request
   return n  -- caller's appended line is at index n (0-indexed)
 end
 
@@ -237,37 +241,238 @@ end
 function M.replace_all(bufnr, new_content)
   local lines = vim.split(new_content, "\n", { plain = true })
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-  vim.wait(50)
+  M.sync(bufnr)
+end
+
+-- ---------------------------------------------------------------------------
+-- Synchronization
+-- ---------------------------------------------------------------------------
+--
+-- Two distinct primitives, because the server has two queues:
+--
+--   M.sync(bufnr)  — round-trip barrier. Notifications (didOpen/didChange/
+--     didClose/didSave) and requests share ONE FIFO worker queue in arrival
+--     order (scripts/lsp/lsp.valk:116-122), so a request that comes back
+--     proves every notification sent before it has been fully handled.
+--     This replaces every "vim.wait(N) to let didChange flush" sleep.
+--
+--   M.wait_until(...) — outcome poll. Notification handlers enqueue indexing
+--     and diagnostics onto a SEPARATE system (lsp/idx-sys, lsp.valk:373), and
+--     no request round-trips through it. So index/diagnostic effects can only
+--     be awaited by polling for the observable result.
+--
+-- A bare vim.wait(N) is legitimate in exactly one place: as the poll interval
+-- inside wait_until. Everywhere else it has to be sized for the worst case,
+-- which makes it simultaneously slower than necessary in the common case and
+-- too short under load — sluggish AND flaky from the same line of code.
+--
+-- Three sleeps that look necessary but are not:
+--
+--   "let nvim flush the pending didChange" — never needed. Client:request
+--   calls changetracking.flush() before sending every request
+--   (nvim runtime/lua/vim/lsp/client.lua:732), so a queued didChange always
+--   reaches the server ahead of the next request. Just make the request.
+--
+--   "wait for the workspace scan" — the server announces it, via $/progress
+--   with kind="end". Use wait_for_workspace_scan.
+--
+--   "wait to be sure no diagnostic arrives" — absence of an event is not
+--   observable, but arrival of an empty publish is. Use settle_diagnostics,
+--   which waits for the publish that the edit provoked and then lets you
+--   assert on its contents.
+
+-- The barrier request must NOT be document-scoped. Anything that parses the
+-- buffer (foldingRange, documentSymbol, semanticTokens, ...) raises on
+-- incomplete input, and these scenarios deliberately leave unbalanced parens
+-- to simulate mid-typing states, so a document-scoped barrier would turn
+-- every mid-edit sync into an error response. (Those errors are at least
+-- matchable now — the AOT miscompile that dropped `id` from
+-- lsp/request-done-cb and made them come back with a null id is fixed;
+-- see test_build.c build_aot_closure_captures_formals.) A barrier that
+-- reports failure is still a bad barrier. workspace/symbol only touches
+-- the symbol db, cannot fail on buffer text, and still goes through the
+-- same FIFO worker queue, so it orders correctly.
+local SYNC_METHOD = "workspace/symbol"
+local SYNC_PARAMS = { query = "\1uat-barrier" }
+
+-- WORKLOAD parameter, not synchronization. A latency scenario asks "is the
+-- editor responsive while I type", and that number only means something at a
+-- defined input rate — with no gap at all you measure max-rate queue
+-- contention instead, which is a different (harsher, also valid) test.
+-- ~25ms/char is roughly 100wpm sustained.
+--
+-- Never use this to wait for the server to catch up. It is only the simulated
+-- gap between two keystrokes, and only in scenarios that report a latency
+-- percentile. Correctness-under-burst scenarios type with no gap on purpose.
+M.TYPING_CADENCE_MS = 25
+
+function M.keystroke_gap()
+  vim.wait(M.TYPING_CADENCE_MS)
+end
+
+-- Block until the server has drained every notification sent before now.
+-- Returns true if the round trip completed.
+function M.sync(bufnr, timeout_ms)
+  local clients = vim.lsp.get_clients({ bufnr = bufnr })
+  if #clients == 0 then return false end
+  local res = vim.lsp.buf_request_sync(bufnr, SYNC_METHOD, SYNC_PARAMS,
+    timeout_ms or 5000)
+  return res ~= nil
+end
+
+-- Poll `predicate` until it returns truthy. Returns (ok, value, elapsed_ms).
+-- Polls on a short interval rather than sleeping a fixed budget, so the
+-- common case costs one interval and only a genuine failure costs the
+-- timeout. `interval_ms` defaults to 10.
+function M.wait_until(predicate, timeout_ms, interval_ms)
+  timeout_ms = timeout_ms or 5000
+  interval_ms = interval_ms or 10
+  local t0 = vim.uv.hrtime()
+  local deadline = t0 + timeout_ms * 1e6
+  while true do
+    local ok, value = pcall(predicate)
+    if ok and value then
+      return true, value, (vim.uv.hrtime() - t0) / 1e6
+    end
+    if vim.uv.hrtime() >= deadline then
+      return false, value, (vim.uv.hrtime() - t0) / 1e6
+    end
+    vim.wait(interval_ms)
+  end
+end
+
+-- Same, but errors with `msg` on timeout instead of returning false. Use
+-- this when the wait is a precondition for the assertion that follows: a
+-- silent timeout turns a "server never indexed the file" bug into a
+-- confusing failure several lines later.
+function M.require_until(predicate, msg, timeout_ms, interval_ms)
+  local ok, value, elapsed = M.wait_until(predicate, timeout_ms, interval_ms)
+  if not ok then
+    error(("%s (waited %.0f ms)"):format(msg or "require_until timed out", elapsed), 2)
+  end
+  return value
+end
+
+-- Wait until the client has been idle for `window_ms` — no server-initiated
+-- diagnostics have arrived in that window.
+--
+-- This is for the one case a barrier cannot cover: after churning many files,
+-- nvim itself has a backlog of inbound notifications, and its handlers run on
+-- the same main loop the test runs on. Measuring latency mid-drain times nvim's
+-- queue rather than the server.
+--
+-- A quiescence window is not a guessed sleep: the condition ("nothing has
+-- arrived for W ms") is verified, the total wait adapts to real load, and it
+-- fails fast when the system is already idle. It only spends the full timeout
+-- when the server genuinely will not stop talking.
+function M.wait_for_quiescence(window_ms, timeout_ms)
+  window_ms = window_ms or 150
+  local counts = M._publish_counts
+  if not counts then return true end
+  local deadline = vim.uv.hrtime() + (timeout_ms or 5000) * 1e6
+  while vim.uv.hrtime() < deadline do
+    local before = counts._total
+    vim.wait(window_ms)
+    if counts._total == before then return true end
+  end
+  return false
+end
+
+-- Wait until the server has finished at least one workspace scan, observed
+-- via the $/progress kind="end" report the runner records. This is the honest
+-- precondition for any cross-file assertion — previously scenarios slept 2-2.5s
+-- and hoped. Returns true if a scan completed within the timeout.
+--
+-- Prefer wait_for_workspace_symbol when you can name the symbol you need; use
+-- this when the assertion tolerates a miss (e.g. "must not crash") and you
+-- only need the index to be settled.
+function M.wait_for_workspace_scan(timeout_ms)
+  local state = M._scan_state
+  if not state then return false end
+  local seen = state.ended
+  if seen > 0 then return true end
+  return (M.wait_until(function() return state.ended > seen end,
+    timeout_ms or 10000, 10))
 end
 
 -- ---------------------------------------------------------------------------
 -- Indexing polling
 -- ---------------------------------------------------------------------------
 
--- Poll documentSymbol until the buffer's symdb entry contains at
--- least one symbol matching `name_pattern` (Lua pattern), or timeout.
--- Use after open_fixture / write_temp+open_path before you make
--- assertions that depend on the LSP having indexed the file.
--- Returns true if found, false on timeout. Always returns within
--- timeout_ms; never raises.
-function M.wait_for_symbol_indexed(bufnr, name_pattern, timeout_ms)
-  timeout_ms = timeout_ms or 3000
-  local deadline = vim.uv.hrtime() + timeout_ms * 1e6
-  while vim.uv.hrtime() < deadline do
-    local res = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol",
-      { textDocument = { uri = M.bufuri(bufnr) } }, 500)
-    if res then
-      for _, r in pairs(res) do
-        if r.result then
-          for _, s in ipairs(r.result) do
-            if (s.name or ""):match(name_pattern) then return true end
-          end
-        end
+-- Return the documentSymbol names the server currently reports for `bufnr`.
+function M.document_symbols(bufnr)
+  local res = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol",
+    { textDocument = { uri = M.bufuri(bufnr) } }, 1000)
+  local names = {}
+  if res then
+    for _, r in pairs(res) do
+      for _, s in ipairs(r.result or {}) do
+        table.insert(names, s.name or "")
       end
     end
-    vim.wait(50)
+  end
+  return names
+end
+
+local function has_symbol(bufnr, name_pattern)
+  for _, n in ipairs(M.document_symbols(bufnr)) do
+    if n:match(name_pattern) then return true end
   end
   return false
+end
+
+-- Poll documentSymbol until a symbol matching `name_pattern` (Lua pattern)
+-- appears. Returns true if found, false on timeout; never raises. Prefer
+-- require_symbol_indexed when the symbol's presence is a precondition.
+function M.wait_for_symbol_indexed(bufnr, name_pattern, timeout_ms)
+  local ok = M.wait_until(function() return has_symbol(bufnr, name_pattern) end,
+    timeout_ms or 3000, 20)
+  return ok
+end
+
+-- Strict variant: fails the test if the symbol never shows up.
+function M.require_symbol_indexed(bufnr, name_pattern, timeout_ms)
+  if not M.wait_for_symbol_indexed(bufnr, name_pattern, timeout_ms) then
+    error(("server never indexed a symbol matching %q; documentSymbol reports: %s")
+      :format(name_pattern, vim.inspect(M.document_symbols(bufnr))), 2)
+  end
+end
+
+-- Inverse: wait until no symbol matches. Needed after deleting a definition,
+-- where the interesting state is the absence of a row.
+function M.wait_for_symbol_gone(bufnr, name_pattern, timeout_ms)
+  return (M.wait_until(function() return not has_symbol(bufnr, name_pattern) end,
+    timeout_ms or 3000, 20))
+end
+
+-- Wait until the workspace index can resolve `name`, via workspace/symbol
+-- rather than the per-file documentSymbol list.
+--
+-- Use this — NOT wait_for_symbol_indexed — whenever the symbol is defined in
+-- a file other than `bufnr`. documentSymbol only reports definitions in the
+-- requested document, so polling it for a cross-file symbol can never
+-- succeed: it burns the entire timeout and then returns false, which callers
+-- routinely ignore. Four such call sites were silently costing 5s each.
+function M.wait_for_workspace_symbol(bufnr, name, timeout_ms)
+  return (M.wait_until(function()
+    local res = vim.lsp.buf_request_sync(bufnr, "workspace/symbol",
+      { query = name }, 1000)
+    if not res then return false end
+    for _, r in pairs(res) do
+      for _, s in ipairs(r.result or {}) do
+        if (s.name or "") == name then return true end
+      end
+    end
+    return false
+  end, timeout_ms or 5000, 20))
+end
+
+-- Strict variant: a cross-file precondition that never materializes should
+-- fail here, loudly, rather than 20 lines later as a confusing assertion.
+function M.require_workspace_symbol(bufnr, name, timeout_ms)
+  if not M.wait_for_workspace_symbol(bufnr, name, timeout_ms) then
+    error(("workspace index never resolved %q"):format(name), 2)
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -285,15 +490,75 @@ end
 --                   absence of new diags but currently have some.
 function M.wait_for_diagnostics(bufnr, want_count, timeout_ms)
   timeout_ms = timeout_ms or 3000
-  local deadline = vim.uv.hrtime() + timeout_ms * 1e6
-  local diags = vim.diagnostic.get(bufnr)
-  while vim.uv.hrtime() < deadline do
-    diags = vim.diagnostic.get(bufnr)
-    if want_count > 0 and #diags >= want_count then return diags end
-    if want_count == 0 and #diags == 0 then return diags end
-    vim.wait(50)
+  if want_count >= 0 then
+    M.wait_until(function()
+      local n = #vim.diagnostic.get(bufnr)
+      if want_count > 0 then return n >= want_count end
+      return n == 0
+    end, timeout_ms, 10)
+    return vim.diagnostic.get(bufnr)
   end
-  return diags
+  -- want_count < 0: "whatever landed after the server caught up". Not a sleep:
+  -- flush + barrier, then wait for the server to actually publish for this URI.
+  M.settle_diagnostics(bufnr, timeout_ms)
+  return vim.diagnostic.get(bufnr)
+end
+
+-- How many times has the server published diagnostics for this buffer's URI?
+function M.diagnostic_publishes(bufnr)
+  local counts = M._publish_counts
+  if not counts then return 0 end
+  return counts[M.bufuri(bufnr)] or 0
+end
+
+-- Wait for the server to publish diagnostics for `bufnr` at least once from
+-- now on. Returns true if a publish arrived.
+function M.wait_for_diagnostic_publish(bufnr, timeout_ms)
+  local before = M.diagnostic_publishes(bufnr)
+  return (M.wait_until(function()
+    return M.diagnostic_publishes(bufnr) > before
+  end, timeout_ms or 3000, 10))
+end
+
+-- Bring diagnostics for `bufnr` to a known-settled state, for assertions of
+-- the form "there should be no (more) errors here".
+--
+-- The absence of a notification is not observable, so this does not try to
+-- observe it. Instead:
+--   1. sync() forces the client to flush pending didChange (nvim flushes
+--      changetracking before every request) and proves the server dequeued it,
+--   2. then wait for the resulting publish for this URI to actually arrive.
+-- After that the diagnostic set reflects the edit, and asserting on it is
+-- deterministic rather than a race against a fixed sleep.
+--
+-- Returns true if a publish was observed. False means the server chose not to
+-- republish, in which case the current set is already the settled one.
+function M.settle_diagnostics(bufnr, timeout_ms)
+  local before = M.diagnostic_publishes(bufnr)
+  M.sync(bufnr)
+  return (M.wait_until(function()
+    return M.diagnostic_publishes(bufnr) > before
+  end, timeout_ms or 3000, 10))
+end
+
+-- Wait until diagnostics for `bufnr` satisfy `pred(diags)`. Preferred over
+-- wait_for_diagnostics when the assertion is about content rather than count:
+-- it returns the moment the expected message lands instead of waiting for an
+-- arbitrary count that may never be reached.
+function M.wait_for_diagnostic_matching(bufnr, pred, timeout_ms)
+  M.wait_until(function() return pred(vim.diagnostic.get(bufnr)) end,
+    timeout_ms or 3000, 10)
+  return vim.diagnostic.get(bufnr)
+end
+
+-- Convenience: any diagnostic whose message contains `needle`.
+function M.wait_for_diagnostic_containing(bufnr, needle, timeout_ms)
+  return M.wait_for_diagnostic_matching(bufnr, function(diags)
+    for _, d in ipairs(diags) do
+      if (d.message or ""):find(needle, 1, true) then return true end
+    end
+    return false
+  end, timeout_ms)
 end
 
 -- ---------------------------------------------------------------------------
@@ -313,9 +578,13 @@ function M.insert_at(bufnr, line0, col0, text)
   else
     end_line, end_col = line0 + #lines - 1, #lines[#lines]
   end
-  -- nvim's LSP integration auto-fires didChange via on_lines callback.
-  -- Give the event loop a tick to flush.
-  vim.wait(5)
+  -- No wait here, deliberately. This simulates a keystroke in a burst, so a
+  -- round-trip barrier would serialize every keystroke against a response and
+  -- stop testing the thing under test. And no bare tick is needed either:
+  -- nvim's Client:request calls changetracking.flush() before sending
+  -- (runtime/lua/vim/lsp/client.lua:732), so the pending didChange is
+  -- guaranteed to reach the server ahead of whatever request the caller makes
+  -- next. Sleeping to "let didChange flush" was always a no-op guess.
   return end_line, end_col
 end
 

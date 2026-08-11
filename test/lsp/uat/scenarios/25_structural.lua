@@ -6,7 +6,6 @@ return {
   folding_ranges_returned_for_multi_def_file = function(lib)
     local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)
     local res = lib.request(bufnr, "textDocument/foldingRange",
       { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
     lib.assert_truthy(res, "foldingRange returned nil")
@@ -28,21 +27,15 @@ return {
     lib.wait_for_lsp(bufnr)
     lib.wait_for_symbol_indexed(bufnr, "^add$", 3000)
 
-    -- nvim queues client-to-server requests while previous responses
-    -- are pending; in busy suites the selectionRange request can sit
-    -- in the queue for >1s before being sent. Use a 10s per-request
-    -- timeout (the actual server-side processing is <10ms; the wait
-    -- is purely for nvim's outbox to drain).
-    local res, last_err
-    for attempt = 1, 2 do
-      vim.wait(200)
-      local line, col = lib.find_text(bufnr, "(square a)")
-      res, _, last_err = lib.request(bufnr, "textDocument/selectionRange", {
-        textDocument = { uri = lib.bufuri(bufnr) },
-        positions = { lib.pos(line, col + 8) },
-      }, 10000)
-      if res and #res >= 1 then break end
-    end
+    -- A barrier drains whatever is already queued, so the selectionRange
+    -- request below is not sitting behind unrelated in-flight work. That
+    -- removes the reason this used to sleep 200ms and retry twice.
+    lib.sync(bufnr)
+    local line, col = lib.find_text(bufnr, "(square a)")
+    local res, _, last_err = lib.request(bufnr, "textDocument/selectionRange", {
+      textDocument = { uri = lib.bufuri(bufnr) },
+      positions = { lib.pos(line, col + 8) },
+    }, 10000)
 
     lib.assert_truthy(res, ("selectionRange returned nil after 3 retries (last err=%s)"
       ):format(tostring(last_err)))

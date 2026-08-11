@@ -9,28 +9,11 @@
 --   2. Good code produces diagnostics → user sees red squigglies on
 --      working code, has to ignore them, eventually misses real ones.
 
-local function wait_for_diagnostics(bufnr, timeout_ms, want_count_min)
-  local deadline = vim.uv.hrtime() + timeout_ms * 1e6
-  local last_diags = {}
-  while vim.uv.hrtime() < deadline do
-    last_diags = vim.diagnostic.get(bufnr)
-    if want_count_min == 0 then
-      -- "no diagnostics" — wait the full timeout to be sure none arrive
-      vim.wait(100)
-      last_diags = vim.diagnostic.get(bufnr)
-    elseif #last_diags >= want_count_min then
-      return last_diags
-    end
-    vim.wait(50)
-  end
-  return last_diags
-end
-
 return {
   diagnostics_flag_known_bad_code = function(lib)
     local bufnr = lib.open_fixture("diagnostics_bad.valk")
     lib.wait_for_lsp(bufnr)
-    local diags = wait_for_diagnostics(bufnr, 5000, 1)
+    local diags = lib.wait_for_diagnostics(bufnr, 1, 5000)
     lib.assert_truthy(#diags >= 1,
       ("expected >=1 diagnostic on bad fixture, got %d"):format(#diags))
     -- Check at least one diagnostic mentions division. The exact
@@ -51,8 +34,11 @@ return {
   diagnostics_silent_on_clean_code = function(lib)
     local bufnr = lib.open_fixture("diagnostics_clean.valk")
     lib.wait_for_lsp(bufnr)
-    -- Wait long enough that a slow validator would have spoken up.
-    local diags = wait_for_diagnostics(bufnr, 3000, 0)
+    -- Not "sleep and hope nothing arrives": wait for the publish that didOpen
+    -- provoked to actually land, then assert on what it contained. An empty
+    -- publish is an observable event; the absence of one is not.
+    lib.settle_diagnostics(bufnr, 5000)
+    local diags = vim.diagnostic.get(bufnr)
     -- Allow at most 0 errors. Warnings/hints are tolerated since the
     -- LSP may legitimately suggest e.g. unused-binding hints.
     local errors = 0

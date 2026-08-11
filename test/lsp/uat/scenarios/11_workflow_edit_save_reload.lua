@@ -42,7 +42,6 @@ return {
     -- buffer (handle-did-close publishes empty diagnostics) but keep
     -- the file in the symbol DB.
     lib.close_buffer(bufnr)
-    vim.wait(200)
 
     -- Reopen. didOpen fires with the on-disk content (which has the
     -- bug). The LSP should publish a diagnostic for the reopened buffer.

@@ -5,7 +5,13 @@
 --   - cross-file def fails because the workspace scan didn't index the
 --     other file
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   goto_def_local_function = function(lib)
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
@@ -35,10 +41,12 @@ return {
   goto_def_cross_file_stdlib = function(lib)
     local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
-    -- Wait for workspace indexing to actually finish — cross-file
-    -- definition needs the symdb populated. The progress-end
-    -- notification arrives async; just give it some time.
-    vim.wait(2000)
+    -- Cross-file definition needs the symdb populated. Wait on the scan's own
+    -- $/progress end report rather than a fixed sleep. (Not
+    -- wait_for_workspace_symbol("dict/set!") — that's a C builtin, and stdlib
+    -- is only seeded when the workspace happens to be the valkyria repo, so
+    -- the symbol legitimately never appears in this temp fixture workspace.)
+    lib.wait_for_workspace_scan(10000)
     -- Find a call to `dict/set!` (a builtin/stdlib symbol). It's used
     -- frequently in io.valk.
     local found_line, found_col

@@ -12,12 +12,13 @@ return {
     -- because the file is on disk + indexed in symdb regardless of
     -- whether a buffer is open.
     lib.close_buffer(bufnr)
-    vim.wait(300)
 
     -- Re-open another file in the workspace; query workspace/symbol.
     local main_buf = lib.open_fixture("multi/main.valk")
     lib.wait_for_lsp(main_buf)
-    vim.wait(500)
+    -- The assertion below is that the closed file is still resolvable from the
+    -- workspace index, so wait for exactly that.
+    lib.wait_for_workspace_symbol(main_buf, "utils/triple", 5000)
 
     local res = lib.request(main_buf, "workspace/symbol",
       { query = "utils/triple" }, 5000)
@@ -43,7 +44,7 @@ return {
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
     vim.fn.delete(path)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     -- The LSP shouldn't have crashed. Make a request to verify.
     local res, _, err = lib.request(bufnr, "textDocument/hover",
@@ -52,6 +53,12 @@ return {
     -- without timing out or erroring at the protocol level.
     lib.assert_truthy(not err or err == "timeout",
       "LSP errored on hover after file deletion: " .. tostring(err))
+
+    -- Drop the buffer before leaving. A loaded buffer whose file is gone makes
+    -- nvim emit `E211: File ... no longer available` on the next :checktime,
+    -- which lands in the middle of a LATER scenario's PASS line and corrupts
+    -- the report. Scenario state must not leak into the report either.
+    lib.close_buffer(bufnr)
   end,
 
   open_empty_file_doesnt_crash_lsp = function(lib)
@@ -59,7 +66,7 @@ return {
     local path = lib.write_temp("empty.valk", "")
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
     local res = lib.request(bufnr, "textDocument/completion", {
       textDocument = { uri = lib.bufuri(bufnr) },
       position = lib.pos(0, 0),

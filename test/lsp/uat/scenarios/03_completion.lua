@@ -6,7 +6,13 @@
 -- These tests catch both: presence of expected items + absence of
 -- obvious noise.
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   completion_after_open_paren_has_user_fns = function(lib)
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
@@ -21,7 +27,6 @@ return {
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local insert_line = #lines
     vim.api.nvim_buf_set_lines(bufnr, insert_line, insert_line, false, { "(" })
-    vim.wait(50)
     local res, elapsed = lib.request(bufnr, "textDocument/completion", {
       textDocument = { uri = lib.bufuri(bufnr) },
       position = lib.pos(insert_line, 1),
@@ -55,7 +60,6 @@ return {
     local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local insert_line = #lines
     vim.api.nvim_buf_set_lines(bufnr, insert_line, insert_line, false, { "(squa" })
-    vim.wait(50)
     local res, elapsed = lib.request(bufnr, "textDocument/completion", {
       textDocument = { uri = lib.bufuri(bufnr) },
       position = lib.pos(insert_line, 5),

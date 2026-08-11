@@ -58,7 +58,8 @@ return {
     -- Step 3: save the buggy version to disk, verify diagnostic survives
     -- the save (didSave shouldn't clear errors that are still valid).
     lib.save_buffer(bufnr)
-    vim.wait(400)
+    -- didSave republishes; wait for that publish instead of a fixed budget.
+    lib.settle_diagnostics(bufnr, 5000)
     local diags_after_save = vim.diagnostic.get(bufnr)
     local errors_after_save = 0
     for _, d in ipairs(diags_after_save) do
@@ -76,17 +77,12 @@ return {
     -- Wait for the diagnostic to clear. The validator runs async via
     -- idx-sys; we give it up to 3s before declaring the diagnostic
     -- stuck.
-    local cleared = false
-    local deadline = vim.uv.hrtime() + 3e9
-    while vim.uv.hrtime() < deadline do
-      local d = vim.diagnostic.get(bufnr)
-      local errors = 0
-      for _, di in ipairs(d) do
-        if di.severity == vim.diagnostic.severity.ERROR then errors = errors + 1 end
+    local cleared = lib.wait_until(function()
+      for _, di in ipairs(vim.diagnostic.get(bufnr)) do
+        if di.severity == vim.diagnostic.severity.ERROR then return false end
       end
-      if errors == 0 then cleared = true; break end
-      vim.wait(100)
-    end
+      return true
+    end, 3000)
     lib.assert_truthy(cleared,
       ("diagnostic stuck after fix; current diagnostics: %s"):format(
         vim.inspect(vim.tbl_map(function(d) return d.message end,

@@ -1,0 +1,15 @@
+; Private dependency for 14_multifile_edit_propagation. That scenario
+; deletes and re-adds definitions here, so nothing else may depend on it.
+; Symbol basenames are deliberately unique across the fixture set (see the
+; note in the scenario about vd/is-known-by-basename).
+
+(sig 'prop/double {-> Num Num})
+(fun {prop/double x} {* x 2})
+
+(sig 'prop/triple {-> Num Num})
+(fun {prop/triple x} {* x 3})
+
+(sig 'prop/zorble {-> Num Num Num Num})
+(fun {prop/zorble x lo hi}
+  {if (< x lo) lo
+    {if (> x hi) hi {x}}})

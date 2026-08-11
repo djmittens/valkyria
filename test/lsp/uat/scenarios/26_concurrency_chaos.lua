@@ -89,8 +89,9 @@ return {
       lib.tdp(lib.bufuri(bufnr), line, col + 1))
 
     -- Inject an edit while t1 is in flight.
+    -- No wait: the next request flushes pending changetracking itself
+    -- (nvim client.lua:732).
     vim.api.nvim_buf_set_text(bufnr, line, 0, line, 0, { "; " })
-    vim.wait(10)  -- let didChange flush
 
     local t2 = lib.request_async(bufnr, "textDocument/hover",
       lib.tdp(lib.bufuri(bufnr), line, col + 4))  -- shifted by `; `
@@ -118,7 +119,7 @@ return {
       vim.api.nvim_buf_set_text(bufnr, n, i - 1, n, i - 1,
         { marker:sub(i, i) })
     end
-    vim.wait(150)  -- give LSP time to reindex
+    lib.sync(bufnr)
 
     -- documentSymbol won't include `mymark1234` since it's just a
     -- bare token, but completion at end-of-line ought to include it.
@@ -139,7 +140,7 @@ return {
     -- request-id tracking would leave the second waiting forever.
     local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)  -- let initial scan settle
+    lib.wait_for_workspace_scan(10000)
 
     -- semanticTokens/full on medium.valk is the heaviest read request.
     local doc = { textDocument = { uri = lib.bufuri(bufnr) } }

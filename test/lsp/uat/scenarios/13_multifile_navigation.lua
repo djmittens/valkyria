@@ -11,8 +11,9 @@ return {
   goto_def_jumps_across_files = function(lib)
     local bufnr = lib.open_fixture("multi/main.valk")
     lib.wait_for_lsp(bufnr)
-    -- Wait for utils.valk to be indexed in the workspace.
-    lib.wait_for_symbol_indexed(bufnr, "^utils/double$", 5000)
+    -- utils/double is defined in utils.valk, not in this buffer, so this is a
+    -- workspace-index wait — documentSymbol would never report it.
+    lib.require_workspace_symbol(bufnr, "utils/double", 5000)
 
     local line, col = lib.find_text(bufnr, "(utils/double 21)")
     local res = lib.request(bufnr, "textDocument/definition",
@@ -33,24 +34,35 @@ return {
     -- should return uses in main.valk AND aux.valk.
     local bufnr = lib.open_fixture("multi/utils.valk")
     lib.wait_for_lsp(bufnr)
-    -- Wait for both call sites to be indexed via workspace scan.
-    -- (Each .valk file in the workspace should be scanned.)
-    vim.wait(2500)
 
     local line, col = lib.find_text(bufnr, "{utils/double x}")
-    local res = lib.request(bufnr, "textDocument/references", {
-      textDocument = { uri = lib.bufuri(bufnr) },
-      position = lib.pos(line, col + 2),
-      context = { includeDeclaration = true },
-    }, 5000)
-    lib.assert_truthy(res, "references returned nil")
-    -- Collect URIs of returned ref locations.
-    local seen_files = {}
-    for _, loc in ipairs(res) do
-      local uri = loc.uri or loc.targetUri or ""
-      local file = uri:match("([^/]+)$")
-      if file then seen_files[file] = true end
+    local function refs_by_file()
+      local res = lib.request(bufnr, "textDocument/references", {
+        textDocument = { uri = lib.bufuri(bufnr) },
+        position = lib.pos(line, col + 2),
+        context = { includeDeclaration = true },
+      }, 5000)
+      local seen = {}
+      for _, loc in ipairs(res or {}) do
+        local uri = loc.uri or loc.targetUri or ""
+        local file = uri:match("([^/]+)$")
+        if file then seen[file] = true end
+      end
+      return seen
     end
+
+    -- The call sites land in the index as the startup workspace scan
+    -- progresses, so poll for the cross-file result rather than sleeping a
+    -- fixed 2.5s. Retries the request itself because "references is complete"
+    -- has no separate observable to wait on.
+    local seen_files = select(2, lib.wait_until(function()
+      local seen = refs_by_file()
+      if seen["utils.valk"] and (seen["main.valk"] or seen["aux.valk"]) then
+        return seen
+      end
+      return nil
+    end, 5000, 25)) or refs_by_file()
+
     lib.assert_truthy(seen_files["utils.valk"], "missing ref in utils.valk")
     lib.assert_truthy(seen_files["main.valk"]
                   or seen_files["aux.valk"],
@@ -60,7 +72,8 @@ return {
   document_symbols_lists_top_level_defs = function(lib)
     local bufnr = lib.open_fixture("multi/utils.valk")
     lib.wait_for_lsp(bufnr)
-    lib.wait_for_symbol_indexed(bufnr, "^utils/double$", 5000)
+    -- Defined in THIS buffer, so documentSymbol is the right probe.
+    lib.require_symbol_indexed(bufnr, "^utils/double$", 5000)
 
     local res = lib.request(bufnr, "textDocument/documentSymbol",
       { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
@@ -77,7 +90,7 @@ return {
   workspace_symbol_search_finds_user_fns = function(lib)
     local bufnr = lib.open_fixture("multi/main.valk")
     lib.wait_for_lsp(bufnr)
-    lib.wait_for_symbol_indexed(bufnr, "^utils/clamp$", 5000)
+    lib.require_workspace_symbol(bufnr, "utils/clamp", 5000)
 
     -- Cmd-T flow: query for "clamp" via workspace/symbol; expect
     -- a hit pointing at utils.valk.

@@ -11,15 +11,16 @@ return {
     local clean_buf = lib.open_fixture("diagnostics_clean.valk")
     lib.wait_for_lsp(clean_buf)
     -- Pace each open through the LSP. Opening 3 files in tight
-    -- succession used to trigger a SIGSEGV in the GC's TLAB-refill
-    -- path under suite load (publishDiagnostics evacuates onto the
-    -- heap and races concurrent indexing). 100ms between opens
-    -- gives the LSP time to settle each didOpen's dispatch chain.
-    vim.wait(100)
+    -- Rapid didOpen in succession used to trigger a SIGSEGV in the GC's
+    -- TLAB-refill path under suite load (publishDiagnostics evacuates onto the
+    -- heap and races concurrent indexing). Barrier between opens so each
+    -- didOpen is fully handled before the next, deterministically rather than
+    -- "100ms is probably enough".
+    lib.sync(clean_buf)
 
     local bad_buf = lib.open_fixture("diagnostics_bad.valk")
     lib.wait_for_lsp(bad_buf)
-    vim.wait(100)
+    lib.sync(bad_buf)
 
     local small_buf = lib.open_fixture("small.valk")
     lib.wait_for_lsp(small_buf)

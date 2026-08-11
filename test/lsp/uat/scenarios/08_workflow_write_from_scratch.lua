@@ -14,7 +14,13 @@
 --   - Diagnostics fail to be cleared after the buggy intermediate
 --     state is replaced by valid code
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   write_save_close_reopen_keeps_state = function(lib)
     -- Step 1: start with an empty file on disk so the LSP sees a real
     -- workspace path (some indexing paths key off the file existing).

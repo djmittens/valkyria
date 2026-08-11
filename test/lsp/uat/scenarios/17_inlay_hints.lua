@@ -57,7 +57,8 @@ return {
     -- Add a new def at end of file.
     lib.append_line(bufnr, "")
     lib.append_line(bufnr, "(def {y} (square 7))")
-    vim.wait(150)  -- let the LSP re-cache hints
+    -- Hints are recomputed off-thread; wait for the new def to reach the index.
+    lib.require_symbol_indexed(bufnr, "^y$", 5000)
 
     local total_lines_2 = vim.api.nvim_buf_line_count(bufnr)
     local h2 = lib.request(bufnr, "textDocument/inlayHint", {

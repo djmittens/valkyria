@@ -17,12 +17,12 @@ return {
     -- case — naïve incremental sync gets it wrong.
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     -- Insert 3 new lines + a top-of-file def at the very start.
     local prelude = "(def {hdr1} 1)\n(def {hdr2} 2)\n(def {hdr3} 3)\n"
     vim.api.nvim_buf_set_text(bufnr, 0, 0, 0, 0, vim.split(prelude, "\n"))
-    vim.wait(300)
+    lib.sync(bufnr)
 
     local res = lib.request(bufnr, "textDocument/semanticTokens/full",
       { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
@@ -54,12 +54,12 @@ return {
     -- a notorious off-by-one source.
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     local n = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, n, n, false,
       { "", "(def {tail1} 1)", "(def {tail2} 2)" })
-    vim.wait(200)
+    lib.sync(bufnr)
 
     local res = lib.request(bufnr, "textDocument/documentSymbol",
       { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
@@ -76,7 +76,7 @@ return {
     -- invalidation. We verify the LSP picks up the new content.
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     -- Replace ENTIRE buffer with new content.
     local new_text = table.concat({
@@ -86,22 +86,26 @@ return {
       "(def {answer} (newfn 7))",
     }, "\n")
     lib.replace_all(bufnr, new_text)
-    vim.wait(300)
+
+    -- replace_all's barrier proves the server stored the new document, but
+    -- documentSymbol answers from the symbol index, which is rebuilt
+    -- asynchronously on lsp/idx-sys. So poll for the post-replace symbol
+    -- rather than assuming one round trip was enough.
+    lib.require_symbol_indexed(bufnr, "^newfn$", 5000)
 
     -- Old `add` should be gone, new `newfn` should be findable.
-    local res = lib.request(bufnr, "textDocument/documentSymbol",
-      { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
-    lib.assert_truthy(res, "documentSymbol after full-replace returned nil")
+    local names = lib.document_symbols(bufnr)
     local saw_newfn = false
     local saw_old_add = false
-    for _, s in ipairs(res) do
-      if s.name == "newfn" then saw_newfn = true end
-      if s.name == "add" then saw_old_add = true end
+    for _, n in ipairs(names) do
+      if n == "newfn" then saw_newfn = true end
+      if n == "add" then saw_old_add = true end
     end
     lib.assert_truthy(saw_newfn,
       "documentSymbol missing `newfn` after full-replace")
     lib.assert_truthy(not saw_old_add,
-      "documentSymbol still showing pre-replace `add` (stale cache)")
+      "documentSymbol still showing pre-replace `add` (stale cache): "
+        .. vim.inspect(names))
   end,
 
   delete_then_retype_returns_to_clean_state = function(lib)
@@ -110,25 +114,22 @@ return {
     -- state from the original content.
     local bufnr = lib.open_fixture("small.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.sync(bufnr)
 
     -- Empty the buffer (simulates :%d).
     lib.replace_all(bufnr, "")
-    vim.wait(150)
 
     -- Retype a fresh program.
     lib.replace_all(bufnr, "(def {fresh} 42)\n")
-    vim.wait(200)
 
-    local res = lib.request(bufnr, "textDocument/documentSymbol",
-      { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
-    lib.assert_truthy(res, "documentSymbol after empty-then-retype returned nil")
+    lib.require_symbol_indexed(bufnr, "^fresh$", 5000)
     local names = {}
-    for _, s in ipairs(res) do names[s.name] = true end
+    for _, n in ipairs(lib.document_symbols(bufnr)) do names[n] = true end
     lib.assert_truthy(names["fresh"],
       "missing fresh symbol after empty-then-retype")
     lib.assert_truthy(not names["add"],
-      "stale `add` symbol persists after empty-then-retype")
+      "stale `add` symbol persists after empty-then-retype: "
+        .. vim.inspect(names))
   end,
 
   backspace_burst_does_not_break_diagnostics = function(lib)
@@ -138,33 +139,29 @@ return {
     -- bad publishDiagnostics path can leak entries.
     local bufnr = lib.open_fixture("diagnostics_clean.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)
+    lib.sync(bufnr)
 
     local n = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, n, n, false, { "(undefined-fn 1 2)" })
-    vim.wait(200)
     -- Should now show ≥1 diagnostic about the unknown symbol.
     local with_bad = lib.wait_for_diagnostics(bufnr, 1, 3000)
     lib.assert_truthy(#with_bad >= 1,
       "expected diagnostic for `(undefined-fn ...)`, got " ..
         vim.inspect(vim.tbl_map(function(d) return d.message end, with_bad)))
 
-    -- Backspace through the entire offending line one char at a time.
+    -- Backspace through the entire offending line one char at a time, with no
+    -- pause: an uninterrupted burst is the point of the scenario.
     local line_text = "(undefined-fn 1 2)"
     for i = #line_text, 1, -1 do
       vim.api.nvim_buf_set_text(bufnr, n, i - 1, n, i, { "" })
-      vim.wait(20)
     end
     -- Empty the trailing line itself.
     vim.api.nvim_buf_set_lines(bufnr, n, n + 1, false, {})
 
-    -- Wait for diagnostics to clear. The didChange burst dispatches
-    -- through lsp/idx-sys, and the final publish lands AFTER all the
-    -- intermediate (version-stale) callbacks have drained — so the
-    -- assertion has to be willing to wait several event-loop ticks
-    -- under suite load. Up to 5s is generous; bursty editor sessions
-    -- routinely take that long for the publish-diagnostics queue to
-    -- catch up.
+    -- Force the trailing didChange out (nothing below issues a request, and
+    -- vim.diagnostic.get does not flush changetracking), then wait for the
+    -- publish it provokes rather than for a fixed budget.
+    lib.settle_diagnostics(bufnr, 5000)
     local final = lib.wait_for_diagnostics(bufnr, 0, 5000)
     local errors = 0
     for _, d in ipairs(final) do
@@ -183,29 +180,29 @@ return {
     local path = lib.write_temp("undo_test.valk", "(def {orig} 1)\n")
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)
+    lib.require_symbol_indexed(bufnr, "^orig$", 5000)
 
     -- Establish baseline: only `orig` symbol.
-    local before = lib.request(bufnr, "textDocument/documentSymbol",
-      { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
-    lib.assert_truthy(before, "documentSymbol baseline returned nil")
+    local before = lib.document_symbols(bufnr)
 
-    -- Add a new def, then undo.
+    -- Add a new def, then undo. Each step polls the index for the symbol it
+    -- expects, since documentSymbol is served from the asynchronously rebuilt
+    -- symbol index rather than from the document the barrier just delivered.
     lib.append_line(bufnr, "(def {undone} 2)")
-    vim.wait(200)
-    local after_add = lib.request(bufnr, "textDocument/documentSymbol",
-      { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
-    lib.assert_truthy(after_add, "documentSymbol after add returned nil")
+    lib.require_symbol_indexed(bufnr, "^undone$", 5000)
 
-    vim.api.nvim_buf_call(bufnr, function() vim.cmd("undo") end)
-    vim.wait(200)
-    local after_undo = lib.request(bufnr, "textDocument/documentSymbol",
-      { textDocument = { uri = lib.bufuri(bufnr) } }, 5000)
-    lib.assert_truthy(after_undo, "documentSymbol after undo returned nil")
+    -- `silent` keeps undo's "1 line less; before #1" message out of the report.
+    vim.api.nvim_buf_call(bufnr, function() vim.cmd("silent undo") end)
+    lib.require_until(function()
+      return #lib.document_symbols(bufnr) == #before
+    end, ("undo did not restore the index to its pre-add state (baseline %s)")
+      :format(vim.inspect(before)), 5000)
+    local after_undo = lib.document_symbols(bufnr)
+
     -- Symbol counts should match the baseline.
     lib.assert_eq(#after_undo, #before,
-      ("undo didn't restore symbol count: before=%d after_undo=%d")
-        :format(#before, #after_undo))
+      ("undo didn't restore symbol count: before=%d after_undo=%d (%s vs %s)")
+        :format(#before, #after_undo, vim.inspect(before), vim.inspect(after_undo)))
   end,
 
   multi_line_range_replacement_keeps_offsets_aligned = function(lib)
@@ -224,11 +221,11 @@ return {
     local path = lib.write_temp("multiline_replace.valk", seed)
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)
+    lib.sync(bufnr)
 
     -- Replace lines 0..4 (a..e) with a single new def.
     vim.api.nvim_buf_set_lines(bufnr, 0, 5, false, { "(def {merged} 99)" })
-    vim.wait(200)
+    lib.sync(bufnr)
 
     -- Request hover on `f` at its new position (now line 2, was line 6).
     local f_line, f_col = lib.find_text(bufnr, "(def {f}")

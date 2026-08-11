@@ -20,7 +20,7 @@ return {
   close_during_pending_request_does_not_crash = function(lib)
     local bufnr = lib.open_fixture("medium.valk")
     lib.wait_for_lsp(bufnr)
-    vim.wait(300)
+    lib.wait_for_workspace_scan(10000)
 
     -- Fire a heavy-ish request, immediately wipe the buffer.
     local doc = { textDocument = { uri = lib.bufuri(bufnr) } }
@@ -47,9 +47,8 @@ return {
     for i = 1, 5 do
       local bufnr = lib.open_fixture("small.valk")
       lib.wait_for_lsp(bufnr)
-      vim.wait(50)
+      lib.sync(bufnr)
       lib.close_buffer(bufnr)
-      vim.wait(50)
     end
 
     -- After the cycle, the symbol table for small.valk should still
@@ -70,13 +69,14 @@ return {
     local path = lib.write_temp("save_race.valk", "(def {x} 1)\n")
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
-    vim.wait(200)
+    lib.require_symbol_indexed(bufnr, "^x$", 5000)
 
     lib.append_line(bufnr, "(def {y} 2)")
     lib.save_buffer(bufnr)
     lib.append_line(bufnr, "(def {z} 3)")
     lib.save_buffer(bufnr)
-    vim.wait(300)
+    -- The assertion is that the last write won, so wait for its symbol.
+    lib.require_symbol_indexed(bufnr, "^z$", 5000)
 
     local res = lib.request(bufnr, "textDocument/documentSymbol",
       { textDocument = { uri = lib.bufuri(bufnr) } }, 15000)
@@ -94,11 +94,11 @@ return {
     local path = lib.write_temp("open_change.valk", "(def {original} 1)\n")
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
-    vim.wait(150)
+    lib.require_symbol_indexed(bufnr, "^original$", 5000)
 
     -- Append a uniquely-named def via didChange (no save).
     lib.append_line(bufnr, "(def {new_unique_99} 2)")
-    vim.wait(200)
+    lib.require_symbol_indexed(bufnr, "^new_unique_99$", 5000)
 
     local res = lib.request(bufnr, "textDocument/documentSymbol",
       { textDocument = { uri = lib.bufuri(bufnr) } }, 15000)

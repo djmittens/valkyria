@@ -12,7 +12,6 @@ return {
     -- Type `(add ` on a fresh line at EOF.
     local last = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, last, last, false, { "(add " })
-    vim.wait(80)
 
     local res = lib.request(bufnr, "textDocument/signatureHelp", {
       textDocument = { uri = lib.bufuri(bufnr) },
@@ -39,7 +38,6 @@ return {
     -- Type `(add 1 ` so the cursor is past the first arg.
     local last = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, last, last, false, { "(add 1 " })
-    vim.wait(80)
 
     local res = lib.request(bufnr, "textDocument/signatureHelp", {
       textDocument = { uri = lib.bufuri(bufnr) },

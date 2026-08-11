@@ -18,7 +18,6 @@ return {
     -- symbol set with their kinds.
     local last = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, last, last, false, { "(" })
-    vim.wait(80)
     local res = lib.request(bufnr, "textDocument/completion", {
       textDocument = { uri = lib.bufuri(bufnr) },
       position = lib.pos(last, 1),
@@ -55,7 +54,6 @@ return {
 
     local last = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, last, last, false, { "(a" })
-    vim.wait(80)
     local res = lib.request(bufnr, "textDocument/completion", {
       textDocument = { uri = lib.bufuri(bufnr) },
       position = lib.pos(last, 2),
@@ -93,7 +91,6 @@ return {
 
     local last = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, last, last, false, { "(add" })
-    vim.wait(80)
     local res = lib.request(bufnr, "textDocument/completion", {
       textDocument = { uri = lib.bufuri(bufnr) },
       position = lib.pos(last, 4),

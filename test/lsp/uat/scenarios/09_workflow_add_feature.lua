@@ -24,10 +24,9 @@ return {
     local bufnr = lib.open_path(path)
     lib.wait_for_lsp(bufnr)
 
-    -- Wait long enough for the workspace + file index to settle.
-    -- This file is its own workspace member after didOpen; the
-    -- symdb sync runs on lsp/idx-sys workers asynchronously.
-    vim.wait(500)
+    -- The symdb sync runs asynchronously on lsp/idx-sys, so wait for the
+    -- file's own symbols to appear rather than guessing at a settle time.
+    lib.require_symbol_indexed(bufnr, "^mul$", 5000)
 
     -- Add a new function `mul3` that uses the existing `mul`. Append
     -- at end of file. We also append a call site so we can goto-def
@@ -45,15 +44,14 @@ return {
     -- Save so didSave triggers symdb resync (didChange+save is the
     -- normal path; we exercise both).
     lib.save_buffer(bufnr)
-    -- Wait for the LSP to pick up the new symbols. The save handler
-    -- dispatches to lsp/idx-sys which writes to the symbol DB.
-    vim.wait(800)
+    -- didSave dispatches the re-index to lsp/idx-sys; wait for the new symbol
+    -- to actually land in the index.
+    lib.require_symbol_indexed(bufnr, "^mul3$", 5000)
 
     -- Assertion 1: completion at `(mul3` should include `mul3`. We do
     -- this by typing `(mul3` on a fresh line and asking for completions.
     local probe_line = vim.api.nvim_buf_line_count(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, probe_line, probe_line, false, { "(mul3" })
-    vim.wait(80)
     local res = lib.request(bufnr, "textDocument/completion", {
       textDocument = { uri = lib.bufuri(bufnr) },
       position = lib.pos(probe_line, 5),
@@ -75,7 +73,7 @@ return {
     -- Clean up the probe line so subsequent assertions see a clean
     -- buffer.
     vim.api.nvim_buf_set_lines(bufnr, probe_line, probe_line + 1, false, {})
-    vim.wait(50)
+    lib.sync(bufnr)
 
     -- Assertion 2: goto-def from `(mul3 2 3 5)` jumps to the (fun {mul3 ...}) line.
     local call_line, call_col = lib.find_text(bufnr, "(mul3 2 3 5)")

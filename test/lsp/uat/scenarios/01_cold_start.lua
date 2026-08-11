@@ -6,7 +6,13 @@
 -- "first response" actually measures cold-start. Subsequent scenarios
 -- benefit from a warm process + cached AST.
 
+-- Latency scenario: asserts wall-clock budgets / percentiles, so it must run
+-- on an otherwise idle machine. The runner keeps these out of the parallel
+-- shards and runs them alone afterwards; measured under 4-way contention the
+-- budgets stop describing anything a user would experience.
 return {
+  _latency = true,
+
   cold_start_to_first_hover_under_2s = function(lib)
     local bufnr = lib.open_fixture("small.valk")
     local t0 = vim.uv.hrtime()
