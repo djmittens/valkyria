@@ -22,6 +22,8 @@ typedef enum {
   CONT_LAMBDA_DONE,    // Lambda body evaluated, decrement call depth
   CONT_CTX_DEADLINE,   // ctx/with-deadline: timeout evaluated, now eval body
   CONT_CTX_WITH,       // ctx/with: key/value evaluated, now eval body
+  CONT_CTX_BODY,       // ctx/*: one body expr done; sequence, then restore ctx
+  CONT_LOGIC_NEXT,     // and/or: one operand evaluated, decide or continue
 } valk_cont_kind_e;
 
 typedef struct valk_cont_frame {
@@ -73,6 +75,23 @@ typedef struct valk_cont_frame {
       valk_lval_t *body;
       struct valk_request_ctx *old_ctx;
     } ctx_with;
+
+    // Body of a ctx/with or ctx/with-deadline, after the context has been
+    // installed. Separate from the two frames above because those mean
+    // "the timeout/key expression finished" — reusing them to sequence the
+    // body made the body's own result get re-read as a timeout.
+    struct {
+      valk_lval_t *remaining;
+      struct valk_request_ctx *old_ctx;
+    } ctx_body;
+
+    // `and` / `or`. Holding the un-evaluated tail here is what makes the
+    // short circuit real: operands past the deciding one are never handed
+    // to the evaluator at all.
+    struct {
+      valk_lval_t *remaining;
+      bool is_and;
+    } logic;
   };
 } valk_cont_frame_t;
 

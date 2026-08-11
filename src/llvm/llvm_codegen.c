@@ -148,6 +148,12 @@ static LLVMValueRef codegen_sexpr(valk_llvm_ctx_t *c, valk_lval_t *expr,
       return valk_codegen_def(c, rest, argc, env_param, false);
     if (valk_codegen_is_sym(head, "\\"))
       return valk_codegen_lambda(c, rest, argc, env_param);
+    // Must be emitted here, before the funcall fallback: `and`/`or` short
+    // circuit, so their operands cannot be evaluated as call arguments.
+    if (valk_codegen_is_sym(head, "and"))
+      return valk_codegen_and_or(c, rest, argc, true, env_param);
+    if (valk_codegen_is_sym(head, "or"))
+      return valk_codegen_and_or(c, rest, argc, false, env_param);
 
     LLVMValueRef specialized =
       valk_codegen_try_numeric_binop(c, head, rest, argc, env_param);

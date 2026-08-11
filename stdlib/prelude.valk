@@ -426,11 +426,24 @@
 (sig 'not {-> Num Num})
 (fun {not x} {if x {0} {1}})
 
-(sig 'or {-> Num Num Num})
-(fun {or x y} {+ x y})
-
-(sig 'and {-> Num Num Num})
-(fun {and x y} {* x y})
+; `and` and `or` are CORE SPECIAL FORMS (see valk_eval_and_or in eval.c and
+; valk_codegen_and_or in llvm_codegen_special.c), not functions and not
+; prelude macros. Short-circuiting requires unevaluated operands, which a
+; function cannot have — they were previously `{or x y} {+ x y}` and
+; `{and x y} {* x y}`, binary and always evaluating both sides.
+;
+; A prelude macro expanding to `if` looks like it should work, and does
+; under the tree walker, but `valk --build` miscompiles it: the codegen
+; never expands macros, so it emits a funcall to the macro object. That is
+; a general limitation of macros inside compiled function bodies, not
+; something specific to these two forms.
+;
+;   (and)          => 1        identity: nothing to falsify
+;   (and a)        => a
+;   (and a b ...)  => 0 at the first falsey operand, else the LAST value
+;   (or)           => 0        identity: nothing to satisfy
+;   (or a)         => a
+;   (or a b ...)   => 1 at the first truthy operand, else the last value
 
 ; Higher-order function utilities
 

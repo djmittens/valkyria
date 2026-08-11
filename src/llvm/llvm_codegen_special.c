@@ -1,6 +1,87 @@
 #include "llvm_codegen_internal.h"
 #include <stdio.h>
 
+// Emit an lval Number with a compile-time-constant value. valk_codegen_num
+// takes an lval; these constants have no source form to point at.
+static LLVMValueRef codegen_num_imm(valk_llvm_ctx_t *c, long v) {
+  LLVMValueRef val = LLVMConstInt(c->i64_type, (u64)v, 1);
+  LLVMTypeRef fn_type = LLVMFunctionType(c->ptr_type,
+    (LLVMTypeRef[]){c->i64_type}, 1, 0);
+  return LLVMBuildCall2(c->builder, fn_type, c->fn_lval_num, &val, 1, "num.imm");
+}
+
+// One operand of an and/or chain, recursing on the tail. Each level has
+// the same shape as an `if`: test this operand, and either take the
+// decided constant or evaluate the rest. Recursion (rather than building
+// an equivalent `(if a (and b...) 0)` AST and re-entering codegen) keeps
+// this allocation-free — freshly consed forms would be reachable only
+// from C locals and so invisible to the GC.
+static LLVMValueRef codegen_logic_chain(valk_llvm_ctx_t *c,
+                                        valk_lval_t *operands, u64 n,
+                                        bool is_and, LLVMValueRef env_param) {
+  // Exhausted without deciding: the identity, (and) => 1, (or) => 0.
+  if (n == 0 || !operands || LVAL_TYPE(operands) != LVAL_CONS) {
+    return codegen_num_imm(c, is_and ? 1 : 0);
+  }
+
+  LLVMValueRef val = valk_codegen_expr(c, operands->cons.head, env_param);
+
+  // Last operand: its value IS the result, so (and 1 7) is 7.
+  if (n == 1) return val;
+
+  LLVMTypeRef truthy_type = LLVMFunctionType(c->i1_type,
+    (LLVMTypeRef[]){c->ptr_type}, 1, 0);
+  LLVMValueRef is_truthy = LLVMBuildCall2(c->builder, truthy_type,
+    c->fn_lval_is_truthy, &val, 1, "logic.truthy");
+
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(c->builder));
+  char cont_name[32], short_name[32], merge_name[32];
+  unsigned long long id = (unsigned long long)c->block_counter++;
+  snprintf(cont_name,  sizeof cont_name,  "logic.cont.%llu", id);
+  snprintf(short_name, sizeof short_name, "logic.short.%llu", id);
+  snprintf(merge_name, sizeof merge_name, "logic.merge.%llu", id);
+
+  LLVMBasicBlockRef cont_bb  = LLVMAppendBasicBlockInContext(c->ctx, fn, cont_name);
+  LLVMBasicBlockRef short_bb = LLVMAppendBasicBlockInContext(c->ctx, fn, short_name);
+  LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlockInContext(c->ctx, fn, merge_name);
+
+  // `and` continues while truthy; `or` continues while falsey.
+  if (is_and) {
+    LLVMBuildCondBr(c->builder, is_truthy, cont_bb, short_bb);
+  } else {
+    LLVMBuildCondBr(c->builder, is_truthy, short_bb, cont_bb);
+  }
+
+  LLVMPositionBuilderAtEnd(c->builder, cont_bb);
+  LLVMValueRef cont_val =
+    codegen_logic_chain(c, operands->cons.tail, n - 1, is_and, env_param);
+  LLVMBuildBr(c->builder, merge_bb);
+  LLVMBasicBlockRef cont_end = LLVMGetInsertBlock(c->builder);
+
+  LLVMPositionBuilderAtEnd(c->builder, short_bb);
+  LLVMValueRef short_val = codegen_num_imm(c, is_and ? 0 : 1);
+  LLVMBuildBr(c->builder, merge_bb);
+  LLVMBasicBlockRef short_end = LLVMGetInsertBlock(c->builder);
+
+  LLVMPositionBuilderAtEnd(c->builder, merge_bb);
+  LLVMValueRef phi = LLVMBuildPhi(c->builder, c->ptr_type, "logic.result");
+  LLVMValueRef incoming[] = {cont_val, short_val};
+  LLVMBasicBlockRef blocks[] = {cont_end, short_end};
+  LLVMAddIncoming(phi, incoming, blocks, 2);
+  return phi;
+}
+
+LLVMValueRef valk_codegen_and_or(valk_llvm_ctx_t *c, valk_lval_t *args,
+                                 u64 argc, bool is_and,
+                                 LLVMValueRef env_param) {
+  // Operands are branched over, so none of them is in tail position.
+  bool saved_tail = c->in_tail;
+  c->in_tail = false;
+  LLVMValueRef result = codegen_logic_chain(c, args, argc, is_and, env_param);
+  c->in_tail = saved_tail;
+  return result;
+}
+
 LLVMValueRef valk_codegen_if(valk_llvm_ctx_t *c, valk_lval_t *args, u64 argc,
                              LLVMValueRef env_param) {
   if (argc < 2) return valk_codegen_nil(c);

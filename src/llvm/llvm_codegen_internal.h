@@ -48,6 +48,11 @@ LLVMValueRef valk_codegen_qexpr(valk_llvm_ctx_t *c, valk_lval_t *expr,
                                 LLVMValueRef env_param);
 LLVMValueRef valk_codegen_literal(valk_llvm_ctx_t *c, valk_lval_t *expr);
 
+// `and` / `or`. Emitted, not called: the operands past the deciding one
+// must never execute, so this cannot go through valk_codegen_funcall.
+LLVMValueRef valk_codegen_and_or(valk_llvm_ctx_t *c, valk_lval_t *args,
+                                 u64 argc, bool is_and,
+                                 LLVMValueRef env_param);
 LLVMValueRef valk_codegen_if(valk_llvm_ctx_t *c, valk_lval_t *args, u64 argc,
                              LLVMValueRef env_param);
 LLVMValueRef valk_codegen_do(valk_llvm_ctx_t *c, valk_lval_t *args, u64 argc,

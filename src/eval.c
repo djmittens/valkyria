@@ -590,9 +590,30 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
             continue;
           }
 
+          // `and` / `or` are special forms, not functions: a function's
+          // arguments are all evaluated before the call, which is exactly
+          // what short-circuiting must not do. Variadic, left to right.
+          // (and) is 1 and (or) is 0 — the identity for each.
+          if (strcmp(first->str, "and") == 0 || strcmp(first->str, "or") == 0) {
+            bool is_and = first->str[0] == 'a';
+            valk_lval_t* operands = expr->cons.tail;
+            if (valk_lval_list_is_empty(operands)) {
+              value = valk_lval_num(is_and ? 1 : 0);
+              expr = NULL;
+              goto apply_cont;
+            }
+            valk_eval_stack_push(&stack, (valk_cont_frame_t){
+              .kind = CONT_LOGIC_NEXT,
+              .env = cur_env,
+              .logic = {.remaining = operands->cons.tail, .is_and = is_and}
+            });
+            expr = operands->cons.head;
+            continue;
+          }
+
           if (strcmp(first->str, "ctx/with-deadline") == 0) {
-            if (count < 3) {
-              value = valk_lval_err("ctx/with-deadline requires timeout-ms and body, got %zu args", count - 1);
+            if (count < 2) {
+              value = valk_lval_err("ctx/with-deadline requires a timeout-ms, got %zu args", count - 1);
               expr = NULL;
               goto apply_cont;
             }
@@ -609,8 +630,8 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
           }
 
           if (strcmp(first->str, "ctx/with") == 0) {
-            if (count < 4) {
-              value = valk_lval_err("ctx/with requires key, value, and body, got %zu args", count - 1);
+            if (count < 3) {
+              value = valk_lval_err("ctx/with requires a key and a value, got %zu args", count - 1);
               expr = NULL;
               goto apply_cont;
             }
@@ -804,6 +825,33 @@ apply_cont:
           continue;
         }
 
+        case CONT_LOGIC_NEXT: {
+          if (LVAL_TYPE(value) == LVAL_ERR) {
+            goto apply_cont;
+          }
+          bool truthy = valk_lval_is_truthy(value);
+          // Decided: `and` stops on the first falsey operand, `or` on the
+          // first truthy one. Everything after it stays unevaluated.
+          if (frame.logic.is_and != truthy) {
+            value = valk_lval_num(frame.logic.is_and ? 0 : 1);
+            goto apply_cont;
+          }
+          // Undecided but out of operands: the last value IS the result,
+          // so (and 1 7) is 7 and (or 0 7) is 7.
+          if (valk_lval_list_is_empty(frame.logic.remaining)) {
+            goto apply_cont;
+          }
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_LOGIC_NEXT,
+            .env = frame.env,
+            .logic = {.remaining = frame.logic.remaining->cons.tail,
+                      .is_and = frame.logic.is_and}
+          });
+          expr = frame.logic.remaining->cons.head;
+          cur_env = frame.env;
+          continue;
+        }
+
         case CONT_BODY_NEXT: {
           if (LVAL_TYPE(value) == LVAL_ERR) {
             goto apply_cont;
@@ -855,21 +903,11 @@ apply_cont:
             goto apply_cont;
           }
 
-          if (valk_lval_list_is_empty(body->cons.tail)) {
-            valk_eval_stack_push(&stack, (valk_cont_frame_t){
-              .kind = CONT_CTX_DEADLINE,
-              .env = frame.env,
-              .ctx_deadline = {.body = valk_lval_nil(), .old_ctx = frame.ctx_deadline.old_ctx}
-            });
-            expr = body->cons.head;
-            cur_env = frame.env;
-            continue;
-          }
-
           valk_eval_stack_push(&stack, (valk_cont_frame_t){
-            .kind = CONT_CTX_DEADLINE,
+            .kind = CONT_CTX_BODY,
             .env = frame.env,
-            .ctx_deadline = {.body = body->cons.tail, .old_ctx = frame.ctx_deadline.old_ctx}
+            .ctx_body = {.remaining = body->cons.tail,
+                         .old_ctx = frame.ctx_deadline.old_ctx}
           });
           expr = body->cons.head;
           cur_env = frame.env;
@@ -902,23 +940,33 @@ apply_cont:
             goto apply_cont;
           }
 
-          if (valk_lval_list_is_empty(body->cons.tail)) {
-            valk_eval_stack_push(&stack, (valk_cont_frame_t){
-              .kind = CONT_CTX_DEADLINE,
-              .env = frame.env,
-              .ctx_deadline = {.body = valk_lval_nil(), .old_ctx = frame.ctx_with.old_ctx}
-            });
-            expr = body->cons.head;
-            cur_env = frame.env;
-            continue;
-          }
-
           valk_eval_stack_push(&stack, (valk_cont_frame_t){
-            .kind = CONT_CTX_DEADLINE,
+            .kind = CONT_CTX_BODY,
             .env = frame.env,
-            .ctx_deadline = {.body = body->cons.tail, .old_ctx = frame.ctx_with.old_ctx}
+            .ctx_body = {.remaining = body->cons.tail,
+                         .old_ctx = frame.ctx_with.old_ctx}
           });
           expr = body->cons.head;
+          cur_env = frame.env;
+          continue;
+        }
+
+        // Sequence the remaining body expressions, then put the previous
+        // request context back. The result of the whole form is the LAST
+        // body expression's value.
+        case CONT_CTX_BODY: {
+          if (LVAL_TYPE(value) == LVAL_ERR ||
+              valk_lval_list_is_empty(frame.ctx_body.remaining)) {
+            valk_thread_ctx.request_ctx = frame.ctx_body.old_ctx;
+            goto apply_cont;
+          }
+          valk_eval_stack_push(&stack, (valk_cont_frame_t){
+            .kind = CONT_CTX_BODY,
+            .env = frame.env,
+            .ctx_body = {.remaining = frame.ctx_body.remaining->cons.tail,
+                         .old_ctx = frame.ctx_body.old_ctx}
+          });
+          expr = frame.ctx_body.remaining->cons.head;
           cur_env = frame.env;
           continue;
         }
