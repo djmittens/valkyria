@@ -21,6 +21,15 @@ static const u16 valk_gc_size_classes[VALK_GC_NUM_SIZE_CLASSES] = {
   16, 32, 64, 128, 256, 512, 1024, 2048, 4096
 };
 
+// log2 of a power of two. __builtin_clzll(0) is undefined behaviour, so zero
+// is handled explicitly instead of trapping: callers derive shift amounts from
+// sizes that are only non-zero by invariant, and a silent bad shift would
+// corrupt every pointer-to-page mapping.
+static inline u8 valk_gc_log2_pow2(sz v) {
+  if (v == 0) return 0;
+  return (u8)(63 - __builtin_clzll((unsigned long long)v));
+}
+
 static inline u8 valk_gc_size_class(sz bytes) {
   if (bytes <= 16)   return 0;
   if (bytes <= 32)   return 1;
@@ -42,9 +51,6 @@ static inline u8 valk_gc_size_class(sz bytes) {
 #define VALK_GC_PAGE_ALIGN  64
 #define VALK_GC_TLAB_SLOTS  32
 #define VALK_GC_TLAB_REFILL_SCAN_LIMIT 4
-#define VALK_GC_SLOT_SIZE   80
-#define VALK_GC_SLOTS_PER_PAGE  819
-#define VALK_GC_BITMAP_SIZE  ((VALK_GC_SLOTS_PER_PAGE + 7) / 8)
 #define VALK_GC_PAGE_HEADER_SIZE 64
 
 static inline u16 valk_gc_slots_per_page(u8 size_class) {
@@ -118,10 +124,18 @@ typedef struct valk_gc_page {
   u32 page_id;
   u8 size_class;
   bool reclaimed;
-  u8 _pad[2];
+  // Set when an LVAL_REF (the only type with a finalizer) is allocated in this
+  // page. Sweep can skip touching dead object memory entirely on pages where
+  // this is false, which is nearly all of them.
+  bool has_refs;
+  u8 _pad[1];
   _Atomic u32 num_allocated;
   u16 slots_per_page;
   u16 bitmap_bytes;
+  // Byte offset from the page base to the (64-byte aligned) slot array.
+  // Cached because recovering it from bitmap_bytes plus realignment showed up
+  // as ~9% of collection time when done per pointer.
+  u16 slots_offset;
 } valk_gc_page_t;
 
 static inline u8 *valk_gc_page_alloc_bitmap(valk_gc_page_t *page) {
@@ -132,20 +146,38 @@ static inline u8 *valk_gc_page_mark_bitmap(valk_gc_page_t *page) {
   return (u8 *)(page + 1) + page->bitmap_bytes;
 }
 
+// log2 of a size class's slot size: classes are 16 << c.
+#define VALK_GC_SLOT_SHIFT(_c) ((u8)(4 + (_c)))
+
+// Must match the original layout exactly: bitmaps start right after the page
+// struct, and the slot array is 64-byte aligned after them.
+static inline u16 valk_gc_page_slots_offset(u16 bitmap_bytes) {
+  sz after_bitmaps = sizeof(valk_gc_page_t) + 2 * (sz)bitmap_bytes;
+  return (u16)((after_bitmaps + 63) & ~(sz)63);
+}
+
 static inline u8 *valk_gc_page_slots(valk_gc_page_t *page) {
-  u8 *after_bitmaps = (u8 *)(page + 1) + 2 * page->bitmap_bytes;
-  uptr addr = (uptr)after_bitmaps;
-  addr = (addr + 63) & ~63ULL;
-  return (u8 *)addr;
+  return (u8 *)page + page->slots_offset;
 }
 
 static inline void *valk_gc_page_slot_ptr(valk_gc_page_t *page, u32 slot_idx) {
-  u16 slot_size = valk_gc_size_classes[page->size_class];
-  return valk_gc_page_slots(page) + slot_idx * slot_size;
+  return valk_gc_page_slots(page) +
+         ((sz)slot_idx << VALK_GC_SLOT_SHIFT(page->size_class));
 }
 
 static inline bool valk_gc_page_try_mark(valk_gc_page_t *page, u32 slot) {
   return valk_gc_bitmap_try_set_atomic(valk_gc_page_mark_bitmap(page), slot);
+}
+
+// Solo variant: valid only when exactly one thread participates in the mark
+// phase, so no other marker can touch this bitmap byte. Skips the locked RMW,
+// which is otherwise paid once per live object.
+static inline bool valk_gc_page_try_mark_solo(valk_gc_page_t *page, u32 slot) {
+  u8 *byte = &valk_gc_page_mark_bitmap(page)[slot / 8];
+  u8 bit = (u8)(1 << (slot % 8));
+  if (*byte & bit) return false;
+  *byte = (u8)(*byte | bit);
+  return true;
 }
 
 static inline bool valk_gc_page_is_marked(valk_gc_page_t *page, u32 slot) {
@@ -167,12 +199,15 @@ typedef struct valk_gc_page_list {
   sz num_pages;
   _Atomic sz total_slots;
   _Atomic sz used_slots;
-  _Atomic u32 next_page_offset;
+  _Atomic sz next_page_offset;
   u16 slot_size;
   u16 slots_per_page;
   sz region_start;
   sz region_size;
   sz page_size;
+  // log2(page_size). Page totals are rounded up to VALK_GC_PAGE_SIZE, so this
+  // is always exact, and it turns a per-pointer division into a shift.
+  u8 page_shift;
 } valk_gc_page_list_t;
 
 // ============================================================================
@@ -263,6 +298,11 @@ struct valk_gc_heap {
   _Atomic u64 generation;
   void *base;
   sz reserved;
+  // log2 of the per-size-class region stride. Regions are laid out uniformly
+  // at c * (1 << region_shift), so a pointer's size class is a shift rather
+  // than a linear search over all 9 regions - and that search sat on the
+  // hottest path in the marker.
+  u8 region_shift;
 
   valk_gc_page_list_t classes[VALK_GC_NUM_SIZE_CLASSES];
 
@@ -312,6 +352,74 @@ typedef struct valk_gc_ptr_location {
   bool is_valid;
 } valk_gc_ptr_location_t;
 
+// Fast path for the contiguous-reserve heap, inlined because the marker calls
+// it once per pointer and an out-of-line call was ~15% of collection time.
+// Falls back to the out-of-line version for the non-contiguous case.
+bool valk_gc_ptr_to_location_slow(valk_gc_heap_t *heap, void *ptr,
+                                  valk_gc_ptr_location_t *out);
+
+static inline bool valk_gc_ptr_to_location_fast(valk_gc_heap_t *heap, void *ptr,
+                                                valk_gc_ptr_location_t *out) {
+  u8 *base = (u8 *)heap->base;
+  u8 *addr = (u8 *)ptr;
+  if (addr < base || addr >= base + heap->reserved) return false;
+
+  sz offset = (sz)(addr - base);
+  u8 c = (u8)(offset >> heap->region_shift);
+  if (c >= VALK_GC_NUM_SIZE_CLASSES) return false;
+
+  valk_gc_page_list_t *list = &heap->classes[c];
+  sz offset_in_region = offset - list->region_start;
+
+  // Relaxed: every caller runs inside the stop-the-world window, so no
+  // allocation can be advancing this concurrently.
+  if (offset_in_region >=
+      atomic_load_explicit(&list->next_page_offset, memory_order_relaxed)) {
+    return false;
+  }
+
+  valk_gc_page_t *page =
+      (valk_gc_page_t *)(base + list->region_start +
+                         ((offset_in_region >> list->page_shift)
+                          << list->page_shift));
+
+  u8 *slots_start = valk_gc_page_slots(page);
+  if (addr < slots_start) return false;
+
+  u32 slot = (u32)((sz)(addr - slots_start) >> VALK_GC_SLOT_SHIFT(c));
+  if (slot >= page->slots_per_page) return false;
+
+  out->page = page;
+  out->slot = slot;
+  out->size_class = c;
+  out->is_valid = true;
+  return true;
+}
+
+// Flag the owning page as containing a finalizable object. Called only when an
+// LVAL_REF is created, which is rare.
+static inline void valk_gc_mark_page_has_refs_in(valk_gc_heap_t *heap,
+                                                 void *ptr) {
+  if (!heap || !ptr || !heap->base || heap->reserved == 0) return;
+  valk_gc_ptr_location_t loc;
+  if (valk_gc_ptr_to_location_fast(heap, ptr, &loc)) {
+    loc.page->has_refs = true;
+  }
+}
+
+static inline bool valk_gc_ptr_to_location(valk_gc_heap_t *heap, void *ptr,
+                                           valk_gc_ptr_location_t *out) {
+  if (!heap || !ptr || !out) {
+    if (out) out->is_valid = false;
+    return false;
+  }
+  out->is_valid = false;
+  if (heap->base && heap->reserved > 0) {
+    return valk_gc_ptr_to_location_fast(heap, ptr, out);
+  }
+  return valk_gc_ptr_to_location_slow(heap, ptr, out);
+}
+
 // ============================================================================
 // GC Statistics Snapshot
 // ============================================================================
@@ -358,7 +466,7 @@ static inline void *valk_gc_tlab_alloc(valk_gc_tlab_t *tlab, u8 size_class) {
 
 bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_class);
 
-bool valk_gc_ptr_to_location(valk_gc_heap_t *heap, void *ptr, valk_gc_ptr_location_t *out);
+
 bool valk_gc_mark_large_object(valk_gc_heap_t *heap, void *ptr);
 sz valk_gc_sweep_page(valk_gc_page_t *page);
 sz valk_gc_sweep_large_objects(valk_gc_heap_t *heap);

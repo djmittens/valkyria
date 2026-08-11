@@ -118,6 +118,27 @@ void *valk_chase_lev_pop(valk_chase_lev_deque_t *deque) {
   return item;
 }
 
+void *valk_chase_lev_pop_solo(valk_chase_lev_deque_t *deque) {
+  int64_t b = atomic_load_explicit(&deque->bottom, memory_order_relaxed) - 1;
+  int64_t t = atomic_load_explicit(&deque->top, memory_order_relaxed);
+
+  // No stealer can move `top`, so the empty test needs no fence and the
+  // last-element case needs no CAS. Bottom is only written once we commit.
+  if (t > b) return VALK_CHASE_LEV_EMPTY;
+
+  valk_chase_lev_array_t *arr =
+      atomic_load_explicit(&deque->array, memory_order_relaxed);
+  void *item = valk_chase_lev_array_get(arr, b);
+
+  if (t == b) {
+    atomic_store_explicit(&deque->top, t + 1, memory_order_relaxed);
+    atomic_store_explicit(&deque->bottom, b + 1, memory_order_relaxed);
+  } else {
+    atomic_store_explicit(&deque->bottom, b, memory_order_relaxed);
+  }
+  return item;
+}
+
 void *valk_chase_lev_steal(valk_chase_lev_deque_t *deque) {
   int64_t t = atomic_load_explicit(&deque->top, memory_order_acquire);
   atomic_thread_fence(memory_order_seq_cst);

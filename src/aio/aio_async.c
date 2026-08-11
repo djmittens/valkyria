@@ -428,7 +428,7 @@ valk_lval_t* valk_async_status_to_sym(valk_async_status_t status) {
 }
 
 valk_lval_t *valk_lval_handle(valk_async_handle_t *handle) {
-  valk_lval_t *res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t *res = valk_lval_alloc();
   res->flags = LVAL_HANDLE | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   LVAL_SRC_POS_SET(res, -1);
   res->async.handle = handle;

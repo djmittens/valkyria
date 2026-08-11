@@ -2016,7 +2016,7 @@ void test_lval_copy_sym_long_truncation(VALK_TEST_ARGS()) {
   // that symbol pointing at freed memory. Clearing LVAL_FLAG_INTERNED is what
   // makes this lval an owner of its own string, which is the case whose
   // truncation behaviour this test exercises.
-  atomic_fetch_and(&orig->flags, ~(u64)LVAL_FLAG_INTERNED);
+  orig->flags &= ~(u64)LVAL_FLAG_INTERNED;
   orig->str = long_str;
 
   valk_lval_t *copy = valk_lval_copy(orig);

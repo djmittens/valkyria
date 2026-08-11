@@ -241,7 +241,7 @@ const char* valk_ltype_name(valk_ltype_e type) {
 // LCOV_EXCL_BR_STOP
 
 valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_REF | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -256,11 +256,13 @@ valk_lval_t* valk_lval_ref(const char* type, void* ptr, void (*free)(void*)) {
   res->ref.evacuate = nullptr;
   res->ref.retain = nullptr;
 
+  valk_gc_mark_page_has_refs_in((valk_gc_heap_t*)valk_thread_ctx.heap, res);
+
   return res;
 }
 
 valk_lval_t* valk_lval_dict(valk_dict_t* data) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_DICT | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -269,7 +271,7 @@ valk_lval_t* valk_lval_dict(valk_dict_t* data) {
 }
 
 valk_lval_t* valk_lval_num_uncached(long x) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_NUM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -286,7 +288,7 @@ valk_lval_t* valk_lval_num(long x) {
 
 // TODO(main): look into UTF-8 support
 valk_lval_t* valk_lval_err(const char* fmt, ...) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_ERR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -307,7 +309,7 @@ valk_lval_t* valk_lval_err(const char* fmt, ...) {
 }
 
 valk_lval_t* valk_lval_sym(const char* sym) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_SYM | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -317,7 +319,7 @@ valk_lval_t* valk_lval_sym(const char* sym) {
 }
 
 valk_lval_t* valk_lval_str(const char* str) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -329,7 +331,7 @@ valk_lval_t* valk_lval_str(const char* str) {
 }
 
 valk_lval_t* valk_lval_str_n(const char* bytes, u64 n) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -404,8 +406,6 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   // `&` must be followed by exactly one symbol to bind the rest to. This
   // was only checked when the lambda was CALLED, so `(\ {x &} {x})` built
   // a function that could never be applied.
-  int arity = 0;
-  bool is_variadic = false;
   u64 nformals = valk_lval_list_count(formals);
   for (u64 i = 0; i < nformals; i++) {
     valk_lval_t* formal = valk_lval_list_nth(formals, i);
@@ -419,16 +419,11 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
         return valk_lval_err(
             "Invalid function format: & must be followed by a symbol");
       }
-      is_variadic = true;
       break;
     }
-    arity++;
-  }
-  if (is_variadic) {
-    arity = -(arity + 1);
   }
 
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -436,7 +431,6 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
 
   res->fun.builtin = nullptr;
 
-  res->fun.arity = arity;
   static const char* lambda_name = "<lambda>";
   u64 name_len = strlen(lambda_name) + 1;
   res->fun.name = valk_mem_alloc(name_len);
@@ -458,7 +452,7 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
 
 valk_lval_t* valk_lval_nil(void) {
   if (__valk_singletons_initialized) return &__valk_nil_singleton;
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_NIL | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -468,7 +462,7 @@ valk_lval_t* valk_lval_nil(void) {
 }
 
 valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_CONS | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -479,7 +473,7 @@ valk_lval_t* valk_lval_cons(valk_lval_t* head, valk_lval_t* tail) {
 }
 
 valk_lval_t* valk_lval_qcons(valk_lval_t* head, valk_lval_t* tail) {
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags =
       LVAL_CONS | LVAL_FLAG_QUOTED | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) | LVAL_SRC_POS_DEFAULT;
   LVAL_INIT_SOURCE_LOC(res);
@@ -604,7 +598,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
   if (lval == nullptr) return nullptr;
   if (valk_lval_is_immortal(lval)) return lval;
 
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
 
   res->flags = (lval->flags & (LVAL_TYPE_MASK | LVAL_FLAG_QUOTED | LVAL_FLAG_INTERNED |
                                LVAL_FLAG_MACRO | LVAL_SRC_POS_MASK)) |

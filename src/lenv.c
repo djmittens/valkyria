@@ -108,13 +108,9 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   }
 
   const char* kstr = key->str;
-  // Relaxed: both flag bits are set at construction, before the object is
-  // published, and are never cleared. Nothing synchronizes through them, and
-  // seq_cst acquire loads on the interpreter's hottest path cost real time
-  // (~20M executions per LSP document walk).
-  const bool key_interned =
-      (atomic_load_explicit(&key->flags, memory_order_relaxed) &
-       LVAL_FLAG_INTERNED) != 0;
+  // Plain load: the bit is set at construction, before the object is
+  // published, and is never cleared.
+  const bool key_interned = (key->flags & LVAL_FLAG_INTERNED) != 0;
 
   while (env) {
     if (env->cmap) {
@@ -215,7 +211,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   const char *ikey = key->str;
   bool env_interned = (atomic_load(&env->flags) & LENV_FLAG_KEYS_INTERNED) != 0;
   if (env_interned) {
-    if (atomic_load(&key->flags) & LVAL_FLAG_INTERNED) {
+    if (key->flags & LVAL_FLAG_INTERNED) {
       // already canonical
     } else if (valk_sym_intern_active()) {
       ikey = valk_sym_intern(key->str);
@@ -366,7 +362,7 @@ static void put_builtin_impl(valk_lenv_t* env, char* key,
                               valk_lval_builtin_t* _fun, u64 extra_flags) {
   VALK_INFO("install builtin: %s (count=%zu)", key, env->symbols.count);
   VALK_WITH_ALLOC(env->allocator) {
-    valk_lval_t* lfun = valk_mem_alloc(sizeof(valk_lval_t));
+    valk_lval_t* lfun = valk_lval_alloc();
     lfun->flags = LVAL_FUN |
         valk_alloc_flags_from_allocator(valk_thread_ctx.allocator) |
         extra_flags;
@@ -375,7 +371,6 @@ static void put_builtin_impl(valk_lenv_t* env, char* key,
     lfun->fun.env = nullptr;
     lfun->fun.formals = nullptr;
     lfun->fun.body = nullptr;
-    lfun->fun.arity = 0;
     lfun->fun.native_fn = nullptr;
     lfun->fun.native_name = nullptr;
     u64 klen = strlen(key) + 1;

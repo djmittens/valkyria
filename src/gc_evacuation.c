@@ -123,7 +123,7 @@ static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t*
 
   valk_lval_t* new_val = nullptr;
   VALK_WITH_ALLOC((void*)ctx->heap) {
-    new_val = valk_mem_alloc(sizeof(valk_lval_t));
+    new_val = valk_lval_alloc();
   }
 
   // LCOV_EXCL_START - OOM during evacuation
@@ -540,7 +540,7 @@ static void valk_fix_pointers(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
 // LCOV_EXCL_BR_START - evacuation to heap: heap fallback and lambda env dispatch
 static valk_lval_t* valk_evacuate_leaf(valk_gc_heap_t* heap, valk_lval_t* v) {
   valk_lval_t* nv;
-  VALK_WITH_ALLOC((void*)heap) { nv = valk_mem_alloc(sizeof(valk_lval_t)); }
+  VALK_WITH_ALLOC((void*)heap) { nv = valk_lval_alloc(); }
   if (!nv) return v; // LCOV_EXCL_LINE
   memcpy(nv, v, sizeof(valk_lval_t));
   nv->flags = (nv->flags & ~LVAL_ALLOC_MASK) | LVAL_ALLOC_HEAP;

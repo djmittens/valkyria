@@ -279,7 +279,7 @@ static valk_lval_t* valk_builtin_make_string(valk_lenv_t* e, valk_lval_t* a) {
     return valk_lval_err("make-string: requested size %zu exceeds 100MB limit", total_size);
   }
 
-  valk_lval_t* res = valk_mem_alloc(sizeof(valk_lval_t));
+  valk_lval_t* res = valk_lval_alloc();
   res->flags = LVAL_STR | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
   VALK_SET_ORIGIN_ALLOCATOR(res);
   res->str = valk_mem_alloc(total_size + 1);

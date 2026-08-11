@@ -25,7 +25,8 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
 
   valk_gc_ptr_location_t loc;
   if (valk_gc_ptr_to_location(ctx->heap, ptr, &loc)) {
-    return valk_gc_page_try_mark(loc.page, loc.slot);
+    return ctx->solo ? valk_gc_page_try_mark_solo(loc.page, loc.slot)
+                     : valk_gc_page_try_mark(loc.page, loc.slot);
   } else {
     return valk_gc_mark_large_object(ctx->heap, ptr);
   }
@@ -43,9 +44,25 @@ static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx) {
     // unmarked and the sweeper freed them all at the first collection.
     // The heap-resident "immortals" still need their children traced:
     // a builtin's fun.name string is a heap allocation too.
-    if (!valk_gc_page_try_mark(loc.page, loc.slot)) return;
-    valk_gc_mark_queue_push(ctx->queue, lval);
-    return;
+    bool first = ctx->solo ? valk_gc_page_try_mark_solo(loc.page, loc.slot)
+                           : valk_gc_page_try_mark(loc.page, loc.slot);
+    if (!first) return;
+    // Leaves don't need a queue round-trip. Pushing them only to pop them
+    // again and fall through mark_children's switch was roughly half of all
+    // queue traffic, because half of a typical live set is numbers.
+    switch (LVAL_TYPE(lval)) {
+      case LVAL_NUM:
+      case LVAL_NIL:
+        return;
+      case LVAL_SYM:
+      case LVAL_STR:
+      case LVAL_ERR:
+        mark_ptr_only(lval->str, ctx);
+        return;
+      default:
+        valk_gc_mark_queue_push(ctx->queue, lval);
+        return;
+    }
   }
 
   // True immortals (image buffers, singletons, num cache, static storage)
@@ -72,7 +89,9 @@ static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
       // Heap env: the mark bit dedups the walk. Whoever marks it first
       // walks its contents AND the rest of the parent chain, so a lost
       // race here means the whole subtree is already covered.
-      if (!valk_gc_page_try_mark(loc.page, loc.slot)) return;
+      bool first = ctx->solo ? valk_gc_page_try_mark_solo(loc.page, loc.slot)
+                             : valk_gc_page_try_mark(loc.page, loc.slot);
+      if (!first) return;
     } else if (!(atomic_load(&env->flags) & LENV_FLAG_FROZEN)) {
       // Env block outside the GC heap and not frozen (malloc-mode tests,
       // foreign envs): stop. There is no mark bit for dedup, and walking
@@ -127,9 +146,14 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
         {
           valk_gc_ptr_location_t loc;
           if (valk_gc_ptr_to_location(ctx->heap, obj, &loc)) {
-            if (valk_gc_page_try_mark(loc.page, loc.slot))
-              valk_gc_mark_queue_push(ctx->queue, obj);
-            return;
+            bool first = ctx->solo
+                             ? valk_gc_page_try_mark_solo(loc.page, loc.slot)
+                             : valk_gc_page_try_mark(loc.page, loc.slot);
+            // Walk the spine in place rather than enqueueing every tail: a
+            // list of N cells used to cost N pushes and N pops. If someone
+            // else already marked the tail, the rest of the spine is theirs.
+            if (!first) return;
+            continue;
           }
           if (valk_gc_mark_large_object(ctx->heap, obj))
             return;
@@ -363,9 +387,12 @@ void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
 
   valk_gc_mark_queue_reset(my_queue);
 
+  const bool solo = atomic_load(&__gc_cycle_participants) <= 1;
+
   valk_gc_mark_ctx_t ctx = {
     .heap = heap,
-    .queue = my_queue
+    .queue = my_queue,
+    .solo = solo
   };
 
   valk_gc_visit_thread_roots(mark_root_visitor2, &ctx);
@@ -402,6 +429,17 @@ void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
   }
 
   valk_barrier_wait(&valk_sys->barrier);
+
+  if (solo) {
+    // Nobody can steal from us and nobody else can finish work on our behalf,
+    // so drain to empty and skip both the fencing pop and the whole
+    // steal/termination protocol.
+    valk_lval_t *obj;
+    while ((obj = valk_gc_mark_queue_pop_solo(my_queue)) != nullptr) {
+      mark_children(obj, &ctx);
+    }
+    return;
+  }
 
   while (true) {
     valk_lval_t *obj;

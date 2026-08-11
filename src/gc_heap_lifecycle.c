@@ -35,7 +35,18 @@ valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
 #endif
 
   sz region_size = heap->reserved / VALK_GC_NUM_SIZE_CLASSES;
-  region_size = region_size & ~(sz)4095;
+  // Round the stride down to a power of two so valk_gc_ptr_to_location can
+  // recover the size class with a shift. The reserve is virtual address
+  // space, so rounding down costs no physical memory.
+  if (region_size < VALK_GC_PAGE_SIZE) {
+    VALK_ERROR("Reserve %zu is too small to carve %d size-class regions",
+               heap->reserved, VALK_GC_NUM_SIZE_CLASSES);
+    munmap(heap->base, heap->reserved);
+    free(heap);
+    return nullptr;
+  }
+  heap->region_shift = valk_gc_log2_pow2(region_size);
+  region_size = (sz)1 << heap->region_shift;
 
   for (int c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     valk_gc_page_list_init(&heap->classes[c], c);

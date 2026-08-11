@@ -358,6 +358,12 @@ valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q) {
   return v;
 }
 
+valk_lval_t* valk_gc_mark_queue_pop_solo(valk_gc_mark_queue_t* q) {
+  void *v = valk_chase_lev_pop_solo(q);
+  if (v == VALK_CHASE_LEV_EMPTY) return nullptr;
+  return v;
+}
+
 valk_lval_t* valk_gc_mark_queue_steal(valk_gc_mark_queue_t* q) {
   void *v = valk_chase_lev_steal(q);
   if (v == VALK_CHASE_LEV_EMPTY || v == VALK_CHASE_LEV_ABORT) return nullptr;

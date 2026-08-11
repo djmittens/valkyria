@@ -26,7 +26,7 @@
 // ============================================================================
 
 #define VALK_IMAGE_MAGIC "VALKIMG\0"
-#define VALK_IMAGE_VERSION 4u
+#define VALK_IMAGE_VERSION 5u
 
 #define VALK_IMAGE_ROOT_LVAL 0u
 #define VALK_IMAGE_ROOT_ENV  1u

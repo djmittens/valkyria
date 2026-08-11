@@ -30,6 +30,9 @@ void valk_chase_lev_destroy(valk_chase_lev_deque_t *deque);
 
 void valk_chase_lev_push(valk_chase_lev_deque_t *deque, void *item);
 void *valk_chase_lev_pop(valk_chase_lev_deque_t *deque);
+// Owner-only pop for when no stealer can exist. Skips the seq_cst fence and
+// the top CAS that valk_chase_lev_pop needs to race with steal().
+void *valk_chase_lev_pop_solo(valk_chase_lev_deque_t *deque);
 void *valk_chase_lev_steal(valk_chase_lev_deque_t *deque);
 
 bool valk_chase_lev_empty(valk_chase_lev_deque_t *deque);

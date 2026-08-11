@@ -265,6 +265,7 @@ void valk_gc_mark_queue_reset(valk_gc_mark_queue_t* q);
 void valk_gc_mark_queue_destroy(valk_gc_mark_queue_t* q);
 void valk_gc_mark_queue_push(valk_gc_mark_queue_t* q, valk_lval_t* val);
 valk_lval_t* valk_gc_mark_queue_pop(valk_gc_mark_queue_t* q);
+valk_lval_t* valk_gc_mark_queue_pop_solo(valk_gc_mark_queue_t* q);
 valk_lval_t* valk_gc_mark_queue_steal(valk_gc_mark_queue_t* q);
 bool valk_gc_mark_queue_empty(valk_gc_mark_queue_t* q);
 
@@ -368,6 +369,9 @@ void valk_gc_participate_in_parallel_gc(void);
 typedef struct valk_gc_mark_ctx {
   valk_gc_heap_t *heap;
   valk_gc_mark_queue_t *queue;
+  // True when this cycle has exactly one participating thread, which makes
+  // every mark-bitmap RMW and every deque pop uncontended by construction.
+  bool solo;
 } valk_gc_mark_ctx_t;
 
 void valk_gc_heap_mark_object(valk_gc_mark_ctx_t *ctx, void *ptr);

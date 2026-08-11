@@ -31,6 +31,9 @@ void valk_gc_page_list_init(valk_gc_page_list_t *list, u8 size_class) {
   list->region_start = 0;
   list->region_size = 0;
   list->page_size = valk_gc_page_total_size(size_class);
+  list->page_shift = valk_gc_log2_pow2(list->page_size);
+  VALK_ASSERT(((sz)1 << list->page_shift) == list->page_size,
+              "page_size must be a power of two for shift-based addressing");
 }
 
 void valk_gc_tlab_init(valk_gc_tlab_t *tlab) {
@@ -125,8 +128,12 @@ static valk_gc_page_t *valk_gc_page_alloc(valk_gc_heap_t *heap, u8 size_class) {
     new_committed = current + page_size;
   } while (!atomic_compare_exchange_weak(&heap->committed_bytes, &current, new_committed));
 
-  u32 offset = atomic_fetch_add(&list->next_page_offset, (u32)page_size);
-  if (offset + page_size > list->region_size) {
+  sz offset = atomic_fetch_add(&list->next_page_offset, page_size);
+  // region_size is a power of two >= page_size, so this cannot underflow, and
+  // phrasing the bound as a subtraction keeps it correct when region_size is
+  // the full width of the offset type.
+  if (offset > list->region_size - page_size) {
+    atomic_fetch_sub(&list->next_page_offset, page_size);
     atomic_fetch_sub(&heap->committed_bytes, page_size);
     VALK_ERROR("Region exhausted for class %d", size_class);
     return nullptr;
@@ -148,6 +155,7 @@ static valk_gc_page_t *valk_gc_page_alloc(valk_gc_heap_t *heap, u8 size_class) {
   page->size_class = size_class;
   page->slots_per_page = slots;
   page->bitmap_bytes = bitmap_bytes;
+  page->slots_offset = valk_gc_page_slots_offset(bitmap_bytes);
   atomic_store(&page->num_allocated, 0);
 
   memset(valk_gc_page_alloc_bitmap(page), 0, bitmap_bytes);
@@ -226,6 +234,7 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
       page->size_class = size_class;
       page->slots_per_page = list->slots_per_page;
       page->bitmap_bytes = valk_gc_bitmap_bytes(size_class);
+      page->slots_offset = valk_gc_page_slots_offset(page->bitmap_bytes);
       atomic_store(&page->num_allocated, 0);
       memset(valk_gc_page_alloc_bitmap(page), 0, page->bitmap_bytes);
       memset(valk_gc_page_mark_bitmap(page), 0, page->bitmap_bytes);

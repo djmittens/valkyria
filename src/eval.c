@@ -417,11 +417,10 @@ static valk_eval_result_t valk_eval_apply_func_iter(valk_lenv_t* env, valk_lval_
     }
 
     if (!valk_lval_list_is_empty(formal_iter)) {
-      valk_lval_t* partial = valk_mem_alloc(sizeof(valk_lval_t));
+      valk_lval_t* partial = valk_lval_alloc();
       partial->flags = LVAL_FUN | valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
       VALK_SET_ORIGIN_ALLOCATOR(partial);
       partial->fun.builtin = nullptr;
-      partial->fun.arity = func->fun.arity;
       partial->fun.name = func->fun.name;
       partial->fun.env = call_env;
       partial->fun.formals = formal_iter;

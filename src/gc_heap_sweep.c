@@ -5,60 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 // LCOV_EXCL_BR_START - pointer location search and validation
-bool valk_gc_ptr_to_location(valk_gc_heap_t *heap, void *ptr, valk_gc_ptr_location_t *out) {
-  if (!heap || !ptr || !out) {
-    if (out) out->is_valid = false;
-    return false;
-  }
-
-  out->is_valid = false;
-
-  if (heap->base && heap->reserved > 0) {
-    u8 *base = (u8 *)heap->base;
-    u8 *addr = (u8 *)ptr;
-
-    if (addr < base || addr >= base + heap->reserved) {
-      return false;
-    }
-
-    size_t offset = (size_t)(addr - base);
-
-    for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
-      valk_gc_page_list_t *list = &heap->classes[c];
-      if (offset >= list->region_start && offset < list->region_start + list->region_size) {
-        u64 offset_in_region = offset - list->region_start;
-
-        u32 committed = atomic_load(&list->next_page_offset);
-        if (offset_in_region >= committed) {
-          return false;
-        }
-
-        u64 page_idx = offset_in_region / list->page_size;
-        valk_gc_page_t *page = (valk_gc_page_t *)(base + list->region_start + page_idx * list->page_size);
-
-        u8 *slots_start = valk_gc_page_slots(page);
-        if (addr < slots_start) {
-          return false;
-        }
-
-        u32 slot = (u32)((size_t)(addr - slots_start) / list->slot_size);
-        if (slot >= page->slots_per_page) {
-          return false;
-        }
-
-        out->page = page;
-        out->slot = slot;
-        out->size_class = c;
-        out->is_valid = true;
-        return true;
-      }
-    }
-
-    return false;
-  }
-
+// Non-contiguous fallback only. The contiguous-reserve fast path is inlined
+// in gc_heap.h because the marker calls it once per pointer.
+bool valk_gc_ptr_to_location_slow(valk_gc_heap_t *heap, void *ptr, valk_gc_ptr_location_t *out) {
   // LCOV_EXCL_START - slow path for non-contiguous heap requires heap->base not set
   for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
     valk_gc_page_list_t *list = &heap->classes[c];
@@ -116,6 +68,31 @@ sz valk_gc_sweep_page(valk_gc_page_t *page) {
   u8 *mark_bitmap = valk_gc_page_mark_bitmap(page);
   u16 bm_bytes = page->bitmap_bytes;
 
+  // Fast path: no finalizable object has ever been allocated in this page, so
+  // sweeping is pure bitmap arithmetic. The slow path below loads v->flags for
+  // every dead slot purely to test for LVAL_REF, which costs a cache miss per
+  // garbage object and dominated collection time on allocation-heavy loads.
+  if (!page->has_refs) {
+    for (u16 byte_offset = 0; byte_offset < bm_bytes; byte_offset++) {
+      u8 garbage_byte = (u8)(alloc_bitmap[byte_offset] & ~mark_bitmap[byte_offset]);
+      if (garbage_byte) {
+        // The trailing byte can cover slot indices past slots_per_page. The
+        // slow path skips those via `slot < slots`; counting them here would
+        // over-report and underflow num_allocated.
+        u32 first_slot = (u32)byte_offset * 8;
+        if (first_slot + 8 > slots) {
+          u8 valid = (u8)((slots > first_slot) ? ((1u << (slots - first_slot)) - 1u) : 0u);
+          garbage_byte = (u8)(garbage_byte & valid);
+        }
+        freed += (sz)__builtin_popcount((unsigned)garbage_byte);
+        alloc_bitmap[byte_offset] = (u8)(alloc_bitmap[byte_offset] & mark_bitmap[byte_offset]);
+      }
+      mark_bitmap[byte_offset] = 0;
+    }
+    atomic_fetch_sub(&page->num_allocated, (u32)freed);
+    return freed;
+  }
+
   for (u16 byte_offset = 0; byte_offset < bm_bytes; byte_offset++) {
     u8 alloc_byte = alloc_bitmap[byte_offset];
     u8 mark_byte = mark_bitmap[byte_offset];
@@ -137,7 +114,7 @@ sz valk_gc_sweep_page(valk_gc_page_t *page) {
           // LCOV_EXCL_BR_START - LVAL_REF finalizer requires integration with ref creation API
           if (slot_size >= sizeof(valk_lval_t)) {
             valk_lval_t *v = (valk_lval_t *)ptr;
-            u64 flags = atomic_load_explicit(&v->flags, memory_order_acquire);
+            u64 flags = v->flags;
             if ((valk_ltype_e)(flags & LVAL_TYPE_MASK) == LVAL_REF && v->ref.free != nullptr) {
                 v->ref.free(v->ref.ptr);
             }
@@ -228,12 +205,22 @@ sz valk_gc_reclaim_empty_pages(valk_gc_heap_t *heap) {
 
       if (allocated == 0 && !page->reclaimed) {
         u64 page_size = list->page_size;
+        // Decommit the slot array only. The page header lives at the page base
+        // and carries the all_pages/partial_pages links; MADV_DONTNEED zeroes
+        // whatever it covers, so covering the header unlinks the page from the
+        // partial list and the allocator can never hand it back out.
+        static uptr os_page = 0;
+        if (os_page == 0) os_page = (uptr)sysconf(_SC_PAGESIZE);
+        uptr decommit_start =
+            ((uptr)valk_gc_page_slots(page) + os_page - 1) & ~(os_page - 1);
+        uptr decommit_end = (uptr)page + page_size;
+        if (decommit_end > decommit_start) {
 #ifdef __APPLE__
-        madvise(page, page_size, MADV_FREE);
+          madvise((void *)decommit_start, decommit_end - decommit_start, MADV_FREE);
 #else
-        madvise(page, page_size, MADV_DONTNEED);
+          madvise((void *)decommit_start, decommit_end - decommit_start, MADV_DONTNEED);
 #endif
-        page->next = next_page;
+        }
         page->reclaimed = true;
         atomic_fetch_sub(&heap->committed_bytes, page_size);
         pages_reclaimed++;

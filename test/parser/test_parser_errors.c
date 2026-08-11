@@ -1203,7 +1203,7 @@ static void test_symbol_copy_truncation(VALK_TEST_ARGS()) {
   // pointers differed, which only held because interning was inactive until
   // valk_lval_init_singletons ran.
   ASSERT_TRUE(copy->str == sym->str);
-  ASSERT_TRUE(atomic_load(&copy->flags) & LVAL_FLAG_INTERNED);
+  ASSERT_TRUE(copy->flags & LVAL_FLAG_INTERNED);
 
   VALK_PASS();
 }

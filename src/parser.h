@@ -6,12 +6,18 @@
 #include "types.h"
 
 // ===========================================================================
-// Flag layout in _Atomic u64:
+// Flag layout in u64. Plain (non-atomic) because the collector is
+// stop-the-world: flags are written before a value is published, and every
+// GC-side write happens with all mutators parked at the phase barrier.
 //   bits  0-7:   type (8 bits, valk_ltype_e)
 //   bits  8-9:   alloc region (2 bits: scratch=0, global=1, heap=2)
 //   bits 10-16:  GC generation (7 bits, 0-127 survived cycles)
 //   bit  17:     immortal
 //   bit  18:     quoted (cons cell prints as {} vs ())
+//   bit  19:     interned (str points into the global symbol table)
+//   bit  20:     macro
+//   bit  21:     accepts_err
+//   bits 22-31:  free
 //   bits 32-63:  src_pos (32 bits, source position, -1 = unknown)
 // ===========================================================================
 
@@ -148,7 +154,7 @@ struct valk_lenv_t {
 };
 
 struct valk_lval_t {
-  _Atomic u64 flags;
+  u64 flags;
 #ifdef VALK_COVERAGE
   u16 cov_file_id;
   u16 cov_line;
@@ -159,7 +165,6 @@ struct valk_lval_t {
     struct {
       // Builtin function pointer (nullptr for lambdas)
       valk_lval_builtin_t *builtin;
-      int arity;
       char *name;
       // For closures
       valk_lenv_t *env;
@@ -198,6 +203,12 @@ struct valk_lval_t {
     char *str;
   };
 };
+
+// Single chokepoint for raw lval allocation. Every value in the system comes
+// from here, which is what makes the slot size (and any future change to the
+// value representation) a one-line edit rather than an 18-site sweep.
+// Requires memory.h at the use site.
+#define valk_lval_alloc() valk_mem_alloc(sizeof(valk_lval_t))
 
 // Immortal object helpers - must be after valk_lval_t definition
 static inline bool valk_lval_is_immortal(valk_lval_t *v) {

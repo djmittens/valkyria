@@ -85,6 +85,15 @@ leak:libLLVM
 # entry tables) are needed until the image dump and freed by process exit.
 leak:valk_build_emit_aot
 
+# A loaded image's buffer IS the backing store for every lval and env in it:
+# img_finalize_root keeps ld->buf on success and only frees it on the failure
+# paths (img_loaded_free_all). Freeing it after a successful load would leave
+# the whole returned env dangling. AOT binaries load an embedded image at
+# startup and hold it for the process lifetime, so LSan sees one bounded
+# allocation per process.
+leak:img_read_bytes
+leak:img_read_all
+
 # Pipes and LSP readers have no teardown API by design: the uv handle owns
 # the lifetime and freeing on pipe/close would leave the Lisp REF dangling
 # (use-after-free on double close). One bounded allocation per pipe for the

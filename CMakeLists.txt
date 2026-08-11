@@ -682,3 +682,19 @@ if(VALK_LLVM)
   include_directories(bench_jit src/)
 endif()
 
+# Allocation + GC pause benchmarks. No LLVM needed.
+add_executable(bench_alloc test/lang/bench_alloc.c)
+target_link_libraries(bench_alloc PRIVATE "-lc" valkyria)
+target_compile_options(bench_alloc PRIVATE -Wno-pedantic -O2)
+include_directories(bench_alloc src/)
+
+add_executable(bench_gc test/lang/bench_gc.c)
+target_link_libraries(bench_gc PRIVATE "-lc" valkyria)
+target_compile_options(bench_gc PRIVATE -Wno-pedantic -O2)
+include_directories(bench_gc src/)
+
+add_executable(bench_game test/lang/bench_game.c)
+target_link_libraries(bench_game PRIVATE "-lc" valkyria)
+target_compile_options(bench_game PRIVATE -Wno-pedantic -O2)
+include_directories(bench_game src/)
+

@@ -3643,6 +3643,84 @@ void test_gc_tlab_refill_multiple_partial_pages(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_gc_empty_pages_are_recycled(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_thread_register();
+  valk_gc_heap_t *heap = valk_gc_heap_create(128 * 1024 * 1024);
+
+  u8 size_class = valk_gc_size_class(128);
+  u16 slots = valk_gc_slots_per_page(size_class);
+  valk_gc_page_list_t *list = &heap->classes[size_class];
+
+  int per_round = slots * 4;
+  sz baseline = 0;
+  for (int round = 0; round < 6; round++) {
+    for (int i = 0; i < per_round; i++) {
+      VALK_TEST_ASSERT(valk_gc_heap_alloc(heap, 128) != nullptr, "alloc should succeed");
+    }
+    valk_gc_heap_collect(heap);
+    if (round == 1) baseline = list->num_pages;
+  }
+
+  VALK_TEST_ASSERT(list->num_pages <= baseline,
+                   "empty pages must be recycled rather than re-allocated "
+                   "(baseline %zu pages, now %zu)", baseline, list->num_pages);
+
+  sz partial_count = 0;
+  for (valk_gc_page_t *p = list->partial_pages; p; p = p->next_partial) partial_count++;
+  VALK_TEST_ASSERT(partial_count > 1,
+                   "reclaimed pages must stay threaded on the partial list "
+                   "(num_pages %zu, partial %zu)", list->num_pages, partial_count);
+
+  valk_gc_thread_unregister();
+  valk_gc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
+void test_gc_page_alloc_region_exhaustion(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_gc_thread_register();
+  valk_gc_heap_t *heap = valk_gc_heap_create(128 * 1024 * 1024);
+
+  u8 size_class = valk_gc_size_class(128);
+  valk_gc_page_list_t *list = &heap->classes[size_class];
+
+  atomic_store(&list->next_page_offset, list->region_size - 2 * list->page_size);
+
+  valk_gc_tlab_t tlab;
+  valk_gc_tlab_init(&tlab);
+  int fresh_pages = 0;
+  for (int i = 0; i < 4; i++) {
+    list->partial_pages = nullptr;
+    if (valk_gc_tlab_refill(&tlab, heap, size_class)) fresh_pages++;
+    valk_gc_tlab_reset(&tlab);
+  }
+  VALK_TEST_ASSERT(fresh_pages == 2,
+                   "region must yield exactly the 2 remaining pages then fail "
+                   "cleanly (got %d)", fresh_pages);
+
+  VALK_TEST_ASSERT(atomic_load(&list->next_page_offset) <= list->region_size,
+                   "bump cursor must not wrap past the end of the region");
+
+  valk_gc_page_t *slow = list->all_pages;
+  valk_gc_page_t *fast = list->all_pages;
+  bool cycle = false;
+  while (fast && fast->next) {
+    fast = fast->next->next;
+    slow = slow->next;
+    if (fast == slow) { cycle = true; break; }
+  }
+  VALK_TEST_ASSERT(!cycle, "all_pages must never contain a cycle");
+
+  valk_gc_thread_unregister();
+  valk_gc_heap_destroy(heap);
+
+  VALK_PASS();
+}
+
 // ===========================================================================
 // Registration during an active GC cycle must not wedge or corrupt the cycle.
 //
@@ -3962,6 +4040,8 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_gc_tlab_refill_fragmented_page", test_gc_tlab_refill_fragmented_page);
   valk_testsuite_add_test(suite, "test_gc_tlab_refill_multiple_partial_pages", test_gc_tlab_refill_multiple_partial_pages);
   valk_testsuite_add_test(suite, "test_gc_register_during_cycle_no_wedge", test_gc_register_during_cycle_no_wedge);
+  valk_testsuite_add_test(suite, "test_gc_empty_pages_are_recycled", test_gc_empty_pages_are_recycled);
+  valk_testsuite_add_test(suite, "test_gc_page_alloc_region_exhaustion", test_gc_page_alloc_region_exhaustion);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
