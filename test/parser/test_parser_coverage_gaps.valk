@@ -719,6 +719,35 @@
     (test/assert-eq 0 called "or short-circuits on true")
     true
   })
+  ; and/or return the operand that DECIDED the chain, not a boolean: the
+  ; first falsey operand for and, the first truthy one for or, otherwise
+  ; the last operand.
+  (test/case "and-or-return-deciding-operand"
+    {do
+    (test/assert-eq 0 (and 1 0 9) "and returns the first falsey operand")
+    (test/assert-eq 7 (and 1 2 7) "and returns the last when all truthy")
+    (test/assert-eq 7 (or 0 7 9) "or returns the first truthy operand")
+    (test/assert-eq 3 (or 0 0 3) "or returns the last when none truthy")
+    (test/assert-eq 1 (and) "and of nothing is the identity 1")
+    (test/assert-eq 0 (or) "or of nothing is the identity 0")
+    (test/assert-eq 4 (and 4) "single operand is itself")
+    (test/assert-eq 4 (or 4) "single operand is itself")
+    true
+  })
+  ; They are builtins, so they are also VALUES. In that position the
+  ; arguments have already been evaluated, so there is no short circuit —
+  ; but the result must be identical to the special form's.
+  (test/case "and-or-usable-as-values"
+    {do
+    (test/assert-eq 7 (foldl and 1 {1 2 7}) "and folds as a function")
+    (test/assert-eq 0 (foldl and 1 {1 0 9}) "and folds to the falsey one")
+    (test/assert-eq 3 (foldl or 0 {0 0 3}) "or folds as a function")
+    (test/assert-eq 7 ((\ {f} {f 0 7 9}) or) "or survives being passed")
+    (test/assert-eq 2 (len (map (\ {x} {or x 5}) {0 2})) "usable inside a lambda")
+    (test/assert (not (error? and)) "and is bound to a value")
+    (test/assert (not (error? or)) "or is bound to a value")
+    true
+  })
   (test/case "lambda-partial-application"
     {do
     (= {add} (\ {a b} {+ a b}))

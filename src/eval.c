@@ -831,9 +831,11 @@ apply_cont:
           }
           bool truthy = valk_lval_is_truthy(value);
           // Decided: `and` stops on the first falsey operand, `or` on the
-          // first truthy one. Everything after it stays unevaluated.
+          // first truthy one. Everything after it stays unevaluated, and
+          // `value` — the operand that decided it — is already the result,
+          // matching what the valk_builtin_and/or functions return when
+          // these are used as values.
           if (frame.logic.is_and != truthy) {
-            value = valk_lval_num(frame.logic.is_and ? 0 : 1);
             goto apply_cont;
           }
           // Undecided but out of operands: the last value IS the result,

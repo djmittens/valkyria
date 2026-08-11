@@ -58,14 +58,16 @@ static LLVMValueRef codegen_logic_chain(valk_llvm_ctx_t *c,
   LLVMBuildBr(c->builder, merge_bb);
   LLVMBasicBlockRef cont_end = LLVMGetInsertBlock(c->builder);
 
+  // The operand that decided the chain IS the result, so this block just
+  // forwards `val` — it dominates both successors, having been computed
+  // before the branch.
   LLVMPositionBuilderAtEnd(c->builder, short_bb);
-  LLVMValueRef short_val = codegen_num_imm(c, is_and ? 0 : 1);
   LLVMBuildBr(c->builder, merge_bb);
   LLVMBasicBlockRef short_end = LLVMGetInsertBlock(c->builder);
 
   LLVMPositionBuilderAtEnd(c->builder, merge_bb);
   LLVMValueRef phi = LLVMBuildPhi(c->builder, c->ptr_type, "logic.result");
-  LLVMValueRef incoming[] = {cont_val, short_val};
+  LLVMValueRef incoming[] = {cont_val, val};
   LLVMBasicBlockRef blocks[] = {cont_end, short_end};
   LLVMAddIncoming(phi, incoming, blocks, 2);
   return phi;

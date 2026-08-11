@@ -14,20 +14,37 @@
 (sig '/ {-> & Num Num})
 (sig 'mod {-> Num Num Num})
 
+; Smallest of its arguments. Variadic, at least one.
+(sig 'min {-> & Num Num})
+; Largest of its arguments. Variadic, at least one.
+(sig 'max {-> & Num Num})
+
 ; === Comparison ===
+;
+; All of these CHAIN over adjacent pairs and short-circuit on the first
+; false pair: (< 1 2 3) is 1<2 and 2<3. == and != are all-equal /
+; not-all-equal. One operand forms no pair and is vacuously true.
 
 ; Less than.
-(sig '< {-> Num Num Num})
+(sig '< {-> & Num Num})
 ; Greater than.
-(sig '> {-> Num Num Num})
+(sig '> {-> & Num Num})
 ; Less or equal.
-(sig '<= {-> Num Num Num})
+(sig '<= {-> & Num Num})
 ; Greater or equal.
-(sig '>= {-> Num Num Num})
+(sig '>= {-> & Num Num})
 ; Equality test.
-(sig '== {-> A B Num})
+(sig '== {-> & A Num})
 ; Inequality test.
-(sig '!= {-> A B Num})
+(sig '!= {-> & A Num})
+
+; === Logic ===
+;
+; Builtins, so they are values — but the evaluator and the LLVM backend
+; both recognise them in head position and emit branches, which is what
+; short-circuits. The result is the operand that decided the chain.
+(sig 'and {-> & A A})
+(sig 'or {-> & A A})
 
 ; === Ordering ===
 

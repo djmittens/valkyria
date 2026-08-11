@@ -316,6 +316,48 @@ void test_build_aot_closure_captures_formals(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+// `and`/`or` are builtins (so they are values) that the evaluator and the
+// codegen both recognise in head position and lower to branches. The two
+// paths must agree on the RESULT and differ only in whether operands past
+// the deciding one run at all. Exercised through --build because the
+// codegen path is the one that can silently diverge: an earlier attempt
+// implemented these as prelude macros, which the tree walker expanded and
+// the compiler emitted as a call to the macro object.
+void test_build_aot_and_or_semantics(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  const char *src = "/tmp/valk_build_test_andor.valk";
+  const char *out = "/tmp/valk_build_test_andor.bin";
+  const char *body =
+      "(def {hits} 0)\n"
+      "(def {bump} (\\ {_} {do (def {hits} (+ hits 1)) 1}))\n"
+      "(\\ {argv} {do\n"
+      "  (if (not (== (and 1 0 9) 0)) {1}\n"
+      "  {if (not (== (and 1 2 7) 7)) {2}\n"
+      "  {if (not (== (or 0 7 9) 7)) {3}\n"
+      "  {if (not (== (or 0 0 3) 3)) {4}\n"
+      "  {if (not (== (and) 1)) {5}\n"
+      "  {if (not (== (or) 0)) {6}\n"
+      // Value position: no short circuit, same answer.
+      "  {if (not (== (foldl and 1 (list 1 2 7)) 7)) {7}\n"
+      "  {if (not (== (foldl or 0 (list 0 0 3)) 3)) {8}\n"
+      // Call position: the operand after the decision must NOT run.
+      "  {do (def {hits} 0) (and 0 (bump 0)) (or 1 (bump 0))\n"
+      "      (if (not (== hits 0)) {9} {0})}}}}}}}})\n"
+      "})\n";
+  VALK_TEST_ASSERT(write_valk(src, body) == 0, "write src");
+  VALK_TEST_ASSERT(run_valk_build(src, out) == 0, "valk --build succeeds");
+
+  int rc = run_produced(out, NULL);
+  VALK_TEST_ASSERT(rc == 0,
+                   "compiled and/or match the evaluator (got %d: 1-6 value "
+                   "mismatch, 7-8 not usable as values, 9 no short circuit)",
+                   rc);
+
+  unlink(src);
+  unlink(out);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -339,6 +381,8 @@ int main(void) {
                           test_build_aot_survives_gc);
   valk_testsuite_add_test(suite, "build_aot_closure_captures_formals",
                           test_build_aot_closure_captures_formals);
+  valk_testsuite_add_test(suite, "build_aot_and_or_semantics",
+                          test_build_aot_and_or_semantics);
   int rc = valk_testsuite_run(suite);
   valk_testsuite_print(suite);
   valk_testsuite_free(suite);

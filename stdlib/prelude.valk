@@ -426,24 +426,30 @@
 (sig 'not {-> Num Num})
 (fun {not x} {if x {0} {1}})
 
-; `and` and `or` are CORE SPECIAL FORMS (see valk_eval_and_or in eval.c and
-; valk_codegen_and_or in llvm_codegen_special.c), not functions and not
-; prelude macros. Short-circuiting requires unevaluated operands, which a
-; function cannot have — they were previously `{or x y} {+ x y}` and
-; `{and x y} {* x y}`, binary and always evaluating both sides.
+; `and` and `or` are BUILTINS (valk_builtin_and / valk_builtin_or in
+; builtins_math.c), so they are values: pass them to foldl, store them,
+; hand them to a lambda. The evaluator (CONT_LOGIC_NEXT in eval.c) and the
+; LLVM backend (valk_codegen_and_or) additionally recognise them in head
+; position and emit branches rather than a call, which is what gives the
+; short circuit. This is the same arrangement `+` has — `(foldl + 0 l)`
+; works and `(+ a b)` still lowers to a native add.
 ;
-; A prelude macro expanding to `if` looks like it should work, and does
-; under the tree walker, but `valk --build` miscompiles it: the codegen
-; never expands macros, so it emits a funcall to the macro object. That is
-; a general limitation of macros inside compiled function bodies, not
-; something specific to these two forms.
+; Both paths agree on the RESULT. They differ only in whether the operands
+; past the deciding one are evaluated, which is observable only through
+; side effects: `(or a (launch))` will not launch, `(foldl or 0 lst)` has
+; already evaluated everything before `or` is called.
 ;
+; The value is the operand that DECIDED the chain, not a boolean:
 ;   (and)          => 1        identity: nothing to falsify
 ;   (and a)        => a
-;   (and a b ...)  => 0 at the first falsey operand, else the LAST value
+;   (and a b ...)  => the first falsey operand, else the LAST operand
 ;   (or)           => 0        identity: nothing to satisfy
 ;   (or a)         => a
-;   (or a b ...)   => 1 at the first truthy operand, else the last value
+;   (or a b ...)   => the first truthy operand, else the LAST operand
+;
+; They were previously `{or x y} {+ x y}` and `{and x y} {* x y}` — binary,
+; always evaluating both sides, and returning a sum/product rather than a
+; decision.
 
 ; Higher-order function utilities
 

@@ -110,6 +110,45 @@ static valk_lval_t* valk_builtin_chain(valk_lval_t* a, ord_op_e op) {
   return valk_lval_num(1);
 }
 
+// `and` / `or` as ordinary functions, so they are VALUES: they can be
+// passed to foldl, stored, partially applied. The evaluator and the LLVM
+// backend additionally recognise them in head position and emit branches
+// instead of a call, which is what gives the short circuit — exactly the
+// arrangement `+` already has, where (foldl + 0 l) works and (+ a b) still
+// lowers to a native add.
+//
+// The two paths agree on the RESULT. They differ only in whether operands
+// past the deciding one are evaluated, which is unobservable except
+// through side effects: a function's arguments are all evaluated before
+// the call, so `(foldl or 0 lst)` cannot short circuit, while
+// `(or a (launch))` does.
+//
+// Both return the DECIDING operand rather than a boolean: the first falsey
+// operand for `and`, the first truthy one for `or`, otherwise the last.
+static valk_lval_t* valk_builtin_and(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  u64 n = valk_lval_list_count(a);
+  if (n == 0) return valk_lval_num(1);  // identity: nothing to falsify
+  valk_lval_t* operand = nullptr;
+  for (u64 i = 0; i < n; i++) {
+    operand = valk_lval_list_nth(a, i);
+    if (!valk_lval_is_truthy(operand)) return operand;
+  }
+  return operand;
+}
+
+static valk_lval_t* valk_builtin_or(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  u64 n = valk_lval_list_count(a);
+  if (n == 0) return valk_lval_num(0);  // identity: nothing to satisfy
+  valk_lval_t* operand = nullptr;
+  for (u64 i = 0; i < n; i++) {
+    operand = valk_lval_list_nth(a, i);
+    if (valk_lval_is_truthy(operand)) return operand;
+  }
+  return operand;
+}
+
 // (min 3 1 4) / (max 3 1 4). At least one argument: there is no identity
 // to return for the empty case that isn't a lie about the number domain.
 static valk_lval_t* valk_builtin_minmax(valk_lval_t* a, bool want_max) {
@@ -293,6 +332,8 @@ void valk_register_math_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "!=", valk_builtin_ne);
   valk_lenv_put_builtin(env, "min", valk_builtin_min);
   valk_lenv_put_builtin(env, "max", valk_builtin_max);
+  valk_lenv_put_builtin(env, "and", valk_builtin_and);
+  valk_lenv_put_builtin(env, "or", valk_builtin_or);
   valk_lenv_put_builtin(env, "str->num", valk_builtin_str_to_num);
   valk_lenv_put_builtin(env, "%", valk_builtin_modulo);
   valk_lenv_put_builtin(env, "mod", valk_builtin_modulo);
