@@ -297,17 +297,6 @@ void valk_lspi_emit_node(index_ctx_t *ctx, int pos, int end, const char *type,
   valk_lspi_emit_node_ctx(ctx, pos, end, type, name, NULL);
 }
 
-void valk_lspi_emit_semtok(index_ctx_t *ctx, int pos, int len, int type,
-                           int mods) {
-  if (ctx->fast_mode) return;
-  sqlite3_reset(ctx->stmt_semtok);
-  sqlite3_bind_int(ctx->stmt_semtok, 1, ctx->file_id);
-  sqlite3_bind_int(ctx->stmt_semtok, 2, pos);
-  sqlite3_bind_int(ctx->stmt_semtok, 3, len);
-  sqlite3_bind_int(ctx->stmt_semtok, 4, type);
-  sqlite3_bind_int(ctx->stmt_semtok, 5, mods);
-  sqlite3_step(ctx->stmt_semtok);
-}
 
 void valk_lspi_emit_ref(index_ctx_t *ctx, const char *name, int pos, int len,
                         int scope_id, int is_def) {

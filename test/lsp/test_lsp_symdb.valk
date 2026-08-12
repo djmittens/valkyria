@@ -24,6 +24,20 @@
     fid
 })
 
+; A connection shaped like the LSP's: an on-disk index with the in-memory
+; overlay attached in front of it.
+(fun {make-overlay-db} {do
+  (= {db} (sqlite/open ":memory:"))
+  (sqlite/exec-script db symdb/schema-sql)
+  (symdb/attach-live db)
+  db
+})
+
+(fun {index-disk db path text} {
+  symdb/sync-file-with-ast db (str "file://" path) text (str "disk:" (len text))
+    (parse text)
+})
+
 (fun {get-refs db fid} {
   sqlite/query db
     "SELECT name, line, col FROM refs WHERE file_id=?1 ORDER BY line, col"
@@ -416,6 +430,81 @@
     {do
       (test/assert-eq "short" (symdb/uri->path "short")
         "short string returned as-is")
+      true
+    })
+
+  ; --- Live overlay: the editor's text, not the disk's ---
+
+  (test/case "overlay-shows-edited-symbols"
+    {do
+      (= {db} (make-overlay-db))
+      (index-disk db "/ov.valk" "(fun {onDisk x} {+ x 1})\n")
+      (test/assert (nil? (symdb/find-definition db "typed"))
+        "a symbol that exists only in the buffer is unknown before the edit")
+      (symdb/live-sync db "file:///ov.valk"
+        "(fun {onDisk x} {+ x 1})\n(fun {typed y} {- y 1})\n"
+        (parse "(fun {onDisk x} {+ x 1})\n(fun {typed y} {- y 1})\n"))
+      (test/assert (not (nil? (symdb/find-definition db "typed")))
+        "the overlay answers with the buffer's symbols")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "overlay-leaves-the-on-disk-index-alone"
+    {do
+      (= {db} (make-overlay-db))
+      (index-disk db "/ov.valk" "(fun {onDisk x} {+ x 1})\n")
+      (= {before} (sqlite/query-value db "SELECT count(*) FROM main.symbols"))
+      (symdb/live-sync db "file:///ov.valk"
+        "(fun {onDisk x} {+ x 1})\n(fun {typed y} {- y 1})\n"
+        (parse "(fun {onDisk x} {+ x 1})\n(fun {typed y} {- y 1})\n"))
+      (test/assert-eq before (sqlite/query-value db "SELECT count(*) FROM main.symbols")
+        "editing must not write to the on-disk index")
+      (test/assert (> (sqlite/query-value db "SELECT count(*) FROM live.symbols") 0)
+        "the edit lands in the overlay")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "overlay-shadows-rather-than-duplicates"
+    {do
+      (= {db} (make-overlay-db))
+      (index-disk db "/ov.valk" "(fun {onDisk x} {+ x 1})\n")
+      (symdb/live-sync db "file:///ov.valk" "(fun {onDisk x y} {+ x y})\n"
+        (parse "(fun {onDisk x y} {+ x y})\n"))
+      (= {defs} (symdb/find-definitions db "onDisk"))
+      (test/assert-eq 1 (len defs)
+        "the buffer's version replaces the file's, it does not stack on it")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "overlay-drop-restores-the-disk-version"
+    {do
+      (= {db} (make-overlay-db))
+      (index-disk db "/ov.valk" "(fun {onDisk x} {+ x 1})\n")
+      (symdb/live-sync db "file:///ov.valk"
+        "(fun {onDisk x} {+ x 1})\n(fun {typed y} {- y 1})\n"
+        (parse "(fun {onDisk x} {+ x 1})\n(fun {typed y} {- y 1})\n"))
+      (symdb/live-drop db "/ov.valk")
+      (test/assert (nil? (symdb/find-definition db "typed"))
+        "closing or saving drops the buffer's version")
+      (test/assert (not (nil? (symdb/find-definition db "onDisk")))
+        "the file's own symbols are still there")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "overlay-covers-only-the-edited-file"
+    {do
+      (= {db} (make-overlay-db))
+      (index-disk db "/a.valk" "(fun {inA x} {+ x 1})\n")
+      (index-disk db "/b.valk" "(fun {inB x} {+ x 2})\n")
+      (symdb/live-sync db "file:///a.valk" "(fun {inA x} {+ x 9})\n"
+        (parse "(fun {inA x} {+ x 9})\n"))
+      (test/assert (not (nil? (symdb/find-definition db "inB")))
+        "an untouched file still answers from disk")
+      (sqlite/close db)
       true
     })
 

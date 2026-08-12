@@ -428,7 +428,7 @@
     {do
       (= {ast} (parse "(= {x} 42)"))
       (= {val} (head (tail (tail (head ast)))))
-      (test/assert-eq "Num" (hint/infer-val-type val nil) "number")
+      (test/assert-eq "Num" (hint/infer-val-type val nil nil) "number")
       true
     })
 
@@ -436,7 +436,7 @@
     {do
       (= {ast} (parse "(= {x} \"hello\")"))
       (= {val} (head (tail (tail (head ast)))))
-      (test/assert-eq "Str" (hint/infer-val-type val nil) "string")
+      (test/assert-eq "Str" (hint/infer-val-type val nil nil) "string")
       true
     })
 
@@ -444,7 +444,7 @@
     {do
       (= {ast} (parse "(= {x} (list 1 2 3))"))
       (= {val} (head (tail (tail (head ast)))))
-      (test/assert-eq "List" (hint/infer-val-type val nil) "list call")
+      (test/assert-eq "List" (hint/infer-val-type val nil nil) "list call")
       true
     })
 
@@ -452,7 +452,7 @@
     {do
       (= {ast} (parse "(= {x} (dict/new))"))
       (= {val} (head (tail (tail (head ast)))))
-      (test/assert-eq "Dict" (hint/infer-val-type val nil) "dict/new")
+      (test/assert-eq "Dict" (hint/infer-val-type val nil nil) "dict/new")
       true
     })
 
@@ -460,7 +460,7 @@
     {do
       (= {ast} (parse "(= {x} (None))"))
       (= {val} (head (tail (tail (head ast)))))
-      (test/assert-eq "Option" (hint/infer-val-type val nil) "None")
+      (test/assert-eq "Option" (hint/infer-val-type val nil nil) "None")
       true
     })
 
@@ -468,7 +468,7 @@
     {do
       (= {ast} (parse "(= {x} (Some 42))"))
       (= {val} (head (tail (tail (head ast)))))
-      (test/assert-eq "Option" (hint/infer-val-type val nil) "Some")
+      (test/assert-eq "Option" (hint/infer-val-type val nil nil) "Some")
       true
     })
 
@@ -476,7 +476,7 @@
     {do
       (= {ast} (parse "(= {x} (\\ {y} {+ y 1}))"))
       (= {val} (head (tail (tail (head ast)))))
-      (test/assert-eq "Fn" (hint/infer-val-type val nil) "lambda")
+      (test/assert-eq "Fn" (hint/infer-val-type val nil nil) "lambda")
       true
     })
 
@@ -484,7 +484,7 @@
     {do
       (= {ast} (parse "(= {x} (foo 1))"))
       (= {val} (head (tail (tail (head ast)))))
-      (test/assert (nil? (hint/infer-val-type val nil)) "unknown without db")
+      (test/assert (nil? (hint/infer-val-type val nil nil)) "unknown without db")
       true
     })
 
@@ -578,6 +578,129 @@
       (= {labels} (map (\ {h} {h:label}) hints))
       (test/assert (member? ":: Num" labels) "x gets Num inside do")
       (test/assert (member? ":: Str" labels) "s gets Str inside do")
+      true
+    })
+
+  ; --- Type hint: local variable scope ---
+
+  (test/case "type-hint-var-from-binding"
+    {do
+      (= {text} "(fun {f} {do\n  (= {a} 42)\n  (= {b} a)\n  b})")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {h:label}) hints))
+      (test/assert-eq 2 (len (filter (\ {l} {== l ":: Num"}) labels))
+        "both the binding and the variable that copies it get Num")
+      true
+    })
+
+  (test/case "type-hint-var-from-param-sig"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "f" "{-> Str Str}")
+      (= {text} "(fun {f a} {do\n  (= {b} a)\n  b})")
+      (= {hints} (hint/collect text db nil))
+      (= {labels} (map (\ {h} {h:label}) hints))
+      (sqlite/close db)
+      (test/assert (member? ":: Str" labels) "param type flows into the binding")
+      true
+    })
+
+  (test/case "type-hint-var-unknown"
+    {do
+      (= {text} "(fun {f} {do\n  (= {b} zzz)\n  b})")
+      (= {hints} (hint/collect text nil nil))
+      (= {type-hints} (filter (\ {h} {== h:kind 1}) hints))
+      (test/assert-eq 0 (len type-hints) "unknown variable gives no type hint")
+      true
+    })
+
+  (test/case "type-hint-var-scope-is-per-function"
+    {do
+      (= {text} "(fun {f} {do (= {a} 42) a})\n(fun {g} {do (= {b} a) b})")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {h:label}) hints))
+      (test/assert-eq 1 (len (filter (\ {l} {== l ":: Num"}) labels))
+        "another function's binding does not leak into this scope")
+      true
+    })
+
+  (test/case "type-hint-var-in-lambda-body"
+    {do
+      (= {text} "(fun {f} {do\n  (= {a} \"s\")\n  (map (\\ {x} {do (= {b} a) b}) nil)})")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {h:label}) hints))
+      (test/assert-eq 2 (len (filter (\ {l} {== l ":: Str"}) labels))
+        "a lambda body sees the enclosing function's bindings")
+      true
+    })
+
+  ; --- Broken parse: hints describe the current text ---
+
+  (test/case "hints-survive-a-broken-form"
+    {do
+      ; The middle form has no closing paren. The forms around it still
+      ; parsed, so they keep their hints instead of the whole document
+      ; falling back to whatever last parsed cleanly.
+      (= {text} "(= {a} 1)\n(= {b} 2\n(= {c} \"three\")")
+      (= {hints} (hint/collect text nil nil))
+      (= {labels} (map (\ {h} {h:label}) hints))
+      (test/assert (member? ":: Num" labels) "form before the break keeps its hint")
+      (test/assert (member? ":: Str" labels) "form after the break keeps its hint")
+      true
+    })
+
+  (test/case "hints-land-inside-the-current-text"
+    {do
+      (= {text} "(= {a} 1)\n(= {b} 2\n(= {c} \"three\")")
+      (= {lines} (str/split text "\n"))
+      (= {hints} (hint/collect text nil nil))
+      (= {ok} (foldl (\ {acc h} {do
+        (= {p} (plist/get h :position))
+        (= {src} (nth (+ (plist/get p :line) 1) lines))
+        (* acc (if (nil? src) {0} {<= (plist/get p :character) (len src)}))}) 1 hints))
+      (test/assert ok "every hint position must exist in the current text")
+      true
+    })
+
+  (test/case "whole-file-broken-yields-no-hints"
+    {do
+      (= {hints} (hint/collect "(fun {foo x} {+ x" nil nil))
+      (test/assert-eq 0 (len hints) "nothing parsed, so nothing to hint")
+      true
+    })
+
+  ; --- Inferred types that say nothing are not shown ---
+
+  (test/case "no-hint-for-type-variable-return"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "pick" "{-> Num A A A}")
+      (= {text} "(= {v} (pick 1 2 3))")
+      (= {hints} (hint/collect text db nil))
+      (sqlite/close db)
+      (test/assert-eq 0 (len hints) "a bare type variable is not a useful hint")
+      true
+    })
+
+  (test/case "no-hint-for-any-return"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "fetch" "{-> Str Any}")
+      (= {text} "(= {v} (fetch \"k\"))")
+      (= {hints} (hint/collect text db nil))
+      (sqlite/close db)
+      (test/assert-eq 0 (len hints) "Any is not a useful hint")
+      true
+    })
+
+  (test/case "uninformative-type-does-not-propagate"
+    {do
+      (= {db} (make-sig-db))
+      (seed-sig db "fetch" "{-> Str Any}")
+      (= {text} "(fun {f} {do\n  (= {v} (fetch \"k\"))\n  (= {w} v)\n  w})")
+      (= {hints} (hint/collect text db nil))
+      (sqlite/close db)
+      (test/assert-eq 0 (len hints) "Any must not reach the scope and resurface")
       true
     })
 

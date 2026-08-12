@@ -64,7 +64,6 @@ static void walk_match(index_ctx_t *ctx, valk_lval_t *tl) {
           int cp = (int)LVAL_SRC_POS(ctor);
           int cl = (int)strlen(ctor->str);
           if (cp >= 0) {
-            valk_lspi_emit_semtok(ctx, cp, cl, TOK_TYPE, 0);
             valk_lspi_emit_node(ctx, cp, cp + cl, "sym", ctor->str);
           }
         }
@@ -78,7 +77,6 @@ static void walk_match(index_ctx_t *ctx, valk_lval_t *tl) {
             int vl = (int)strlen(vname);
             valk_lspi_add_scope_name(ctx, vname, true);
             if (vp >= 0) {
-              valk_lspi_emit_semtok(ctx, vp, vl, TOK_PARAMETER, 1);
               valk_lspi_emit_ref(ctx, vname, vp, vl, clause_pos, 1);
               valk_lspi_emit_node(ctx, vp, vp + vl, "sym", vname);
             }
@@ -92,7 +90,6 @@ static void walk_match(index_ctx_t *ctx, valk_lval_t *tl) {
         int pl = (int)strlen(pname);
         if (pp >= 0 && strcmp(pname, "_") != 0) {
           valk_lspi_add_scope_name(ctx, pname, true);
-          valk_lspi_emit_semtok(ctx, pp, pl, TOK_PARAMETER, 1);
           valk_lspi_emit_ref(ctx, pname, pp, pl, clause_pos, 1);
           valk_lspi_emit_node(ctx, pp, pp + pl, "sym", pname);
         }
@@ -134,8 +131,6 @@ static void walk_qexpr_body(index_ctx_t *ctx, valk_lval_t *qexpr) {
   if (hd && LVAL_TYPE(hd) == LVAL_SYM) {
     const char *name = hd->str;
     if (strcmp(name, "do") == 0) {
-      int dp = (int)LVAL_SRC_POS(hd);
-      if (dp >= 0) valk_lspi_emit_semtok(ctx, dp, 2, TOK_KEYWORD, 0);
       walk_do(ctx, qexpr->cons.tail);
       return;
     }
@@ -173,7 +168,6 @@ static void collect_param_names(index_ctx_t *ctx, valk_lval_t *formals, int scop
       int pos = (int)LVAL_SRC_POS(p);
       int len = (int)strlen(name);
       if (pos >= 0) {
-        valk_lspi_emit_semtok(ctx, pos, len, TOK_PARAMETER, 1);
         valk_lspi_emit_ref(ctx, name, pos, len, scope_pos, 1);
         valk_lspi_emit_node(ctx, pos, pos + len, "sym", name);
       }
@@ -184,8 +178,6 @@ static void collect_param_names(index_ctx_t *ctx, valk_lval_t *formals, int scop
 
 static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is_lambda) {
   int kw_pos = (int)LVAL_SRC_POS(kw);
-  int kw_len = is_lambda ? 1 : 3;
-  if (kw_pos >= 0) valk_lspi_emit_semtok(ctx, kw_pos, kw_len, TOK_KEYWORD, 0);
 
   u64 tl_len = valk_lval_list_count(tl);
   if (tl_len < 2) { walk_each(ctx, tl); return; }
@@ -223,7 +215,6 @@ static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is
       const char *qname = ctx->is_top_level
         ? valk_lspi_qualify(ctx, fname->str, qbuf, sizeof qbuf) : fname->str;
       if (fp >= 0) {
-        valk_lspi_emit_semtok(ctx, fp, fl, TOK_FUNCTION, 1);
         valk_lspi_emit_ref(ctx, qname, fp, fl, -1, 1);
         valk_lspi_emit_node(ctx, fp, fp + fl, "sym", fname->str);
       }
@@ -251,8 +242,6 @@ static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is
     valk_lval_t *inner = body;
     if (inner->cons.head && LVAL_TYPE(inner->cons.head) == LVAL_SYM &&
         strcmp(inner->cons.head->str, "do") == 0) {
-      int dp = (int)LVAL_SRC_POS(inner->cons.head);
-      if (dp >= 0) valk_lspi_emit_semtok(ctx, dp, 2, TOK_KEYWORD, 0);
       walk_do(ctx, inner->cons.tail);
     } else {
       walk_qexpr_body(ctx, inner);
@@ -266,8 +255,6 @@ static void walk_fun(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl, bool is
 
 static void walk_binding(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl) {
   int kw_pos = (int)LVAL_SRC_POS(kw);
-  int kw_len = (int)strlen(kw->str);
-  if (kw_pos >= 0) valk_lspi_emit_semtok(ctx, kw_pos, kw_len, TOK_KEYWORD, 0);
 
   if (!tl || LVAL_TYPE(tl) != LVAL_CONS) return;
   valk_lval_t *binding = tl->cons.head;
@@ -292,7 +279,6 @@ static void walk_binding(index_ctx_t *ctx, valk_lval_t *kw, valk_lval_t *tl) {
         int vp = (int)LVAL_SRC_POS(v);
         int vl = (int)strlen(v->str);
         if (vp >= 0) {
-          valk_lspi_emit_semtok(ctx, vp, vl, TOK_VARIABLE, 1);
           valk_lspi_emit_ref(ctx, qname, vp, vl, scope_id, 1);
           valk_lspi_emit_node(ctx, vp, vp + vl, "sym", v->str);
         }
@@ -332,7 +318,6 @@ static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
 
   if (is_keyword_str(name)) {
     valk_lspi_emit_node_ctx(ctx, pos, pos + len, "sym", name, ctx->current_call);
-    valk_lspi_emit_semtok(ctx, pos, len, TOK_PROPERTY, 0);
     return;
   }
 
@@ -348,8 +333,6 @@ static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
 
     // Emit var as scoped ref
     int scope_id = valk_lspi_resolve_scope(ctx, var_name);
-    int tok = (scope_id >= 0 && valk_lspi_is_scope_param(ctx, var_name)) ? TOK_PARAMETER : TOK_VARIABLE;
-    valk_lspi_emit_semtok(ctx, pos, var_len, tok, 0);
     valk_lspi_emit_ref(ctx, var_name, pos, var_len, scope_id, 0);
     valk_lspi_emit_node(ctx, pos, pos + var_len, "sym", var_name);
 
@@ -359,7 +342,6 @@ static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
     while (*p == ':') {
       const char *next = strchr(p + 1, ':');
       int flen = next ? (int)(next - p) : (int)strlen(p);
-      valk_lspi_emit_semtok(ctx, field_pos, flen, TOK_PROPERTY, 0);
       valk_lspi_emit_node_ctx(ctx, field_pos, field_pos + flen, "sym", p, var_name);
       field_pos += flen;
       p = next ? next : p + flen;
@@ -370,7 +352,6 @@ static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
   // Check for Type:accessor (uppercase first char + colon)
   if (name[0] >= 'A' && name[0] <= 'Z' && colon) {
     valk_lspi_emit_node(ctx, pos, pos + len, "sym", name);
-    valk_lspi_emit_semtok(ctx, pos, len, TOK_TYPE, 0);
     return;
   }
 
@@ -380,11 +361,7 @@ static void walk_sym(index_ctx_t *ctx, valk_lval_t *sym) {
   // Only globals get the module prefix — a lexical binding shadows the
   // module-level name (macro.c rewrite_node consults `shadows` first).
   const char *qname = scope_id < 0 ? valk_lspi_qualify(ctx, name, qbuf, sizeof qbuf) : name;
-  if (scope_id >= 0) {
-    int tok = valk_lspi_is_scope_param(ctx, name) ? TOK_PARAMETER : TOK_VARIABLE;
-    valk_lspi_emit_semtok(ctx, pos, len, tok, 0);
-  } else {
-    valk_lspi_emit_semtok(ctx, pos, len, TOK_VARIABLE, 0);
+  if (scope_id < 0) {
     valk_lspi_emit_global_ref(ctx, qname, pos);
   }
   valk_lspi_emit_ref(ctx, qname, pos, len, scope_id, 0);
@@ -405,7 +382,6 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
   if (strcmp(name, "=") == 0)     { walk_binding(ctx, hd, tl); return; }
   if (strcmp(name, "type") == 0 && ctx->is_top_level && tl && LVAL_TYPE(tl) == LVAL_CONS) {
     int kp = (int)LVAL_SRC_POS(hd);
-    if (kp >= 0) valk_lspi_emit_semtok(ctx, kp, 4, TOK_KEYWORD, 0);
     valk_lval_t *type_name = tl->cons.head;
     if (type_name && LVAL_TYPE(type_name) == LVAL_CONS &&
         (type_name->flags & LVAL_FLAG_QUOTED) &&
@@ -428,7 +404,6 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
   }
   if (strcmp(name, "sig") == 0 && ctx->is_top_level && tl && LVAL_TYPE(tl) == LVAL_CONS) {
     int kp = (int)LVAL_SRC_POS(hd);
-    if (kp >= 0) valk_lspi_emit_semtok(ctx, kp, 3, TOK_KEYWORD, 0);
     // (sig 'name {-> ...}) — extract sig text
     valk_lval_t *sig_name_q = tl->cons.head;
     if (sig_name_q && LVAL_TYPE(sig_name_q) == LVAL_CONS &&
@@ -469,16 +444,12 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
     return;
   }
   if (strcmp(name, "match") == 0) {
-    int kp = (int)LVAL_SRC_POS(hd);
-    if (kp >= 0) valk_lspi_emit_semtok(ctx, kp, 5, TOK_KEYWORD, 0);
     walk_match(ctx, tl);
     return;
   }
   // quote falls through — walk_expr handles Q-exprs via walk_qexpr_tokens
 
   if (strcmp(name, "do") == 0) {
-    int kp = (int)LVAL_SRC_POS(hd);
-    if (kp >= 0) valk_lspi_emit_semtok(ctx, kp, 2, TOK_KEYWORD, 0);
     walk_do(ctx, tl);
     return;
   }
@@ -489,11 +460,9 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
   char qbuf[QUAL_NAME_MAX];
 
   if (in_set(name, KEYWORDS)) {
-    if (pos >= 0) valk_lspi_emit_semtok(ctx, pos, slen, TOK_KEYWORD, 0);
     walk_each(ctx, tl);
   } else if (in_set(name, OPERATORS)) {
     if (pos >= 0) {
-      valk_lspi_emit_semtok(ctx, pos, slen, TOK_OPERATOR, 0);
       valk_lspi_emit_node(ctx, pos, pos + slen, "sym", name);
     }
     int scope_id = valk_lspi_resolve_scope(ctx, name);
@@ -503,7 +472,6 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
     walk_each(ctx, tl);
   } else {
     if (pos >= 0) {
-      valk_lspi_emit_semtok(ctx, pos, slen, TOK_FUNCTION, 0);
       valk_lspi_emit_node(ctx, pos, pos + slen, "sym", name);
     }
     int scope_id = valk_lspi_resolve_scope(ctx, name);
@@ -525,7 +493,6 @@ static void walk_qexpr_tokens(index_ctx_t *ctx, valk_lval_t *qexpr) {
       int pos = (int)LVAL_SRC_POS(elem);
       int len = (int)strlen(elem->str);
       if (pos >= 0) {
-        valk_lspi_emit_semtok(ctx, pos, len, TOK_VARIABLE, 0);
         valk_lspi_emit_node(ctx, pos, pos + len, "sym", elem->str);
       }
     } else if (LVAL_TYPE(elem) == LVAL_NUM) {
@@ -533,12 +500,7 @@ static void walk_qexpr_tokens(index_ctx_t *ctx, valk_lval_t *qexpr) {
       if (pos >= 0) {
         char buf[32];
         snprintf(buf, sizeof(buf), "%ld", (long)elem->num);
-        valk_lspi_emit_semtok(ctx, pos, (int)strlen(buf), TOK_NUMBER, 0);
       }
-    } else if (LVAL_TYPE(elem) == LVAL_STR) {
-      int pos = (int)LVAL_SRC_POS(elem);
-      if (pos >= 0)
-        valk_lspi_emit_semtok(ctx, pos, (int)strlen(elem->str) + 2, TOK_STRING, 0);
     } else if (LVAL_TYPE(elem) == LVAL_CONS) {
       walk_qexpr_tokens(ctx, elem);
     }
@@ -555,7 +517,6 @@ static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr) {
       char buf[32];
       snprintf(buf, sizeof(buf), "%ld", (long)expr->num);
       int len = (int)strlen(buf);
-      valk_lspi_emit_semtok(ctx, pos, len, TOK_NUMBER, 0);
       valk_lspi_emit_node(ctx, pos, pos + len, "num", buf);
     }
     return;
@@ -565,7 +526,6 @@ static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr) {
     int pos = (int)LVAL_SRC_POS(expr);
     if (pos >= 0) {
       int len = (int)strlen(expr->str);
-      valk_lspi_emit_semtok(ctx, pos, len + 2, TOK_STRING, 0);
       valk_lspi_emit_node(ctx, pos, pos + len + 2, "str", expr->str);
     }
     return;
@@ -595,29 +555,41 @@ static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr) {
 // Public API — called from Valk as (lsp/index-file db file-id ast text)
 // ---------------------------------------------------------------------------
 
-static const char *SQL_DELETE_ALL[] = {
-  "DELETE FROM nodes WHERE file_id=?1",
-  "DELETE FROM semantic_tokens WHERE file_id=?1",
-  "DELETE FROM scoped_refs WHERE file_id=?1",
-  "DELETE FROM scopes WHERE file_id=?1",
-  "DELETE FROM inlay_hints WHERE file_id=?1",
-  "DELETE FROM symbols WHERE file_id=?1",
-  "DELETE FROM refs WHERE file_id=?1",
-  NULL
+// Every statement is schema-qualified. The LSP reads through a connection
+// whose temp views shadow these table names (the in-memory overlay of the
+// buffer being edited on top of the on-disk index), and an unqualified
+// write there resolves to the view and fails. The caller says which
+// database it is indexing into: "main" for the on-disk source index,
+// "live" for the editor's in-flight text.
+static const char *TABLES_DELETE_ALL[] = {
+  "nodes", "scoped_refs", "scopes", "symbols", "refs", NULL
 };
+static const char *TABLES_DELETE_FAST[] = { "symbols", "refs", NULL };
 
-static const char *SQL_INSERT_NODE =
-    "INSERT INTO nodes (file_id,pos,end_pos,type,name,context) VALUES (?1,?2,?3,?4,?5,?6)";
-static const char *SQL_INSERT_SEMTOK =
-    "INSERT INTO semantic_tokens (file_id,pos,length,token_type,modifiers) VALUES (?1,?2,?3,?4,?5)";
-static const char *SQL_INSERT_REF =
-    "INSERT INTO scoped_refs (file_id,name,pos,len,scope_id,is_def) VALUES (?1,?2,?3,?4,?5,?6)";
-static const char *SQL_INSERT_SCOPE =
-    "INSERT INTO scopes (file_id,pos,parent_pos) VALUES (?1,?2,?3)";
-static const char *SQL_INSERT_SYMBOL =
-    "INSERT INTO symbols (name,file_id,line,col,kind,arity,doc,sig,module) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)";
-static const char *SQL_INSERT_GLOBAL_REF =
-    "INSERT INTO refs (name,file_id,line,col) VALUES (?1,?2,?3,?4)";
+#define SQL_BUF 256
+
+static void delete_file_rows(sqlite3 *db, const char *schema,
+                             const char **tables, int file_id) {
+  char sql[SQL_BUF];
+  for (int i = 0; tables[i]; i++) {
+    snprintf(sql, sizeof sql, "DELETE FROM %s.%s WHERE file_id=?1", schema,
+             tables[i]);
+    sqlite3_stmt *del;
+    sqlite3_prepare_v2(db, sql, -1, &del, NULL);
+    sqlite3_bind_int(del, 1, file_id);
+    sqlite3_step(del);
+    sqlite3_finalize(del);
+  }
+}
+
+static void prepare_insert(sqlite3 *db, const char *schema, const char *table,
+                           const char *cols, const char *vals,
+                           sqlite3_stmt **out) {
+  char sql[SQL_BUF];
+  snprintf(sql, sizeof sql, "INSERT INTO %s.%s (%s) VALUES (%s)", schema, table,
+           cols, vals);
+  sqlite3_prepare_v2(db, sql, -1, out, NULL);
+}
 
 valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
   UNUSED(e);
@@ -631,6 +603,12 @@ valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
   valk_lval_t *text_v = valk_lval_list_nth(a, 3);
   bool fast = (argc > 4 && LVAL_TYPE(valk_lval_list_nth(a, 4)) == LVAL_NUM &&
                valk_lval_list_nth(a, 4)->num != 0);
+  const char *schema = "main";
+  if (argc > 5) {
+    valk_lval_t *schema_v = valk_lval_list_nth(a, 5);
+    if (LVAL_TYPE(schema_v) == LVAL_STR && schema_v->str[0])
+      schema = schema_v->str;
+  }
 
   if (LVAL_TYPE(db_ref) != LVAL_REF || strcmp(db_ref->ref.type, SQLITE_REF_TYPE) != 0)
     return valk_lval_nil(); // LCOV_EXCL_LINE
@@ -654,38 +632,24 @@ valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
   }
 
   // Delete old data — only relevant tables
-  if (fast) {
-    sqlite3_stmt *del;
-    const char *fast_dels[] = {
-      "DELETE FROM symbols WHERE file_id=?1",
-      "DELETE FROM refs WHERE file_id=?1",
-      NULL
-    };
-    for (int i = 0; fast_dels[i]; i++) {
-      sqlite3_prepare_v2(db, fast_dels[i], -1, &del, NULL);
-      sqlite3_bind_int(del, 1, file_id);
-      sqlite3_step(del);
-      sqlite3_finalize(del);
-    }
-  } else {
-    sqlite3_stmt *del;
-    for (int i = 0; SQL_DELETE_ALL[i]; i++) {
-      sqlite3_prepare_v2(db, SQL_DELETE_ALL[i], -1, &del, NULL);
-      sqlite3_bind_int(del, 1, file_id);
-      sqlite3_step(del);
-      sqlite3_finalize(del);
-    }
-  }
+  delete_file_rows(db, schema, fast ? TABLES_DELETE_FAST : TABLES_DELETE_ALL,
+                   file_id);
 
   // Prepare insert statements (skip unused in fast mode)
   if (!fast) {
-    sqlite3_prepare_v2(db, SQL_INSERT_NODE, -1, &ctx.stmt_node, NULL);
-    sqlite3_prepare_v2(db, SQL_INSERT_SEMTOK, -1, &ctx.stmt_semtok, NULL);
-    sqlite3_prepare_v2(db, SQL_INSERT_REF, -1, &ctx.stmt_ref, NULL);
-    sqlite3_prepare_v2(db, SQL_INSERT_SCOPE, -1, &ctx.stmt_scope, NULL);
+    prepare_insert(db, schema, "nodes", "file_id,pos,end_pos,type,name,context",
+                   "?1,?2,?3,?4,?5,?6", &ctx.stmt_node);
+    prepare_insert(db, schema, "scoped_refs",
+                   "file_id,name,pos,len,scope_id,is_def", "?1,?2,?3,?4,?5,?6",
+                   &ctx.stmt_ref);
+    prepare_insert(db, schema, "scopes", "file_id,pos,parent_pos", "?1,?2,?3",
+                   &ctx.stmt_scope);
   }
-  sqlite3_prepare_v2(db, SQL_INSERT_SYMBOL, -1, &ctx.stmt_symbol, NULL);
-  sqlite3_prepare_v2(db, SQL_INSERT_GLOBAL_REF, -1, &ctx.stmt_global_ref, NULL);
+  prepare_insert(db, schema, "symbols",
+                 "name,file_id,line,col,kind,arity,doc,sig,module",
+                 "?1,?2,?3,?4,?5,?6,?7,?8,?9", &ctx.stmt_symbol);
+  prepare_insert(db, schema, "refs", "name,file_id,line,col", "?1,?2,?3,?4",
+                 &ctx.stmt_global_ref);
 
   // Resolve the file's module prefix and local def set before walking, so
   // forward references inside the file qualify the same way the runtime
@@ -698,7 +662,6 @@ valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
   // Cleanup
   if (!fast) {
     sqlite3_finalize(ctx.stmt_node);
-    sqlite3_finalize(ctx.stmt_semtok);
     sqlite3_finalize(ctx.stmt_ref);
     sqlite3_finalize(ctx.stmt_scope);
   }

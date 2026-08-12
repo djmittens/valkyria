@@ -5,32 +5,6 @@
 ; Query functions for precomputed data
 ; ---------------------------------------------------------------------------
 
-(sig 'symdb/get-semantic-tokens {-> Ref Str List})
-(fun {symdb/get-semantic-tokens db path} {
-  if (nil? db) {nil}
-  {sqlite/query db
-    "SELECT pos, length, token_type, modifiers FROM semantic_tokens t JOIN files f ON t.file_id=f.id WHERE f.path=?1 ORDER BY t.pos"
-    path}
-})
-
-; Range-filtered semantic tokens: only return tokens whose byte offset
-; falls within [start-offset, end-offset).
-(sig 'symdb/get-semantic-tokens-range {-> Ref Str Num Num List})
-(fun {symdb/get-semantic-tokens-range db path start-offset end-offset} {
-  if (nil? db) {nil}
-  {sqlite/query db
-    "SELECT pos, length, token_type, modifiers FROM semantic_tokens t JOIN files f ON t.file_id=f.id WHERE f.path=?1 AND t.pos>=?2 AND t.pos<?3 ORDER BY t.pos"
-    path start-offset end-offset}
-})
-
-(sig 'symdb/get-inlay-hints {-> Ref Str Num Num List})
-(fun {symdb/get-inlay-hints db path start-line end-line} {
-  if (nil? db) {nil}
-  {sqlite/query db
-    "SELECT h.pos, h.label, h.kind, h.padding FROM inlay_hints h JOIN files f ON h.file_id=f.id WHERE f.path=?1 ORDER BY h.pos"
-    path}
-})
-
 (sig 'symdb/get-scoped-refs {-> Ref Str Str Num List})
 (fun {symdb/get-scoped-refs db path name scope-id} {
   if (nil? db) {nil}
@@ -346,9 +320,9 @@
 
 (sig 'symdb/remove-file {-> Ref Num Nil})
 (fun {symdb/remove-file db file-id} {do
-  (sqlite/exec db "DELETE FROM symbols WHERE file_id=?1" file-id)
-  (sqlite/exec db "DELETE FROM refs WHERE file_id=?1" file-id)
-  (sqlite/exec db "DELETE FROM files WHERE id=?1" file-id)
+  (sqlite/exec db "DELETE FROM main.symbols WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM main.refs WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM main.files WHERE id=?1" file-id)
 })
 
 

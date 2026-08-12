@@ -205,10 +205,11 @@
 ; ---------------------------------------------------------------------------
 ; A file with hundreds of call sites used to issue one query per call even
 ; when the same function repeated; the memo collapses that to one query per
-; distinct name. Reset at the start of every precompute run (see
-; lsp/precompute-file-data) so entries never outlive a symdb sync. Each
-; entry stores (db result) so a hit is only valid for the same connection —
-; ref equality is identity — which keeps callers with different DBs (tests,
+; distinct name. Reset at the start of every collection run
+; (hint/collect-from-ast) so entries never outlive one request and can't
+; report a sig that another file's edit has since changed. Each entry
+; stores (db result) so a hit is only valid for the same connection — ref
+; equality is identity — which keeps callers with different DBs (tests,
 ; lsp/db vs lsp/idx-db) from seeing each other's rows. A nil result is
 ; still a valid entry ("queried, no row"), distinguished from a miss by the
 ; entry's presence.
@@ -306,11 +307,16 @@
 ; Walk AST and collect hints
 ; ---------------------------------------------------------------------------
 
+; The guard belongs at the call site: an LVAL_ERR argument short-circuits
+; the call it is passed to, so one broken top-level form would otherwise
+; make every pass return that error and the document lose all its hints.
 (sig 'hint/walk-exprs {-> List List List List})
 (fun {hint/walk-exprs exprs ctx acc} {
   if (nil? exprs) {acc}
-  {hint/walk-exprs (tail exprs) ctx
-    (hint/walk-code (head exprs) ctx acc)}
+  {do
+    (= {e} (head exprs))
+    (hint/walk-exprs (tail exprs) ctx
+      (if (error? e) {acc} {hint/walk-code e ctx acc}))}
 })
 
 (sig 'hint/walk-code {-> Any List List List})
@@ -587,7 +593,21 @@
   {do
     (= {sig-types} (hint/query-sig-types db name))
     (if (nil? sig-types) {nil}
-      {last sig-types})}
+      {do
+        (= {t} (last sig-types))
+        (if (hint/uninformative-type? t) {nil} {t})})}
+})
+
+; A declared `A` or `Any` says nothing about the value — `if` returns `A`
+; and every `(= {x} (if ...))` was labelled `:: A`. Suppress it when the
+; type is inferred; a sig that spells `A` still shows it on the param it
+; was written for.
+(sig 'hint/uninformative-type? {-> Any Num})
+(fun {hint/uninformative-type? t} {
+  if (nil? t) {1}
+  {if (== t "Any") {1}
+  {if (== (len t) 1) {hint/is-ctor-name t}
+  {0}}}
 })
 
 (sig 'hint/skip-inline-ann {-> List List Num List List})
@@ -623,14 +643,25 @@
   {hint/emit-def-hint-one (head params) (tail params) sig-types type-idx acc}
 })
 
-(sig 'hint/infer-val-type {-> Any Ref Any})
-(fun {hint/infer-val-type val db} {
+(sig 'hint/infer-val-type {-> Any Ref Ref Any})
+(fun {hint/infer-val-type val db scope} {
   if (num? val) {"Num"}
   {if (str? val) {"Str"}
-  {if (sym? val) {hint/infer-field-chain (str val) db}
+  {if (sym? val) {hint/infer-sym-type (str val) db scope}
   {if (not (list? val)) {nil}
   {if (nil? val) {nil}
   {hint/infer-from-head (head val) db}}}}}
+})
+
+; A bare symbol is a variable reference: its type is whatever the enclosing
+; function's scope says. Without that, `(def {lsp/db-path} db-path)` got no
+; hint while the `db-path` binding right above it did, which is the same
+; type spelled two different ways.
+(sig 'hint/infer-sym-type {-> Str Ref Ref Any})
+(fun {hint/infer-sym-type name db scope} {do
+  (= {local} (hint/scope-lookup scope name))
+  (if (not (nil? local)) {local}
+    {hint/infer-field-chain name db})
 })
 
 ; Resolve chained field access like params:range:start:line
@@ -733,57 +764,94 @@
     (>= (str/index-of "ABCDEFGHIJKLMNOPQRSTUVWXYZ" c) 0)}
 })
 
-(sig 'hint/emit-binding-type {-> List Any Ref List List})
-(fun {hint/emit-binding-type formals val db acc} {
-  if (not (list? formals)) {acc}
-  {if (nil? formals) {acc}
-  {hint/emit-binding-for (head formals) val db acc}}
+; ---------------------------------------------------------------------------
+; Variable scope — name -> type for the bindings in view
+; ---------------------------------------------------------------------------
+; A mutable dict, filled by the same walk that emits the hints: each binding
+; is inferred once, then recorded, so the next one can name it. That is what
+; lets `(def {lsp/db-path} db-path)` say `:: Str` — the binding it copies is
+; already in scope.
+;
+; A `fun` gets a child dict seeded with the enclosing scope and its own
+; params (typed from its sig), so it can see closed-over names without its
+; own bindings escaping. Lambdas deliberately share the enclosing dict: they
+; are walked inline, and their bodies read the surrounding bindings.
+
+(sig 'hint/scope-child {-> List List Ref Ref})
+(fun {hint/scope-child params sig-types outer} {do
+  (= {child} (dict/new))
+  (hint/scope-copy-entries (if (nil? outer) {nil} {dict/entries outer}) child)
+  (hint/scope-seed-params (hint/filter-formals params nil) sig-types 0 child)
+  child
 })
 
-(sig 'hint/emit-binding-for {-> Any Any Ref List List})
-(fun {hint/emit-binding-for name-sym val db acc} {
-  if (not (sym? name-sym)) {acc}
+(sig 'hint/scope-copy-entries {-> List Ref Nil})
+(fun {hint/scope-copy-entries entries d} {
+  if (nil? entries) {nil}
   {do
-    (= {type-str} (hint/infer-val-type val db))
-    (if (nil? type-str) {acc}
-      {do
-        ; Anchor the hint to the value expression so it lands BETWEEN the
-        ; closing `}` of the formals and the value — "{name} :: Type val"
-        ; rather than "{name :: Type} val", which looks like it's inside
-        ; the identifier. Fall back to the end of the name-sym only if the
-        ; value has no source position (synthesized AST).
-        (= {vpos} (src-pos val))
-        (= {npos} (src-pos name-sym))
-        (= {ns} (str name-sym))
-        (if (>= vpos 0)
-          {qcons (list :offset vpos :label (str ":: " type-str) :kind 1
-                       :paddingRight :true) acc}
-          {if (< npos 0) {acc}
-            {qcons (list :offset (+ npos (len ns)) :label (str ":: " type-str) :kind 1
-                         :paddingLeft :true) acc}})})}
+    (= {e} (head entries))
+    (dict/set! d (head e) (head (tail e)))
+    (hint/scope-copy-entries (tail entries) d)}
 })
 
-(sig 'hint/type-from-fun {-> List Ref List List})
-(fun {hint/type-from-fun tl db acc} {
+(sig 'hint/scope-seed-params {-> List List Num Ref Nil})
+(fun {hint/scope-seed-params names sig-types idx d} {
+  if (nil? names) {nil}
+  {if (>= idx (- (len sig-types) 1)) {nil}
+  {do
+    (dict/set! d (head names) (nth (+ idx 1) sig-types))
+    (hint/scope-seed-params (tail names) sig-types (+ idx 1) d)}}
+})
+
+(sig 'hint/scope-lookup {-> Ref Str Any})
+(fun {hint/scope-lookup scope name} {
+  if (nil? scope) {nil} {dict/get scope name}
+})
+
+(sig 'hint/scope-put {-> Ref Str Str Nil})
+(fun {hint/scope-put scope name type-str} {
+  if (nil? scope) {nil} {do (dict/set! scope name type-str) nil}
+})
+
+(sig 'hint/emit-binding-hint {-> Any Any Str List List})
+(fun {hint/emit-binding-hint name-sym val type-str acc} {do
+  ; Anchor the hint to the value expression so it lands BETWEEN the
+  ; closing `}` of the formals and the value — "{name} :: Type val"
+  ; rather than "{name :: Type} val", which looks like it's inside
+  ; the identifier. Fall back to the end of the name-sym only if the
+  ; value has no source position (synthesized AST).
+  (= {vpos} (src-pos val))
+  (= {npos} (src-pos name-sym))
+  (= {ns} (str name-sym))
+  (if (>= vpos 0)
+    {qcons (list :offset vpos :label (str ":: " type-str) :kind 1
+                 :paddingRight :true) acc}
+    {if (< npos 0) {acc}
+      {qcons (list :offset (+ npos (len ns)) :label (str ":: " type-str) :kind 1
+                   :paddingLeft :true) acc}})
+})
+
+(sig 'hint/type-from-fun {-> List Ref Ref List List})
+(fun {hint/type-from-fun tl db scope acc} {
   if (< (len tl) 2) {acc}
-  {hint/type-fun-with-parts (head tl) (head (tail tl)) db acc}
+  {hint/type-fun-with-parts (head tl) (head (tail tl)) db scope acc}
 })
 
-(sig 'hint/type-fun-with-parts {-> List List Ref List List})
-(fun {hint/type-fun-with-parts formals body db acc} {
+(sig 'hint/type-fun-with-parts {-> List List Ref Ref List List})
+(fun {hint/type-fun-with-parts formals body db scope acc} {
   if (not (list? formals)) {acc}
   {if (nil? formals) {acc}
-  {hint/type-fun-extract (head formals) (tail formals) body db acc}}
+  {hint/type-fun-extract (head formals) (tail formals) body db scope acc}}
 })
 
-(sig 'hint/type-fun-extract {-> Str List List Ref List List})
-(fun {hint/type-fun-extract fname params body db acc} {
+(sig 'hint/type-fun-extract {-> Str List List Ref Ref List List})
+(fun {hint/type-fun-extract fname params body db scope acc} {
   if (not (sym? fname)) {acc}
-  {hint/type-fun-emit (str fname) params body db acc}
+  {hint/type-fun-emit (str fname) params body db scope acc}
 })
 
-(sig 'hint/type-fun-emit {-> Str List List Ref List List})
-(fun {hint/type-fun-emit name params body db acc} {do
+(sig 'hint/type-fun-emit {-> Str List List Ref Ref List List})
+(fun {hint/type-fun-emit name params body db scope acc} {do
   (= {sig-types} (hint/query-sig-types db name))
   (= {acc2} (if (nil? sig-types) {acc}
     {hint/emit-def-type-hints params sig-types 0 acc}))
@@ -796,62 +864,87 @@
         {qcons (list :offset bpos :label (str "-> " ret-type) :kind 1
                      :paddingRight :true) acc2})}))
 
-  (hint/type-one body db acc3)
+  (hint/type-one body db (hint/scope-child params sig-types scope) acc3)
 })
 
-(sig 'hint/type-from-def {-> List Ref List List})
-(fun {hint/type-from-def tl db acc} {
+(sig 'hint/type-from-def {-> List Ref Ref List List})
+(fun {hint/type-from-def tl db scope acc} {
   if (< (len tl) 2) {acc}
-  {hint/type-def-with-parts (head tl) (head (tail tl)) db acc}
+  {hint/type-def-with-parts (head tl) (head (tail tl)) db scope acc}
 })
 
-(sig 'hint/type-def-with-parts {-> List Any Ref List List})
-(fun {hint/type-def-with-parts formals val db acc} {do
-  (= {acc2} (hint/emit-binding-type formals val db acc))
-  (hint/type-one val db acc2)
+(sig 'hint/type-def-with-parts {-> List Any Ref Ref List List})
+(fun {hint/type-def-with-parts formals val db scope acc} {
+  hint/type-def-bind (hint/binding-name formals) val db scope acc
 })
 
-(sig 'hint/type-walk-body {-> List Ref List List})
-(fun {hint/type-walk-body tl db acc} {
+(sig 'hint/binding-name {-> Any Any})
+(fun {hint/binding-name formals} {
+  if (not (list? formals)) {nil}
+  {if (nil? formals) {nil}
+  {do
+    (= {h} (head formals))
+    (if (sym? h) {h} {nil})}}
+})
+
+; The binding is recorded after its own hint is emitted and its value walked,
+; so `(= {x} x)` still reads the outer x and a shadowing rebind only takes
+; effect for the bindings that follow it.
+(sig 'hint/type-def-bind {-> Any Any Ref Ref List List})
+(fun {hint/type-def-bind name-sym val db scope acc} {
+  if (nil? name-sym) {hint/type-one val db scope acc}
+  {do
+    (= {type-str} (hint/infer-val-type val db scope))
+    (= {acc2} (if (nil? type-str) {acc}
+      {hint/emit-binding-hint name-sym val type-str acc}))
+    (= {acc3} (hint/type-one val db scope acc2))
+    (if (nil? type-str) {acc3}
+      {do (hint/scope-put scope (str name-sym) type-str) acc3})}
+})
+
+(sig 'hint/type-walk-body {-> List Ref Ref List List})
+(fun {hint/type-walk-body tl db scope acc} {
   if (< (len tl) 2) {acc}
-  {hint/type-one (head (tail tl)) db acc}
+  {hint/type-one (head (tail tl)) db scope acc}
 })
 
-(sig 'hint/type-one {-> Any Ref List List})
-(fun {hint/type-one expr db acc} {
+(sig 'hint/type-one {-> Any Ref Ref List List})
+(fun {hint/type-one expr db scope acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
-  {hint/type-dispatch (head expr) (tail expr) db acc}}
+  {hint/type-dispatch (head expr) (tail expr) db scope acc}}
 })
 
-(sig 'hint/type-dispatch {-> Any List Ref List List})
-(fun {hint/type-dispatch hd tl db acc} {
-  if (not (sym? hd)) {hint/type-walk tl db acc}
-  {hint/type-by-name (str hd) tl db acc}
+(sig 'hint/type-dispatch {-> Any List Ref Ref List List})
+(fun {hint/type-dispatch hd tl db scope acc} {
+  if (not (sym? hd)) {hint/type-walk tl db scope acc}
+  {hint/type-by-name (str hd) tl db scope acc}
 })
 
-(sig 'hint/type-by-name {-> Str List Ref List List})
-(fun {hint/type-by-name n tl db acc} {
-  if (== n "fun") {hint/type-from-fun tl db acc}
-  {if (== n "def") {hint/type-from-def tl db acc}
-  {if (== n "=") {hint/type-from-def tl db acc}
-  {if (== n "do") {hint/type-walk tl db acc}
-  {if (== n "\\") {hint/type-walk-body tl db acc}
-  {if (== n "if") {hint/type-walk tl db acc}
-  {if (== n "match") {hint/type-walk tl db acc}
-  {if (== n "let") {hint/type-walk tl db acc}
-  {hint/type-walk tl db acc}}}}}}}}
+(sig 'hint/type-by-name {-> Str List Ref Ref List List})
+(fun {hint/type-by-name n tl db scope acc} {
+  if (== n "fun") {hint/type-from-fun tl db scope acc}
+  {if (== n "def") {hint/type-from-def tl db scope acc}
+  {if (== n "=") {hint/type-from-def tl db scope acc}
+  {if (== n "do") {hint/type-walk tl db scope acc}
+  {if (== n "\\") {hint/type-walk-body tl db scope acc}
+  {if (== n "if") {hint/type-walk tl db scope acc}
+  {if (== n "match") {hint/type-walk tl db scope acc}
+  {if (== n "let") {hint/type-walk tl db scope acc}
+  {hint/type-walk tl db scope acc}}}}}}}}
 })
 
-(sig 'hint/type-walk {-> List Ref List List})
-(fun {hint/type-walk exprs db acc} {
+(sig 'hint/type-walk {-> List Ref Ref List List})
+(fun {hint/type-walk exprs db scope acc} {
   if (nil? exprs) {acc}
-  {hint/type-walk (tail exprs) db
-    (hint/type-one (head exprs) db acc)}
+  {do
+    (= {e} (head exprs))
+    (hint/type-walk (tail exprs) db scope
+      (if (error? e) {acc} {hint/type-one e db scope acc}))}
 })
 
 (sig 'hint/collect-type-hints {-> List Ref List})
 (fun {hint/collect-type-hints ast db} {
-  hint/type-walk ast db nil
+  hint/type-walk ast db (dict/new) nil
 })
 

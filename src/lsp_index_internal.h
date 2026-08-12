@@ -7,13 +7,6 @@
 // Internal indexer primitives shared between lsp_index.c (AST walker) and
 // lsp_index_emit.c (context, qualification, scopes, sqlite emission).
 
-// Token types (must match SEM_* in lsp-analysis.valk)
-enum {
-  TOK_KEYWORD = 0, TOK_FUNCTION = 1, TOK_PARAMETER = 2, TOK_VARIABLE = 3,
-  TOK_NUMBER = 4, TOK_STRING = 5, TOK_TYPE = 6, TOK_OPERATOR = 7,
-  TOK_PROPERTY = 8,
-};
-
 enum { SYMKIND_FUNCTION = 1, SYMKIND_VARIABLE = 2, SYMKIND_TYPE = 3,
        SYMKIND_CONSTRUCTOR = 4 };
 
@@ -44,7 +37,6 @@ typedef struct {
   bool fast_mode;
 
   sqlite3_stmt *stmt_node;
-  sqlite3_stmt *stmt_semtok;
   sqlite3_stmt *stmt_ref;
   sqlite3_stmt *stmt_scope;
   sqlite3_stmt *stmt_symbol;
@@ -95,7 +87,5 @@ void valk_lspi_emit_node_ctx(index_ctx_t *ctx, int pos, int end,
                              const char *context);
 void valk_lspi_emit_node(index_ctx_t *ctx, int pos, int end, const char *type,
                          const char *name);
-void valk_lspi_emit_semtok(index_ctx_t *ctx, int pos, int len, int type,
-                           int mods);
 void valk_lspi_emit_ref(index_ctx_t *ctx, const char *name, int pos, int len,
                         int scope_id, int is_def);

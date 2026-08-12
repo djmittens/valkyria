@@ -28,19 +28,10 @@
     {do
       (= {start-line} params:range:start:line)
       (= {end-line} params:range:end:line)
-      ; Same caching strategy as handle-semantic-tokens (see nav.valk):
-      ; clean parse → tokenize + cache; broken parse → return cached
-      ; tokens to avoid orange flicker from re-lexing latency.
+      ; Same rule as handle-semantic-tokens (see nav.valk): tokens describe
+      ; the current text, broken form included.
       (= {ast} (lsp/get-ast uri text))
-      (= {data}
-        (if (or (nil? ast) (lsp/ast-has-error ast))
-          {do
-            (= {cached} (dict/get lsp/last-good-tokens-cache uri))
-            (if (nil? cached) {sem/lex-tokenize text} {cached})}
-          {do
-            (= {fresh} (sem/tokenize-ast ast text))
-            (dict/set! lsp/last-good-tokens-cache uri fresh)
-            fresh}))
+      (= {data} (if (nil? ast) {sem/lex-tokenize text} {sem/tokenize-ast ast text}))
       (= {typed} (sem/parse-flat data))
       (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
       (= {result} (sem/flatten filtered))
@@ -88,9 +79,6 @@
 ; ---------------------------------------------------------------------------
 ; Dispatch
 ; ---------------------------------------------------------------------------
-
-(def {lsp/sem-version} 0)
-(def {lsp/hint-version} 0)
 
 ; Done-callback for dispatched requests. A handler error used to be
 ; swallowed by lsp/noop-cb — no response was ever sent for that id, so the
@@ -141,45 +129,17 @@
       {}})
 })
 
-; Debounced dispatch: when a newer request of the same family has already
-; bumped the version, the queued stale request answers from the last-good
-; cache instead of recomputing. Every request MUST get a response — a
-; silently dropped id leaves the client holding stale state forever.
-(sig 'lsp/params-uri {-> List Str})
-(fun {lsp/params-uri params}
-  {plist/get (plist/get params :textDocument) :uri})
-
-(sig 'lsp/dispatch-sem-debounced {-> Str Any List Nil})
-(fun {lsp/dispatch-sem-debounced method id params} {do
-  (def {lsp/sem-version} (+ lsp/sem-version 1))
-  (= {v} lsp/sem-version)
-  (aio/dispatch lsp/sys
-    (\ {_} {if (not (== lsp/sem-version v))
-      {do (lsp/send-response id
-            (list :data (dict/get lsp/last-good-tokens-cache (lsp/params-uri params))))
-          nil}
-      {do (lsp/handle-readonly method id params) nil}})
-    nil (lsp/request-done-cb method id))})
-
-(sig 'lsp/dispatch-hint-debounced {-> Str Any List Nil})
-(fun {lsp/dispatch-hint-debounced method id params} {do
-  (def {lsp/hint-version} (+ lsp/hint-version 1))
-  (= {v} lsp/hint-version)
-  (aio/dispatch lsp/sys
-    (\ {_} {if (not (== lsp/hint-version v))
-      {do (lsp/send-response id
-            (dict/get lsp/last-good-hints-cache (lsp/params-uri params)))
-          nil}
-      {do (lsp/handle-readonly method id params) nil}})
-    nil (lsp/request-done-cb method id))})
-
+; Tokens and hints go through the same worker dispatch as everything else.
+; They used to be "debounced": a request that another request of the same
+; family had overtaken answered from a last-good cache instead of being
+; computed. That answer described whatever text last parsed cleanly, so the
+; client painted one document's offsets onto another's — and it fired on
+; every keystroke, which is exactly when it is most visible. Recomputing
+; costs one AST walk over text the handler reads fresh, and it is the only
+; answer that matches what the client is holding.
 (sig 'lsp/dispatch-request {-> Str Any List Nil})
 (fun {lsp/dispatch-request method id params} {
-  match method
-    {"textDocument/semanticTokens/full" (lsp/dispatch-sem-debounced method id params)}
-    {"textDocument/semanticTokens/range" (lsp/dispatch-sem-debounced method id params)}
-    {"textDocument/inlayHint" (lsp/dispatch-hint-debounced method id params)}
-    {_ (lsp/dispatch-to-worker method id params)}
+  lsp/dispatch-to-worker method id params
 })
 
 (sig 'lsp/to-doc-params {-> List DocParams})
@@ -331,6 +291,7 @@
                     (def {lsp/idx-db} (symdb/init lsp/db-path))
                     (def {lsp/idx-db-own} 1)
                     (lsp/seed-builtins lsp/idx-db lsp/root-path)
+                    (symdb/attach-live lsp/idx-db)
                     (lsp/collect-workspace-files lsp/root-path)})
                   nil
                   (\ {files} {if (or (nil? files) (error? files)) {}

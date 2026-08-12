@@ -23,6 +23,7 @@
 (fun {hint/collect-from-ast ast text db range} {
   if (error? ast) {nil}
   {do
+    (hint/reset-query-cache)
     (hint/set-module-from-ast ast)
     (= {local-params} (hint/collect-local-params ast))
     (= {ctx} (list :local local-params :db db))
@@ -108,8 +109,10 @@
 (sig 'hint/collect-type-defs-loop {-> List List List})
 (fun {hint/collect-type-defs-loop exprs defs} {
   if (nil? exprs) {defs}
-  {hint/collect-type-defs-loop (tail exprs)
-    (hint/td-one (head exprs) defs)}
+  {do
+    (= {e} (head exprs))
+    (hint/collect-type-defs-loop (tail exprs)
+      (if (error? e) {defs} {hint/td-one e defs}))}
 })
 
 ; --- Pass 2: Collect variable types (from inferred types + constructor bindings) ---
@@ -257,11 +260,12 @@
   if (nil? exprs) {result}
   {do
     (= {expr} (head exprs))
-    (= {result2} (if (not (list? expr)) {result}
+    (= {result2} (if (error? expr) {result}
+      {if (not (list? expr)) {result}
       {if (nil? expr) {result}
       {if (== (ast/head-name expr) "fun")
         {hint/vt-from-fun (tail expr) db result}
-        {result}}}))
+        {result}}}}))
     (hint/vt-walk (tail exprs) db result2)}
 })
 
@@ -435,8 +439,10 @@
 (sig 'hint/fa-walk {-> List Str List List List List})
 (fun {hint/fa-walk exprs func-name var-types type-defs acc} {
   if (nil? exprs) {acc}
-  {hint/fa-walk (tail exprs) func-name var-types type-defs
-    (hint/fa-one (head exprs) func-name var-types type-defs acc)}
+  {do
+    (= {e} (head exprs))
+    (hint/fa-walk (tail exprs) func-name var-types type-defs
+      (if (error? e) {acc} {hint/fa-one e func-name var-types type-defs acc}))}
 })
 
 (sig 'hint/parse-field-sig {-> Str List})

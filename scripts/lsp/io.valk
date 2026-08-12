@@ -140,20 +140,6 @@
   {dict/get lsp/documents uri})
 
 (def {lsp/ast-cache} (dict/new))
-; Cache of the last AST that parsed cleanly (no errors). Used as a fallback
-; for semantic tokens during in-progress edits when the current AST has
-; parse errors. Stale offsets are better than no highlighting.
-(def {lsp/last-good-ast-cache} (dict/new))
-; Cache of the last semantic-token data array computed from a clean parse.
-; Returned instantly when the current parse is broken, avoiding the latency
-; of re-lexing or re-walking the AST on every keystroke — which on large
-; files produced a visible orange flash between didChange and response.
-(def {lsp/last-good-tokens-cache} (dict/new))
-; Same idea for inlay hints: returning nil on broken parse encodes as an
-; empty array which tells the client to clear all hints visibly, so
-; during typing hints disappear until parse recovers. Keeping the last
-; clean set around and re-serving it keeps the display stable.
-(def {lsp/last-good-hints-cache} (dict/new))
 
 ; Returns the first parse error in an AST list, or nil if there are none.
 ; Parse errors are now preserved in the AST list as LVAL_ERR elements
@@ -176,10 +162,6 @@
 ; document has moved to vN+1, and a subsequent get-ast would hand back
 ; vN's AST offsets applied to vN+1's text — producing tokens/hints at
 ; wrong columns (the "jumpy colors, ::A mid-word" visual bug).
-;
-; Note: `lsp/last-good-ast-cache` is written ONLY from the main loop via
-; `lsp/parse-and-remember`. cache-ast runs on lsp/sys workers and would
-; race main-loop reads if it touched the last-good cache directly.
 (sig 'lsp/cache-ast {-> Str Str List})
 (fun {lsp/cache-ast uri text} {do
   (= {ast} (parse text))
@@ -187,36 +169,12 @@
   ast})
 
 ; Parses `text` when the ast-cache entry is missing or stale (different text).
-; Side-effects: populates lsp/last-good-ast-cache when the parse is clean so
-; subsequent broken edits have a fallback AST for semantic tokens. Without
-; this, a brand-new file whose first request triggers a fresh parse has
-; no last-good snapshot when the next edit breaks the syntax.
 (sig 'lsp/get-ast {-> Str Str List})
 (fun {lsp/get-ast uri text} {do
   (= {cached} (dict/get lsp/ast-cache uri))
-  (if (nil? cached) {lsp/parse-and-remember uri text}
+  (if (nil? cached) {lsp/cache-ast uri text}
     {if (== (head cached) text) {head (tail cached)}
-      {lsp/parse-and-remember uri text}})})
-
-(sig 'lsp/parse-and-remember {-> Str Str List})
-(fun {lsp/parse-and-remember uri text} {do
-  (= {ast} (parse text))
-  (if (not (lsp/ast-has-error ast))
-    {dict/set! lsp/last-good-ast-cache uri (list text ast)}
-    {})
-  ast})
-
-; Returns the AST suitable for semantic tokens / hover / etc. Prefers the
-; current AST if it parsed cleanly; otherwise falls back to the most recent
-; clean parse for this document. Returns nil only if no AST is available
-; at all (brand-new file with parse errors from the first keystroke).
-(sig 'lsp/get-ast-for-display {-> Str Str List})
-(fun {lsp/get-ast-for-display uri text} {do
-  (= {current} (lsp/get-ast uri text))
-  (if (lsp/ast-has-error current)
-    {do (= {last-good} (dict/get lsp/last-good-ast-cache uri))
-        (if (nil? last-good) {current} {head (tail last-good)})}
-    {current})})
+      {lsp/cache-ast uri text}})})
 
 ; ---------------------------------------------------------------------------
 ; Incremental text sync — apply content changes to stored text
@@ -224,17 +182,6 @@
 ; Each change is a plist with :range (optional) and :text.
 ; If :range is nil, it's a full document replacement.
 ; Range has :start {:line N :character N} and :end {:line N :character N}.
-
-; Returns 1 if any change in the list is a full-document replacement
-; (no :range field). A whole-buffer paste produces a single full-replace
-; change; the cached "last good" tokens/hints become positionally invalid
-; in that case (offsets refer to the previous buffer) and must be cleared
-; rather than served as fallback during the next broken parse.
-(sig 'lsp/changes-include-full-replace {-> List Num})
-(fun {lsp/changes-include-full-replace changes}
-  {if (nil? changes) {0}
-    {if (nil? (plist/get (head changes) :range)) {1}
-      {lsp/changes-include-full-replace (tail changes)}}})
 
 (sig 'lsp/apply-changes {-> Str List Str})
 (fun {lsp/apply-changes text changes} {
@@ -257,16 +204,18 @@
 })
 
 ; Returns a DocCtx for display features (hover, semantic tokens, definition,
-; references, completion, etc). Uses the last-known-good AST as a fallback
-; when the current parse has errors, so the editor doesn't lose all
-; highlighting / hover info during in-progress edits.
+; references, completion, etc). The AST is always the current text's: the
+; reader keeps the forms either side of a broken one and every walker skips
+; the error element, so a mid-edit document degrades to "nothing to say
+; about the form being typed" rather than answering with positions into a
+; document the client no longer has.
 (sig 'lsp/get-doc {-> DocParams DocCtx})
 (fun {lsp/get-doc params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (= {text} (lsp/doc-get uri))
   (if (nil? text) {nil}
-    {(DocCtx :uri uri :text text :ast (lsp/get-ast-for-display uri text))})
+    {(DocCtx :uri uri :text text :ast (lsp/get-ast uri text))})
 })
 
 (sig 'lsp/get-text-pos {-> TextDocPosParams List})
@@ -281,7 +230,7 @@
         {do
           ; Parse can fail on broken source; the AST field holds the raw
           ; parse result (list-of-errors is fine, a bare Error is not).
-          (= {ast-val} (lsp/get-ast-for-display uri text))
+          (= {ast-val} (lsp/get-ast uri text))
           (= {ast-val} (if (error? ast-val) {nil} {ast-val}))
           (list :uri uri :text text :ast ast-val
                 :line pos:line :col pos:character)})})

@@ -4,13 +4,21 @@
 ;
 ; ONE function indexes a file: lsp/index-file-full
 ;   1. Sync symbols + refs to DB (symdb/sync-file-symbols)
-;   2. Run C indexer for semantic tokens + scoped refs (lsp/index-ast)
-;   3. Compute inlay hints (lsp/precompute-file-data)
+;   2. Run C indexer for scoped refs + nodes (lsp/index-ast)
 ;   Returns 1 if file changed, 0 if cached.
 ;
+; Semantic tokens and inlay hints are NOT stored: they are positional data
+; about a buffer the editor is holding, so they are computed from the text
+; of the request that asks for them (nav.valk / features.valk).
+;
 ; Callers:
-;   - lsp/sync-doc:       called by did-open/did-change/did-save (text from editor)
-;   - lsp/seed-from-disk: called by workspace scan (text from disk)
+;   - lsp/seed-from-disk: called by the workspace scan and by didSave
+;     (text that is on disk)
+;
+; The editor's unsaved text never enters the on-disk index. It is indexed
+; into an in-memory overlay attached to each connection that needs it
+; (lsp/live-sync-doc), which shadows the on-disk rows for that path until
+; the file is saved or closed.
 
 (module workspace)
 
@@ -42,10 +50,12 @@
 ; Returns 1 when the stored hash for `path` matches, 0 when the file is
 ; missing, changed, or the query itself failed (a closed/locked DB must
 ; not be treated as "up to date").
+; Asks the on-disk index specifically: this decides whether a file needs
+; re-indexing from disk, and the overlay's answer is about a buffer.
 (sig 'lsp/hash-current? {-> Ref Str Str Num})
 (fun {lsp/hash-current? db path hash} {do
   (= {existing} (sqlite/query-maybe db
-    "SELECT hash FROM files WHERE path=?1" path))
+    "SELECT hash FROM main.files WHERE path=?1" path))
   (if (nil? existing) {0}
     {if (error? existing) {0}
       {== existing:hash hash}})
@@ -105,25 +115,6 @@
   (if (== (+ b p) 0)
     {stderr/write "[valk-lsp] builtins + prelude not on disk (using env)\n"}
     {stderr/write "[valk-lsp] seeded builtins + prelude\n"})})
-
-(sig 'lsp/precompute-file-data {-> Ref Str List Str Nil})
-(fun {lsp/precompute-file-data db uri ast text} {do
-  (= {path} (symdb/uri->path uri))
-  (= {file-id} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
-  (if (nil? file-id) {}
-    {do
-      ; The symdb was just re-synced for this file; drop memoized sig
-      ; lookups so hint queries below observe the fresh rows.
-      (hint/reset-query-cache)
-      (hint/set-module-from-ast ast)
-      (lsp/index-ast db file-id ast text)
-      (= {local-params} (hint/collect-local-params ast))
-      (= {hctx} (HintCtx local-params db))
-      (= {raw-hints} (hint/walk-exprs ast hctx nil))
-      (= {type-hints} (hint/collect-type-hints ast db))
-      (= {field-hints} (hint/collect-field-hints ast db))
-      (symdb/insert-hint-batch db file-id (join raw-hints (join type-hints field-hints)))})
-})
 
 ; ---------------------------------------------------------------------------
 ; Diagnostic publishing
@@ -185,18 +176,15 @@
 
 ; Extract the byte offset from a parse error message of the form
 ; "[offset: N] ...". Returns 0 if no offset is found.
-(sig 'lsp/parse-error-offset {-> Any Num})
+(sig 'lsp/parse-error-offset {-> Str Num})
 (fun {lsp/parse-error-offset err} {do
-  (= {msg} (str err))
-  (= {start} (str/index-of msg "[offset: "))
+  (= {start} (str/index-of err "[offset: "))
   (if (< start 0) {0}
     {do
-      (= {after} (str/slice msg (+ start 9) (len msg)))
+      (= {after} (str/slice err (+ start 9) (len err)))
       (= {end} (str/index-of after "]"))
       (if (< end 0) {0}
-        {do (= {n-str} (str/slice after 0 end))
-            ; Use parse to convert digit string to number
-            (= {parsed} (parse n-str))
+        {do (= {parsed} (parse (str/slice after 0 end)))
             (if (and (list? parsed) (and (> (len parsed) 0) (num? (head parsed))))
               {head parsed} {0})})})})
 
@@ -229,6 +217,11 @@
       (list :uri uri :diagnostics
         (list (lsp/parse-error->diag (str parse-err) text)))}
     {do
+      ; This connection has its own overlay: the buffer has to be in it
+      ; before the known-symbol and arity checks run, or a function the
+      ; user just typed reads as undefined and one whose parameter list
+      ; they just changed reads as called with the wrong arity.
+      (symdb/live-sync db uri text ast)
       (lsp/ensure-loads-indexed db ast)
       (= {known} (vd/load-known-set db))
       (= {diags} (vd/validate-with-known db ast text known))
@@ -244,37 +237,42 @@
 ; Sync document to symdb
 ; ---------------------------------------------------------------------------
 
-; Takes an explicit db ref so callers can choose lsp/db (main connection,
-; used on loop 0) or lsp/idx-db (secondary connection, used by dispatched
-; workers). Routing DB writes through lsp/idx-db on lsp/idx-sys keeps
-; lsp/sys loop-0 free to flush pipe/writes promptly after a didOpen, so
-; semantic-tokens responses don't queue behind a long index transaction.
-; Parses text directly (native ~5ms) instead of relying on lsp/ast-cache,
-; because the cache is written by a concurrent lsp/sys worker and racy
-; to read from idx-sys.
-(sig 'lsp/sync-doc {-> Ref Str Str Nil})
-(fun {lsp/sync-doc db uri text} {do
-  (if (nil? db) {}
-    {do
-      (= {hash} (str "mem:" (len text)))
-      (= {path} (symdb/uri->path uri))
-      (if (lsp/hash-current? db path hash) {}
-        {do
-          (= {ast} (parse text))
-          ; `parse` returns a list of top-level forms and appends parse
-          ; errors as LVAL_ERR elements, so `(error? ast)` is always
-          ; false; scan the list for any error element instead. Skipping
-          ; the symdb write on broken parses keeps highlighting/inlays
-          ; stable on the last-good snapshot while the user is mid-edit,
-          ; rather than flickering between partial new data and stale
-          ; old data.
-          (if (lsp/ast-has-error ast) {}
-            {lsp/with-tx db
-              (\ {} {do
-                (symdb/sync-file-with-ast db uri text hash ast)
-                (lsp/precompute-file-data db uri ast text)})})})})})
+; The editor's text never reaches the on-disk index. It is indexed into
+; `live`, the in-memory overlay attached to the connection being used, which
+; shadows the on-disk rows for that path until the file is saved or closed.
+; Every connection that has to answer questions about the buffer keeps its
+; own overlay: lsp/db for interactive requests, lsp/idx-db for diagnostics.
+;
+; Parses text directly rather than consulting lsp/ast-cache, because the
+; cache is written by a concurrent lsp/sys worker and racy to read.
+;
+; A broken parse leaves the overlay on the last version that parsed: a
+; half-typed form has no symbols worth recording, and positional data
+; (tokens, hints) no longer comes from the database at all.
+(sig 'lsp/live-sync-doc {-> Ref Str Str Nil})
+(fun {lsp/live-sync-doc db uri text} {
+  if (nil? db) {}
+  {do
+    (= {ast} (parse text))
+    (if (lsp/ast-has-error ast) {}
+      {symdb/live-sync db uri text ast})}})
 
-
+; A save makes the buffer and the file identical, so the text goes into the
+; on-disk index and the overlay entry for it is dropped.
+(sig 'lsp/save-doc {-> Ref Str Str Nil})
+(fun {lsp/save-doc db uri text} {
+  if (nil? db) {}
+  {do
+    (= {path} (symdb/uri->path uri))
+    (= {ast} (parse text))
+    ; Store the file's fingerprint, not a marker: the text just written to
+    ; disk IS the file, so a later workspace scan can skip it.
+    (= {fp} (file/fingerprint path))
+    (= {hash} (if (error? fp) {str "save:" (len text)} {fp}))
+    (if (lsp/ast-has-error ast) {}
+      {lsp/with-tx db
+        (\ {} {symdb/sync-file-with-ast db uri text hash ast})})
+    (symdb/live-drop db path)}})
 
 ; ---------------------------------------------------------------------------
 ; Method handlers — notifications
@@ -330,12 +328,14 @@
       ; lsp/db is read on lsp/sys by interactive features (hover/go-to-def);
       ; index stdlib into it here (same thread) for richer builtin navigation.
       ; Builtin *recognition* for diagnostics comes from (penv), not this.
-      (lsp/seed-builtins lsp/db lsp/root-path)}
+      (lsp/seed-builtins lsp/db lsp/root-path)
+      (symdb/attach-live lsp/db)}
     {do
       (def {lsp/root-path} "")
       (def {lsp/db} (symdb/init ":memory:"))
       (def {lsp/db-path} ":memory:")
-      (lsp/seed-builtins lsp/db lsp/root-path)})
+      (lsp/seed-builtins lsp/db lsp/root-path)
+      (symdb/attach-live lsp/db)})
   ; Only a completed handshake flips the flag: a rejected initialize must
   ; leave the server answering -32002, not serving requests.
   (def {lsp/initialized} 1)
@@ -352,12 +352,10 @@
 ; Dispatches:
 ;   - lsp/sys worker: lsp/cache-ast to populate the in-process AST cache
 ;     (used by semantic-tokens workers on lsp/sys)
-;   - lsp/idx-sys worker: lsp/sync-doc to write to the DB via lsp/idx-db,
-;     off lsp/sys loop-0. Keeping the DB write off loop-0 lets pipe/write
-;     responses (semantic tokens, diagnostics) flush promptly — the old
-;     layout's 1-2s loop-0 index transaction was the single largest source
-;     of latency on file open. lsp/idx-db is a separate sqlite connection
-;     from lsp/db so there's no nested-BEGIN conflict.
+;   - lsp/sys worker: lsp/live-sync-doc to index the buffer into lsp/db's
+;     in-memory overlay. The overlay belongs to the connection it is
+;     attached to, so this has to run on the connection interactive
+;     requests read from. It writes no disk pages and takes ~10ms.
 ;   - lsp/sys worker: publish-diagnostics (on a done-cb). This still reads
 ;     lsp/db from loop-0; worth investigating moving too.
 ;
@@ -386,9 +384,20 @@
       {do (lsp/cache-ast uri text) nil}})
     nil
     lsp/noop-cb)
-  (aio/dispatch lsp/idx-sys
+  (aio/dispatch lsp/sys
     (\ {_} {if (not (== lsp/doc-version v)) {nil}
-      {do (lsp/sync-doc lsp/idx-db uri text) nil}})
+      {do (lsp/live-sync-doc lsp/db uri text) nil}})
+    nil
+    lsp/noop-cb)
+  ; Opening a file is the one moment we are told about a path the startup
+  ; scan may never have seen — created by another tool, arrived with a
+  ; branch switch, or living outside the workspace root. Index it FROM
+  ; DISK (not from the buffer, which belongs in the overlay): the on-disk
+  ; index is meant to describe the source tree, and without this a file
+  ; that exists on disk stays missing from it until the next restart.
+  ; No-ops when the fingerprint already matches, which is the usual case.
+  (aio/dispatch lsp/idx-sys
+    (\ {_} {do (lsp/seed-from-disk lsp/idx-db (symdb/uri->path uri)) nil})
     nil
     lsp/noop-cb)
   (lsp/schedule-publish-diagnostics uri)})
@@ -507,10 +516,10 @@
 (sig 'lsp/schedule-sync-doc {-> Str Nil})
 (fun {lsp/schedule-sync-doc uri} {
   if (== (lsp/coalesce-claim lsp/sync-doc-inflight lsp/sync-doc-dirty uri) 0) {}
-    {aio/dispatch lsp/idx-sys
+    {aio/dispatch lsp/sys
       (\ {_} {do
         (= {latest} (lsp/doc-get uri))
-        (if (nil? latest) {nil} {do (lsp/sync-doc lsp/idx-db uri latest) nil})})
+        (if (nil? latest) {nil} {do (lsp/live-sync-doc lsp/db uri latest) nil})})
       nil
       (\ {_} {lsp/clear-sync-doc-pending uri})}
 })
@@ -540,14 +549,6 @@
         {lsp/apply-changes old-text changes}))
       (lsp/doc-store uri text)
       (dict/remove! lsp/ast-cache uri)
-      ; Full-document replacement (e.g. paste-over-all) makes cached
-      ; offsets in the last-good token/hint arrays meaningless. Drop
-      ; the fallbacks rather than serve stale spans pointing past EOL.
-      (if (== (lsp/changes-include-full-replace changes) 1)
-        {do (dict/remove! lsp/last-good-ast-cache uri)
-            (dict/remove! lsp/last-good-tokens-cache uri)
-            (dict/remove! lsp/last-good-hints-cache uri)}
-        {})
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
       (lsp/schedule-cache-ast uri)
@@ -560,11 +561,11 @@
   (= {uri} td:uri)
   (dict/remove! lsp/documents uri)
   (dict/remove! lsp/ast-cache uri)
-  ; Per-URI fallback caches grow unbounded across long-running editor
-  ; sessions if not explicitly evicted on close.
-  (dict/remove! lsp/last-good-ast-cache uri)
-  (dict/remove! lsp/last-good-tokens-cache uri)
-  (dict/remove! lsp/last-good-hints-cache uri)
+  ; The buffer is gone: the file on disk is the truth again.
+  (symdb/live-drop lsp/db (symdb/uri->path uri))
+  (aio/dispatch lsp/idx-sys
+    (\ {_} {do (symdb/live-drop lsp/idx-db (symdb/uri->path uri)) nil})
+    nil lsp/noop-cb)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics nil))})
@@ -583,13 +584,15 @@
       (= {v} lsp/doc-version)
       (aio/dispatch lsp/sys
         (\ {_} {if (not (== lsp/doc-version v)) {nil}
-          {do (lsp/cache-ast uri save-text) nil}})
+          {do (lsp/cache-ast uri save-text)
+              (symdb/live-drop lsp/db (symdb/uri->path uri))
+              nil}})
         nil
         (\ {_} {if (not (== lsp/doc-version v)) {}
           {lsp/refresh-semantic-tokens}}))
       (aio/dispatch lsp/idx-sys
         (\ {_} {if (not (== lsp/doc-version v)) {nil}
-          {do (lsp/sync-doc lsp/idx-db uri save-text) nil}})
+          {do (lsp/save-doc lsp/idx-db uri save-text) nil}})
         nil
         (\ {_} {if (not (== lsp/doc-version v)) {}
           {lsp/refresh-semantic-tokens}}))

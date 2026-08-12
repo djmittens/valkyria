@@ -50,11 +50,17 @@
 ; Walk a list of expressions as code
 ; ---------------------------------------------------------------------------
 
+; A parse error is kept in the top-level list as an LVAL_ERR element, and
+; under BYOL an error argument short-circuits the call it is passed to, so
+; the guard has to sit at the call site: without it one broken form makes
+; the whole walk return that error and the document loses every token.
 (sig 'sem/walk-each {-> List List List List})
 (fun {sem/walk-each exprs scope acc} {
   if (nil? exprs) {acc}
-  {sem/walk-each (tail exprs) scope
-    (sem/walk-code (head exprs) scope acc)}
+  {do
+    (= {e} (head exprs))
+    (sem/walk-each (tail exprs) scope
+      (if (error? e) {acc} {sem/walk-code e scope acc}))}
 })
 
 ; ---------------------------------------------------------------------------
@@ -368,11 +374,60 @@
   (sem/tokenize-ast (parse text) text)
 })
 
+; Tokens always describe `text`, never an older snapshot of it. The reader
+; recovers from a broken form by ending it where the next top-level form
+; starts, so a mid-edit document still yields real forms either side of the
+; damage: walk those, and lex the one span that has no AST. Serving a cached
+; token array from the last clean parse instead — as this used to — renders
+; every token at the offsets of a document the client no longer has, which
+; is what makes identifiers highlight half-way through mid-edit.
 (sig 'sem/tokenize-ast {-> List Str List})
 (fun {sem/tokenize-ast ast text} {do
   (sem/encode-deltas text
-    (list/group 4 (reverse (sem/walk-each ast nil nil))))
+    (list/group 4 (reverse (sem/walk-top ast text nil))))
 })
+
+(sig 'sem/walk-top {-> List Str List List})
+(fun {sem/walk-top exprs text acc} {
+  if (nil? exprs) {acc}
+  {do
+    (= {e} (head exprs))
+    (sem/walk-top (tail exprs) text
+      (if (error? e)
+        {sem/lex-gap (sem/acc-end acc)
+                     (sem/next-form-offset (tail exprs) (len text)) text acc}
+        {sem/walk-code e nil acc}))}
+})
+
+; The unparseable span runs from where AST coverage stopped to where it
+; resumes. Derived from the tokens, not from the error's own offset: that
+; offset is the start of the broken form for "Missing `)`" but end-of-file
+; for "Unexpected end of input", and the second kind would lex nothing.
+(sig 'sem/acc-end {-> List Num})
+(fun {sem/acc-end acc} {
+  if (nil? acc) {0}
+  {if (< (len acc) 4) {0}
+  {do
+    (= {e} (+ (nth 4 acc) (nth 3 acc)))
+    (if (< e 0) {0} {e})}}
+})
+
+(sig 'sem/lex-gap {-> Num Num Str List List})
+(fun {sem/lex-gap start end text acc} {
+  if (>= start end) {acc} {sem/lex-walk text start end acc}
+})
+
+(sig 'sem/next-form-offset {-> List Num Num})
+(fun {sem/next-form-offset rest fallback} {
+  if (nil? rest) {fallback}
+  {do
+    (= {e} (head rest))
+    (if (error? e) {sem/next-form-offset (tail rest) fallback}
+      {do
+        (= {p} (src-pos e))
+        (if (< p 0) {sem/next-form-offset (tail rest) fallback} {p})})}
+})
+
 
 ; ---------------------------------------------------------------------------
 ; Lexer-based fallback for semantic tokens.

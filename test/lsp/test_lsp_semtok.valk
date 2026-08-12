@@ -19,6 +19,19 @@
 (fun {tok-type tok} {nth 4 tok})
 (fun {tok-len tok} {nth 3 tok})
 
+; Decode the delta encoding and check each token lies inside its line.
+(fun {sem-test/tokens-fit groups lines line col} {
+  if (nil? groups) {1}
+  {do
+    (= {g} (head groups))
+    (= {ln} (+ line (nth 1 g)))
+    (= {c} (if (== (nth 1 g) 0) {+ col (nth 2 g)} {nth 2 g}))
+    (= {src} (nth (+ ln 1) lines))
+    (if (nil? src) {0}
+    {if (> (+ c (nth 3 g)) (len src)) {0}
+    {sem-test/tokens-fit (tail groups) lines ln c}})}
+})
+
 (test/run (list
 
   ; --- Basic token counts ---
@@ -263,6 +276,48 @@
     {do
       (= {n} (tok-count "(def {a} 1)\n(def {b} 2)"))
       (test/assert (>= n 4) "two defs should produce at least 4 tokens")
+      true
+    })
+
+  ; --- Broken parse: tokens still describe the current text ---
+
+  (test/case "broken-form-does-not-kill-other-tokens"
+    {do
+      (= {good} "(def {a} 1)\n(def {b} 2)\n(def {c} 3)")
+      (= {broken} "(def {a} 1)\n(def {b} 2\n(def {c} 3)")
+      (= {n-good} (tok-count good))
+      (= {n-broken} (tok-count broken))
+      (test/assert (>= n-broken n-good)
+        "a broken middle form must not cost the other forms their tokens")
+      true
+    })
+
+  (test/case "broken-form-is-lexed-in-place"
+    {do
+      ; `(def {b} 2` has no AST, so its tokens come from the lexer — they
+      ; must still land on `def`, `b` and `2` rather than be dropped.
+      (= {groups} (tok-groups "(def {a} 1)\n(def {b} 2\n(def {c} 3)"))
+      (= {lines-hit} (foldl (\{acc t} {+ acc (nth 1 t)}) 0 groups))
+      (test/assert (>= lines-hit 2) "tokens must span all three lines")
+      true
+    })
+
+  (test/case "whole-file-broken-still-tokenizes"
+    {do
+      (= {n} (tok-count "(fun {foo x} {+ x"))
+      (test/assert (> n 0) "an unterminated file must still return tokens")
+      true
+    })
+
+  (test/case "token-offsets-track-the-current-text"
+    {do
+      ; The tokens for an edited document must describe that document:
+      ; every token has to fit inside the line it is reported on.
+      (= {text} "(def {alpha} 1)\n(def {beta} 2\n(def {gamma} 3)")
+      (= {lines} (str/split text "\n"))
+      (= {groups} (tok-groups text))
+      (test/assert (sem-test/tokens-fit groups lines 0 0)
+        "every token must fit within its line in the current text")
       true
     })
 
