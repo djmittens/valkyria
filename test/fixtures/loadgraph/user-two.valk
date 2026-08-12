@@ -1,0 +1,4 @@
+; Fixture: sees only the 2-field LGThing through its load.
+(load "two-field.valk")
+
+(fun {lg-make-two v w} {LGThing :x v :y w})

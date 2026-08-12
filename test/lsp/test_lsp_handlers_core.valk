@@ -371,7 +371,7 @@
       (reset-state)
       (lsp/doc-store "file:///inc.valk" "(+ 1 2)")
       (reset-captures)
-      (workspace/handle-did-change
+      (lsp/handle-did-change
         (ChangeParams
           :textDocument (LspTextDoc :uri "file:///inc.valk")
           :contentChanges (list
@@ -387,7 +387,7 @@
       (reset-state)
       (lsp/doc-store "file:///full.valk" "old")
       (reset-captures)
-      (workspace/handle-did-change
+      (lsp/handle-did-change
         (ChangeParams
           :textDocument (LspTextDoc :uri "file:///full.valk")
           :contentChanges (list (list :text "new"))))
@@ -400,7 +400,7 @@
       (reset-state)
       (lsp/doc-store "file:///ver.valk" "x")
       (= {v1} lsp/doc-version)
-      (workspace/handle-did-change
+      (lsp/handle-did-change
         (ChangeParams
           :textDocument (LspTextDoc :uri "file:///ver.valk")
           :contentChanges (list (list :text "y"))))
@@ -411,7 +411,7 @@
     {do
       (reset-state)
       (= {v1} lsp/doc-version)
-      (workspace/handle-did-open
+      (lsp/handle-did-open
         (OpenParams :textDocument (LspTextDocText :uri "file:///op.valk" :text "hello")))
       (test/assert (> lsp/doc-version v1) "version should increment on open")
       (test/assert-eq "hello" (lsp/doc-get "file:///op.valk") "text stored")
@@ -423,7 +423,7 @@
       (lsp/doc-store "file:///cl.valk" "text")
       (lsp/cache-ast "file:///cl.valk" "text")
       (reset-captures)
-      (workspace/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
+      (lsp/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///cl.valk")))
       (test/assert (nil? (lsp/doc-get "file:///cl.valk")) "doc removed")
       (test/assert (nil? (dict/get lsp/ast-cache "file:///cl.valk")) "ast cache removed")
     })
@@ -637,7 +637,7 @@
       (reset-state)
       (lsp/doc-store "file:///close.valk" "text")
       (reset-captures)
-      (workspace/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///close.valk")))
+      (lsp/handle-did-close (DocParams :textDocument (LspTextDoc :uri "file:///close.valk")))
       (= {notif} (last-notification))
       (test/assert (not (nil? notif)) "should send notification")
       (test/assert-eq "textDocument/publishDiagnostics" notif:method "method")

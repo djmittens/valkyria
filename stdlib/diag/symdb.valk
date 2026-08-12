@@ -1,14 +1,14 @@
 ; Valkyria Symbol Database — Valk library using sqlite/* builtins
 ; Assumes prelude.valk is already loaded.
 
+(load "stdlib/diag/symdb-types.valk")
+
+; Query/display half of the module. Loaded pre-declaration so it stays a
+; sibling part of `symdb` (it declares (module symdb) itself) instead of
+; nesting under it.
+(load "stdlib/diag/symdb-query.valk")
+
 (module symdb)
-
-(type {WordRange}
-  {:word Str :start Num :end Num})
-
-(type {SymInfo}
-  {:name Str :kind Num :arity Num :doc Str :sig Str
-   :path Str :line Num :col Num :formals Str})
 
 ; === Symbol kind constants ===
 (def {SYMKIND_FUNCTION} 1)
@@ -23,7 +23,7 @@
 (def {LSP_SK_VARIABLE} 13)
 
 ; === Schema ===
-(def {symdb/schema-sql} "
+(def {schema-sql} "
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 
@@ -56,10 +56,17 @@ CREATE TABLE IF NOT EXISTS refs (
   col INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS loads (
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  target_path TEXT NOT NULL,
+  UNIQUE(file_id, target_path)
+);
+
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_refs_name ON refs(name);
 CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
+CREATE INDEX IF NOT EXISTS idx_loads_file ON loads(file_id);
 
 CREATE TABLE IF NOT EXISTS nodes (
   id INTEGER PRIMARY KEY,
@@ -122,7 +129,7 @@ CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
 ; can share one view without a live symbol joining a disk file.
 (def {SYMDB_LIVE_ID_BASE} 1000000)
 
-(def {symdb/overlay-views-sql} (str "
+(def {overlay-views-sql} (str "
 CREATE TEMP VIEW files AS
   SELECT id + " SYMDB_LIVE_ID_BASE " AS id, path, hash FROM live.files
   UNION ALL SELECT id, path, hash FROM main.files
@@ -171,26 +178,33 @@ CREATE TEMP VIEW scopes AS
   UNION ALL SELECT id, file_id, pos, parent_pos
     FROM main.scopes WHERE file_id IN (SELECT id FROM main.files
       WHERE path NOT IN (SELECT path FROM live.files));
+
+CREATE TEMP VIEW loads AS
+  SELECT file_id + " SYMDB_LIVE_ID_BASE " AS file_id, target_path
+    FROM live.loads
+  UNION ALL SELECT file_id, target_path
+    FROM main.loads WHERE file_id IN (SELECT id FROM main.files
+      WHERE path NOT IN (SELECT path FROM live.files));
 "))
 
 ; Attach the in-memory overlay and put the views in front of the tables.
 ; Must run AFTER any seeding this connection does, since the views make
 ; unqualified writes an error.
-(sig 'symdb/attach-live {-> Ref Nil})
-(fun {symdb/attach-live db} {do
+(sig 'attach-live {-> Ref Nil})
+(fun {attach-live db} {do
   (sqlite/exec db "ATTACH DATABASE ':memory:' AS live")
   (sqlite/exec-script db
     (str/replace
-      (str/replace symdb/schema-sql "CREATE TABLE IF NOT EXISTS "
+      (str/replace schema-sql "CREATE TABLE IF NOT EXISTS "
                                     "CREATE TABLE IF NOT EXISTS live.")
       "CREATE INDEX IF NOT EXISTS " "CREATE INDEX IF NOT EXISTS live."))
-  (sqlite/exec-script db symdb/overlay-views-sql)
+  (sqlite/exec-script db overlay-views-sql)
   nil})
 
 ; Index `text` as the editor's current version of `uri`. Replaces whatever
 ; the overlay held for that path; the on-disk index is untouched.
-(sig 'symdb/live-sync {-> Ref Str Str List Nil})
-(fun {symdb/live-sync db uri text ast} {
+(sig 'live-sync {-> Ref Str Str List Nil})
+(fun {live-sync db uri text ast} {
   if (nil? db) {nil}
   {do
   (= {path} (uri->path uri))
@@ -200,13 +214,13 @@ CREATE TEMP VIEW scopes AS
   (= {file-id} (sqlite/query-value db
     "SELECT id FROM live.files WHERE path=?1" path))
   (if (nil? file-id) {}
-    {lsp/index-ast db file-id (symdb/strip-errors ast) text 0 "live"})
+    {lsp/index-ast db file-id (strip-errors ast) text 0 "live"})
   nil}})
 
 ; Forget the editor's version of a path — on save (the on-disk index now
 ; describes it) or on close (the buffer is gone).
-(sig 'symdb/live-drop {-> Ref Str Nil})
-(fun {symdb/live-drop db path} {
+(sig 'live-drop {-> Ref Str Nil})
+(fun {live-drop db path} {
   if (nil? db) {nil}
   {do
   (= {file-id} (sqlite/query-value db
@@ -227,10 +241,14 @@ CREATE TEMP VIEW scopes AS
 ; v7: symbols carry the module prefix; names are stored fully qualified
 ; v8: semantic_tokens and inlay_hints dropped — both describe a buffer's
 ;     current text, so they are computed per request instead of stored
-(def {SYMDB_VERSION} 8)
+; v9: loads table — the static load graph, emitted per file by the
+;     indexer; shape checks resolve names through it
+; v10: record constructors carry their field spec in sig (field-name
+;      validation against the type's definition)
+(def {SYMDB_VERSION} 10)
 
-(sig 'symdb/init {-> Str Ref})
-(fun {symdb/init path} {do
+(sig 'init {-> Str Ref})
+(fun {init path} {do
   (= {db} (sqlite/open path))
   (= {ver} (sqlite/query-value db "PRAGMA user_version"))
   (if (not (== ver SYMDB_VERSION))
@@ -238,6 +256,8 @@ CREATE TEMP VIEW scopes AS
       (sqlite/exec db "DROP TABLE IF EXISTS diagnostics")
       (sqlite/exec db "DROP TABLE IF EXISTS inlay_hints")
       (sqlite/exec db "DROP TABLE IF EXISTS semantic_tokens")
+      (sqlite/exec db "DROP TABLE IF EXISTS loads")
+      (sqlite/exec db "DROP TABLE IF EXISTS scoped_refs")
       (sqlite/exec db "DROP TABLE IF EXISTS scopes")
       (sqlite/exec db "DROP TABLE IF EXISTS nodes")
       (sqlite/exec db "DROP TABLE IF EXISTS refs")
@@ -245,11 +265,11 @@ CREATE TEMP VIEW scopes AS
       (sqlite/exec db "DROP TABLE IF EXISTS files")
       (sqlite/exec db (str "PRAGMA user_version=" SYMDB_VERSION))}
     {})
-  (sqlite/exec-script db symdb/schema-sql)
+  (sqlite/exec-script db schema-sql)
   db})
 
-(sig 'symdb/close {-> Ref Nil})
-(fun {symdb/close db} {sqlite/close db})
+(sig 'close {-> Ref Nil})
+(fun {close db} {sqlite/close db})
 
 ; === Helpers ===
 
@@ -261,15 +281,15 @@ CREATE TEMP VIEW scopes AS
 ; /private/var/x.valk. Two rows for one file means re-indexing one row
 ; leaves the other's symbols in the table forever — deleted definitions
 ; stay resolvable and undefined-symbol diagnostics never fire.
-(def {symdb/canon-cache} (dict/new))
+(def {canon-cache} (dict/new))
 
 (sig 'canon-path {-> Str Str})
 (fun {canon-path p} {do
-  (= {hit} (dict/get symdb/canon-cache p))
+  (= {hit} (dict/get canon-cache p))
   (if (not (nil? hit)) {hit}
     {do
       (= {out} (canon-resolve p))
-      (dict/set! symdb/canon-cache p out)
+      (dict/set! canon-cache p out)
       out})
 })
 
@@ -383,22 +403,22 @@ CREATE TEMP VIEW scopes AS
 ; Public helpers — qualified at def site so they bind at top level
 ; (rewriter leaves names with `/` alone) and are reachable from sibling
 ; modules without depending on load order.
-(sig 'symdb/scan-word-start {-> Str Num Num})
-(fun {symdb/scan-word-start s col} {
+(sig 'scan-word-start {-> Str Num Num})
+(fun {scan-word-start s col} {
   if (<= col 0) {0}
     {do
       (= {c} (str/slice s (- col 1) col))
       (if (is-delim c) {col}
-        {symdb/scan-word-start s (- col 1)})}
+        {scan-word-start s (- col 1)})}
 })
 
-(sig 'symdb/scan-word-end {-> Str Num Num})
-(fun {symdb/scan-word-end s col} {
+(sig 'scan-word-end {-> Str Num Num})
+(fun {scan-word-end s col} {
   if (>= col (len s)) {col}
     {do
       (= {c} (str/slice s col (+ col 1)))
       (if (is-delim c) {col}
-        {symdb/scan-word-end s (+ col 1)})}
+        {scan-word-end s (+ col 1)})}
 })
 
 (sig 'word-at-position {-> Str Num Num Str})
@@ -409,8 +429,8 @@ CREATE TEMP VIEW scopes AS
       (= {target} (nth (+ line 1) lines))
       (if (> col (len target)) {nil}
         {do
-          (= {start} (symdb/scan-word-start target col))
-          (= {end} (symdb/scan-word-end target col))
+          (= {start} (scan-word-start target col))
+          (= {end} (scan-word-end target col))
           (if (>= start end) {nil}
             {str/slice target start end})})})
 })
@@ -423,16 +443,16 @@ CREATE TEMP VIEW scopes AS
       (= {target} (nth (+ line 1) lines))
       (if (> col (len target)) {nil}
         {do
-          (= {start} (symdb/scan-word-start target col))
-          (= {end} (symdb/scan-word-end target col))
+          (= {start} (scan-word-start target col))
+          (= {end} (scan-word-end target col))
           (if (>= start end) {nil}
             {(WordRange :word (str/slice target start end) :start start :end end)})})})
 })
 
 ; === Database operations ===
 
-(sig 'symdb/sync-document {-> Ref Str Str Nil})
-(fun {symdb/sync-document db uri text} {do
+(sig 'sync-document {-> Ref Str Str Nil})
+(fun {sync-document db uri text} {do
   (= {path} (uri->path uri))
   (= {mem-hash} (str "mem:" (len text)))
   (= {existing} (sqlite/query-maybe db
@@ -440,15 +460,15 @@ CREATE TEMP VIEW scopes AS
   (if (not (nil? existing))
     {if (== (plist/get existing :hash) mem-hash) {0}
       {do (sqlite/exec db "BEGIN")
-          (symdb/sync-file-symbols db uri text mem-hash)
+          (sync-file-symbols db uri text mem-hash)
           (sqlite/exec db "COMMIT") 1}}
     {do (sqlite/exec db "BEGIN")
-        (symdb/sync-file-symbols db uri text mem-hash)
+        (sync-file-symbols db uri text mem-hash)
         (sqlite/exec db "COMMIT") 1})
 })
 
-(sig 'symdb/node-at-offset {-> Ref Str Num List})
-(fun {symdb/node-at-offset db path offset} {
+(sig 'node-at-offset {-> Ref Str Num List})
+(fun {node-at-offset db path offset} {
   if (nil? db) {nil}
   {sqlite/query-maybe db
     "SELECT n.type, n.name, n.pos, n.end_pos, n.context FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.pos<=?2 AND n.end_pos>?2 LIMIT 1"
@@ -464,20 +484,20 @@ CREATE TEMP VIEW scopes AS
 
 ; === File sync ===
 
-(sig 'symdb/strip-errors {-> List List})
-(fun {symdb/strip-errors ast} {
+(sig 'strip-errors {-> List List})
+(fun {strip-errors ast} {
   if (nil? ast) {nil}
   {do
     (= {h} (head ast))
     (if (error? h)
-      {symdb/strip-errors (tail ast)}
-      {qcons h (symdb/strip-errors (tail ast))})}
+      {strip-errors (tail ast)}
+      {qcons h (strip-errors (tail ast))})}
 })
 
-(sig 'symdb/sync-file-with-ast {-> Ref Str Str Str List Nil})
-(fun {symdb/sync-file-with-ast db uri text hash ast} {do
+(sig 'sync-file-with-ast {-> Ref Str Str Str List Nil})
+(fun {sync-file-with-ast db uri text hash ast} {do
   (= {path} (uri->path uri))
-  (= {clean-ast} (symdb/strip-errors ast))
+  (= {clean-ast} (strip-errors ast))
   (sqlite/exec db
     "INSERT INTO main.files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
     path hash)
@@ -485,29 +505,29 @@ CREATE TEMP VIEW scopes AS
   (if (not (nil? file-id)) {lsp/index-ast db file-id clean-ast text 0 "main"} {})
 })
 
-(sig 'symdb/sync-file-symbols {-> Ref Str Str Str Nil})
-(fun {symdb/sync-file-symbols db uri text hash} {do
+(sig 'sync-file-symbols {-> Ref Str Str Str Nil})
+(fun {sync-file-symbols db uri text hash} {do
   (= {path} (uri->path uri))
   (= {raw-ast} (parse text))
-  (= {ast} (symdb/strip-errors raw-ast))
+  (= {ast} (strip-errors raw-ast))
   (sqlite/exec db
     "INSERT INTO main.files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
     path hash)
   (= {file-id} (sqlite/query-value db "SELECT id FROM main.files WHERE path=?1" path))
   (if (not (nil? file-id)) {lsp/index-ast db file-id ast text 0 "main"} {})
   (if (and (not (nil? file-id)) (not (nil? ast)))
-    {symdb/store-inferred-types db file-id ast} {})
+    {store-inferred-types db file-id ast} {})
 })
 
-(sig 'symdb/store-inferred-types {-> Ref Num List Nil})
-(fun {symdb/store-inferred-types db file-id ast} {do
+(sig 'store-inferred-types {-> Ref Num List Nil})
+(fun {store-inferred-types db file-id ast} {do
   (= {result} (type/infer-file ast))
   (= {types} (plist/get result :types))
-  (symdb/update-inferred-from-types db file-id types)
+  (update-inferred-from-types db file-id types)
 })
 
-(sig 'symdb/update-inferred-from-types {-> Ref Num List Nil})
-(fun {symdb/update-inferred-from-types db file-id types} {
+(sig 'update-inferred-from-types {-> Ref Num List Nil})
+(fun {update-inferred-from-types db file-id types} {
   if (nil? types) {nil}
   {do
     (= {entry} (head types))
@@ -518,7 +538,7 @@ CREATE TEMP VIEW scopes AS
         "UPDATE main.symbols SET inferred_type=?3 WHERE file_id=?1 AND name=?2"
         file-id name type-str}
       {nil})
-    (symdb/update-inferred-from-types db file-id (tail types))}
+    (update-inferred-from-types db file-id (tail types))}
 })
 
 (sig 'symkind->lsp-kind {-> Num Num})
@@ -530,4 +550,3 @@ CREATE TEMP VIEW scopes AS
     {LSP_SK_VARIABLE}}}}
 })
 
-(load "stdlib/diag/symdb-query.valk")

@@ -169,7 +169,7 @@
 
   (test/case "lens-build-from-syms-empty"
     {do
-      (test/assert (nil? (lens/build-from-syms nil nil)) "nil syms -> nil lenses")
+      (test/assert (nil? (lens/build-from-syms nil nil nil)) "nil syms -> nil lenses")
     })
 
   (test/case "handle-completion-with-db"

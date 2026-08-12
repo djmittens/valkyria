@@ -11,11 +11,37 @@ bool valk_macro_is_def(valk_lval_t *expr);
 // Unqualified names get `prefix/` prepended; already-qualified names
 // (containing `/`) are left alone. Bare references to locally-defined
 // names are rewritten to their qualified form throughout the AST.
+// Whole-file variant used by static tooling (compile/process); does not
+// resolve load-context aliases.
 void valk_module_apply_prefix(valk_lval_t *ast, const char *prefix);
+
+// Per-form rewriting used by the loader. `locals` is the set of bare def
+// names in the current file's module region.
+typedef struct valk_module_locals valk_module_locals_t;
+valk_module_locals_t *valk_module_locals_new(void);
+void valk_module_locals_collect(valk_module_locals_t *locals,
+                                valk_lval_t *form);
+void valk_module_locals_free(valk_module_locals_t *locals);
+
+// Rewrite the top-level form held in `cell` (a cons cell of the file's form
+// list) in place: qualify bare def/sig names with `prefix` (when
+// qualify_defs), rewrite bare references to `locals` as `prefix/name`, and
+// (when use_aliases) resolve qualified references through the module aliases
+// of the current load-context chain.
+void valk_module_rewrite_form(valk_lval_t *cell, const char *prefix,
+                              valk_module_locals_t *locals, bool qualify_defs,
+                              bool use_aliases);
+
+// Implemented in load.c: resolve a qualified name against the module aliases
+// visible from the current load context. Returns a malloc'd replacement
+// (caller frees) or NULL if no alias applies.
+char *valk_load_resolve_alias(const char *name);
+
+// Implemented in load.c: resolve a load path exactly as the runtime would
+// for a file living in `dir` (NULL when none). `resolved` must hold
+// PATH_MAX bytes.
+bool valk_load_resolve_from(const char *dir, const char *path,
+                            char *resolved);
 
 valk_lval_t *valk_eval_form(valk_lenv_t *env, valk_lval_t *form);
 valk_lval_t *valk_load_file(valk_lenv_t *env, const char *path);
-
-// Retrieve (and clear) any module prefix set via `(module X)` during macro
-// expansion. Returns a heap-allocated string the caller must free, or NULL.
-char *valk_take_pending_module_prefix(void);

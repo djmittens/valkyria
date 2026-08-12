@@ -115,6 +115,7 @@ set(VALKYRIA_SOURCES
   src/builtins_string.c
   src/builtins_env.c
   src/builtins_io.c
+  src/load.c
   src/builtins_file.c
   src/builtins_mem.c
   src/builtins_http.c
@@ -212,7 +213,6 @@ set(VALKYRIA_SOURCES
   src/pool_metrics.c
   src/event_loop_metrics.c
   src/json.c
-  src/validate.c
   src/image.c
   src/build.c
   vendor/sqlite3/sqlite3.c
@@ -630,8 +630,6 @@ target_link_libraries(test_http2_session_unit PRIVATE "-lc" valkyria valk_test_f
 add_executable(test_conn_admission_unit test/unit/test_conn_admission.c test/testing.c)
 target_link_libraries(test_conn_admission_unit PRIVATE "-lc" valkyria ${LIBUV_LIBRARIES})
 
-add_executable(test_validate test/parser/test_validate.c test/testing.c)
-target_link_libraries(test_validate PRIVATE "-lc" valkyria)
 
 add_executable(test_type_env test/parser/test_type_env.c test/testing.c)
 target_link_libraries(test_type_env PRIVATE "-lc" valkyria)

@@ -20,7 +20,11 @@
 ; (lsp/live-sync-doc), which shadows the on-disk rows for that path until
 ; the file is saved or closed.
 
-(module workspace)
+(load "stdlib/diag/symdb.valk")
+(load "stdlib/diag/validate.valk")
+(load "scripts/lsp/io.valk")
+
+(module lsp)
 
 ; ---------------------------------------------------------------------------
 ; Transaction helper
@@ -34,8 +38,8 @@
 ; Use this instead of bare (sqlite/exec db "BEGIN") / (sqlite/exec db "COMMIT")
 ; pairs so error handling is uniform across the codebase.
 
-(sig 'lsp/with-tx {-> Ref Fun Any})
-(fun {lsp/with-tx db thunk} {do
+(sig 'with-tx {-> Ref Fun Any})
+(fun {with-tx db thunk} {do
   (sqlite/exec db "BEGIN")
   (= {r} (thunk))
   (if (error? r)
@@ -52,8 +56,8 @@
 ; not be treated as "up to date").
 ; Asks the on-disk index specifically: this decides whether a file needs
 ; re-indexing from disk, and the overlay's answer is about a buffer.
-(sig 'lsp/hash-current? {-> Ref Str Str Num})
-(fun {lsp/hash-current? db path hash} {do
+(sig 'hash-current? {-> Ref Str Str Num})
+(fun {hash-current? db path hash} {do
   (= {existing} (sqlite/query-maybe db
     "SELECT hash FROM main.files WHERE path=?1" path))
   (if (nil? existing) {0}
@@ -61,10 +65,10 @@
       {== existing:hash hash}})
 })
 
-(sig 'lsp/index-file-full {-> Ref Str Str Str Num})
-(fun {lsp/index-file-full db uri text hash} {do
+(sig 'index-file-full {-> Ref Str Str Str Num})
+(fun {index-file-full db uri text hash} {do
   (= {path} (symdb/uri->path uri))
-  (if (lsp/hash-current? db path hash) {0}
+  (if (hash-current? db path hash) {0}
     {do
       ; Single-parse path: get-ast hits the ast-cache for open documents,
       ; falls back to parse otherwise. Then sync-file-with-ast does
@@ -87,17 +91,17 @@
 ; Canonicalize first: the hash probe keys on files.path, which is always
 ; physical, so a symlinked input path would miss the row and re-index on
 ; every publish.
-(sig 'lsp/seed-from-disk {-> Ref Str Num})
-(fun {lsp/seed-from-disk db raw-path} {do
+(sig 'seed-from-disk {-> Ref Str Num})
+(fun {seed-from-disk db raw-path} {do
   (= {path} (symdb/canon-path raw-path))
   (= {fp} (file/fingerprint path))
   (if (error? fp) {0}
-    {if (lsp/hash-current? db path fp) {0}
+    {if (hash-current? db path fp) {0}
       {do
         (= {text} (read-file path))
         (if (error? text) {0}
-          {lsp/with-tx db
-            (\ {} {lsp/index-file-full db (str "file://" path) text fp})})}})
+          {with-tx db
+            (\ {} {index-file-full db (str "file://" path) text fp})})}})
 })
 
 ; Best-effort: index stdlib so go-to-def / hover on a builtin lands in
@@ -106,12 +110,12 @@
 ; validator does NOT depend on this — it recognizes builtins/operators via
 ; (penv) in vd/load-known-set, so `+` etc. are never falsely flagged even
 ; when stdlib is not on disk.
-(sig 'lsp/seed-builtins {-> Ref Str Nil})
-(fun {lsp/seed-builtins db root} {do
+(sig 'seed-builtins {-> Ref Str Nil})
+(fun {seed-builtins db root} {do
   (= {builtins-path} (str root "/stdlib/builtins.valk"))
   (= {prelude-path} (str root "/stdlib/prelude.valk"))
-  (= {b} (lsp/seed-from-disk db builtins-path))
-  (= {p} (lsp/seed-from-disk db prelude-path))
+  (= {b} (seed-from-disk db builtins-path))
+  (= {p} (seed-from-disk db prelude-path))
   (if (== (+ b p) 0)
     {stderr/write "[valk-lsp] builtins + prelude not on disk (using env)\n"}
     {stderr/write "[valk-lsp] seeded builtins + prelude\n"})})
@@ -131,14 +135,32 @@
     :source "valk"
     :message d:message})
 
-(sig 'lsp/ensure-loads-indexed {-> Ref List Nil})
-(fun {lsp/ensure-loads-indexed db ast} {
+(sig 'ensure-loads-indexed {-> Ref Str List Nil})
+(fun {ensure-loads-indexed db doc-path ast} {
   if (nil? db) {}
-  {lsp/ensure-loads-walk db ast}
+  {ensure-loads-walk db (parent-dir doc-path) ast}
 })
 
-(sig 'lsp/ensure-loads-walk {-> Ref List Nil})
-(fun {lsp/ensure-loads-walk db exprs} {
+(sig 'parent-dir {-> Str Str})
+(fun {parent-dir p} {do
+  (= {i} (str/last-index-of p "/"))
+  (if (< i 1) {""} {str/slice p 0 i})
+})
+
+; Mirror the runtime's resolution order for a load written in this
+; document: relative to the document's directory first, then the
+; workspace root.
+(sig 'resolve-load-target {-> Str Str Str})
+(fun {resolve-load-target doc-dir path} {
+  if (str/starts-with? path "/") {path}
+  {do
+    (= {local} (if (== (len doc-dir) 0) {""} {str doc-dir "/" path}))
+    (if (and (> (len local) 0) (file/exists? local)) {local}
+      {str lsp/root-path "/" path})}
+})
+
+(sig 'ensure-loads-walk {-> Ref Str List Nil})
+(fun {ensure-loads-walk db doc-dir exprs} {
   if (nil? exprs) {}
   {do
     (= {e} (head exprs))
@@ -150,34 +172,33 @@
             {if (nil? (tail e)) {}
               {do
                 (= {path} (str (head (tail e))))
-                (lsp/seed-from-disk db (if (str/starts-with? path "/") {path}
-                  {str lsp/root-path "/" path}))}}
+                (seed-from-disk db (resolve-load-target doc-dir path))}}
             {})}}
       {})
-    (lsp/ensure-loads-walk db (tail exprs))}
+    (ensure-loads-walk db doc-dir (tail exprs))}
 })
 
-(sig 'lsp/republish-all-diagnostics {-> Nil})
-(fun {lsp/republish-all-diagnostics} {do
+(sig 'republish-all-diagnostics {-> Nil})
+(fun {republish-all-diagnostics} {do
   (= {uris} (dict/keys lsp/documents))
-  (lsp/republish-loop uris)
+  (republish-loop uris)
 })
 
-(sig 'lsp/republish-loop {-> List Nil})
-(fun {lsp/republish-loop uris} {
+(sig 'republish-loop {-> List Nil})
+(fun {republish-loop uris} {
   if (nil? uris) {}
   {do
     (= {uri} (head uris))
     (= {text} (lsp/doc-get uri))
     (if (nil? text) {}
-      {lsp/publish-diagnostics lsp/db uri text})
-    (lsp/republish-loop (tail uris))}
+      {publish-diagnostics lsp/db uri text})
+    (republish-loop (tail uris))}
 })
 
 ; Extract the byte offset from a parse error message of the form
 ; "[offset: N] ...". Returns 0 if no offset is found.
-(sig 'lsp/parse-error-offset {-> Str Num})
-(fun {lsp/parse-error-offset err} {do
+(sig 'parse-error-offset {-> Str Num})
+(fun {parse-error-offset err} {do
   (= {start} (str/index-of err "[offset: "))
   (if (< start 0) {0}
     {do
@@ -190,9 +211,9 @@
 
 ; Convert a parse error to an LSP Diagnostic, using the embedded byte offset
 ; to compute the line/column.
-(sig 'lsp/parse-error->diag {-> Any Str List})
-(fun {lsp/parse-error->diag err text} {do
-  (= {offset} (lsp/parse-error-offset err))
+(sig 'parse-error->diag {-> Any Str List})
+(fun {parse-error->diag err text} {do
+  (= {offset} (parse-error-offset err))
   (= {pos} (offset->line-col text offset))
   (= {line} (head pos))
   (= {col} (head (tail pos)))
@@ -208,23 +229,24 @@
 ; lsp/idx-sys (keeping lsp/sys loop-0 free to flush pipe writes). Parses
 ; text directly rather than consulting lsp/ast-cache because the cache
 ; is written by concurrent lsp/sys workers.
-(sig 'lsp/publish-diagnostics {-> Ref Str Str Nil})
-(fun {lsp/publish-diagnostics db uri text} {do
+(sig 'publish-diagnostics {-> Ref Str Str Nil})
+(fun {publish-diagnostics db uri text} {do
   (= {ast} (parse text))
   (= {parse-err} (lsp/ast-find-error ast))
   (if (error? parse-err)
     {lsp/send-notification "textDocument/publishDiagnostics"
       (list :uri uri :diagnostics
-        (list (lsp/parse-error->diag (str parse-err) text)))}
+        (list (parse-error->diag (str parse-err) text)))}
     {do
       ; This connection has its own overlay: the buffer has to be in it
       ; before the known-symbol and arity checks run, or a function the
       ; user just typed reads as undefined and one whose parameter list
       ; they just changed reads as called with the wrong arity.
       (symdb/live-sync db uri text ast)
-      (lsp/ensure-loads-indexed db ast)
+      (= {path} (symdb/uri->path uri))
+      (ensure-loads-indexed db path ast)
       (= {known} (vd/load-known-set db))
-      (= {diags} (vd/validate-with-known db ast text known))
+      (= {diags} (vd/validate-with-known db path ast text known))
       (= {lsp-diags} (if (error? diags)
         {do (stderr/write (str "[lsp] validate error: " diags "\n")) nil}
         {map make-lsp-diag diags}))
@@ -249,8 +271,8 @@
 ; A broken parse leaves the overlay on the last version that parsed: a
 ; half-typed form has no symbols worth recording, and positional data
 ; (tokens, hints) no longer comes from the database at all.
-(sig 'lsp/live-sync-doc {-> Ref Str Str Nil})
-(fun {lsp/live-sync-doc db uri text} {
+(sig 'live-sync-doc {-> Ref Str Str Nil})
+(fun {live-sync-doc db uri text} {
   if (nil? db) {}
   {do
     (= {ast} (parse text))
@@ -259,8 +281,8 @@
 
 ; A save makes the buffer and the file identical, so the text goes into the
 ; on-disk index and the overlay entry for it is dropped.
-(sig 'lsp/save-doc {-> Ref Str Str Nil})
-(fun {lsp/save-doc db uri text} {
+(sig 'save-doc {-> Ref Str Str Nil})
+(fun {save-doc db uri text} {
   if (nil? db) {}
   {do
     (= {path} (symdb/uri->path uri))
@@ -270,7 +292,7 @@
     (= {fp} (file/fingerprint path))
     (= {hash} (if (error? fp) {str "save:" (len text)} {fp}))
     (if (lsp/ast-has-error ast) {}
-      {lsp/with-tx db
+      {with-tx db
         (\ {} {symdb/sync-file-with-ast db uri text hash ast})})
     (symdb/live-drop db path)}})
 
@@ -281,20 +303,20 @@
 ; The server reports every position as a byte offset into the line, so it
 ; can only serve a client that offers utf-8 in general.positionEncodings.
 ; Per spec a client that omits the capability supports utf-16 only.
-(sig 'lsp/client-accepts-utf8 {-> List Num})
-(fun {lsp/client-accepts-utf8 caps} {do
+(sig 'client-accepts-utf8 {-> List Num})
+(fun {client-accepts-utf8 caps} {do
   (= {encodings} (plist/get (plist/get caps :general) :positionEncodings))
-  (if (nil? encodings) {0} {lsp/list-has-utf8 encodings})})
+  (if (nil? encodings) {0} {list-has-utf8 encodings})})
 
-(sig 'lsp/list-has-utf8 {-> List Num})
-(fun {lsp/list-has-utf8 encodings} {
+(sig 'list-has-utf8 {-> List Num})
+(fun {list-has-utf8 encodings} {
   if (nil? encodings) {0}
   {if (== (str (head encodings)) "utf-8") {1}
-    {lsp/list-has-utf8 (tail encodings)}}})
+    {list-has-utf8 (tail encodings)}}})
 
 (sig 'handle-initialize {-> Num InitParams Nil})
 (fun {handle-initialize id params} {
-  if (== (lsp/client-accepts-utf8 params:capabilities) 0)
+  if (== (client-accepts-utf8 params:capabilities) 0)
     {do
       (stderr/write
         (str "[valk-lsp] client does not offer utf-8 in "
@@ -303,10 +325,10 @@
       (lsp/send-init-error id
         (str "valk-lsp requires positionEncoding utf-8. This client offered "
              "only utf-16, which the server does not implement."))}
-    {lsp/init-workspace id params}})
+    {init-workspace id params}})
 
-(sig 'lsp/init-workspace {-> Num InitParams Nil})
-(fun {lsp/init-workspace id params} {do
+(sig 'init-workspace {-> Num InitParams Nil})
+(fun {init-workspace id params} {do
   (= {root-uri} params:rootUri)
   (stderr/write (str "[valk-lsp] root: " root-uri "\n"))
   (if (not (nil? root-uri))
@@ -328,13 +350,13 @@
       ; lsp/db is read on lsp/sys by interactive features (hover/go-to-def);
       ; index stdlib into it here (same thread) for richer builtin navigation.
       ; Builtin *recognition* for diagnostics comes from (penv), not this.
-      (lsp/seed-builtins lsp/db lsp/root-path)
+      (seed-builtins lsp/db lsp/root-path)
       (symdb/attach-live lsp/db)}
     {do
       (def {lsp/root-path} "")
       (def {lsp/db} (symdb/init ":memory:"))
       (def {lsp/db-path} ":memory:")
-      (lsp/seed-builtins lsp/db lsp/root-path)
+      (seed-builtins lsp/db lsp/root-path)
       (symdb/attach-live lsp/db)})
   ; Only a completed handshake flips the flag: a rejected initialize must
   ; leave the server answering -32002, not serving requests.
@@ -344,7 +366,7 @@
 ; Done-callback for fire-and-forget tasks (cache-ast/sync-doc/diagnostics).
 ; These have no request id to answer, but a silent failure means stale
 ; highlighting or diagnostics that never update — log it.
-(def {lsp/noop-cb} (\ {r} {
+(def {noop-cb} (\ {r} {
   if (error? r)
     {stderr/write (str "[valk-lsp] task error: " r "\n")}
     {}}))
@@ -383,12 +405,12 @@
     (\ {_} {if (not (== lsp/doc-version v)) {nil}
       {do (lsp/cache-ast uri text) nil}})
     nil
-    lsp/noop-cb)
+    noop-cb)
   (aio/dispatch lsp/sys
     (\ {_} {if (not (== lsp/doc-version v)) {nil}
-      {do (lsp/live-sync-doc lsp/db uri text) nil}})
+      {do (live-sync-doc lsp/db uri text) nil}})
     nil
-    lsp/noop-cb)
+    noop-cb)
   ; Opening a file is the one moment we are told about a path the startup
   ; scan may never have seen — created by another tool, arrived with a
   ; branch switch, or living outside the workspace root. Index it FROM
@@ -397,10 +419,10 @@
   ; that exists on disk stays missing from it until the next restart.
   ; No-ops when the fingerprint already matches, which is the usual case.
   (aio/dispatch lsp/idx-sys
-    (\ {_} {do (lsp/seed-from-disk lsp/idx-db (symdb/uri->path uri)) nil})
+    (\ {_} {do (seed-from-disk lsp/idx-db (symdb/uri->path uri)) nil})
     nil
-    lsp/noop-cb)
-  (lsp/schedule-publish-diagnostics uri)})
+    noop-cb)
+  (schedule-publish-diagnostics uri)})
 
 ; Coalesce dispatches via "pending" flags. While a dispatched task is
 ; queued/running, suppress new dispatches of the same kind. The
@@ -445,30 +467,30 @@
 ; Synchronization is unchanged in spirit: every read/write below happens on
 ; lsp/sys loop 0 — handle-did-change runs there, and the lsp/idx-sys
 ; completions bounce back through a no-op dispatch before touching state.
-(def {lsp/cache-ast-inflight} (dict/new))
-(def {lsp/cache-ast-dirty} (dict/new))
-(def {lsp/sync-doc-inflight} (dict/new))
-(def {lsp/sync-doc-dirty} (dict/new))
-(def {lsp/publish-diag-inflight} (dict/new))
-(def {lsp/publish-diag-dirty} (dict/new))
+(def {cache-ast-inflight} (dict/new))
+(def {cache-ast-dirty} (dict/new))
+(def {sync-doc-inflight} (dict/new))
+(def {sync-doc-dirty} (dict/new))
+(def {publish-diag-inflight} (dict/new))
+(def {publish-diag-dirty} (dict/new))
 
-(sig 'lsp/coalesce-busy? {-> Ref Str Num})
-(fun {lsp/coalesce-busy? inflight uri}
+(sig 'coalesce-busy? {-> Ref Str Num})
+(fun {coalesce-busy? inflight uri}
   {== (dict/get inflight uri 0) 1})
 
 ; Returns 1 when the caller should launch a job for `uri`, 0 when one is
 ; already running (in which case the URI is left marked dirty so the running
 ; job's completion relaunches it).
-(sig 'lsp/coalesce-claim {-> Ref Ref Str Num})
-(fun {lsp/coalesce-claim inflight dirty uri} {
-  if (lsp/coalesce-busy? inflight uri)
+(sig 'coalesce-claim {-> Ref Ref Str Num})
+(fun {coalesce-claim inflight dirty uri} {
+  if (coalesce-busy? inflight uri)
     {do (dict/set! dirty uri 1) 0}
     {do (dict/set! inflight uri 1) (dict/remove! dirty uri) 1}
 })
 
 ; Returns 1 when newer text arrived while the job ran and it must relaunch.
-(sig 'lsp/coalesce-release {-> Ref Ref Str Num})
-(fun {lsp/coalesce-release inflight dirty uri} {do
+(sig 'coalesce-release {-> Ref Ref Str Num})
+(fun {coalesce-release inflight dirty uri} {do
   (dict/set! inflight uri 0)
   (if (== (dict/get dirty uri 0) 1)
     {do (dict/remove! dirty uri) 1}
@@ -478,29 +500,29 @@
 ; Bounce a state update back to lsp/sys loop 0 via a no-op dispatch. Used as
 ; the completion callback of an lsp/idx-sys dispatch when we need to touch
 ; single-loop-owned state from a different aio system.
-(sig 'lsp/clear-sync-doc-pending {-> Str Nil})
-(fun {lsp/clear-sync-doc-pending uri} {
+(sig 'clear-sync-doc-pending {-> Str Nil})
+(fun {clear-sync-doc-pending uri} {
   aio/dispatch lsp/sys (\ {_} {}) nil
-    (\ {_} {if (== (lsp/coalesce-release lsp/sync-doc-inflight
-                                        lsp/sync-doc-dirty uri) 1)
-      {lsp/schedule-sync-doc uri} {}})
+    (\ {_} {if (== (coalesce-release sync-doc-inflight
+                                        sync-doc-dirty uri) 1)
+      {schedule-sync-doc uri} {}})
 })
 
-(sig 'lsp/clear-publish-diag-pending {-> Str Nil})
-(fun {lsp/clear-publish-diag-pending uri} {
+(sig 'clear-publish-diag-pending {-> Str Nil})
+(fun {clear-publish-diag-pending uri} {
   aio/dispatch lsp/sys (\ {_} {}) nil
-    (\ {_} {if (== (lsp/coalesce-release lsp/publish-diag-inflight
-                                         lsp/publish-diag-dirty uri) 1)
-      {lsp/schedule-publish-diagnostics uri} {}})
+    (\ {_} {if (== (coalesce-release publish-diag-inflight
+                                         publish-diag-dirty uri) 1)
+      {schedule-publish-diagnostics uri} {}})
 })
 
 ; Coalesced schedulers. Each is safe to call on every didChange: the first call
 ; launches, calls while a job is in flight are absorbed, and the completion
 ; relaunches once if newer text arrived meanwhile. The job body always reads
 ; the LATEST doc, so an absorbed batch collapses into one pass.
-(sig 'lsp/schedule-cache-ast {-> Str Nil})
-(fun {lsp/schedule-cache-ast uri} {
-  if (== (lsp/coalesce-claim lsp/cache-ast-inflight lsp/cache-ast-dirty uri) 0) {}
+(sig 'schedule-cache-ast {-> Str Nil})
+(fun {schedule-cache-ast uri} {
+  if (== (coalesce-claim cache-ast-inflight cache-ast-dirty uri) 0) {}
     {aio/dispatch lsp/sys
       (\ {_} {do
         (= {latest} (lsp/doc-get uri))
@@ -508,32 +530,32 @@
       nil
       (\ {_} {do
         (lsp/refresh-semantic-tokens)
-        (if (== (lsp/coalesce-release lsp/cache-ast-inflight
-                                      lsp/cache-ast-dirty uri) 1)
-          {lsp/schedule-cache-ast uri} {})})}
+        (if (== (coalesce-release cache-ast-inflight
+                                      cache-ast-dirty uri) 1)
+          {schedule-cache-ast uri} {})})}
 })
 
-(sig 'lsp/schedule-sync-doc {-> Str Nil})
-(fun {lsp/schedule-sync-doc uri} {
-  if (== (lsp/coalesce-claim lsp/sync-doc-inflight lsp/sync-doc-dirty uri) 0) {}
+(sig 'schedule-sync-doc {-> Str Nil})
+(fun {schedule-sync-doc uri} {
+  if (== (coalesce-claim sync-doc-inflight sync-doc-dirty uri) 0) {}
     {aio/dispatch lsp/sys
       (\ {_} {do
         (= {latest} (lsp/doc-get uri))
-        (if (nil? latest) {nil} {do (lsp/live-sync-doc lsp/db uri latest) nil})})
+        (if (nil? latest) {nil} {do (live-sync-doc lsp/db uri latest) nil})})
       nil
-      (\ {_} {lsp/clear-sync-doc-pending uri})}
+      (\ {_} {clear-sync-doc-pending uri})}
 })
 
-(sig 'lsp/schedule-publish-diagnostics {-> Str Nil})
-(fun {lsp/schedule-publish-diagnostics uri} {
-  if (== (lsp/coalesce-claim lsp/publish-diag-inflight
-                             lsp/publish-diag-dirty uri) 0) {}
+(sig 'schedule-publish-diagnostics {-> Str Nil})
+(fun {schedule-publish-diagnostics uri} {
+  if (== (coalesce-claim publish-diag-inflight
+                             publish-diag-dirty uri) 0) {}
     {aio/dispatch lsp/idx-sys
       (\ {_} {do
         (= {latest} (lsp/doc-get uri))
-        (if (nil? latest) {nil} {do (lsp/publish-diagnostics lsp/idx-db uri latest) nil})})
+        (if (nil? latest) {nil} {do (publish-diagnostics lsp/idx-db uri latest) nil})})
       nil
-      (\ {_} {lsp/clear-publish-diag-pending uri})}
+      (\ {_} {clear-publish-diag-pending uri})}
 })
 
 (sig 'handle-did-change {-> ChangeParams Nil})
@@ -551,9 +573,9 @@
       (dict/remove! lsp/ast-cache uri)
       (lsp/invalidate-known-set)
       (def {lsp/doc-version} (+ lsp/doc-version 1))
-      (lsp/schedule-cache-ast uri)
-      (lsp/schedule-sync-doc uri)
-      (lsp/schedule-publish-diagnostics uri)})})
+      (schedule-cache-ast uri)
+      (schedule-sync-doc uri)
+      (schedule-publish-diagnostics uri)})})
 
 (sig 'handle-did-close {-> DocParams Nil})
 (fun {handle-did-close params} {do
@@ -565,7 +587,7 @@
   (symdb/live-drop lsp/db (symdb/uri->path uri))
   (aio/dispatch lsp/idx-sys
     (\ {_} {do (symdb/live-drop lsp/idx-db (symdb/uri->path uri)) nil})
-    nil lsp/noop-cb)
+    nil noop-cb)
   (def {lsp/doc-version} (+ lsp/doc-version 1))
   (lsp/send-notification "textDocument/publishDiagnostics"
     (list :uri uri :diagnostics nil))})
@@ -592,9 +614,9 @@
           {lsp/refresh-semantic-tokens}}))
       (aio/dispatch lsp/idx-sys
         (\ {_} {if (not (== lsp/doc-version v)) {nil}
-          {do (lsp/save-doc lsp/idx-db uri save-text) nil}})
+          {do (save-doc lsp/idx-db uri save-text) nil}})
         nil
         (\ {_} {if (not (== lsp/doc-version v)) {}
           {lsp/refresh-semantic-tokens}}))
-      (lsp/schedule-publish-diagnostics uri)})})
+      (schedule-publish-diagnostics uri)})})
 

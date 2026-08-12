@@ -1,5 +1,11 @@
 ; Valkyria LSP Server — hover, definition, references, completion, symbols, rename
 
+(load "stdlib/diag/symdb.valk")
+(load "scripts/lsp/io.valk")
+(load "scripts/lsp/analysis.valk")
+(load "scripts/lsp/refs.valk")
+(load "scripts/lsp/hints.valk")
+
 (module nav)
 
 ; ---------------------------------------------------------------------------
@@ -51,8 +57,8 @@
 ; Hover — AST-node-aware via symdb nodes table
 ; ---------------------------------------------------------------------------
 
-(sig 'hover/describe {-> List Ref Str})
-(fun {hover/describe info db} {
+(sig 'hover/describe {-> List Ref Str Str})
+(fun {hover/describe info db path} {
   if (nil? info) {nil}
   {do
     (= {ntype} (plist/get info :type))
@@ -63,16 +69,16 @@
       {if (> (len name) 0)
         {if (== (str/slice name 0 1) ":")
           {str "```valk\n" name " :: Keyword\n```"}
-          {hover/sym-describe name db}}
+          {hover/sym-describe name db path}}
         {nil}}
     {nil}}})}
 })
 
-(sig 'hover/sym-describe {-> Str Ref Str})
-(fun {hover/sym-describe name db} {
+(sig 'hover/sym-describe {-> Str Ref Str Str})
+(fun {hover/sym-describe name db path} {
   if (nil? db) {str "```valk\n" name "\n```"}
   {do
-    (= {info} (symdb/symbol-hover db name))
+    (= {info} (symdb/symbol-hover-in db name path))
     (if (nil? info) {str "```valk\n" name "\n```"}
       {hover/format-markdown info name})}
 })
@@ -82,7 +88,7 @@
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
-      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
+      (= {offset} (sem/line-col->offset ctx:text ctx:line ctx:col))
       (= {path} (symdb/uri->path ctx:uri))
       (= {info} (if (nil? lsp/db) {nil}
         {do (= {r} (symdb/node-at-offset lsp/db path offset))
@@ -93,7 +99,7 @@
         {plist/get info :name}))
       (if (nil? word) {lsp/send-response id (None)}
         {do
-          (= {hover-str} (hover/describe info lsp/db))
+          (= {hover-str} (hover/describe info lsp/db path))
           (= {hover-str} (if (nil? hover-str)
             {do
               (= {fallback-info} (if (nil? lsp/db) {nil}
@@ -131,14 +137,14 @@
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
       (= {path} (symdb/uri->path ctx:uri))
-      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
+      (= {offset} (sem/line-col->offset ctx:text ctx:line ctx:col))
       (= {local-def} (lsp/find-local-def ctx:ast ctx:text ctx:line ctx:col ctx:word path offset))
       (if (not (nil? local-def))
         {lsp/respond-def-offset id ctx:uri ctx:text local-def}
         {do
           (= {sites} (if (nil? lsp/db) {nil}
             {symdb/find-definition-sites lsp/db ctx:word path}))
-          (= {locs} (map (\ {d} {nav/def->lsp-location d (len ctx:word)}) sites))
+          (= {locs} (map (\ {d} {def->lsp-location d (len ctx:word)}) sites))
           (if (nil? locs) {lsp/send-response id (None)}
             ; textDocument/definition accepts Location | Location[]. A name
             ; defined in several files (e.g. a test mock shadowing the real
@@ -150,8 +156,8 @@
   )
 })
 
-(sig 'nav/def->lsp-location {-> List Num List})
-(fun {nav/def->lsp-location d word-len} {do
+(sig 'def->lsp-location {-> List Num List})
+(fun {def->lsp-location d word-len} {do
   (= {line} (plist/get d :line))
   (= {col} (plist/get d :col))
   (list :uri (str "file://" (plist/get d :path))
@@ -193,7 +199,7 @@
         (if (not (== ntype "sym")) {nil}
           {if (not (> (len nname) 0)) {nil}
           {if (not (== (str/slice nname 0 1) ":")) {nil}
-            {symdb/find-field-definition db nname nctx}}})})}
+            {symdb/find-field-definition db nname nctx path}}})})}
 })
 
 (sig 'lsp/respond-def-offset {-> Num Str Str List Nil})
@@ -229,7 +235,7 @@
   (if (nil? ctx) {lsp/send-response id nil}
     {do
       (= {path} (symdb/uri->path ctx:uri))
-      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
+      (= {offset} (sem/line-col->offset ctx:text ctx:line ctx:col))
       (= {target} (if (nil? lsp/db) {nil}
         {symdb/get-ref-at-offset lsp/db path offset}))
       (= {local-refs} (if (nil? target) {nil}
@@ -251,7 +257,14 @@
             {lsp/send-response id (map (\ {r} {ref->lsp-location ctx:uri ctx:text r}) ast-refs)}
             {if (nil? lsp/db) {lsp/send-response id nil}
               {do
-                (= {refs} (symdb/find-refs lsp/db ctx:word))
+                ; Reverse direction of the load graph: only references from
+                ; files whose own resolution of the name reaches the same
+                ; definition this document resolves to.
+                (= {rpath} (symdb/uri->path ctx:uri))
+                (= {rsites} (symdb/find-definition-sites lsp/db ctx:word rpath))
+                (= {rdef} (if (nil? rsites) {nil}
+                  {plist/get (head rsites) :path}))
+                (= {refs} (symdb/find-refs-resolved lsp/db ctx:word rdef))
                 (lsp/send-response id (map (\ {r} {
                   list :uri (str "file://" (plist/get r :path))
                        :range (list
@@ -280,7 +293,7 @@
 ; the popup never appear.
 (sig 'lsp/in-string? {-> Str Num Num Num})
 (fun {lsp/in-string? text line col} {do
-  (= {offset} (analysis/line-col->offset text line col))
+  (= {offset} (sem/line-col->offset text line col))
   (str/in-string? text offset)
 })
 
@@ -403,8 +416,8 @@
         (= {sym-items} (if (nil? lsp/db) {nil}
           {do
             (= {syms} (if (== prefix "")
-              {symdb/completion-all lsp/db}
-              {symdb/completion-symbols lsp/db prefix}))
+              {symdb/completion-all-in lsp/db (symdb/uri->path ctx:uri)}
+              {symdb/completion-symbols-in lsp/db (symdb/uri->path ctx:uri) prefix}))
             (map make-sym-completion-item (map row->completion-row syms))}))
         (= {all-items} (join snippet-items (if (nil? sym-items) {nil} {sym-items})))
         (lsp/send-response id (list :isIncomplete :false :items all-items))}})
@@ -480,14 +493,14 @@
       (lsp/send-response id (list :data data))})
 })
 
-(sig 'nav/rows-to-token-groups {-> List List})
-(fun {nav/rows-to-token-groups rows} {
+(sig 'rows-to-token-groups {-> List List})
+(fun {rows-to-token-groups rows} {
   if (nil? rows) {nil}
   {do
     (= {r} (head rows))
     (qcons (list (plist/get r :pos) (plist/get r :length)
                  (plist/get r :token_type) (plist/get r :modifiers))
-      (nav/rows-to-token-groups (tail rows)))}
+      (rows-to-token-groups (tail rows)))}
 })
 
 ; ---------------------------------------------------------------------------
@@ -570,8 +583,12 @@
         {if (nil? lsp/db) {lsp/send-error id -32602 "No workspace"}
           {do
             (= 'word-len (len ctx:word))
-            (= 'db-refs (symdb/find-refs lsp/db ctx:word))
-            (= 'db-defs (symdb/find-definitions lsp/db ctx:word))
+            (= 'rpath (symdb/uri->path ctx:uri))
+            (= 'rsites (symdb/find-definition-sites lsp/db ctx:word rpath))
+            (= 'rdef (if (nil? rsites) {nil}
+              {plist/get (head rsites) :path}))
+            (= 'db-refs (symdb/find-refs-resolved lsp/db ctx:word rdef))
+            (= 'db-defs rsites)
             (= 'all-locs (join
               (map (\ {r} {
                 list :uri (str "file://" r:path)

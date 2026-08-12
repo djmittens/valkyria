@@ -1,5 +1,12 @@
 ; Valkyria LSP Server — inlay hints, signature help, highlight, links, folding, selection, code lens, code actions
 
+(load "stdlib/diag/symdb.valk")
+(load "scripts/lsp/io.valk")
+(load "scripts/lsp/analysis.valk")
+(load "scripts/lsp/refs.valk")
+(load "scripts/lsp/hints.valk")
+(load "scripts/lsp/hints-fields.valk")
+
 (module features)
 
 ; ---------------------------------------------------------------------------
@@ -19,6 +26,7 @@
       ; edited loses its own. Re-serving the last clean parse's hints
       ; instead puts them at offsets the client's text no longer has.
       (= {current-ast} (lsp/get-ast ctx:uri ctx:text))
+      (hint/set-doc-path (symdb/uri->path ctx:uri))
       (if (nil? current-ast)
         {lsp/send-response id nil}
         {lsp/send-response id
@@ -97,7 +105,8 @@
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
-      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
+      (hint/set-doc-path (symdb/uri->path ctx:uri))
+      (= {offset} (sem/line-col->offset ctx:text ctx:line ctx:col))
       (= {open-pos} (sig/scan-back ctx:text (- offset 1) 0 0))
       (if (nil? open-pos) {lsp/send-response id (None)}
         {do
@@ -115,9 +124,7 @@
                   ; behavior for the :sig field returning ()) by
                   ; querying sqlite directly for the sig column.
                   (= {sig-row} (if (nil? lsp/db) {nil}
-                    {sqlite/query-maybe lsp/db
-                      "SELECT sig, doc FROM symbols WHERE name=?1 AND sig LIKE '{->%' LIMIT 1"
-                      name}))
+                    {symdb/sig-of lsp/db (symdb/uri->path ctx:uri) name}))
                   (= {sig-str} (if (nil? sig-row) {nil} {plist/get sig-row :sig}))
                   (= {sig-doc} (if (nil? sig-row) {nil} {plist/get sig-row :doc}))
                   (= {typed-params} (if (nil? sig-str) {nil}
@@ -178,7 +185,7 @@
   (if (nil? ctx) {lsp/send-response id nil}
     {do
       (= {path} (symdb/uri->path ctx:uri))
-      (= {offset} (analysis/line-col->offset ctx:text ctx:line ctx:col))
+      (= {offset} (sem/line-col->offset ctx:text ctx:line ctx:col))
       (= {target} (if (nil? lsp/db) {nil}
         {symdb/get-ref-at-offset lsp/db path offset}))
       (= {db-refs} (if (nil? target) {nil}
@@ -367,7 +374,7 @@
   map (\ {pos} {do
     (= {line} pos:line)
     (= {col} pos:character)
-    (= {offset} (analysis/line-col->offset text line col))
+    (= {offset} (sem/line-col->offset text line col))
     (if (error? ast)
       {list :range (list :start pos :end pos)}
       {do
@@ -439,11 +446,11 @@
     {do
       (= {path} (symdb/uri->path uri))
       (= {syms} (symdb/file-symbols lsp/db path))
-      (= {lenses} (lens/build-from-syms syms lsp/db))
+      (= {lenses} (lens/build-from-syms syms lsp/db path))
       (lsp/send-response id lenses)})})
 
-(sig 'lens/build-from-syms {-> List Ref List})
-(fun {lens/build-from-syms syms db} {
+(sig 'lens/build-from-syms {-> List Ref Str List})
+(fun {lens/build-from-syms syms db path} {
   if (nil? syms) {nil}
   {do
     (= {s} (head syms))
@@ -451,7 +458,9 @@
     (if (== kind symdb/SYMKIND_FUNCTION)
       {do
         (= {name} s:name)
-        (= {count} (symdb/ref-count db name))
+        ; Count only references that resolve to THIS definition through
+        ; their own load graphs.
+        (= {count} (symdb/ref-count-resolved db name path))
         (= {sym-line} s:line)
         (= {sym-col} s:col)
         (= {lens} (list :range (list
@@ -459,8 +468,8 @@
           :end (list :line sym-line :character (+ sym-col (len name))))
           :command (list :title (str count " reference" (if (== count 1) {""} {"s"}))
                          :command "")))
-        (qcons lens (lens/build-from-syms (tail syms) db))}
-      {lens/build-from-syms (tail syms) db})}
+        (qcons lens (lens/build-from-syms (tail syms) db path))}
+      {lens/build-from-syms (tail syms) db path})}
 })
 
 ; ---------------------------------------------------------------------------

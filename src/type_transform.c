@@ -74,6 +74,8 @@ static bool is_field_access(const char *sym) {
   const char *colon = strchr(sym, ':');
   if (!colon || colon == sym || colon[1] == '\0') return false;
   if (colon[1] == ':') return false;
+  // URI-style names (file://path) are plain symbols, not field accesses.
+  if (colon[1] == '/') return false;
   return true;
 }
 

@@ -22,11 +22,6 @@ typedef struct {
   size_t cap;
 } valk_diag_list_t;
 
-typedef struct {
-  bool (*is_known)(const char *name, void *ctx);
-  void *ctx;
-} valk_name_resolver_t;
-
 void valk_diag_init(valk_diag_list_t *list);
 void valk_diag_add(valk_diag_list_t *list, const char *msg,
                    int offset, int len, int severity);
@@ -36,6 +31,3 @@ void valk_diag_fprint(valk_diag_list_t *list, const char *filename,
                       const char *text, FILE *out);
 
 struct valk_lval_t;
-
-valk_diag_list_t valk_validate_ast(struct valk_lval_t *ast, const char *text,
-                                    valk_name_resolver_t resolver);

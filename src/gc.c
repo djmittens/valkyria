@@ -551,6 +551,9 @@ void valk_gc_visit_global_roots(valk_gc_root_visitor_t visitor, void *ctx) {
   extern void valk_parse_cache_visit_roots(valk_gc_root_visitor_t, void *);
   valk_parse_cache_visit_roots(visitor, ctx);
 
+  extern void valk_load_cache_visit_roots(valk_gc_root_visitor_t, void *);
+  valk_load_cache_visit_roots(visitor, ctx);
+
   // thread_mutex: late registrants may mutate the registry concurrently
   // with this scan (they are excluded from the cycle but not from
   // registering). Their critical section is bounded and never waits on GC.

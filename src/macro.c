@@ -170,6 +170,31 @@ static void qualify_def_name(valk_lval_t *form, const char *prefix) {
 
 // --- Shadow-aware rewriter for intra-file call sites. ---
 
+struct valk_module_locals {
+  name_set_t set;
+};
+
+valk_module_locals_t *valk_module_locals_new(void) {
+  return calloc(1, sizeof(valk_module_locals_t));
+}
+
+void valk_module_locals_collect(valk_module_locals_t *locals,
+                                valk_lval_t *form) {
+  const char *name = extract_unqualified_def_name(form);
+  if (name) name_set_add(&locals->set, name);
+}
+
+void valk_module_locals_free(valk_module_locals_t *locals) {
+  name_set_free(&locals->set);
+  free(locals);
+}
+
+typedef struct {
+  const char *prefix;
+  name_set_t *locals;
+  bool use_aliases;
+} rw_ctx_t;
+
 static void push_formals(valk_lval_t *formals, name_set_t *shadows) {
   valk_lval_t *cur = formals;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
@@ -179,29 +204,40 @@ static void push_formals(valk_lval_t *formals, name_set_t *shadows) {
   }
 }
 
-static void rewrite_node(valk_lval_t *cell, const char *prefix,
-                         name_set_t *locals, name_set_t *shadows);
+static void rewrite_node(valk_lval_t *cell, const rw_ctx_t *rw,
+                         name_set_t *shadows);
 
-static void rewrite_list(valk_lval_t *list, const char *prefix,
-                         name_set_t *locals, name_set_t *shadows) {
+static void rewrite_list(valk_lval_t *list, const rw_ctx_t *rw,
+                         name_set_t *shadows) {
   valk_lval_t *cur = list;
   while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-    rewrite_node(cur, prefix, locals, shadows);
+    rewrite_node(cur, rw, shadows);
     cur = cur->cons.tail;
   }
 }
 
-static void rewrite_node(valk_lval_t *cell, const char *prefix,
-                         name_set_t *locals, name_set_t *shadows) {
+static void rewrite_node(valk_lval_t *cell, const rw_ctx_t *rw,
+                         name_set_t *shadows) {
   valk_lval_t *expr = cell->cons.head;
   if (!expr) return;
 
   if (LVAL_TYPE(expr) == LVAL_SYM) {
     if (expr->str[0] == ':') return;
     if (name_set_has(shadows, expr->str)) return;
-    if (strchr(expr->str, '/')) return;
-    if (name_set_has(locals, expr->str))
-      cell->cons.head = qualify_sym(prefix, expr->str, LVAL_SRC_POS(expr));
+    if (strchr(expr->str, '/')) {
+      if (rw->use_aliases) {
+        char *repl = valk_load_resolve_alias(expr->str);
+        if (repl) {
+          valk_lval_t *sym = valk_lval_sym(repl);
+          LVAL_SRC_POS_SET(sym, LVAL_SRC_POS(expr));
+          cell->cons.head = sym;
+          free(repl);
+        }
+      }
+      return;
+    }
+    if (rw->prefix[0] && name_set_has(rw->locals, expr->str))
+      cell->cons.head = qualify_sym(rw->prefix, expr->str, LVAL_SRC_POS(expr));
     return;
   }
 
@@ -228,7 +264,7 @@ static void rewrite_node(valk_lval_t *cell, const char *prefix,
         name_set_add(&inner, shadows->names[i]);
       push_formals(rest->cons.head, &inner);
       if (rest->cons.tail && LVAL_TYPE(rest->cons.tail) == LVAL_CONS)
-        rewrite_list(rest->cons.tail, prefix, locals, &inner);
+        rewrite_list(rest->cons.tail, rw, &inner);
       name_set_free(&inner);
     }
     return;
@@ -242,7 +278,7 @@ static void rewrite_node(valk_lval_t *cell, const char *prefix,
         if (LVAL_TYPE(bind) == LVAL_SYM) name_set_add(shadows, bind->str);
         else if (LVAL_TYPE(bind) == LVAL_CONS) push_formals(bind, shadows);
         if (rest->cons.tail && LVAL_TYPE(rest->cons.tail) == LVAL_CONS)
-          rewrite_list(rest->cons.tail, prefix, locals, shadows);
+          rewrite_list(rest->cons.tail, rw, shadows);
       }
       return;
     }
@@ -253,7 +289,7 @@ static void rewrite_node(valk_lval_t *cell, const char *prefix,
       valk_lval_t *rest = expr->cons.tail;
       if (rest && LVAL_TYPE(rest) == LVAL_CONS) {
         if (rest->cons.tail && LVAL_TYPE(rest->cons.tail) == LVAL_CONS)
-          rewrite_list(rest->cons.tail, prefix, locals, shadows);
+          rewrite_list(rest->cons.tail, rw, shadows);
       }
       return;
     }
@@ -266,7 +302,7 @@ static void rewrite_node(valk_lval_t *cell, const char *prefix,
       return;
   }
 
-  rewrite_list(expr, prefix, locals, shadows);
+  rewrite_list(expr, rw, shadows);
 }
 
 // If `form` is a top-level (sig 'name ...) whose name matches a local bare
@@ -301,45 +337,39 @@ static void qualify_sig_if_local(valk_lval_t *form, const char *prefix,
   *slot = qualify_sym(prefix, sym->str, LVAL_SRC_POS(sym));
 }
 
+void valk_module_rewrite_form(valk_lval_t *cell, const char *prefix,
+                              valk_module_locals_t *locals, bool qualify_defs,
+                              bool use_aliases) {
+  if (!cell || LVAL_TYPE(cell) != LVAL_CONS) return;
+  rw_ctx_t rw = { prefix ? prefix : "", &locals->set, use_aliases };
+
+  valk_lval_t *form = cell->cons.head;
+  if (rw.prefix[0] && qualify_defs) {
+    if (form && LVAL_TYPE(form) == LVAL_CONS &&
+        !(form->flags & LVAL_FLAG_QUOTED) &&
+        form->cons.head && LVAL_TYPE(form->cons.head) == LVAL_SYM &&
+        strcmp(form->cons.head->str, "def") == 0)
+      qualify_def_name(form, rw.prefix);
+    else
+      qualify_sig_if_local(form, rw.prefix, &locals->set);
+  }
+
+  name_set_t shadows = {0};
+  rewrite_node(cell, &rw, &shadows);
+  name_set_free(&shadows);
+}
+
 void valk_module_apply_prefix(valk_lval_t *ast, const char *prefix) {
   if (!prefix || !*prefix) return;
 
-  // Pass 1a: collect local bare-name defs.
-  name_set_t locals = {0};
-  {
-    valk_lval_t *cur = ast;
-    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-      const char *name = extract_unqualified_def_name(cur->cons.head);
-      if (name) name_set_add(&locals, name);
-      cur = cur->cons.tail;
-    }
-  }
+  valk_module_locals_t *locals = valk_module_locals_new();
+  for (valk_lval_t *cur = ast; cur && LVAL_TYPE(cur) == LVAL_CONS;
+       cur = cur->cons.tail)
+    valk_module_locals_collect(locals, cur->cons.head);
 
-  // Pass 1b: qualify top-level def and paired sig names.
-  {
-    valk_lval_t *cur = ast;
-    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-      valk_lval_t *form = cur->cons.head;
-      if (form && LVAL_TYPE(form) == LVAL_CONS &&
-          !(form->flags & LVAL_FLAG_QUOTED) &&
-          form->cons.head && LVAL_TYPE(form->cons.head) == LVAL_SYM &&
-          strcmp(form->cons.head->str, "def") == 0)
-        qualify_def_name(form, prefix);
-      else
-        qualify_sig_if_local(form, prefix, &locals);
-      cur = cur->cons.tail;
-    }
-  }
+  for (valk_lval_t *cur = ast; cur && LVAL_TYPE(cur) == LVAL_CONS;
+       cur = cur->cons.tail)
+    valk_module_rewrite_form(cur, prefix, locals, true, false);
 
-  // Pass 2: rewrite bare references to `locals` throughout the AST, with
-  // shadow tracking for lambda params and `=` bindings.
-  name_set_t shadows = {0};
-  valk_lval_t *cur = ast;
-  while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-    rewrite_node(cur, prefix, &locals, &shadows);
-    cur = cur->cons.tail;
-  }
-
-  name_set_free(&shadows);
-  name_set_free(&locals);
+  valk_module_locals_free(locals);
 }

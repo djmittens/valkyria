@@ -170,60 +170,13 @@ static int resolve_exe_dir(char *out, size_t cap) {
 
 static valk_lval_t *eval_script_capture_last(valk_lenv_t *env,
                                              const char *script_path) {
-  valk_gc_heap_t *heap = (valk_gc_heap_t *)valk_thread_ctx.allocator;
-
-  valk_lval_t *res;
-  VALK_WITH_ALLOC((void *)heap) { res = valk_parse_file(script_path); }
-  if (LVAL_TYPE(res) == LVAL_ERR) { valk_lval_println(res); return NULL; }
-  valk_gc_root_push(res);
-
-  VALK_WITH_ALLOC((void *)heap) {
-    valk_lval_t *cur = res;
-    while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-      if (valk_macro_is_def(cur->cons.head)) {
-        valk_lval_t *r = valk_lval_eval(env, cur->cons.head);
-        if (LVAL_TYPE(r) == LVAL_ERR) valk_lval_println(r);
-        cur->cons.head = valk_lval_nil();
-      } else {
-        cur->cons.head = valk_macro_expand_one(env, cur->cons.head);
-      }
-      cur = cur->cons.tail;
-    }
+  // The loader pipeline treats the file as a (do ...): the last top-level
+  // form's value is the file's value (heap-evacuated by the loader).
+  valk_lval_t *last = valk_load_file(env, script_path);
+  if (LVAL_TYPE(last) == LVAL_ERR) {
+    valk_lval_println(last);
+    return NULL;
   }
-
-  char *script_prefix = valk_take_pending_module_prefix();
-  if (script_prefix) valk_module_apply_prefix(res, script_prefix);
-
-  valk_lval_t *last = valk_lval_nil();
-  while (valk_lval_list_count(res) > 0) {
-    valk_lval_t *x;
-    VALK_WITH_ALLOC((void *)heap) {
-      x = valk_lval_pop(res, 0);
-      x = valk_type_transform_expr(x);
-    }
-    if (LVAL_TYPE(x) == LVAL_NIL) continue;
-    if (LVAL_TYPE(x) == LVAL_ERR) {
-      valk_lval_println(x);
-      valk_gc_root_pop();
-      if (script_prefix) free(script_prefix);
-      return NULL;
-    }
-    valk_gc_root_push(x);
-    VALK_WITH_ALLOC((void *)valk_thread_ctx.scratch) {
-      x = valk_lval_eval(env, x);
-    }
-    valk_gc_root_pop();
-    if (LVAL_TYPE(x) == LVAL_ERR) {
-      valk_lval_println(x);
-      valk_gc_root_pop();
-      if (script_prefix) free(script_prefix);
-      return NULL;
-    }
-    VALK_WITH_ALLOC((void *)heap) { last = valk_lval_copy(x); }
-    VALK_GC_SAFE_POINT();
-  }
-  valk_gc_root_pop();
-  if (script_prefix) free(script_prefix);
   return last;
 }
 

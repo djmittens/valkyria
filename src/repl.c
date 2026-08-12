@@ -142,32 +142,11 @@ int main(int argc, char* argv[]) {
         char script_path[PATH_MAX];
         snprintf(script_path, sizeof(script_path), "%s/stdlib/diag/quality.valk", resolved);
         script_mode = true;
-        valk_lval_t *res;
-        VALK_WITH_ALLOC((void*)gc_heap) {
-          res = valk_parse_file(script_path);
-        }
+        valk_lval_t *res = valk_load_file(env, script_path);
         if (LVAL_TYPE(res) == LVAL_ERR) {
           valk_lval_println(res);
           return 1;
         }
-        valk_gc_root_push(res);
-        while (valk_lval_list_count(res) > 0) {
-          valk_lval_t *x;
-          VALK_WITH_ALLOC((void*)gc_heap) {
-            x = valk_type_transform_expr(valk_lval_pop(res, 0));
-          }
-          if (LVAL_TYPE(x) == LVAL_NIL) continue;
-          if (LVAL_TYPE(x) == LVAL_ERR) { valk_lval_println(x); break; }
-          valk_gc_root_push(x);
-          VALK_WITH_ALLOC((void*)scratch) {
-            x = valk_lval_eval(env, x);
-          }
-          valk_gc_root_pop();
-          if (LVAL_TYPE(x) == LVAL_ERR) { valk_lval_println(x); break; }
-          VALK_GC_SAFE_POINT();
-          if (valk_gc_should_collect(gc_heap)) valk_gc_heap_collect(gc_heap);
-        }
-        valk_gc_root_pop();
         continue;
       }
       if (strcmp(argv[i], "--build") == 0) {
@@ -201,69 +180,11 @@ int main(int argc, char* argv[]) {
         break;
       }
       script_mode = true;  // Any file argument implies script mode
-      valk_lval_t* res;
-      // Parse into GC heap (persistent - AST must survive checkpoints)
-      VALK_WITH_ALLOC((void*)gc_heap) {
-        res = valk_parse_file(argv[i]);
-      }
+      // The script goes through the same loader pipeline as any (load ...):
+      // file-as-(do ...), module nesting, alias resolution.
+      valk_lval_t *res = valk_load_file(env, argv[i]);
       if (LVAL_TYPE(res) == LVAL_ERR) {
         valk_lval_println(res);
-      } else {
-        valk_gc_root_push(res);
-
-        // Pass 1: macro-expand top-level forms. (macro ...) defs eval into
-        // env; other forms get their macro calls expanded. A top-level
-        // (module X) macro here sets the pending prefix via side effect.
-        VALK_WITH_ALLOC((void*)gc_heap) {
-          valk_lval_t *cur = res;
-          while (cur && LVAL_TYPE(cur) == LVAL_CONS) {
-            if (valk_macro_is_def(cur->cons.head)) {
-              valk_lval_t *r = valk_lval_eval(env, cur->cons.head);
-              if (LVAL_TYPE(r) == LVAL_ERR) valk_lval_println(r);
-              cur->cons.head = valk_lval_nil();
-            } else {
-              cur->cons.head = valk_macro_expand_one(env, cur->cons.head);
-            }
-            cur = cur->cons.tail;
-          }
-        }
-
-        // Pass 2: apply module prefix if (module X) was declared.
-        char *script_prefix = valk_take_pending_module_prefix();
-        if (script_prefix)
-          valk_module_apply_prefix(res, script_prefix);
-
-        // Pass 3: type-transform + eval each form.
-        while (valk_lval_list_count(res) > 0) {
-          valk_lval_t* x;
-          VALK_WITH_ALLOC((void*)gc_heap) {
-            x = valk_lval_pop(res, 0);
-            x = valk_type_transform_expr(x);
-          }
-          if (LVAL_TYPE(x) == LVAL_NIL) continue;
-          if (LVAL_TYPE(x) == LVAL_ERR) {
-            valk_lval_println(x);
-            break;
-          }
-          valk_gc_root_push(x);
-          VALK_WITH_ALLOC((void*)scratch) {
-            x = valk_lval_eval(env, x);
-          }
-          valk_gc_root_pop();
-
-          if (LVAL_TYPE(x) == LVAL_ERR) {
-            valk_lval_println(x);
-            break;
-          }
-          if (atomic_load(&sys->shutting_down)) break;
-
-          VALK_GC_SAFE_POINT();
-          if (valk_gc_should_collect(gc_heap)) {
-            valk_gc_heap_collect(gc_heap);
-          }
-        }
-        if (script_prefix) free(script_prefix);
-        valk_gc_root_pop();
       }
     }
   }

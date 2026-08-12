@@ -1,0 +1,7 @@
+; Fixture: nests lsp/io under bar (-> bar/lsp/io) and calls through the
+; alias.
+(module bar)
+
+(load "deep.valk")
+
+(lsp/io/foo 4)

@@ -6,21 +6,22 @@
 ; 2. Collect variable types from sigs and constructor bindings → func → var → type
 ; 3. Walk AST and emit hints where var:field resolves to a known field type
 
+(load "stdlib/diag/symdb.valk")
 (load "scripts/lsp/hints.valk")
 
-(module hints-fields)
+(module hint)
 
 ; ---------------------------------------------------------------------------
 ; Public API — combines parameter hints, type hints, and field-access hints
 ; ---------------------------------------------------------------------------
 
-(sig 'hint/collect {-> Str Ref List List})
-(fun {hint/collect text db range} {
-  hint/collect-from-ast (parse text) text db range
+(sig 'collect {-> Str Ref List List})
+(fun {collect text db range} {
+  collect-from-ast (parse text) text db range
 })
 
-(sig 'hint/collect-from-ast {-> List Str Ref List List})
-(fun {hint/collect-from-ast ast text db range} {
+(sig 'collect-from-ast {-> List Str Ref List List})
+(fun {collect-from-ast ast text db range} {
   if (error? ast) {nil}
   {do
     (hint/reset-query-cache)
@@ -29,7 +30,7 @@
     (= {ctx} (list :local local-params :db db))
     (= {raw-hints} (hint/walk-exprs ast ctx nil))
     (= {type-hints} (hint/collect-type-hints ast db))
-    (= {field-hints} (hint/collect-field-hints ast db))
+    (= {field-hints} (collect-field-hints ast db))
     ; BYOL: any pass returning an error (e.g. field-hints walker hitting
     ; an untyped binding) should degrade to "no hints from that pass"
     ; rather than propagate up.
@@ -41,52 +42,52 @@
 
 ; --- Pass 1: Collect type definitions ---
 
-(sig 'hint/td-field-pairs {-> List List List})
-(fun {hint/td-field-pairs fields acc} {
+(sig 'td-field-pairs {-> List List List})
+(fun {td-field-pairs fields acc} {
   if (nil? fields) {acc}
   {if (< (len fields) 2) {acc}
   {do
     (= {f} (str (head fields)))
     (= {t} (str (nth 2 fields)))
-    (hint/td-field-pairs (tail (tail fields))
+    (td-field-pairs (tail (tail fields))
       (qcons (list :field f :type t) acc))}}
 })
 
-(sig 'hint/td-parse-ctor {-> List List List})
-(fun {hint/td-parse-ctor ctor defs} {
+(sig 'td-parse-ctor {-> List List List})
+(fun {td-parse-ctor ctor defs} {
   if (not (list? ctor)) {defs}
   {if (nil? ctor) {defs}
   {do
     (= {cname} (str (head ctor)))
-    (= {pairs} (hint/td-field-pairs (tail ctor) nil))
+    (= {pairs} (td-field-pairs (tail ctor) nil))
     (qcons (list :ctor cname :fields pairs) defs)}}
 })
 
-(sig 'hint/td-parse-body {-> Str List List List})
-(fun {hint/td-parse-body type-name body defs} {
+(sig 'td-parse-body {-> Str List List List})
+(fun {td-parse-body type-name body defs} {
   if (nil? body) {defs}
   {do
     (= {fs} (ast/head-name body))
     (if (> (len fs) 0)
       {if (== (str/slice fs 0 1) ":")
         {do
-          (= {pairs} (hint/td-field-pairs body nil))
+          (= {pairs} (td-field-pairs body nil))
           (qcons (list :ctor type-name :fields pairs) defs)}
         {defs}}
       {if (list? (head body))
-        {hint/td-parse-ctors body defs}
+        {td-parse-ctors body defs}
         {defs}})}
 })
 
-(sig 'hint/td-parse-ctors {-> List List List})
-(fun {hint/td-parse-ctors ctors defs} {
+(sig 'td-parse-ctors {-> List List List})
+(fun {td-parse-ctors ctors defs} {
   if (nil? ctors) {defs}
-  {hint/td-parse-ctors (tail ctors)
-    (hint/td-parse-ctor (head ctors) defs)}
+  {td-parse-ctors (tail ctors)
+    (td-parse-ctor (head ctors) defs)}
 })
 
-(sig 'hint/td-one {-> Any List List})
-(fun {hint/td-one expr defs} {
+(sig 'td-one {-> Any List List})
+(fun {td-one expr defs} {
   if (not (list? expr)) {defs}
   {if (< (len expr) 3) {defs}
   {do
@@ -97,47 +98,45 @@
     (= {name-list} (nth 2 expr))
     (if (not (list? name-list)) {defs}
     {if (nil? name-list) {defs}
-    {hint/td-parse-body (str (head name-list)) (nth 3 expr) defs}})}})}}
+    {td-parse-body (str (head name-list)) (nth 3 expr) defs}})}})}}
 })
 
-(sig 'hint/collect-type-defs {-> List List})
-(fun {hint/collect-type-defs ast} {
+(sig 'collect-type-defs {-> List List})
+(fun {collect-type-defs ast} {
   if (nil? ast) {nil}
-  {hint/collect-type-defs-loop ast nil}
+  {collect-type-defs-loop ast nil}
 })
 
-(sig 'hint/collect-type-defs-loop {-> List List List})
-(fun {hint/collect-type-defs-loop exprs defs} {
+(sig 'collect-type-defs-loop {-> List List List})
+(fun {collect-type-defs-loop exprs defs} {
   if (nil? exprs) {defs}
   {do
     (= {e} (head exprs))
-    (hint/collect-type-defs-loop (tail exprs)
-      (if (error? e) {defs} {hint/td-one e defs}))}
+    (collect-type-defs-loop (tail exprs)
+      (if (error? e) {defs} {td-one e defs}))}
 })
 
 ; --- Pass 2: Collect variable types (from inferred types + constructor bindings) ---
 
-(sig 'hint/query-inferred-type {-> Ref Str Str})
-(fun {hint/query-inferred-type db name} {
+(sig 'query-inferred-type {-> Ref Str Str})
+(fun {query-inferred-type db name} {
   if (nil? db) {nil}
   {do
-    (= {row} (sqlite/query-maybe db
-      "SELECT inferred_type FROM symbols WHERE name=?1 AND inferred_type IS NOT NULL LIMIT 1"
-      name))
+    (= {row} (symdb/inferred-type-of db hint/doc-path name))
     (if (nil? row) {nil} {row:inferred_type})}
 })
 
-(sig 'hint/parse-fn-return-type {-> Str Str})
-(fun {hint/parse-fn-return-type type-str} {
+(sig 'parse-fn-return-type {-> Str Str})
+(fun {parse-fn-return-type type-str} {
   if (nil? type-str) {nil}
   {do
-    (= {parts} (hint/split-type-parts type-str))
+    (= {parts} (split-type-parts type-str))
     (if (nil? parts) {nil}
       {last parts})}
 })
 
-(sig 'hint/split-type-parts {-> Str List})
-(fun {hint/split-type-parts type-str} {
+(sig 'split-type-parts {-> Str List})
+(fun {split-type-parts type-str} {
   if (nil? type-str) {nil}
   {if (< (len type-str) 5) {nil}
   {do
@@ -148,18 +147,18 @@
       (str/split inner " ")})}}
 })
 
-(sig 'hint/vt-correlate-inferred {-> List Str Ref List List})
-(fun {hint/vt-correlate-inferred params fname db acc} {
+(sig 'vt-correlate-inferred {-> List Str Ref List List})
+(fun {vt-correlate-inferred params fname db acc} {
   if (nil? params) {acc}
   {do
-    (= {inferred} (hint/query-inferred-type db fname))
-    (= {parts} (hint/split-type-parts inferred))
+    (= {inferred} (query-inferred-type db fname))
+    (= {parts} (split-type-parts inferred))
     (if (nil? parts) {acc}
-      {hint/vt-correlate-parts params parts 0 acc})}
+      {vt-correlate-parts params parts 0 acc})}
 })
 
-(sig 'hint/vt-correlate-parts {-> List List Num List List})
-(fun {hint/vt-correlate-parts params parts idx acc} {
+(sig 'vt-correlate-parts {-> List List Num List List})
+(fun {vt-correlate-parts params parts idx acc} {
   if (nil? params) {acc}
   {if (>= idx (- (len parts) 1)) {acc}
   {do
@@ -167,33 +166,33 @@
     (= {pname} (if (sym? (head params)) {str (head params)} {nil}))
     (= {acc2} (if (nil? pname) {acc}
       {qcons (list :var pname :type t) acc}))
-    (hint/vt-correlate-parts (tail params) parts (+ idx 1) acc2)}}
+    (vt-correlate-parts (tail params) parts (+ idx 1) acc2)}}
 })
 
-(sig 'hint/vt-scan-body {-> Any Ref List List})
-(fun {hint/vt-scan-body expr db acc} {
+(sig 'vt-scan-body {-> Any Ref List List})
+(fun {vt-scan-body expr db acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
   {do
     (= {n} (ast/head-name expr))
     (if (== n "") {acc}
-    {if (== n "=") {hint/vt-scan-binding (tail expr) db acc}
-    {if (== n "do") {hint/vt-scan-list (tail expr) db acc}
-    {if (== n "if") {hint/vt-scan-list (tail expr) db acc}
-    {if (== n "let") {hint/vt-scan-list (tail expr) db acc}
-    {if (== n "match") {hint/vt-scan-list (tail expr) db acc}
+    {if (== n "=") {vt-scan-binding (tail expr) db acc}
+    {if (== n "do") {vt-scan-list (tail expr) db acc}
+    {if (== n "if") {vt-scan-list (tail expr) db acc}
+    {if (== n "let") {vt-scan-list (tail expr) db acc}
+    {if (== n "match") {vt-scan-list (tail expr) db acc}
     {acc}}}}}})}}
 })
 
-(sig 'hint/vt-scan-list {-> List Ref List List})
-(fun {hint/vt-scan-list exprs db acc} {
+(sig 'vt-scan-list {-> List Ref List List})
+(fun {vt-scan-list exprs db acc} {
   if (nil? exprs) {acc}
-  {hint/vt-scan-list (tail exprs) db
-    (hint/vt-scan-body (head exprs) db acc)}
+  {vt-scan-list (tail exprs) db
+    (vt-scan-body (head exprs) db acc)}
 })
 
-(sig 'hint/vt-scan-binding {-> List Ref List List})
-(fun {hint/vt-scan-binding tl db acc} {
+(sig 'vt-scan-binding {-> List Ref List List})
+(fun {vt-scan-binding tl db acc} {
   if (< (len tl) 2) {acc}
   {do
     (= {formals} (head tl))
@@ -210,22 +209,22 @@
           (if (== hn "") {nil}
           {if (hint/is-ctor-name hn) {hn}
           {do
-            (= {ret} (hint/query-inferred-ret db hn))
+            (= {ret} (query-inferred-ret db hn))
             (if (nil? ret) {hint/infer-call-return-type hn db} {ret})}})}}}))
       (if (nil? inferred) {acc}
         {qcons (list :var var-name :type inferred) acc})}})}
 })
 
-(sig 'hint/query-inferred-ret {-> Ref Str Str})
-(fun {hint/query-inferred-ret db name} {
+(sig 'query-inferred-ret {-> Ref Str Str})
+(fun {query-inferred-ret db name} {
   if (nil? db) {nil}
   {do
-    (= {t} (hint/query-inferred-type db name))
-    (hint/parse-fn-return-type t)}
+    (= {t} (query-inferred-type db name))
+    (parse-fn-return-type t)}
 })
 
-(sig 'hint/vt-from-fun {-> List Ref List List})
-(fun {hint/vt-from-fun tl db result} {
+(sig 'vt-from-fun {-> List Ref List List})
+(fun {vt-from-fun tl db result} {
   if (< (len tl) 2) {result}
   {do
     (= {formals} (head tl))
@@ -235,28 +234,28 @@
     {do
       (= {fname} (str (head formals)))
       (= {params} (tail formals))
-      (= {param-vars} (hint/vt-correlate-inferred params fname db nil))
+      (= {param-vars} (vt-correlate-inferred params fname db nil))
       (= {param-vars} (if (nil? param-vars)
         {do
           (= {sig-types} (hint/query-sig-types db fname))
           (if (nil? sig-types) {nil}
-            {hint/vt-correlate-parts params sig-types 0 nil})}
+            {vt-correlate-parts params sig-types 0 nil})}
         {param-vars}))
-      (= {body-vars} (hint/vt-scan-body body db nil))
+      (= {body-vars} (vt-scan-body body db nil))
       (= {all-vars} (if (nil? param-vars) {body-vars}
         {join param-vars body-vars}))
       (if (nil? all-vars) {result}
         {qcons (list :func fname :vars all-vars) result})}})}
 })
 
-(sig 'hint/collect-var-types {-> List Ref List})
-(fun {hint/collect-var-types ast db} {
+(sig 'collect-var-types {-> List Ref List})
+(fun {collect-var-types ast db} {
   if (nil? ast) {nil}
-  {hint/vt-walk ast db nil}
+  {vt-walk ast db nil}
 })
 
-(sig 'hint/vt-walk {-> List Ref List List})
-(fun {hint/vt-walk exprs db result} {
+(sig 'vt-walk {-> List Ref List List})
+(fun {vt-walk exprs db result} {
   if (nil? exprs) {result}
   {do
     (= {expr} (head exprs))
@@ -264,65 +263,65 @@
       {if (not (list? expr)) {result}
       {if (nil? expr) {result}
       {if (== (ast/head-name expr) "fun")
-        {hint/vt-from-fun (tail expr) db result}
+        {vt-from-fun (tail expr) db result}
         {result}}}}))
-    (hint/vt-walk (tail exprs) db result2)}
+    (vt-walk (tail exprs) db result2)}
 })
 
 ; --- Pass 3: Walk AST and emit field-access hints ---
 
-(sig 'hint/fa-lookup-var {-> Str Str List Any})
-(fun {hint/fa-lookup-var var-name func-name var-types} {
+(sig 'fa-lookup-var {-> Str Str List Any})
+(fun {fa-lookup-var var-name func-name var-types} {
   if (nil? var-types) {nil}
   {do
     (= {entry} (head var-types))
     (if (== entry:func func-name)
-      {hint/fa-find-in-vars var-name entry:vars}
-      {hint/fa-lookup-var var-name func-name (tail var-types)})}
+      {fa-find-in-vars var-name entry:vars}
+      {fa-lookup-var var-name func-name (tail var-types)})}
 })
 
-(sig 'hint/fa-find-in-vars {-> Str List Any})
-(fun {hint/fa-find-in-vars var-name vars} {
+(sig 'fa-find-in-vars {-> Str List Any})
+(fun {fa-find-in-vars var-name vars} {
   if (nil? vars) {nil}
   {do
     (= {v} (head vars))
     (if (== v:var var-name) {v:type}
-      {hint/fa-find-in-vars var-name (tail vars)})}
+      {fa-find-in-vars var-name (tail vars)})}
 })
 
-(sig 'hint/fa-lookup-field {-> Str Str List Any})
-(fun {hint/fa-lookup-field ctor-name field-name type-defs} {
+(sig 'fa-lookup-field {-> Str Str List Any})
+(fun {fa-lookup-field ctor-name field-name type-defs} {
   if (nil? type-defs) {nil}
   {do
     (= {td} (head type-defs))
     (if (== td:ctor ctor-name)
-      {hint/fa-find-field field-name td:fields}
-      {hint/fa-lookup-field ctor-name field-name (tail type-defs)})}
+      {fa-find-field field-name td:fields}
+      {fa-lookup-field ctor-name field-name (tail type-defs)})}
 })
 
-(sig 'hint/fa-find-field {-> Str List Any})
-(fun {hint/fa-find-field field-name fields} {
+(sig 'fa-find-field {-> Str List Any})
+(fun {fa-find-field field-name fields} {
   if (nil? fields) {nil}
   {do
     (= {f} (head fields))
     (if (== f:field field-name) {f:type}
-      {hint/fa-find-field field-name (tail fields)})}
+      {fa-find-field field-name (tail fields)})}
 })
 
-(sig 'hint/fa-resolve {-> Str Str List List Any})
-(fun {hint/fa-resolve sym-str func-name var-types type-defs} {do
+(sig 'fa-resolve {-> Str Str List List Any})
+(fun {fa-resolve sym-str func-name var-types type-defs} {do
   (= {colon} (str/index-of sym-str ":"))
   (if (< colon 1) {nil}
   {do
     (= {var-name} (str/slice sym-str 0 colon))
     (= {field-name} (str ":" (str/slice sym-str (+ colon 1) (len sym-str))))
-    (= {var-type} (hint/fa-lookup-var var-name func-name var-types))
+    (= {var-type} (fa-lookup-var var-name func-name var-types))
     (if (nil? var-type) {nil}
-      {hint/fa-lookup-field var-type field-name type-defs})})
+      {fa-lookup-field var-type field-name type-defs})})
 })
 
-(sig 'hint/fa-emit-field-hint {-> List Any List List})
-(fun {hint/fa-emit-field-hint tl field-type acc} {
+(sig 'fa-emit-field-hint {-> List Any List List})
+(fun {fa-emit-field-hint tl field-type acc} {
   if (nil? field-type) {acc}
   {if (== field-type "Any") {acc}
   {do
@@ -339,8 +338,8 @@
 
 ; fields list is in reverse definition order (qcons-accumulated).
 ; idx is 0-based original order.
-(sig 'hint/fa-get-field-by-idx {-> Num List Any})
-(fun {hint/fa-get-field-by-idx idx fields} {
+(sig 'fa-get-field-by-idx {-> Num List Any})
+(fun {fa-get-field-by-idx idx fields} {
   (= {n} (len fields))
   (if (< idx 0) {nil}
   {if (>= idx n) {nil}
@@ -349,45 +348,45 @@
     (if (nil? f) {nil} {f:type})}})
 })
 
-(sig 'hint/fa-lookup-field-by-idx {-> Str Num List Any})
-(fun {hint/fa-lookup-field-by-idx ctor-name idx type-defs} {
+(sig 'fa-lookup-field-by-idx {-> Str Num List Any})
+(fun {fa-lookup-field-by-idx ctor-name idx type-defs} {
   if (nil? type-defs) {nil}
   {do
     (= {td} (head type-defs))
     (if (== td:ctor ctor-name)
-      {hint/fa-get-field-by-idx idx td:fields}
-      {hint/fa-lookup-field-by-idx ctor-name idx (tail type-defs)})}
+      {fa-get-field-by-idx idx td:fields}
+      {fa-lookup-field-by-idx ctor-name idx (tail type-defs)})}
 })
 
-(sig 'hint/fa-binding {-> List Str Str List List List List})
-(fun {hint/fa-binding tl val-str func-name var-types type-defs acc} {
-  hint/fa-emit-field-hint tl
-    (hint/fa-resolve val-str func-name var-types type-defs)
+(sig 'fa-binding {-> List Str Str List List List List})
+(fun {fa-binding tl val-str func-name var-types type-defs acc} {
+  fa-emit-field-hint tl
+    (fa-resolve val-str func-name var-types type-defs)
     acc
 })
 
-(sig 'hint/fa-one {-> Any Str List List List List})
-(fun {hint/fa-one expr func-name var-types type-defs acc} {
+(sig 'fa-one {-> Any Str List List List List})
+(fun {fa-one expr func-name var-types type-defs acc} {
   if (not (list? expr)) {acc}
   {if (nil? expr) {acc}
   {do
     (= {n} (ast/head-name expr))
     (= {tl} (tail expr))
-    (if (== n "fun") {hint/fa-fun tl var-types type-defs acc}
+    (if (== n "fun") {fa-fun tl var-types type-defs acc}
     {if (== n "=")
-      {hint/fa-try-binding expr tl func-name var-types type-defs acc}
+      {fa-try-binding expr tl func-name var-types type-defs acc}
     {if (or (== n "do") (or (== n "if") (or (== n "let") (== n "match"))))
-      {hint/fa-walk tl func-name var-types type-defs acc}
+      {fa-walk tl func-name var-types type-defs acc}
       {acc}}})}}
 })
 
-(sig 'hint/fa-try-binding {-> List List Str List List List List})
-(fun {hint/fa-try-binding expr tl func-name var-types type-defs acc} {
+(sig 'fa-try-binding {-> List List Str List List List List})
+(fun {fa-try-binding expr tl func-name var-types type-defs acc} {
   if (< (len tl) 2) {acc}
   {do
     (= {rhs-name} (ast/nth-name 3 expr))
     (if (not (== rhs-name ""))
-      {hint/fa-binding tl rhs-name func-name var-types type-defs acc}
+      {fa-binding tl rhs-name func-name var-types type-defs acc}
     {do
       ; RHS is a type-transformed field access: (plist/get var :field) or (nth N var)
       (= {rhs} (nth 2 tl))
@@ -403,7 +402,7 @@
             (if (== var-nm "") {acc}
             {if (== field-key "") {acc}
             {if (not (== (str/slice field-key 0 1) ":")) {acc}
-            {hint/fa-binding tl
+            {fa-binding tl
               (str var-nm (str/slice field-key 1 (len field-key)))
               func-name var-types type-defs acc}}})}
         {if (== rhs-head "nth")
@@ -415,16 +414,16 @@
             {if (error? nth-idx) {acc}
             {if (not (num? nth-idx)) {acc}
             {do
-              (= {vt} (hint/fa-lookup-var var-nm func-name var-types))
+              (= {vt} (fa-lookup-var var-nm func-name var-types))
               (if (nil? vt) {acc}
-              {hint/fa-emit-field-hint tl
-                (hint/fa-lookup-field-by-idx vt (- nth-idx 2) type-defs)
+              {fa-emit-field-hint tl
+                (fa-lookup-field-by-idx vt (- nth-idx 2) type-defs)
                 acc})}}})}
         {acc}})}})})}
 })
 
-(sig 'hint/fa-fun {-> List List List List List})
-(fun {hint/fa-fun tl var-types type-defs acc} {
+(sig 'fa-fun {-> List List List List List})
+(fun {fa-fun tl var-types type-defs acc} {
   if (< (len tl) 2) {acc}
   {do
     (= {formals} (head tl))
@@ -433,71 +432,69 @@
     {if (nil? formals) {acc}
     {do
       (= {fname} (str (head formals)))
-      (hint/fa-one body fname var-types type-defs acc)}})}
+      (fa-one body fname var-types type-defs acc)}})}
 })
 
-(sig 'hint/fa-walk {-> List Str List List List List})
-(fun {hint/fa-walk exprs func-name var-types type-defs acc} {
+(sig 'fa-walk {-> List Str List List List List})
+(fun {fa-walk exprs func-name var-types type-defs acc} {
   if (nil? exprs) {acc}
   {do
     (= {e} (head exprs))
-    (hint/fa-walk (tail exprs) func-name var-types type-defs
-      (if (error? e) {acc} {hint/fa-one e func-name var-types type-defs acc}))}
+    (fa-walk (tail exprs) func-name var-types type-defs
+      (if (error? e) {acc} {fa-one e func-name var-types type-defs acc}))}
 })
 
-(sig 'hint/parse-field-sig {-> Str List})
-(fun {hint/parse-field-sig sig-str} {
+(sig 'parse-field-sig {-> Str List})
+(fun {parse-field-sig sig-str} {
   if (nil? sig-str) {nil}
   {do
     (= {parts} (str/split sig-str " "))
-    (hint/parse-field-parts parts nil)}
+    (parse-field-parts parts nil)}
 })
 
-(sig 'hint/parse-field-parts {-> List List List})
-(fun {hint/parse-field-parts parts acc} {
+(sig 'parse-field-parts {-> List List List})
+(fun {parse-field-parts parts acc} {
   if (nil? parts) {acc}
   {if (< (len parts) 2) {acc}
   {do
     (= {f} (head parts))
     (= {t} (nth 2 parts))
-    (hint/parse-field-parts (tail (tail parts))
+    (parse-field-parts (tail (tail parts))
       (qcons (list :field f :type t) acc))}}
 })
 
-(sig 'hint/query-db-type-defs {-> Ref List})
-(fun {hint/query-db-type-defs db} {
+(sig 'query-db-type-defs {-> Ref List})
+(fun {query-db-type-defs db} {
   if (nil? db) {nil}
   {do
-    (= {rows} (sqlite/query db
-      "SELECT name, sig FROM symbols WHERE kind=4 AND sig IS NOT NULL AND sig != ''"
-      ))
-    (hint/build-db-type-defs rows nil)}
+    (= {rows} (symdb/ctor-sigs-in db hint/doc-path))
+    (build-db-type-defs rows nil)}
 })
 
-(sig 'hint/build-db-type-defs {-> List List List})
-(fun {hint/build-db-type-defs rows acc} {
+(sig 'build-db-type-defs {-> List List List})
+(fun {build-db-type-defs rows acc} {
   if (nil? rows) {acc}
   {do
     (= {row} (head rows))
-    (= {fields} (hint/parse-field-sig row:sig))
+    (= {fields} (parse-field-sig row:sig))
     (= {acc2} (if (nil? fields) {acc}
       {qcons (list :ctor row:name :fields fields) acc}))
-    (hint/build-db-type-defs (tail rows) acc2)}
+    (build-db-type-defs (tail rows) acc2)}
 })
 
-(sig 'hint/merge-type-defs {-> List List List})
-(fun {hint/merge-type-defs local db-defs} {
+(sig 'merge-type-defs {-> List List List})
+(fun {merge-type-defs local db-defs} {
   if (nil? local) {db-defs}
   {if (nil? db-defs) {local}
   {join local db-defs}}
 })
 
-(sig 'hint/collect-field-hints {-> List Ref List})
-(fun {hint/collect-field-hints ast db} {do
-  (= {local-defs} (hint/collect-type-defs ast))
-  (= {db-defs} (hint/query-db-type-defs db))
-  (= {type-defs} (hint/merge-type-defs local-defs db-defs))
-  (= {var-types} (hint/collect-var-types ast db))
+(sig 'collect-field-hints {-> List Ref List})
+(fun {collect-field-hints ast db} {do
+  (= {local-defs} (collect-type-defs ast))
+  (= {db-defs} (query-db-type-defs db))
+  (= {type-defs} (merge-type-defs local-defs db-defs))
+  (= {var-types} (collect-var-types ast db))
   (if (or (nil? type-defs) (nil? var-types)) {nil}
-    {hint/fa-walk ast "" var-types type-defs nil})
+    {fa-walk ast "" var-types type-defs nil})
 })

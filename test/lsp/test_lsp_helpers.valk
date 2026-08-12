@@ -13,7 +13,7 @@
 ; Short-name aliases so tests can call helpers directly. Names without `/`
 ; get module-prefixed at load time (lsp/<file>/<name>); names with `/`
 ; stay at their literal value (sig/extract-name is already top-level-bound).
-(def {make-lsp-diag}              workspace/make-lsp-diag)
+(def {make-lsp-diag}              lsp/make-lsp-diag)
 (def {ref->lsp-location}          nav/ref->lsp-location)
 (def {ref->lsp-edit}              nav/ref->lsp-edit)
 (def {db-ref->lsp-edit}           nav/db-ref->lsp-edit)

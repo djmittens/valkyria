@@ -19,26 +19,6 @@
 
 (fun {eprintln s} {stderr/write (str s "\n")})
 
-; === Module prefix derivation ===
-; Mirrors the compiler's extract_module_prefix: basename without extension.
-; Files loaded by the C runtime (prelude, builtins) get no prefix.
-
-(def {check/NO_PREFIX_FILES}
-  (dict/from-keys {"stdlib/prelude.valk" "stdlib/builtins.valk"}))
-
-(fun {check/basename-stem path} {do
-  (= {parts} (str/split path "/"))
-  (= {filename} (last parts))
-  (= {dot} (str/index-of filename "."))
-  (if (< dot 1) {filename}
-    {str/slice filename 0 dot})
-})
-
-(fun {check/module-prefix path} {
-  if (dict/has? check/NO_PREFIX_FILES path) {""}
-    {check/basename-stem path}
-})
-
 ; === Find .valk files via git ===
 
 (fun {check/find-files dir} {do
@@ -173,8 +153,9 @@
             (= {text} (read-file path))
             (if (not (error? text))
               {do
-                (= {prefix} (check/module-prefix path))
-                (= {ast} (compile/process text prefix))
+                ; compile/process derives the prefix from the file's own
+                ; (module X) declaration during expansion.
+                (= {ast} (compile/process text))
                 (if (error? ast) {nil}
                   {do
                     (sqlite/exec db "BEGIN")
@@ -273,7 +254,7 @@
                   (check/validate-walk db (tail files) with-types cache total (+ idx 1)
                     (+ total-lines lines) (+ total-errors 1) total-warnings)}
               {do
-                (= {vd-diags} (vd/validate-cached db ast text cache))
+                (= {vd-diags} (vd/validate-cached db (symdb/canon-path path) ast text cache))
                 (= {hm-diags} (if with-types {check/hm-errors text ast} {nil}))
                 (= {diags} (if (error? vd-diags) {hm-diags}
                                {check/merge-diags vd-diags hm-diags}))

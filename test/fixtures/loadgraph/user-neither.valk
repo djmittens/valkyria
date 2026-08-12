@@ -1,0 +1,3 @@
+; Fixture: references LGThing without loading any definer — the
+; missing-dependency check must flag it.
+(fun {lg-bad v} {LGThing :x v})

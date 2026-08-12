@@ -1,10 +1,9 @@
 ; Valkyria LSP Server — dispatch, main loop
 
-(module lsp)
-
+; Shared dependencies load before the (module lsp) declaration so they keep
+; their own top-level module prefixes instead of nesting under lsp/.
 (load "stdlib/diag/symdb.valk")
 (load "stdlib/diag/validate.valk")
-(load "scripts/lsp/constants.valk")
 (load "scripts/lsp/analysis.valk")
 (load "scripts/lsp/refs.valk")
 (load "scripts/lsp/hints.valk")
@@ -14,6 +13,8 @@
 (load "scripts/lsp/scan.valk")
 (load "scripts/lsp/nav.valk")
 (load "scripts/lsp/features.valk")
+
+(module lsp)
 
 ; ---------------------------------------------------------------------------
 ; Semantic tokens range — tokens for visible viewport only
@@ -84,20 +85,20 @@
 ; swallowed by lsp/noop-cb — no response was ever sent for that id, so the
 ; client waited on it forever (perceived as a hang/crash). JSON-RPC requires
 ; a response for every request: surface handler failures as -32603.
-(sig 'lsp/request-done-cb {-> Str Any Fun})
-(fun {lsp/request-done-cb method id} {
+(sig 'request-done-cb {-> Str Any Fun})
+(fun {request-done-cb method id} {
   \ {r} {if (error? r)
     {do (stderr/write (str "[valk-lsp] handler error " method ": " r "\n"))
         (lsp/send-error id -32603 (str "Internal error in " method))}
     {}}
 })
 
-(sig 'lsp/dispatch-to-worker {-> Str Any List Nil})
-(fun {lsp/dispatch-to-worker method id params} {
+(sig 'dispatch-to-worker {-> Str Any List Nil})
+(fun {dispatch-to-worker method id params} {
   aio/dispatch lsp/sys
-    (\ {_} {do (lsp/handle-readonly method id params) nil})
+    (\ {_} {do (handle-readonly method id params) nil})
     nil
-    (lsp/request-done-cb method id)
+    (request-done-cb method id)
 })
 
 ; Notifications (didOpen/didChange/didClose/didSave) run on the SAME single
@@ -107,22 +108,22 @@
 ; lenv.c valk_lenv_put vs valk_lenv_get). Loop 0's Lisp is now limited to
 ; parse-and-dispatch, which touches only thread-local call envs, the cmap
 ; root env, and lock-protected dicts.
-(sig 'lsp/handle-notification {-> Str List Nil})
-(fun {lsp/handle-notification method params} {
+(sig 'handle-notification {-> Str List Nil})
+(fun {handle-notification method params} {
   match method
-    {"textDocument/didOpen" (workspace/handle-did-open (lsp/to-open-params params))}
-    {"textDocument/didChange" (workspace/handle-did-change (lsp/to-change-params params))}
-    {"textDocument/didClose" (workspace/handle-did-close (lsp/to-doc-params params))}
-    {"textDocument/didSave" (workspace/handle-did-save (lsp/to-save-params params))}
+    {"textDocument/didOpen" (lsp/handle-did-open (to-open-params params))}
+    {"textDocument/didChange" (lsp/handle-did-change (to-change-params params))}
+    {"textDocument/didClose" (lsp/handle-did-close (to-doc-params params))}
+    {"textDocument/didSave" (lsp/handle-did-save (to-save-params params))}
     {_ nil}
 })
 
 ; Notifications have no id to answer, but a failed handler means lost
 ; document state (e.g. a didChange that never applied) — log loudly.
-(sig 'lsp/dispatch-notification {-> Str List Nil})
-(fun {lsp/dispatch-notification method params} {
+(sig 'dispatch-notification {-> Str List Nil})
+(fun {dispatch-notification method params} {
   aio/dispatch lsp/sys
-    (\ {_} {do (lsp/handle-notification method params) nil})
+    (\ {_} {do (handle-notification method params) nil})
     nil
     (\ {r} {if (error? r)
       {stderr/write (str "[valk-lsp] notification error " method ": " r "\n")}
@@ -137,47 +138,47 @@
 ; every keystroke, which is exactly when it is most visible. Recomputing
 ; costs one AST walk over text the handler reads fresh, and it is the only
 ; answer that matches what the client is holding.
-(sig 'lsp/dispatch-request {-> Str Any List Nil})
-(fun {lsp/dispatch-request method id params} {
-  lsp/dispatch-to-worker method id params
+(sig 'dispatch-request {-> Str Any List Nil})
+(fun {dispatch-request method id params} {
+  dispatch-to-worker method id params
 })
 
-(sig 'lsp/to-doc-params {-> List DocParams})
-(fun {lsp/to-doc-params raw} {do
+(sig 'to-doc-params {-> List DocParams})
+(fun {to-doc-params raw} {do
   (= {td} (plist/get raw :textDocument))
   (DocParams (LspTextDoc (plist/get td :uri)))
 })
 
-(sig 'lsp/to-tdp-params {-> List TextDocPosParams})
-(fun {lsp/to-tdp-params raw} {do
+(sig 'to-tdp-params {-> List TextDocPosParams})
+(fun {to-tdp-params raw} {do
   (= {td} (plist/get raw :textDocument))
   (= {pos} (plist/get raw :position))
   (TextDocPosParams (LspTextDoc (plist/get td :uri))
                     (LspPosition (plist/get pos :line) (plist/get pos :character)))
 })
 
-(sig 'lsp/to-open-params {-> List OpenParams})
-(fun {lsp/to-open-params raw} {do
+(sig 'to-open-params {-> List OpenParams})
+(fun {to-open-params raw} {do
   (= {td} (plist/get raw :textDocument))
   (OpenParams (LspTextDocText (plist/get td :uri) (plist/get td :text)))
 })
 
-(sig 'lsp/to-change-params {-> List ChangeParams})
-(fun {lsp/to-change-params raw} {do
+(sig 'to-change-params {-> List ChangeParams})
+(fun {to-change-params raw} {do
   (= {td} (plist/get raw :textDocument))
   (ChangeParams (LspTextDoc (plist/get td :uri))
                 (plist/get raw :contentChanges))
 })
 
-(sig 'lsp/to-save-params {-> List SaveParams})
-(fun {lsp/to-save-params raw} {do
+(sig 'to-save-params {-> List SaveParams})
+(fun {to-save-params raw} {do
   (= {td} (plist/get raw :textDocument))
   (SaveParams (LspTextDoc (plist/get td :uri))
               (plist/get raw :text))
 })
 
-(sig 'lsp/to-range-params {-> List RangeParams})
-(fun {lsp/to-range-params raw} {do
+(sig 'to-range-params {-> List RangeParams})
+(fun {to-range-params raw} {do
   (= {td} (plist/get raw :textDocument))
   (= {r} (plist/get raw :range))
   (= {s} (plist/get r :start))
@@ -187,8 +188,8 @@
                          (LspPosition (plist/get e :line) (plist/get e :character))))
 })
 
-(sig 'lsp/to-rename-params {-> List RenameParams})
-(fun {lsp/to-rename-params raw} {do
+(sig 'to-rename-params {-> List RenameParams})
+(fun {to-rename-params raw} {do
   (= {td} (plist/get raw :textDocument))
   (= {pos} (plist/get raw :position))
   (RenameParams (LspTextDoc (plist/get td :uri))
@@ -200,16 +201,16 @@
 ; Build SelectionParams so handle-selection-range can use field-access on
 ; a typed record — see the note on lsp/get-doc for why raw plist input
 ; can't be field-accessed directly (key order is non-deterministic).
-(sig 'lsp/to-selection-params {-> List SelectionParams})
-(fun {lsp/to-selection-params raw} {do
+(sig 'to-selection-params {-> List SelectionParams})
+(fun {to-selection-params raw} {do
   (= {td} (plist/get raw :textDocument))
   (SelectionParams (LspTextDoc (plist/get td :uri))
                    (plist/get raw :positions))
 })
 
 ; Code action carries a range and a context (with diagnostics).
-(sig 'lsp/to-code-action-params {-> List CodeActionParams})
-(fun {lsp/to-code-action-params raw} {do
+(sig 'to-code-action-params {-> List CodeActionParams})
+(fun {to-code-action-params raw} {do
   (= {td} (plist/get raw :textDocument))
   (= {r} (plist/get raw :range))
   (= {s} (plist/get r :start))
@@ -221,27 +222,27 @@
                     (CodeActionContext (plist/get ctx :diagnostics)))
 })
 
-(sig 'lsp/handle-readonly {-> Str Any List Nil})
-(fun {lsp/handle-readonly method id params} {
+(sig 'handle-readonly {-> Str Any List Nil})
+(fun {handle-readonly method id params} {
   match method
-    {"textDocument/hover" (nav/handle-hover id (lsp/to-tdp-params params))}
-    {"textDocument/definition" (nav/handle-definition id (lsp/to-tdp-params params))}
-    {"textDocument/references" (nav/handle-references id (lsp/to-tdp-params params))}
-    {"textDocument/completion" (nav/handle-completion id (lsp/to-tdp-params params))}
-    {"textDocument/documentSymbol" (nav/handle-document-symbols id (lsp/to-doc-params params))}
+    {"textDocument/hover" (nav/handle-hover id (to-tdp-params params))}
+    {"textDocument/definition" (nav/handle-definition id (to-tdp-params params))}
+    {"textDocument/references" (nav/handle-references id (to-tdp-params params))}
+    {"textDocument/completion" (nav/handle-completion id (to-tdp-params params))}
+    {"textDocument/documentSymbol" (nav/handle-document-symbols id (to-doc-params params))}
     {"workspace/symbol" (nav/handle-workspace-symbols id (QueryParams (plist/get params :query)))}
-    {"textDocument/semanticTokens/full" (nav/handle-semantic-tokens id (lsp/to-doc-params params))}
-    {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id (lsp/to-range-params params))}
-    {"textDocument/prepareRename" (nav/handle-prepare-rename id (lsp/to-tdp-params params))}
-    {"textDocument/rename" (nav/handle-rename id (lsp/to-rename-params params))}
-    {"textDocument/inlayHint" (features/handle-inlay-hints id (lsp/to-range-params params))}
-    {"textDocument/signatureHelp" (features/handle-signature-help id (lsp/to-tdp-params params))}
-    {"textDocument/documentHighlight" (features/handle-document-highlight id (lsp/to-tdp-params params))}
-    {"textDocument/documentLink" (features/handle-document-link id (lsp/to-doc-params params))}
-    {"textDocument/foldingRange" (features/handle-folding-range id (lsp/to-doc-params params))}
-    {"textDocument/selectionRange" (features/handle-selection-range id (lsp/to-selection-params params))}
-    {"textDocument/codeLens" (features/handle-code-lens id (lsp/to-doc-params params))}
-    {"textDocument/codeAction" (features/handle-code-action id (lsp/to-code-action-params params))}
+    {"textDocument/semanticTokens/full" (nav/handle-semantic-tokens id (to-doc-params params))}
+    {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id (to-range-params params))}
+    {"textDocument/prepareRename" (nav/handle-prepare-rename id (to-tdp-params params))}
+    {"textDocument/rename" (nav/handle-rename id (to-rename-params params))}
+    {"textDocument/inlayHint" (features/handle-inlay-hints id (to-range-params params))}
+    {"textDocument/signatureHelp" (features/handle-signature-help id (to-tdp-params params))}
+    {"textDocument/documentHighlight" (features/handle-document-highlight id (to-tdp-params params))}
+    {"textDocument/documentLink" (features/handle-document-link id (to-doc-params params))}
+    {"textDocument/foldingRange" (features/handle-folding-range id (to-doc-params params))}
+    {"textDocument/selectionRange" (features/handle-selection-range id (to-selection-params params))}
+    {"textDocument/codeLens" (features/handle-code-lens id (to-doc-params params))}
+    {"textDocument/codeAction" (features/handle-code-action id (to-code-action-params params))}
     {_ (if (not (nil? id))
          {lsp/send-error id -32601 (str "Method not found: " method)} {})}
 })
@@ -249,8 +250,8 @@
 ; ---------------------------------------------------------------------------
 ; Event-driven main loop — pipe/lsp-reader delivers parsed messages
 ; ---------------------------------------------------------------------------
-(sig 'lsp/on-message {-> Str Nil})
-(fun {lsp/on-message body} {do
+(sig 'on-message {-> Str Nil})
+(fun {on-message body} {do
   (= {msg} (json/parse body))
   ; Unparseable JSON must be answered (id null) per JSON-RPC — silently
   ; dropping it leaves the client waiting on whatever id it sent.
@@ -270,7 +271,7 @@
                               ; and re-seed builtins under the live server.
                               (if (== lsp/initialized 1)
                                 {lsp/send-error id -32600 "Server already initialized"}
-                                {workspace/handle-initialize id
+                                {lsp/handle-initialize id
                                   (InitParams (plist/get params :rootUri)
                                               (plist/get params :capabilities))}))}
             {"initialized" (do
@@ -313,13 +314,13 @@
                  {if (not (nil? id))
                    {lsp/send-error id -32600 "Server is shut down"} {}}
                  {match method
-                   {"textDocument/didOpen" (lsp/dispatch-notification method params)}
-                   {"textDocument/didChange" (lsp/dispatch-notification method params)}
-                   {"textDocument/didClose" (lsp/dispatch-notification method params)}
-                   {"textDocument/didSave" (lsp/dispatch-notification method params)}
+                   {"textDocument/didOpen" (dispatch-notification method params)}
+                   {"textDocument/didChange" (dispatch-notification method params)}
+                   {"textDocument/didClose" (dispatch-notification method params)}
+                   {"textDocument/didSave" (dispatch-notification method params)}
                    {"$/cancelRequest" {}}
                    {_ (if (not (nil? id))
-                          {lsp/dispatch-request method id params}
+                          {dispatch-request method id params}
                                                   {})}}})}})})})
 
 
@@ -327,8 +328,8 @@
 ; `exit`, 1 otherwise. The spec makes that distinction observable so a
 ; supervisor can tell a clean stop from a client that dropped the
 ; protocol.
-(sig 'lsp/start {-> Num})
-(fun {lsp/start} {do
+(sig 'start {-> Num})
+(fun {start} {do
   (stderr/write "[valk-lsp] starting (threaded)\n")
   ; Two loops: loop 0 owns stdin/stdout + notification handlers; loop 1
   ; is the single worker every request dispatches to (round-robin over
@@ -349,7 +350,7 @@
   (def {lsp/idx-sys} (aio/await (aio/start {:num-threads 1})))
   (= {stdin-pipe} (pipe/stdin-open lsp/sys))
   (def {lsp/out} (pipe/stdout-open lsp/sys))
-  (pipe/lsp-reader stdin-pipe (\ {body} {lsp/on-message body}))
+  (pipe/lsp-reader stdin-pipe (\ {body} {on-message body}))
   (aio/run lsp/sys)
   (aio/stop lsp/idx-sys)
   (if (and (not (nil? lsp/idx-db)) (== lsp/idx-db-own 1))

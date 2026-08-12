@@ -1,0 +1,2 @@
+; Fixture: load returns the last form's value.
+(+ 40 2)

@@ -1,0 +1,7 @@
+; Fixture: loads inner.valk after the module declaration, nesting it as
+; outer/inner. Also exercises file-relative load resolution.
+(module outer)
+
+(load "inner.valk")
+
+(inner/g 40)

@@ -1,0 +1,67 @@
+; Module system: file-as-(do ...) semantics, nesting, resolution order,
+; env overrides.
+(load "stdlib/test/test.valk")
+
+(test/run (list
+
+  (test/case "load-returns-last-value"
+    {do
+      (= {r} (load "test/fixtures/modules/ret42.valk"))
+      (test/assert (== r 42) "load returns the last form's value")
+      true})
+
+  (test/case "repeat-load-returns-cached-value"
+    {do
+      (= {a} (load "test/fixtures/modules/ret42.valk"))
+      (= {b} (load "test/fixtures/modules/ret42.valk"))
+      (test/assert (== a 42) "first load returns value")
+      (test/assert (== b 42) "repeat load returns the cached value")
+      true})
+
+  (test/case "module-nesting-and-relative-load"
+    {do
+      (= {r} (load "test/fixtures/modules/outer.valk"))
+      (test/assert (== r 42) "outer resolves inner/g via the module alias")
+      (test/assert (== (outer/inner/f 1) 2) "inner nests as outer/inner")
+      true})
+
+  (test/case "same-file-loads-once-per-prefix"
+    {do
+      ; inner.valk is already nested under outer (previous case); loading it
+      ; at the root prefix evaluates it again as plain inner/*.
+      (load "test/fixtures/modules/inner.valk")
+      (test/assert (== (inner/f 1) 2) "root copy: inner/f")
+      (test/assert (== (outer/inner/f 1) 2) "nested copy: outer/inner/f")
+      true})
+
+  (test/case "module-nesting-slash-names"
+    {do
+      (= {r} (load "test/fixtures/modules/deepuser.valk"))
+      (test/assert (== r 40) "bar calls lsp/io/foo through the alias")
+      (test/assert (== (bar/lsp/io/foo 2) 20) "lsp/io nests as bar/lsp/io")
+      true})
+
+  (test/case "load-before-module-stays-flat"
+    {do
+      (= {r} (load "test/fixtures/modules/pre-module.valk"))
+      (test/assert (== r 60) "module region sees the flat dependency")
+      (test/assert (== (plain-fn 3) 6) "pre-module load is not nested")
+      (test/assert (== (pre/h 1) 3) "defs after (module pre) are qualified")
+      true})
+
+  (test/case "env-file-override"
+    {do
+      (def {file://virtual-mod.valk}
+           {(module vmod) (fun {vf x} {+ x 5}) (vf 10)})
+      (= {r} (load "virtual-mod.valk"))
+      (test/assert (== r 15) "override forms evaluate as the file body")
+      (test/assert (== (vmod/vf 1) 6) "override module defs land in the env")
+      true})
+
+  (test/case "missing-file-still-errors"
+    {do
+      (= {r} (load "no/such/file-anywhere.valk"))
+      (test/assert (error? r) "unresolvable path returns error")
+      true})
+
+) {:suite-name "Module System"})

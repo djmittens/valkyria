@@ -7,7 +7,10 @@
 ;   null         -> (None) (Option type from prelude)
 ;   nil          -> []     (nil = empty list, always)
 
-(module io)
+(load "stdlib/diag/symdb.valk")
+(load "stdlib/diag/validate.valk")
+
+(module lsp)
 
 ; ---------------------------------------------------------------------------
 ; Typed contexts — replace ad-hoc plists with var:field access
@@ -54,107 +57,112 @@
 ; LSP I/O — Content-Length framing over uv_pipe_t
 ; ---------------------------------------------------------------------------
 
-(def {lsp/sys} nil)
-(def {lsp/idx-sys} nil)
-(def {lsp/out} nil)
-(def {lsp/initialized} 0)
+(def {sys} nil)
+(def {idx-sys} nil)
+(def {out} nil)
+(def {initialized} 0)
 ; Set by `shutdown`. Requests after it are InvalidRequest, and `exit`
 ; without it is a protocol violation the server reports via exit code 1.
-(def {lsp/shutdown-requested} 0)
+(def {shutdown-requested} 0)
 
-(sig 'lsp/write-message {-> List Nil})
-(fun {lsp/write-message json-body} {do
+(sig 'write-message {-> List Nil})
+(fun {write-message json-body} {do
   (= {msg} (json/encode json-body))
-  (pipe/write lsp/out (str "Content-Length: " (len msg) "\r\n\r\n" msg))})
+  (pipe/write out (str "Content-Length: " (len msg) "\r\n\r\n" msg))})
 
-(sig 'lsp/send-response {-> Num Any Nil})
-(fun {lsp/send-response id result}
-  {lsp/write-message (list :jsonrpc "2.0" :id id :result result)})
+(sig 'send-request {-> Num Str Any Nil})
+(fun {send-request id method params}
+  {write-message
+    (list :jsonrpc "2.0" :id id :method method :params params)})
 
-(sig 'lsp/send-error {-> Num Num Str Nil})
-(fun {lsp/send-error id code message}
-  {lsp/write-message
+(sig 'send-response {-> Num Any Nil})
+(fun {send-response id result}
+  {write-message (list :jsonrpc "2.0" :id id :result result)})
+
+(sig 'send-error {-> Num Num Str Nil})
+(fun {send-error id code message}
+  {write-message
     (list :jsonrpc "2.0" :id id
           :error (list :code code :message message))})
 
 ; `initialize` failures carry an InitializeError payload; retry:false stops
 ; the client from re-sending a request that can never succeed.
-(sig 'lsp/send-init-error {-> Num Str Nil})
-(fun {lsp/send-init-error id message}
-  {lsp/write-message
+(sig 'send-init-error {-> Num Str Nil})
+(fun {send-init-error id message}
+  {write-message
     (list :jsonrpc "2.0" :id id
           :error (list :code -32602 :message message
                        :data (list :retry :false)))})
 
-(sig 'lsp/send-notification {-> Str List Nil})
-(fun {lsp/send-notification method params}
-  {lsp/write-message
+(sig 'send-notification {-> Str List Nil})
+(fun {send-notification method params}
+  {write-message
     (list :jsonrpc "2.0" :method method :params params)})
 
 ; Monotonic counter for server->client request IDs. Must not collide with
 ; progress-token IDs (which start at 100000), so we allocate at 200000+.
-(def {lsp/server-req-counter} 0)
+(def {server-req-counter} 0)
 
-(sig 'lsp/next-server-req-id {-> Num})
-(fun {lsp/next-server-req-id} {do
-  (def {lsp/server-req-counter} (+ lsp/server-req-counter 1))
-  (+ 200000 lsp/server-req-counter)})
+(sig 'next-server-req-id {-> Num})
+(fun {next-server-req-id} {do
+  (def {lsp/server-req-counter} (+ server-req-counter 1))
+  (+ 200000 server-req-counter)})
 
 ; Tracks the doc-version at which we last asked the client to refresh
 ; tokens. didOpen / didChange / didSave each fire two dispatches whose
 ; done-cbs both want to refresh; without coalescing the client receives
 ; up to 2 requests per keystroke and re-runs semanticTokens/full each
 ; time. Coalescing by version keeps refresh count to <=1 per version.
-(def {lsp/last-refresh-version} -1)
+(def {last-refresh-version} -1)
 
 ; Tells the client to re-request semantic tokens. Call this once per document
 ; sync after the AST + symdb are populated, so the initial lex-tokens paint
-; gets upgraded to full AST-based tokens. Uses lsp/send-request (defined in
-; workspace.valk and resolved at call-time) so test stubs can intercept it.
-(sig 'lsp/refresh-semantic-tokens {-> Nil})
-(fun {lsp/refresh-semantic-tokens} {do
-  (if (== lsp/last-refresh-version lsp/doc-version) {nil}
+; gets upgraded to full AST-based tokens. Uses lsp/send-request resolved at
+; call-time so test stubs can intercept it.
+(sig 'refresh-semantic-tokens {-> Nil})
+(fun {refresh-semantic-tokens} {do
+  (if (== last-refresh-version doc-version) {nil}
     {do
-      (def {lsp/last-refresh-version} lsp/doc-version)
-      (lsp/send-request (lsp/next-server-req-id)
+      (def {lsp/last-refresh-version} doc-version)
+      (lsp/send-request (next-server-req-id)
         "workspace/semanticTokens/refresh" (None))})})
 
 ; ---------------------------------------------------------------------------
 ; State
 ; ---------------------------------------------------------------------------
 
-(def {lsp/documents} (dict/new))
-(def {lsp/db} nil)
-(def {lsp/idx-db} nil)
-(def {lsp/idx-db-own} 0)
-(def {lsp/db-path} nil)
-(def {lsp/root-path} nil)
-(def {lsp/doc-version} 0)
+(def {documents} (dict/new))
+(def {db} nil)
+(def {idx-db} nil)
+(def {idx-db-own} 0)
+(def {db-path} nil)
+(def {root-path} nil)
+(def {doc-version} 0)
 
-(sig 'lsp/doc-store {-> Str Str Nil})
-(fun {lsp/doc-store uri text}
-  {dict/set! lsp/documents uri text})
+(sig 'doc-store {-> Str Str Nil})
+(fun {doc-store uri text}
+  {dict/set! documents uri text})
 
-(sig 'lsp/doc-get {-> Str Any})
-(fun {lsp/doc-get uri}
-  {dict/get lsp/documents uri})
+(sig 'doc-get {-> Str Any})
+(fun {doc-get uri}
+  {dict/get documents uri})
 
-(def {lsp/ast-cache} (dict/new))
+(def {ast-cache} (dict/new))
 
 ; Returns the first parse error in an AST list, or nil if there are none.
 ; Parse errors are now preserved in the AST list as LVAL_ERR elements
 ; (see valk_parse_text in src/reader.c).
-(sig 'lsp/ast-find-error {-> List Any})
-(fun {lsp/ast-find-error ast} {
+(sig 'ast-find-error {-> List Any})
+(fun {ast-find-error ast} {
   if (nil? ast) {nil}
   {if (not (list? ast)) {nil}
   {if (error? ast) {ast}
   {if (error? (head ast)) {head ast}
-  {lsp/ast-find-error (tail ast)}}}}
+  {ast-find-error (tail ast)}}}}
 })
 
-(sig 'lsp/ast-has-error {-> List Num})
-(fun {lsp/ast-has-error ast} {error? (lsp/ast-find-error ast)})
+(sig 'ast-has-error {-> List Num})
+(fun {ast-has-error ast} {error? (ast-find-error ast)})
 
 ; Cache entries are stored as (text ast) so readers can verify the cached
 ; AST was parsed from the exact text they're about to render against.
@@ -162,19 +170,19 @@
 ; document has moved to vN+1, and a subsequent get-ast would hand back
 ; vN's AST offsets applied to vN+1's text — producing tokens/hints at
 ; wrong columns (the "jumpy colors, ::A mid-word" visual bug).
-(sig 'lsp/cache-ast {-> Str Str List})
-(fun {lsp/cache-ast uri text} {do
+(sig 'cache-ast {-> Str Str List})
+(fun {cache-ast uri text} {do
   (= {ast} (parse text))
-  (dict/set! lsp/ast-cache uri (list text ast))
+  (dict/set! ast-cache uri (list text ast))
   ast})
 
 ; Parses `text` when the ast-cache entry is missing or stale (different text).
-(sig 'lsp/get-ast {-> Str Str List})
-(fun {lsp/get-ast uri text} {do
-  (= {cached} (dict/get lsp/ast-cache uri))
-  (if (nil? cached) {lsp/cache-ast uri text}
+(sig 'get-ast {-> Str Str List})
+(fun {get-ast uri text} {do
+  (= {cached} (dict/get ast-cache uri))
+  (if (nil? cached) {cache-ast uri text}
     {if (== (head cached) text) {head (tail cached)}
-      {lsp/cache-ast uri text}})})
+      {cache-ast uri text}})})
 
 ; ---------------------------------------------------------------------------
 ; Incremental text sync — apply content changes to stored text
@@ -183,15 +191,15 @@
 ; If :range is nil, it's a full document replacement.
 ; Range has :start {:line N :character N} and :end {:line N :character N}.
 
-(sig 'lsp/apply-changes {-> Str List Str})
-(fun {lsp/apply-changes text changes} {
+(sig 'apply-changes {-> Str List Str})
+(fun {apply-changes text changes} {
   if (nil? changes) {text}
-  {lsp/apply-changes (lsp/apply-one-change text (head changes))
+  {apply-changes (apply-one-change text (head changes))
                      (tail changes)}
 })
 
-(sig 'lsp/apply-one-change {-> Str List Str})
-(fun {lsp/apply-one-change text change} {do
+(sig 'apply-one-change {-> Str List Str})
+(fun {apply-one-change text change} {do
   (= {range} (plist/get change :range))
   (= {new-text} (plist/get change :text))
   (if (nil? range) {new-text}
@@ -209,35 +217,35 @@
 ; the error element, so a mid-edit document degrades to "nothing to say
 ; about the form being typed" rather than answering with positions into a
 ; document the client no longer has.
-(sig 'lsp/get-doc {-> DocParams DocCtx})
-(fun {lsp/get-doc params} {do
+(sig 'get-doc {-> DocParams DocCtx})
+(fun {get-doc params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
-  (= {text} (lsp/doc-get uri))
+  (= {text} (doc-get uri))
   (if (nil? text) {nil}
-    {(DocCtx :uri uri :text text :ast (lsp/get-ast uri text))})
+    {(DocCtx :uri uri :text text :ast (get-ast uri text))})
 })
 
-(sig 'lsp/get-text-pos {-> TextDocPosParams List})
-(fun {lsp/get-text-pos params} {do
+(sig 'get-text-pos {-> TextDocPosParams List})
+(fun {get-text-pos params} {do
   (= {td} params:textDocument)
   (= {uri} td:uri)
   (if (or (error? uri) (nil? uri)) {nil}
     {do
-      (= {text} (lsp/doc-get uri))
+      (= {text} (doc-get uri))
       (= {pos} params:position)
       (if (or (nil? text) (error? text)) {nil}
         {do
           ; Parse can fail on broken source; the AST field holds the raw
           ; parse result (list-of-errors is fine, a bare Error is not).
-          (= {ast-val} (lsp/get-ast uri text))
+          (= {ast-val} (get-ast uri text))
           (= {ast-val} (if (error? ast-val) {nil} {ast-val}))
           (list :uri uri :text text :ast ast-val
                 :line pos:line :col pos:character)})})
 })
 
-(fun {lsp/get-word-ctx params} {do
-  (= {ctx} (lsp/get-text-pos params))
+(fun {get-word-ctx params} {do
+  (= {ctx} (get-text-pos params))
   (if (or (nil? ctx) (error? ctx)) {nil}
     {do
       (= {w} (symdb/word-at-position ctx:text ctx:line ctx:col))
@@ -249,7 +257,7 @@
 ; LSP Capabilities
 ; ---------------------------------------------------------------------------
 
-(def {lsp/capabilities}
+(def {capabilities}
   {:capabilities
     {:positionEncoding "utf-8"
      :textDocumentSync
@@ -293,17 +301,17 @@
 ; Known-set cache — rebuilt only when symdb changes
 ; ---------------------------------------------------------------------------
 
-(def {lsp/known-set-cache} nil)
+(def {known-set-cache} nil)
 
-(sig 'lsp/invalidate-known-set {-> Nil})
-(fun {lsp/invalidate-known-set} {
+(sig 'invalidate-known-set {-> Nil})
+(fun {invalidate-known-set} {
   def {lsp/known-set-cache} nil
 })
 
-(sig 'lsp/get-known-set {-> List})
-(fun {lsp/get-known-set} {
-  if (nil? lsp/known-set-cache)
-    {do (def {lsp/known-set-cache} (vd/load-known-set lsp/db))
-        lsp/known-set-cache}
-    {lsp/known-set-cache}
+(sig 'get-known-set {-> List})
+(fun {get-known-set} {
+  if (nil? known-set-cache)
+    {do (def {lsp/known-set-cache} (vd/load-known-set db))
+        known-set-cache}
+    {known-set-cache}
 })

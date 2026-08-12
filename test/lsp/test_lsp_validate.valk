@@ -17,24 +17,24 @@
 
 (fun {diag-count text} {do
   (= {ast} (parse text))
-  (len (vd/validate-with-known nil ast text BUILTIN_KNOWN))
+  (len (vd/validate-with-known nil "" ast text BUILTIN_KNOWN))
 })
 
 (fun {diag-messages text} {do
   (= {ast} (parse text))
-  (= {diags} (vd/validate-with-known nil ast text BUILTIN_KNOWN))
+  (= {diags} (vd/validate-with-known nil "" ast text BUILTIN_KNOWN))
   (map (\{d} {d:message}) diags)
 })
 
 (fun {first-diag text} {do
   (= {ast} (parse text))
-  (= {diags} (vd/validate-with-known nil ast text BUILTIN_KNOWN))
+  (= {diags} (vd/validate-with-known nil "" ast text BUILTIN_KNOWN))
   (if (nil? diags) {nil} {head diags})
 })
 
 (fun {diag-count-with-db db text} {do
   (= {ast} (parse text))
-  (len (vd/validate db ast text))
+  (len (vd/validate db "" ast text))
 })
 
 (test/run (list
@@ -537,7 +537,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(fun {add a b} {+ a b})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db "" (parse code) code)))
       (= {_} (sqlite/close db))
       (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
       (test/assert-eq 0 (len type-msgs)
@@ -552,7 +552,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(fun {f x :: Num y} {+ x y})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db "" (parse code) code)))
       (= {_} (sqlite/close db))
       (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
       (test/assert-eq 0 (len type-msgs)
@@ -593,7 +593,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(sig 'f {-> Num})\n(fun {compute x} {x})\n(fun {f} {do (= {r} (compute 1)) r})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db "" (parse code) code)))
       (= {_} (sqlite/close db))
       (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
       (test/assert (== (len type-msgs) 0)
@@ -621,7 +621,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(sig 'f {-> Num})\n(fun {compute x} {x})\n(fun {f} {do (= {_} (compute 1)) 42})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db "" (parse code) code)))
       (= {_} (sqlite/close db))
       (= {underscore-msgs} (filter (\{m} {str/starts-with? m "Type of '_'"}) msgs))
       (test/assert-eq 0 (len underscore-msgs)
@@ -681,7 +681,7 @@
       (= {_} (symdb/sync-document db "file:///builtins.valk" bt))
       (= {code} "(fun {notype x f} {do (= {r} (f x)) r})")
       (= {_} (symdb/sync-document db "file:///test.valk" code))
-      (= {msgs} (map (\{d} {d:message}) (vd/validate db (parse code) code)))
+      (= {msgs} (map (\{d} {d:message}) (vd/validate db "" (parse code) code)))
       (= {_} (sqlite/close db))
       (= {type-msgs} (filter (\{m} {str/starts-with? m "Type of"}) msgs))
       (test/assert (<= (len type-msgs) 1)
@@ -746,7 +746,7 @@
       (sqlite/exec-script db symdb/schema-sql)
       (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
       (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('foo', 1, 0, 0, 1, 1, '{-> Str Str}')")
-      (= {diags} (vd/validate db (parse "(foo 1 2)") "(foo 1 2)"))
+      (= {diags} (vd/validate db "" (parse "(foo 1 2)") "(foo 1 2)"))
       (test/assert (> (len diags) 0) "should have diag")
       (= {msg} (plist/get (head diags) :message))
       (test/assert (>= (str/index-of msg "expects 1") 0) "message should say expects 1")
@@ -841,7 +841,7 @@
       (sqlite/exec-script db symdb/schema-sql)
       (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
       (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('/', 1, 0, 0, 1, 2, '{-> & Num Num}')")
-      (= {diags} (vd/validate db (parse "(/ 10 0)") "(/ 10 0)"))
+      (= {diags} (vd/validate db "" (parse "(/ 10 0)") "(/ 10 0)"))
       (= {warnings} (filter (\ {d} {== (plist/get d :severity) 2}) diags))
       (sqlite/close db)
       (test/assert (>= (len warnings) 0) "div-zero check limited: builtin operators resolve before dispatch")
@@ -854,7 +854,7 @@
       (sqlite/exec-script db symdb/schema-sql)
       (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
       (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('/', 1, 0, 0, 1, 2, '{-> & Num Num}')")
-      (= {diags} (vd/validate db (parse "(/ 10 x)") "(/ 10 x)"))
+      (= {diags} (vd/validate db "" (parse "(/ 10 x)") "(/ 10 x)"))
       (= {warnings} (filter (\ {d} {== (plist/get d :severity) 2}) diags))
       (sqlite/close db)
       (test/assert-eq 0 (len warnings) "division by variable should not warn")
@@ -867,7 +867,7 @@
       (sqlite/exec-script db symdb/schema-sql)
       (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
       (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('mod', 1, 0, 0, 1, 2, '{-> Num Num Num}')")
-      (= {diags} (vd/validate db (parse "(mod 10 0)") "(mod 10 0)"))
+      (= {diags} (vd/validate db "" (parse "(mod 10 0)") "(mod 10 0)"))
       (= {warnings} (filter (\ {d} {== (plist/get d :severity) 2}) diags))
       (sqlite/close db)
       (test/assert (> (len warnings) 0) "modulo by literal 0 should produce warning")
@@ -883,7 +883,7 @@
       (sqlite/exec-script db symdb/schema-sql)
       (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
       (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('+', 1, 0, 0, 1, -1, '{-> & Num Num}')")
-      (= {diags} (vd/validate db (parse "(+ \"hello\" 1)") "(+ \"hello\" 1)"))
+      (= {diags} (vd/validate db "" (parse "(+ \"hello\" 1)") "(+ \"hello\" 1)"))
       (= {type-errs} (filter (\ {d} {>= (str/index-of (plist/get d :message) "expects") 0}) diags))
       (sqlite/close db)
       (test/assert (>= (len type-errs) 0) "type-check limited: builtin operators resolve before dispatch")
@@ -957,7 +957,7 @@
       (sqlite/exec-script db symdb/schema-sql)
       (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
       (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('Point', 1, 0, 0, 4, 2, ':x Num :y Num')")
-      (= {diags} (vd/validate db (parse "(Point :x 1 :z 2)") "(Point :x 1 :z 2)"))
+      (= {diags} (vd/validate db "" (parse "(Point :x 1 :z 2)") "(Point :x 1 :z 2)"))
       (sqlite/close db)
       (test/assert (> (len diags) 0) "wrong field name should produce diagnostic")
       (= {msg} (plist/get (head diags) :message))
@@ -971,9 +971,105 @@
       (sqlite/exec-script db symdb/schema-sql)
       (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('t.valk', 'h')")
       (sqlite/exec db "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES ('Point', 1, 0, 0, 4, 2, ':x Num :y Num')")
-      (= {diags} (vd/validate db (parse "(Point :x 1)") "(Point :x 1)"))
+      (= {diags} (vd/validate db "" (parse "(Point :x 1)") "(Point :x 1)"))
       (sqlite/close db)
       (test/assert (> (len diags) 0) "missing keyword pair should produce diagnostic")
+      true
+    })
+
+  ; --- Load-graph scoped shape resolution ---
+  ; Two fixture files define conflicting LGThing types (1 field vs 2).
+  ; A consumer resolves against the definition reachable through ITS loads,
+  ; not against an arbitrary workspace-wide pick.
+
+  (test/case "loadgraph-scoped-ctor-resolution"
+    {do
+      (= {db} (sqlite/open ":memory:"))
+      (sqlite/exec-script db symdb/schema-sql)
+      ; Seed a fake ambient builtins row: the missing-dependency check
+      ; disables itself when the DB has no ambient files (see
+      ; vd/load-visible-set).
+      (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('/amb/stdlib/builtins.valk','h')")
+      (sqlite/exec db "INSERT INTO symbols (name,file_id,line,col,kind,arity) SELECT 'head', id, 0, 0, 1, 1 FROM files WHERE path='/amb/stdlib/builtins.valk'")
+      (= {sync} (\ {p} {do
+        (= {abs} (realpath p))
+        (symdb/sync-document db (str "file://" abs) (read-file abs))
+        abs}))
+      (sync "test/fixtures/loadgraph/one-field.valk")
+      (sync "test/fixtures/loadgraph/two-field.valk")
+      (= {u1} (sync "test/fixtures/loadgraph/user-one.valk"))
+      (= {u2} (sync "test/fixtures/loadgraph/user-two.valk"))
+
+      (= {edges} (sqlite/query db "SELECT COUNT(*) AS n FROM loads"))
+      (test/assert (>= (plist/get (head edges) :n) 2)
+        "indexer records load edges")
+
+      ; user-one sees the 1-field LGThing: 1 pair OK, 2 pairs flagged.
+      (= {ok1} (vd/validate db u1 (parse "(LGThing :x 1)") "(LGThing :x 1)"))
+      (test/assert-eq 0 (len ok1) "closure resolves to 1-field def")
+      (= {bad1} (vd/validate db u1
+        (parse "(LGThing :x 1 :y 2)") "(LGThing :x 1 :y 2)"))
+      (test/assert (> (len bad1) 0) "2 pairs against 1-field def flagged")
+
+      ; user-two sees the 2-field LGThing: mirror expectations.
+      (= {ok2} (vd/validate db u2
+        (parse "(LGThing :x 1 :y 2)") "(LGThing :x 1 :y 2)"))
+      (test/assert-eq 0 (len ok2) "closure resolves to 2-field def")
+      (= {bad2} (vd/validate db u2 (parse "(LGThing :x 1)") "(LGThing :x 1)"))
+      (test/assert (> (len bad2) 0) "1 pair against 2-field def flagged")
+
+      ; Field names come from the type's own definition (ctor sig emitted
+      ; by the indexer): right count, wrong keyword — still flagged.
+      (= {badf} (vd/validate db u2
+        (parse "(LGThing :x 1 :bogus 2)") "(LGThing :x 1 :bogus 2)"))
+      (test/assert (> (len badf) 0) "wrong field name flagged")
+      (= {msgf} (plist/get (head badf) :message))
+      (test/assert (>= (str/index-of msgf ":bogus") 0)
+        "message names the bad field")
+
+      ; No path: definitions conflict workspace-wide, so no shape check.
+      (= {amb} (vd/validate db "" (parse "(LGThing :x 1)") "(LGThing :x 1)"))
+      (test/assert-eq 0 (len amb) "ambiguous global: no guessing")
+
+      ; Navigation respects the graph too: from user-one, go-to-definition
+      ; on LGThing resolves to the one definition its loads reach — not to
+      ; every definition in the workspace.
+      (= {sites1} (symdb/find-definition-sites db "LGThing" u1))
+      (test/assert-eq 1 (len sites1) "one definition site through the graph")
+      (test/assert (>= (str/index-of (plist/get (head sites1) :path)
+                                     "one-field.valk") 0)
+        "the site is the closure's definition")
+      (= {sites-all} (symdb/find-definition-sites db "LGThing" nil))
+      (test/assert-eq 2 (len sites-all) "pathless lookup still sees both")
+
+      ; Reverse direction: references/rename scope to the consumers of a
+      ; specific definition. user-one resolves LGThing to one-field.valk;
+      ; user-two resolves it to two-field.valk. Each definition's
+      ; reference set must contain its own consumer and not the other's.
+      (= {p1} (realpath "test/fixtures/loadgraph/one-field.valk"))
+      (= {p2} (realpath "test/fixtures/loadgraph/two-field.valk"))
+      (= {r1} (symdb/files-resolving-to db "LGThing" p1))
+      (= {r2} (symdb/files-resolving-to db "LGThing" p2))
+      (test/assert (>= (len (filter (\ {p} {>= (str/index-of p "user-one") 0}) r1)) 1)
+        "one-field's consumers include user-one")
+      (test/assert-eq 0 (len (filter (\ {p} {>= (str/index-of p "user-two") 0}) r1))
+        "one-field's consumers exclude user-two")
+      (test/assert (>= (len (filter (\ {p} {>= (str/index-of p "user-two") 0}) r2)) 1)
+        "two-field's consumers include user-two")
+      (test/assert-eq 0 (len (filter (\ {p} {>= (str/index-of p "user-one") 0}) r2))
+        "two-field's consumers exclude user-one")
+
+      ; A file with no loads referencing LGThing: known in the workspace
+      ; but unreachable through its own graph — missing dependency.
+      (= {un} (sync "test/fixtures/loadgraph/user-neither.valk"))
+      (= {miss} (vd/validate db un (parse "(LGThing :x 1)") "(LGThing :x 1)"))
+      (test/assert (> (len miss) 0) "missing dependency flagged")
+      (= {mmsg} (plist/get (head miss) :message))
+      (test/assert (>= (str/index-of mmsg "never loads") 0)
+        "message explains the missing load")
+      (test/assert-eq 2 (plist/get (head miss) :severity)
+        "missing dependency is a warning")
+      (sqlite/close db)
       true
     })
 

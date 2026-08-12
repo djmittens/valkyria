@@ -1,6 +1,4 @@
 ; LSP Validate — public interface, loads checks + walker in order
 
-(module validate)
-
 (load "stdlib/diag/validate-checks.valk")
 (load "stdlib/diag/validate-walk.valk")

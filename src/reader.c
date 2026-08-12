@@ -40,7 +40,7 @@ static valk_lval_t* valk_lval_read_sym(int* i, const char* s) {
   for (; (next = s[end]); ++end) { // LCOV_EXCL_BR_LINE - character set dispatch
     if (strchr("abcdefghijklmnopqrstuvwxyz"
                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-               "0123456789_+-*\\/=<>!&?:|",
+               "0123456789_+-*\\/=<>!&?:|.",
                next) &&
         s[end] != '\0') { // LCOV_EXCL_BR_LINE - redundant null guard
       continue;

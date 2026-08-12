@@ -23,3 +23,7 @@ test/lang/test_capture_builtins.valk
 test/gc/test_gc_and_log_builtins.valk
 test/http/test_sse_builtins.valk
 test/stress/test_recursion_stress.valk
+
+# Load-graph fixtures: user-neither deliberately references a type it never
+# loads (negative fixture for the missing-dependency check)
+test/fixtures/loadgraph/user-neither.valk

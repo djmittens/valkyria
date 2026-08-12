@@ -133,6 +133,11 @@ void valk_lspi_collect_module_and_defs(index_ctx_t *ctx, valk_lval_t *ast) {
       continue;
     }
 
+    // Position-sensitive, matching the runtime: only defs after the
+    // (module X) form belong to the module and get qualified. Defs before
+    // it stay in the enclosing (bare) scope.
+    if (!ctx->module_prefix[0]) continue;
+
     if (strcmp(head->str, "def") != 0 && strcmp(head->str, "fun") != 0)
       continue;
 

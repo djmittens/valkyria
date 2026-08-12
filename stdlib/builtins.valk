@@ -83,16 +83,14 @@
 (sig 'unquote-splicing {-> A A})
 ; Create a Q-expression from arguments.
 (sig 'list {-> & A (List A)})
-; Load and evaluate a file. Returns nil.
-(sig 'load {-> Str Nil})
+; Load and evaluate a file as a (do ...): returns the last form's value.
+(sig 'load {-> Str A})
 ; Parse a string into a single Q-expression.
 (sig 'read {-> Str QExpr})
 ; Parse a string into a list of all top-level expressions.
 (sig 'parse {-> Str (List QExpr)})
 ; Set the current file's module prefix. Called by the (module X) macro.
 (sig 'set-module-prefix! {-> A Nil})
-; Validate a parsed AST against its source text. Returns list of diagnostic plists.
-(sig 'validate {-> (List QExpr) Str (List QExpr)})
 
 ; === List operations ===
 

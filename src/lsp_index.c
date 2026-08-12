@@ -1,6 +1,9 @@
 #include "lsp_index_internal.h"
 
+#include <limits.h>
 #include <string.h>
+
+#include "macro.h"
 
 #define SQLITE_REF_TYPE "sqlite_db"
 
@@ -389,15 +392,36 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
       const char *tname = type_name->cons.head->str;
       const char *doc = valk_lspi_extract_doc_comment(ctx, kp);
       valk_lspi_emit_symbol(ctx, tname, kp, SYMKIND_TYPE, -1, doc, NULL);
-      // Also emit constructor
+      // Also emit the constructor, carrying the record's field spec in the
+      // sig column (":name Type ..."), so shape checks can validate field
+      // names — not just counts — against the type's actual definition.
       valk_lval_t *fields = valk_lval_list_nth(tl, 1);
       int ctor_arity = 0;
+      char field_sig[512];
+      size_t sig_off = 0;
+      field_sig[0] = 0;
       if (fields && LVAL_TYPE(fields) == LVAL_CONS) {
         valk_lval_t *fc = fields;
-        while (fc && LVAL_TYPE(fc) == LVAL_CONS) { ctor_arity++; fc = fc->cons.tail; }
+        while (fc && LVAL_TYPE(fc) == LVAL_CONS) {
+          valk_lval_t *el = fc->cons.head;
+          const char *word =
+              (el && LVAL_TYPE(el) == LVAL_SYM) ? el->str : "?";
+          int wrote = snprintf(field_sig + sig_off,
+                               sizeof field_sig - sig_off, "%s%s",
+                               sig_off ? " " : "", word);
+          if (wrote > 0 && (size_t)wrote < sizeof field_sig - sig_off)
+            sig_off += (size_t)wrote;
+          ctor_arity++;
+          fc = fc->cons.tail;
+        }
         ctor_arity /= 2; // fields are :name Type pairs
       }
-      valk_lspi_emit_symbol(ctx, tname, kp, SYMKIND_CONSTRUCTOR, ctor_arity, doc, NULL);
+      bool is_record = fields && LVAL_TYPE(fields) == LVAL_CONS &&
+                       fields->cons.head &&
+                       LVAL_TYPE(fields->cons.head) == LVAL_SYM &&
+                       fields->cons.head->str[0] == ':';
+      valk_lspi_emit_symbol(ctx, tname, kp, SYMKIND_CONSTRUCTOR, ctor_arity,
+                            doc, is_record && sig_off ? field_sig : NULL);
     }
     walk_each(ctx, tl);
     return;
@@ -562,9 +586,9 @@ static void walk_expr(index_ctx_t *ctx, valk_lval_t *expr) {
 // database it is indexing into: "main" for the on-disk source index,
 // "live" for the editor's in-flight text.
 static const char *TABLES_DELETE_ALL[] = {
-  "nodes", "scoped_refs", "scopes", "symbols", "refs", NULL
+  "nodes", "scoped_refs", "scopes", "symbols", "refs", "loads", NULL
 };
-static const char *TABLES_DELETE_FAST[] = { "symbols", "refs", NULL };
+static const char *TABLES_DELETE_FAST[] = { "symbols", "refs", "loads", NULL };
 
 #define SQL_BUF 256
 
@@ -589,6 +613,67 @@ static void prepare_insert(sqlite3 *db, const char *schema, const char *table,
   snprintf(sql, sizeof sql, "INSERT INTO %s.%s (%s) VALUES (%s)", schema, table,
            cols, vals);
   sqlite3_prepare_v2(db, sql, -1, out, NULL);
+}
+
+// Recursively collect (load "path") forms — loads can appear inside
+// function bodies and test cases, and an edge exists wherever a load does
+// (a conditional load is an over-approximated unconditional edge, which is
+// the safe direction for visibility).
+static void emit_load_edges_walk(valk_lval_t *expr, const char *dir,
+                                 sqlite3_stmt *ins, int file_id) {
+  if (!expr || LVAL_TYPE(expr) != LVAL_CONS) return;
+  valk_lval_t *head = expr->cons.head;
+  if (head && LVAL_TYPE(head) == LVAL_SYM &&
+      strcmp(head->str, "load") == 0) {
+    valk_lval_t *rest = expr->cons.tail;
+    if (rest && LVAL_TYPE(rest) == LVAL_CONS && rest->cons.head &&
+        LVAL_TYPE(rest->cons.head) == LVAL_STR) {
+      char resolved[PATH_MAX];
+      if (valk_load_resolve_from(dir && dir[0] ? dir : NULL,
+                                 rest->cons.head->str, resolved)) {
+        sqlite3_reset(ins);
+        sqlite3_bind_int(ins, 1, file_id);
+        sqlite3_bind_text(ins, 2, resolved, -1, SQLITE_TRANSIENT);
+        sqlite3_step(ins);
+      }
+    }
+  }
+  for (valk_lval_t *cur = expr; cur && LVAL_TYPE(cur) == LVAL_CONS;
+       cur = cur->cons.tail)
+    emit_load_edges_walk(cur->cons.head, dir, ins, file_id);
+}
+
+// Emit the file's static load graph: one edge per (load "path") form, with
+// the path resolved by the runtime's own resolution rules (file-relative
+// first). Encoding the graph lets consumers (the validator's shape checks,
+// navigation) resolve a name against what this file actually sees instead
+// of the whole workspace.
+static void emit_load_edges(sqlite3 *db, const char *schema, int file_id,
+                            valk_lval_t *ast) {
+  char sql[SQL_BUF];
+  snprintf(sql, sizeof sql, "SELECT path FROM %s.files WHERE id=?1", schema);
+  sqlite3_stmt *q = NULL;
+  sqlite3_prepare_v2(db, sql, -1, &q, NULL);
+  sqlite3_bind_int(q, 1, file_id);
+  char dir[PATH_MAX] = "";
+  if (sqlite3_step(q) == SQLITE_ROW) {
+    const char *p = (const char *)sqlite3_column_text(q, 0);
+    if (p) snprintf(dir, sizeof dir, "%s", p);
+  }
+  sqlite3_finalize(q);
+  char *slash = strrchr(dir, '/');
+  if (slash) *slash = 0;
+
+  sqlite3_stmt *ins = NULL;
+  snprintf(sql, sizeof sql,
+           "INSERT OR IGNORE INTO %s.loads (file_id,target_path) VALUES (?1,?2)",
+           schema);
+  sqlite3_prepare_v2(db, sql, -1, &ins, NULL);
+
+  for (valk_lval_t *cur = ast; cur && LVAL_TYPE(cur) == LVAL_CONS;
+       cur = cur->cons.tail)
+    emit_load_edges_walk(cur->cons.head, dir, ins, file_id);
+  sqlite3_finalize(ins);
 }
 
 valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
@@ -634,6 +719,8 @@ valk_lval_t *valk_builtin_lsp_index_file(valk_lenv_t *e, valk_lval_t *a) {
   // Delete old data — only relevant tables
   delete_file_rows(db, schema, fast ? TABLES_DELETE_FAST : TABLES_DELETE_ALL,
                    file_id);
+
+  emit_load_edges(db, schema, file_id, ast);
 
   // Prepare insert statements (skip unused in fast mode)
   if (!fast) {

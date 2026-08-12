@@ -280,13 +280,13 @@
   (test/case "load-file-with-eval-error"
     {do
     (= {result} (load "test/fixtures/load_with_error.valk"))
-    (test/assert (not (error? result)) "load continues past errors")
+    (test/assert (error? result) "first error aborts the load and is returned")
     true
   })
   (test/case "load-file-all-errors"
     {do
     (= {result} (load "test/fixtures/load_all_errors.valk"))
-    (test/assert (not (error? result)) "load with all errors returns nil")
+    (test/assert (error? result) "load with all errors returns the first error")
     true
   })
   (test/case "str-to-num-float"

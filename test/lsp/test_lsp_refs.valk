@@ -251,21 +251,21 @@
 
   (test/case "line-col-first-line"
     {do
-      (test/assert-eq 3 (analysis/line-col->offset "abcdef" 0 3)
+      (test/assert-eq 3 (sem/line-col->offset "abcdef" 0 3)
         "line 0, col 3 = offset 3")
       true
     })
 
   (test/case "line-col-second-line"
     {do
-      (test/assert-eq 4 (analysis/line-col->offset "abc\ndef" 1 0)
+      (test/assert-eq 4 (sem/line-col->offset "abc\ndef" 1 0)
         "line 1, col 0 = offset 4 (after abc\\n)")
       true
     })
 
   (test/case "line-col-second-line-with-col"
     {do
-      (test/assert-eq 6 (analysis/line-col->offset "abc\ndef" 1 2)
+      (test/assert-eq 6 (sem/line-col->offset "abc\ndef" 1 2)
         "line 1, col 2 = offset 6")
       true
     })
