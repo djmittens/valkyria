@@ -11,29 +11,8 @@
 (def {REQ_BRANCH} 850)
 (def {REQ_EXPR} 900)
 
-(def {KNOWN_BLOCKED} (list
-  (list "stdlib/http/api.valk" "stdlib utility library - many functions not exercised by tests")
-  (list "testing/test.valk" "test framework - error/timeout/skip paths not exercised in normal runs")
-  (list "runtime/src/lsp_index.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
-  (list "runtime/src/lsp_index_emit.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
-  (list "runtime/src/gc_region.c" "GC region - branch coverage limited by OOM/edge-case paths")
-  (list "runtime/src/gc_mark.c" "parallel GC mark - 100% line; remaining branches are contention-timing-dependent (CAS retries, work-stealing races) and cannot be forced deterministically")
-  (list "runtime/src/type_env.c" "type environment - branch coverage limited by complex pattern matching")
-  (list "runtime/src/build_shim.c" "--build shim - only exercised by test_build's produced binaries; error paths (missing __entry__, OOM) untestable there")
-  (list "lsp/main.valk" "LSP entry point - only 2 lines, coverage skew from small file")))
-
-(fun {is-blocked rel-path} {
-  (*is-blocked-loop* KNOWN_BLOCKED rel-path)
-})
-
-(fun {*is-blocked-loop* blocked rel-path} {
-  (if (== blocked nil) {nil}
-    {do
-      (= {entry} (head blocked))
-      (if (== (nth 1 entry) rel-path)
-        {(nth 2 entry)}
-        {(*is-blocked-loop* (tail blocked) rel-path)})})
-})
+; Blocked-file exceptions live in coverage_common.valk (cov/KNOWN_BLOCKED),
+; shared with coverage-report.valk.
 
 ; --- CLI ---
 
@@ -131,7 +110,7 @@
             {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (cov/fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
             {})
           (= {line} (str line "  (-" gaps ")"))
-          (= {reason} (is-blocked rel))
+          (= {reason} (cov/is-blocked rel))
           (if (!= reason nil)
             {do
               (= {line} (str line "  [BLOCKED: " reason "]"))
@@ -167,7 +146,7 @@
             {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (cov/fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
             {})
           (= {line} (str line "  (-" gaps ")"))
-          (= {reason} (is-blocked rel))
+          (= {reason} (cov/is-blocked rel))
           (if (!= reason nil)
             {do
               (= {line} (str line "  [BLOCKED: " reason "]"))
