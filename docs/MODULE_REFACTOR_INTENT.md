@@ -1,4 +1,14 @@
-Module Refactor:
+# Module Refactor — Design Intent
+
+Status: **raw design intent**, author's own notes. Not a worked spec.
+
+This is the target model. For the risk analysis of an earlier, narrower proposal
+(macro + lexically-scoped `*module-prefix*`), and the reasons it stalled, see
+[MODULE_SYSTEM_REFACTOR.md](MODULE_SYSTEM_REFACTOR.md). That document's
+sibling-resolution problem (Risk #5) is the main thing the resolution-order and
+nesting rules below are meant to address.
+
+---
 
 I want to change the model behind how modules, namespaces, files and so on work.
 It is true that the load order matters for a programming language for how the program and its symbols are interpreted.

@@ -429,8 +429,8 @@ The compiler has full type information and can optimize representations.
         {(Some h)}
         {(None)})}
     {(Param :prefix pfx :param-name _ :handler h)
-      (if (str/starts-with path pfx)
-        {(Some (h (str/drop (len pfx) path)))}
+      (if (str/starts-with? path pfx)
+        {(Some (h (str/slice path (len pfx) (len path))))}
         {(None)})}
     {(NotFound) (None)}})
 ```

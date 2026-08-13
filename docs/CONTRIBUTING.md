@@ -180,20 +180,20 @@ int main(void) {
 
 ### Lisp Tests
 
-Located in `test/test_*.valk`. Use the test module:
+Located in `test/<area>/test_*.valk`. The prelude is loaded automatically at
+startup; load the test module explicitly:
 
 ```lisp
-(load "src/prelude.valk")
-(load "src/modules/test.valk")
+(load "stdlib/test/test.valk")
 
-(test/suite "My Tests")
+(test/run (list
 
-(test/define "my-test-name"
-  {do
-    (= {result} (my-function 42))
-    (== result expected-value)})
-
-(test/run {})
+  (test/case "my-test-name"
+    {do
+      (= {result} (my-function 42))
+      (test/assert-eq expected-value result "my-function of 42")
+      true})
+))
 ```
 
 ### Running Tests

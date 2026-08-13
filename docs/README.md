@@ -1,38 +1,50 @@
 # Valkyria Documentation
 
-## Core Documentation
+## Start Here
 
-- **[LANGUAGE.md](LANGUAGE.md)** - Language reference: syntax, semantics, builtins
+- **[LANGUAGE.md](LANGUAGE.md)** - Language reference: syntax, core forms, builtins, prelude
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Build setup, code style, testing
 - **[ROADMAP.md](ROADMAP.md)** - Tech tree and feature status
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development setup, code style, testing
 
-## Feature Documentation
+## Subsystems
 
-Detailed documentation for implemented features:
+- **[MEMORY_MANAGEMENT.md](MEMORY_MANAGEMENT.md)** - Scratch arena, GC heap, evacuation, handles
+- **[GC_MARKING_ALGORITHM.md](GC_MARKING_ALGORITHM.md)** - Parallel mark queue and work stealing
+- **[THREADING.md](THREADING.md)** - Two-thread model and GC coordination
+- **[ASYNC_IO.md](ASYNC_IO.md)** - Async handles, combinators, `aio/do` and `aio/let`
+- **[ASYNC_CLOSURES.md](ASYNC_CLOSURES.md)** - How async callbacks capture environments
+- **[METRICS.md](METRICS.md)** - Metrics, export formats, debug endpoints
 
-- **[features/](features/)** - Feature documentation index
-  - [Memory Management](features/MEMORY_MANAGEMENT.md) - Three-tier allocation, GC, checkpoint system
-  - [Async I/O](features/ASYNC_IO.md) - libuv backend, handles, HTTP/2
-  - [Concurrency](features/CONCURRENCY.md) - Thread pool, futures, promises
-  - [Metrics](features/METRICS.md) - Observability and Prometheus export
+## HTTP/2
 
-## API Reference
+- **[HTTP_API.md](HTTP_API.md)** - HTTP/2 client and server API
+- **[HTTP_API_QUICK_REFERENCE.md](HTTP_API_QUICK_REFERENCE.md)** - Cheat sheet
+- **[CAPACITY_PLANNING.md](CAPACITY_PLANNING.md)** - Tuning for throughput and latency
 
-- **[HTTP_API.md](HTTP_API.md)** - High-level HTTP client/server API
-- **[HTTP_API_QUICK_REFERENCE.md](HTTP_API_QUICK_REFERENCE.md)** - HTTP API cheat sheet
+## Testing
 
-## Implementation Planning
+- **[TESTING.md](TESTING.md)** - Running and writing tests
+- **[COVERAGE_REQUIREMENTS.md](COVERAGE_REQUIREMENTS.md)** - Coverage tiers and enforcement
 
-- **[implementation_board/](implementation_board/)** - Detailed task breakdown by layer
-- **[ASYNC_API_PLAN.md](ASYNC_API_PLAN.md)** - Current async API design (in progress)
+## Design Drafts (not yet implemented)
 
-## Source Files
+- **[TYPE_SYSTEM_DESIGN.md](TYPE_SYSTEM_DESIGN.md)** - Algebraic data types with erasure
+- **[MODULE_REFACTOR_INTENT.md](MODULE_REFACTOR_INTENT.md)** - Target module model (design intent)
+- **[MODULE_SYSTEM_REFACTOR.md](MODULE_SYSTEM_REFACTOR.md)** - Risk analysis of the narrower macro-prefix proposal
 
-- `src/prelude.valk` - Standard library
-- `src/http_api.valk` - HTTP API implementation
-- `src/async_handles.valk` - Async handle utilities
-- `src/modules/test.valk` - Test framework
+## Open Work
 
-## Archive
+- **[TECH_DEBT_LOG.md](TECH_DEBT_LOG.md)** - Known debt, ordered by isolation
 
-Historical planning documents are in `archive/`.
+## Source Layout
+
+| Path | Contents |
+|---|---|
+| `src/` | C runtime (`parser.c`, `eval.c`, `memory.c`, `gc*.c`) |
+| `src/aio/` | Async I/O, HTTP/2, TLS |
+| `src/llvm/`, `src/vir/` | AOT/JIT compilation |
+| `stdlib/prelude.valk` | Standard library (auto-loaded at startup) |
+| `stdlib/http/api.valk` | High-level HTTP API |
+| `stdlib/aio/` | Async handles, monadic combinators, SSE |
+| `stdlib/test/test.valk` | Test framework |
+| `test/<area>/` | C and Valk tests by area |

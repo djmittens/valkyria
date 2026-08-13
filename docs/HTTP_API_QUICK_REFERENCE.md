@@ -1,232 +1,121 @@
-# HTTP API Quick Reference
+# HTTP/2 Quick Reference
 
-## Loading the API
+HTTP/2 only. All names are `http2/`-prefixed. See [HTTP_API.md](HTTP_API.md) for detail.
+
+## Setup
 
 ```lisp
-(load "src/prelude.valk")
-(load "src/http_api.valk")
+(load "stdlib/http/api.valk")            ; high-level layer (optional)
+(def {aio} (aio/await (aio/start)))      ; required for all async work
 ```
 
-## Basic Requests
+## Primitives (always available)
+
+| Call | Returns |
+|---|---|
+| `(http2/client-request aio host port path)` | async handle -> response |
+| `(http2/client-request-with-headers aio host port path headers)` | async handle -> response |
+| `(http2/connect aio host port)` | connection |
+| `(http2/response-status resp)` | status **string**, e.g. `"200"` |
+| `(http2/response-body resp)` | body string |
+| `(http2/response-headers resp)` | headers |
+| `(http2/request method scheme host path)` | request |
+| `(http2/request-add-header req name value)` | — |
+| `(http2/mock-response status body)` | response (testing) |
+
+## Server
+
+| Call | Returns |
+|---|---|
+| `(http2/server-listen aio port handler)` | server (`port` 0 = auto) |
+| `(http2/server-listen aio port handler config)` | server; config qexpr, `:error-handler` |
+| `(http2/server-port server)` | resolved port |
+| `(http2/server-handle server)` | handle |
+| `(http2/server-stop server)` | — |
+
+Handler returns a plist:
 
 ```lisp
-; GET request
-(def {req} (http-get "example.com"))
-
-; POST request
-(def {req} (http-post "api.example.com" "body"))
-
-; Custom method
-(def {req} (http-request "PUT" "api.example.com"))
+(\ {req} {`{:status "200" :body "Hello"}})
 ```
 
-## Adding Headers
+## Request Accessors
 
-```lisp
-; Single header
-(def {req} (with-header req "x-api-key" "secret"))
-
-; Multiple headers
-(def {req} (with-headers req (list
-  (list "authorization" "Bearer token")
-  (list "content-type" "application/json"))))
+```
+(req/method req)  (req/path req)    (req/scheme req)   (req/body req)
+(req/authority req)  (req/stream-id req)  (req/headers req)  (req/header req name)
 ```
 
-## Fetching URLs
+## Fetching (high-level)
+
+Signature is always `aio host port path` — no URL parsing.
 
 ```lisp
-; Simple fetch (async operation)
-(def {fetch-op} (fetch "example.com"))
-(def {response} (run-async fetch-op))
-
-; Synchronous-style
-(def {response} (fetch-sync "example.com"))
-
-; Just get the body
-(def {text} (run-async (fetch-text "example.com")))
-
-; Check if successful
-(def {ok} (run-async (fetch-ok "example.com")))
+(http2/fetch aio host port path)               ; Async Response
+(http2/fetch-text aio host port path)          ; Async body
+(http2/fetch-ok? aio host port path)           ; Async bool
+(http2/fetch-retry aio host port path retries) ; Async Response
 ```
 
-## Response Handling
+## Batching
+
+`endpoints` = list of `{host port path}` lists.
 
 ```lisp
-; Extract parts
-(def {status} (response-status resp))
-(def {body} (response-body resp))
-(def {headers} (response-headers resp))
-
-; Check success
-(if (response-ok resp)
-  {(print "Success!")}
-  {(print "Failed")})
+(http2/fetch-all aio endpoints)
+(http2/fetch-all-text aio endpoints)
+(http2/parallel async-ops)
+(http2/sequential async-ops)
+(http2/aggregate aio endpoints combiner)
+(http2/fan-out aio host port path extractors)
+(http2/health-check aio host port path)
+(http2/health-check-all aio endpoints)
 ```
 
-## Batch Operations
+## Requests & Middleware
 
 ```lisp
-; Fetch multiple URLs
-(def {urls} (list "a.com" "b.com" "c.com"))
-(def {responses} (run-async (fetch-all urls)))
+(http2/get url)                    (http2/post url body)
+(http2/make-request method url)
+(http2/with-header req name value) (http2/with-headers req headers)
 
-; Just get bodies
-(def {bodies} (run-async (fetch-all-text urls)))
-
-; Health checks
-(def {healthy} (run-async (health-check-all urls)))
+(http2/with-auth token)            (http2/with-user-agent agent)
+(http2/with-logging req)           (http2/log-response resp)
+(http2/apply-middleware req mw)    (http2/compose-middleware mw-list)
 ```
 
-## Middleware
+## Status
 
 ```lisp
-; Authentication
-(def {auth} (with-auth "Bearer token"))
-(def {req} (auth (http-get "api.example.com")))
-
-; User agent
-(def {ua} (with-user-agent "MyApp/1.0"))
-(def {req} (ua (http-get "api.example.com")))
-
-; Compose multiple
-(def {mw} (compose-middleware (list
-  (with-auth "Bearer token")
-  (with-user-agent "MyApp/1.0"))))
-(def {req} (mw (http-get "api.example.com")))
+(http2/response-ok? resp)          ; 200 <= status < 300
+(http2/validate-status expected)   ; -> (\ {resp} ...), errors on mismatch
 ```
 
-## Patterns
+## Routing
 
 ```lisp
-; Parallel (currently sequential)
-(def {results} (run-async (parallel (list
-  (fetch "a.com")
-  (fetch "b.com")
-  (fetch "c.com")))))
-
-; Sequential
-(def {final} (run-async (sequential (list
-  (fetch "log.com")
-  (fetch "process.com")
-  (fetch "notify.com")))))
-
-; Aggregate
-(def {result} (run-async (aggregate
-  (list "api1.com" "api2.com")
-  (\ {responses} {(list (response-body (head responses)))}))))
+(http2/route-matches? pattern path)      ; exact == match only
+(http2/find-route routes method path)
 ```
 
-## Error Handling
+## Errors
 
 ```lisp
-; With default value
-(def {result} (run-async
-  (async-or-default (fetch "might-fail.com") "default")))
-
-; With error handler
-(def {result} (run-async
-  (async-try (fetch "risky.com")
-    (\ {err} {(async-pure "fallback")}))))
+(error? resp)                  ; direct check
+(async/try op)                 ; -> (list "ok" v) | (list "error" e)
+(async/recover op fallback)
 ```
 
-## Chaining Operations
+## Minimal Round Trip
 
 ```lisp
-; Using async-bind
-(def {result} (run-async
-  (async-bind (fetch "user.com") (\ {resp} {
-    (def {body} (response-body resp))
-    (fetch-text "posts.com")
-  }))))
+(def {aio} (aio/await (aio/start)))
+(def {srv} (http2/server-listen aio 0 (\ {req} {`{:status "200" :body "hi"}})))
 
-; Using async-pipe
-(def {transform} (\ {resp} {(\ {k} {(k (response-body resp))})}))
-(def {result} (run-async
-  (async-pipe (fetch "data.com") (list transform))))
-```
-
-## Complete Example: Authenticated POST
-
-```lisp
-; 1. Create request
-(def {req} (http-post "api.example.com/users" "{\"name\":\"Alice\"}"))
-
-; 2. Add headers
-(def {req} (with-header req "authorization" "Bearer my-token"))
-(def {req} (with-header req "content-type" "application/json"))
-
-; 3. Send request
-(def {resp} (run-async (fetch-with-request "api.example.com" req)))
-
-; 4. Handle response
-(if (response-ok resp)
-  {(print "Created:" (response-body resp))}
-  {(print "Failed:" (response-status resp))})
-```
-
-## Complete Example: Batch Health Checks
-
-```lisp
-; Define services
-(def {services} (list
-  "api1.example.com/health"
-  "api2.example.com/health"
-  "api3.example.com/health"))
-
-; Check all
-(def {results} (run-async (health-check-all services)))
-
-; Print results
-(print "Service health:" results)
-; Output: (1 1 0) - first two healthy, third down
-```
-
-## Complete Example: Middleware Pipeline
-
-```lisp
-; Define middleware
-(def {with-logging} (\ {req} {
-  (print "Sending request:" req)
-  req
+(aio/then (http2/client-request aio "127.0.0.1" (http2/server-port srv) "/") (\ {r} {
+  (print (http2/response-status r))
+  (http2/server-stop srv)
 }))
 
-(def {middleware} (compose-middleware (list
-  (with-auth "Bearer secret")
-  (with-user-agent "MyApp/2.0")
-  with-logging)))
-
-; Apply to request
-(def {req} (middleware (http-get "api.example.com/data")))
-
-; Send
-(def {resp} (run-async (fetch-with-request "api.example.com" req)))
+(aio/run aio)
 ```
-
-## API Cheat Sheet
-
-| Function | Purpose | Returns |
-|----------|---------|---------|
-| `http-get url` | Create GET request | Request |
-| `http-post url body` | Create POST request | Request |
-| `with-header req name val` | Add header | Request |
-| `fetch url` | Fetch URL | Async operation |
-| `fetch-text url` | Fetch body only | Async operation |
-| `fetch-sync url` | Sync-style fetch | Response |
-| `response-status resp` | Get status code | Number |
-| `response-body resp` | Get body | String |
-| `response-ok resp` | Check 2xx status | Boolean |
-| `fetch-all urls` | Batch fetch | Async operation |
-| `health-check url` | Check if healthy | Async operation |
-| `with-auth token` | Auth middleware | Function |
-| `compose-middleware list` | Combine middleware | Function |
-| `parallel ops` | Run in parallel* | Async operation |
-| `async-or-default op val` | With fallback | Async operation |
-| `run-async op` | Execute async op | Result |
-
-\* Currently executes sequentially
-
-## See Also
-
-- `HTTP_API.md` - Complete documentation
-- `ASYNC_MONADIC_API.md` - Async combinators
-- `test/test_http_minimal.valk` - Working examples

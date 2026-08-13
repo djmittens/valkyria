@@ -40,7 +40,7 @@ Main thread                    Event loop thread
 | Operation | Why Safe |
 |-----------|----------|
 | Reading global bindings | Immutable after load-time initialization |
-| `atom` operations | Internally uses `_Atomic int64_t` |
+| `dict` operations | Serialized through 64 striped mutexes keyed by lval pointer |
 | `aio/cancel` from any thread | Uses atomic flag + `uv_async_send` to wake loop |
 
 ### Unsafe Operations
@@ -55,24 +55,33 @@ Main thread                    Event loop thread
 HTTP handlers execute in a **sandboxed environment** where `def` is replaced with an error-returning stub:
 
 ```lisp
-; In handler callback - throws error
-(def {x} 42)  ; => Error: def not allowed in sandboxed environment
+; In handler callback - returns an error (surfaces as a 500)
+(def {x} 42)
+; => def cannot be used in request handler context. Use = for local bindings instead.
 ```
 
 This prevents accidental global mutation from request handlers but doesn't protect other async callbacks.
 
 ## Safe Patterns
 
-### Atoms for Cross-Thread State
+### Dicts for Cross-Thread State
+
+Dicts are the supported shared-mutable structure. Every builtin dict operation
+takes a striped lock, so they are safe to mutate from handlers and worker
+threads. There is no `atom` type.
 
 ```lisp
-(def {counter} (atom 0))
+(def {state} (dict/new))
 
 (fun {handler req} {
-  (atom/add! counter 1)  ; Safe - atomic operation
+  (dict/set! state "hits" (+ 1 (dict/get state "hits")))
   ...
 })
 ```
+
+Available: `dict/new`, `dict/get`, `dict/set!`, `dict/put!`, `dict/remove!`,
+`dict/has?`, `dict/keys`, `dict/values`, `dict/entries`, `dict/count`,
+`dict/from-keys`.
 
 ### Immutable Bindings
 
@@ -100,26 +109,33 @@ This prevents accidental global mutation from request handlers but doesn't prote
 
 The garbage collector uses stop-the-world coordination:
 
-1. GC thread sets `gc_requested` flag
-2. Event loop thread checks flag at safe points (between callbacks)
-3. Event loop acknowledges via `gc_acknowledged` atomic
-4. GC runs while event loop is paused
-5. GC signals completion; event loop resumes
+1. Allocation pressure sets `VALK_SP_GC_COLLECT` in a thread's `safepoint_flags`
+2. `valk_gc_heap_request_stw()` CASes the system phase `IDLE -> PREPARING`,
+   freezes the participant set, then moves to `STW_REQUESTED` and sets
+   `VALK_SP_STW` on every registered thread
+3. Threads notice the flag at a safe point and enter
+   `valk_gc_safe_point_slow()`; the event loop thread is woken via
+   `uv_async_send` on its `gc_wakeup` handle
+4. Participants rendezvous on a phase-counting barrier, then mark and sweep in
+   parallel (`valk_gc_participate_in_parallel_gc()`)
+5. Phase returns to `IDLE` and threads resume
+
+Phases: `IDLE`, `PREPARING`, `STW_REQUESTED`, `MARKING`, `SWEEPING`.
 
 ## Detecting Thread Context
 
+Branches must be qexprs:
+
 ```lisp
 (if (aio/on-loop-thread? aio)
-  ; Running on event loop - callbacks execute here
-  (handle-async ...)
-  ; Running on main thread - blocking calls work here
-  (blocking-call ...))
+  {(handle-async ...)}    ; On event loop - callbacks execute here
+  {(blocking-call ...)})  ; On main thread - blocking calls work here
 ```
 
 ## Summary
 
 - **Don't** use `def` to mutate globals after initialization
-- **Do** use `atom` for counters and shared mutable state
+- **Do** use a `dict` for counters and shared mutable state
 - **Do** use local bindings (`=`) in callbacks
 - HTTP handlers are sandboxed and cannot use `def`
 - All Lisp evaluation in async callbacks happens on the event loop thread

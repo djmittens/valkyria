@@ -8,9 +8,11 @@ Valkyria is a Lisp dialect with:
 - S-expression syntax
 - Lexical scoping with dynamic fallback
 - First-class functions and closures
-- Delimited continuations (shift/reset)
+- Async I/O with composable handles and combinators
 - Built-in HTTP/2 networking
 - Garbage collection
+- Macros and a module system
+- Optional LLVM AOT/JIT compilation
 
 ## Syntax
 
@@ -125,7 +127,7 @@ Q-expressions `{...}` prevent evaluation. This is used for:
 (- 10 3)        ; 7
 (* 2 3 4)       ; 24
 (/ 10 2)        ; 5
-(% 10 3)        ; 1 (modulo)
+(mod 10 3)      ; 1 - modulo; note `%` is not a valid token
 ```
 
 ### Comparison
@@ -162,8 +164,17 @@ Q-expressions `{...}` prevent evaluation. This is used for:
 ### String Operations
 
 ```lisp
-(len "hello")          ; 5
-(join-str "a" "b")     ; "ab"
+(len "hello")               ; 5
+(str "a" "b")               ; "ab" - concatenate
+(str/join list sep)         ; Join with separator (list first)
+(str/split s sep)           ; Split into list
+(str/slice s start end)     ; Substring
+(str/upper s)  (str/lower s)
+(str/trim s)   (str/trim-left s)  (str/trim-right s)
+(str/replace s from to)
+(str/index-of s needle)     (str/last-index-of s needle)
+(str/starts-with? s p)      (str/ends-with? s p)     (str/contains? s sub)
+(str->num s)                ; Parse number
 ```
 
 ### I/O
@@ -184,50 +195,72 @@ Q-expressions `{...}` prevent evaluation. This is used for:
 
 ### Type Checking
 
+Predicates return `1`/`()` for true/false:
+
 ```lisp
-(type x)               ; Returns type as string
+(num? x)   (str? x)   (list? x)   (fun? x)   (sym? x)   (dict? x)
+(ref? x)   (quoted? x)
 (error? x)             ; Check if error
 (nil? x)               ; Check if nil
 ```
 
-## Delimited Continuations
+`type` is not a runtime inspector — it is the (unimplemented) type
+*declaration* form and evaluates to nil. See [TYPE_SYSTEM_DESIGN.md](TYPE_SYSTEM_DESIGN.md).
 
-Valkyria supports shift/reset style delimited continuations for advanced control flow.
+## Async Programming
 
-### async-reset - Establish Delimiter
-
-```lisp
-(async-reset {
-  (print "before")
-  (async-shift {k} {
-    (print "captured continuation")
-    (k 42)})            ; Resume with value 42
-  (print "after")})
-```
-
-### async-shift - Capture Continuation
-
-Within an `async-reset`, `async-shift` captures the continuation up to the delimiter:
+Async work runs on an AIO system created with `(aio/start)`. Callbacks are
+continuation-passing; combinators build graphs of async handles.
 
 ```lisp
-(async-reset {
-  (+ 1 (async-shift {k} {
-         (k (k 5))}))}) ; Returns 7: (+ 1 (+ 1 5))
+(def {aio} (aio/await (aio/start)))
+
+(aio/then (aio/sleep aio 100) (\ {_} {
+  (print "slept")
+}))
+
+(aio/run aio)
 ```
 
-### Async Pattern
-
-Continuations enable asynchronous programming by suspending execution until a value is available:
+### Core Combinators
 
 ```lisp
-; Example: Suspending execution and resuming with a value
-(async-reset {
-  (def {x} (async-shift {k} {
-    ; k is the continuation - call it when result is ready
-    (k 42)
-  }))
-  (+ x 1)})  ; Returns 43
+(aio/pure v)              ; Immediately-resolved handle
+(aio/then h f)            ; Continue with f when h resolves
+(aio/await h)             ; Block until resolved (main thread only)
+(aio/all handles)         ; Wait for all
+(aio/race handles)        ; First to resolve wins
+(aio/any handles)         ; First success
+(aio/within ms h)         ; Timeout
+(aio/retry ...)           ; Retry on failure
+(aio/catch h f)           ; Handle errors
+(aio/finally h f)         ; Always run
+(aio/cancel h)            ; Cancel
 ```
+
+### Sequencing Sugar
+
+```lisp
+(aio/do ...)              ; Sequential async block
+(aio/let {...} ...)       ; Bind async results in sequence
+```
+
+### Monadic Layer
+
+`stdlib/aio/monadic.valk` adds a pure monadic interface:
+
+```lisp
+(async/pure v)
+(async/bind op f)
+(async/map-list f xs)
+(async/collect ops)
+(async/sequence ops)
+(async/try op)            ; -> (list "ok" v) | (list "error" e)
+(async/recover op fallback)
+```
+
+There is no `shift`/`reset` operator. Delimited continuations exist only as an
+internal evaluator mechanism, not as a user-facing form.
 
 ## HTTP/2 Networking
 
@@ -241,71 +274,133 @@ Continuations enable asynchronous programming by suspending execution until a va
 ### High-Level API
 
 ```lisp
-(load "src/http_api.valk")
+(load "stdlib/http/api.valk")
 
-; Simple GET
-(def {resp} (fetch-sync "example.com"))
+(def {aio} (aio/await (aio/start)))
 
-; POST with body
-(def {req} (http-post "api.example.com" "{\"name\":\"Alice\"}"))
+; Fetch takes aio, host, port, path - not a URL
+(aio/then (http2/client-request aio "example.com" 443 "/") (\ {resp} {
+  (print (http2/response-status resp))   ; "200" (a string)
+  (print (http2/response-body resp))
+}))
 
-; Add headers
-(def {req2} (with-header req "content-type" "application/json"))
-
-; Response handling
-(response-status resp)    ; 200
-(response-body resp)      ; "..."
-(response-ok resp)        ; 1 if 2xx status
+; Async helpers from the high-level layer
+(http2/fetch aio "example.com" 443 "/")        ; Async Response
+(http2/fetch-text aio "example.com" 443 "/")   ; Async body
+(http2/response-ok? resp)                      ; true when 2xx
 ```
 
 ### Middleware
 
 ```lisp
-(def {auth} (with-auth "Bearer token"))
-(def {ua} (with-user-agent "MyApp/1.0"))
-(def {middleware} (compose-middleware (list auth ua)))
-(def {req} (middleware (http-get "api.example.com")))
+(def {auth} (http2/with-auth "Bearer token"))
+(def {ua} (http2/with-user-agent "MyApp/1.0"))
+(def {middleware} (http2/compose-middleware (list auth ua)))
+(def {req} (middleware (http2/get "api.example.com")))
 ```
+
+See [HTTP_API.md](HTTP_API.md) for the full surface.
 
 ## Standard Library (Prelude)
 
-The prelude (`src/prelude.valk`) provides common utilities:
+The prelude (`stdlib/prelude.valk`) provides common utilities:
 
 ### Higher-Order Functions
 
 ```lisp
 (map f list)            ; Apply f to each element
 (filter pred list)      ; Keep elements where pred is true
-(foldl f init list)     ; Left fold
-(foldr f init list)     ; Right fold
+(foldl f init list)     ; Left fold (there is no foldr)
 ```
 
 ### List Utilities
 
 ```lisp
-(first list)            ; Alias for head
-(rest list)             ; Alias for tail
 (last list)             ; Last element
 (init list)             ; All but last
 (take n list)           ; First n elements
 (drop n list)           ; Remove first n elements
 (reverse list)          ; Reverse list
 (exists pred list)      ; Any element matches pred?
+(flatten list)          ; Flatten one level
+(sum list)              ; Sum of elements
+(product list)          ; Product of elements
 ```
+
+Use `head`/`tail` for the first element and remainder; there are no `first`/`rest`
+aliases.
 
 ### Function Utilities
 
 ```lisp
-(curry f x)             ; Partial application
+(comp f g)              ; Function composition
 (flip f)                ; Swap first two arguments
-(compose f g)           ; Function composition
+(uncurry f)             ; Convert to list-taking form
+(id x)                  ; Identity
+```
+
+### Positional List Accessors
+
+`fst`/`snd`/`trd` index a **list** (1st, 2nd, 3rd element) — they are not pair
+accessors:
+
+```lisp
+(fst {7 8 9})   ; 7
+(snd {7 8 9})   ; 8
+(trd {7 8 9})   ; 9
+```
+
+### Pairs, Options, Results
+
+`pair` builds a tagged struct, accessed with the `pair/` helpers:
+
+```lisp
+(pair 1 2)              ; {Pair 1 2}
+(pair/map-fst p f)      (pair/map-snd p f)      (pair/bimap p f g)
+
+Options and Results are tagged values built with constructors:
+
+```lisp
+(Some 5)                ; {Option::Some 5}
+(None)                  ; {Option::None}
+(Ok 1)                  ; {Result::Ok 1}
+(Err "boom")            ; {Result::Err boom}
+
+(some? (Some 5))                      ; 1
+(none? (None))                        ; 1
+(option/unwrap-or (Some 5) 99)        ; 5
+(option/unwrap-or (None) 99)          ; 99
+(option/map (Some 5) (\ {v} {* v 2})) ; {Option::Some 10}
+(option/from-nullable nil)            ; {Option::None}
+(option/flat-map o f)  (option/or a b)  (option/filter o pred)
+(option/to-result o)   (option/sequence os)  (option/traverse xs f)
+
+(ok? (Ok 1))                          ; 1
+(err? (Err "e"))                      ; 1
+(result/unwrap-or (Err "e") 0)        ; 0
+(result/map r f)       (result/flat-map r f)   (result/map-err r f)
+(result/or a b)        (result/to-option r)
+```
+
+Deconstruct with `match`:
+
+```lisp
+(match opt
+  {(Some :value v) v}
+  {(None) "empty"})
 ```
 
 ### Control Flow
 
 ```lisp
-(case val clauses...)   ; Pattern matching
-(select pairs...)       ; Conditional selection
+; case - match a value against literals, `_` is the catch-all
+(case 2 {1 "one"} {2 "two"} {_ "other"})        ; "two"
+
+; select - first clause whose condition is truthy
+(select {(> 1 2) "a"} {(< 1 2) "b"})            ; "b"
+
+; match - destructure tagged constructors
+(match (pair 1 2) {(Pair :fst a :snd b) (+ a b)} {_ 0})   ; 3
 ```
 
 ## Memory Model
@@ -345,11 +440,15 @@ The tree-walking interpreter doesn't implement TCO. Deep recursion will use stac
 
 ### Type System
 
-Currently dynamically typed. A gradual type system is planned for future phases.
+Currently dynamically typed. `sig` declarations exist in the prelude but are not
+enforced. Algebraic data types are designed but unimplemented — see
+[TYPE_SYSTEM_DESIGN.md](TYPE_SYSTEM_DESIGN.md).
 
 ### Pattern Matching
 
-Only basic `case`/`select` matching. Full pattern matching is planned.
+`case` matches literals, `select` picks the first truthy clause, and `match`
+destructures tagged constructors (`Some`, `Ok`, `Pair`, ...). Richer patterns
+(nested, guards, exhaustiveness checking) are not implemented.
 
 ## Examples
 
@@ -376,14 +475,17 @@ Only basic `case`/`select` matching. Full pattern matching is planned.
 ### HTTP Request with Error Handling
 
 ```lisp
-(load "src/http_api.valk")
+(load "stdlib/http/api.valk")
 
-(def {result} (run-async
-  (async-or-default
-    (fetch-text "api.example.com/data")
-    "Service unavailable")))
+(def {aio} (aio/await (aio/start)))
 
-(print result)
+(aio/then (http2/client-request aio "api.example.com" 443 "/data") (\ {resp} {
+  (if (error? resp)
+    {(print "Service unavailable")}
+    {(print (http2/response-body resp))})
+}))
+
+(aio/run aio)
 ```
 
 ### Fibonacci
@@ -401,5 +503,7 @@ Note: This is naive recursive Fibonacci (O(2^n)). Memoization would require a ha
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Development guide
 - [ROADMAP.md](ROADMAP.md) - Project roadmap
-- `src/prelude.valk` - Standard library source
-- `src/http_api.valk` - HTTP API source
+- [HTTP_API.md](HTTP_API.md) - HTTP/2 API reference
+- [TYPE_SYSTEM_DESIGN.md](TYPE_SYSTEM_DESIGN.md) - Planned algebraic data types
+- `stdlib/prelude.valk` - Standard library source
+- `stdlib/http/api.valk` - HTTP API source

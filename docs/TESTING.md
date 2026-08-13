@@ -69,18 +69,25 @@ int main(void) {
 
 ### Valk Tests
 
-Located in `test/test_*.valk`:
+Located in `test/<area>/test_*.valk` (areas: `aio`, `gc`, `http`, `lang`, `lsp`,
+`metrics`, `parser`, `stress`). The prelude is loaded automatically at startup;
+load the test module explicitly:
 
 ```lisp
-(load "src/prelude.valk")
+(load "stdlib/test/test.valk")
 
-(defun test-addition ()
-  (assert (= (+ 1 1) 2) "1 + 1 should equal 2")
-  (assert (= (+ 2 3) 5) "2 + 3 should equal 5"))
+(test/run (list
 
-(test-addition)
-(print "All tests passed!")
+  (test/case "addition"
+    {do
+      (test/assert-eq 2 (+ 1 1) "1 + 1")
+      (test/assert-eq 5 (+ 2 3) "2 + 3")
+      true})
+))
 ```
+
+`test/assert-eq` takes `expected` first, then `actual`, then a description. Each
+case body must end in a truthy value.
 
 ## Testing Runtime Components
 

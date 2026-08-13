@@ -8,7 +8,7 @@ This guide explains how memory management works in Valkyria, why it's designed t
 2. [Allocator Types](#allocator-types)
 3. [The Scratch Arena](#the-scratch-arena)
 4. [The GC Heap](#the-gc-heap)
-5. [Checkpoints: Moving Values to Safety](#checkpoints-moving-values-to-safety)
+5. [Evacuation: Moving Values to Safety](#evacuation-moving-values-to-safety)
 6. [Handles: Protecting Values from GC](#handles-protecting-values-from-gc)
 7. [Putting It Together: Async Callbacks](#putting-it-together-async-callbacks)
 8. [VALK_WITH_ALLOC: Switching Allocators](#valk_with_alloc-switching-allocators)
@@ -34,8 +34,8 @@ Our solution:
 │                                                                  │
 │   ┌─────────────────┐            ┌─────────────────┐            │
 │   │  Scratch Arena  │ ─────────> │    GC Heap      │            │
-│   │  (super fast)   │ checkpoint │  (garbage       │            │
-│   │                 │ or evacuate│   collected)    │            │
+│   │  (super fast)   │  evacuate  │  (garbage       │            │
+│   │                 │            │   collected)    │            │
 │   └─────────────────┘            └─────────────────┘            │
 │          │                              │                        │
 │          │                              │                        │
@@ -73,7 +73,7 @@ The allocation type determines **lifetime semantics**:
 
 | Type | Lifetime | When to Use |
 |------|----------|-------------|
-| `LVAL_ALLOC_SCRATCH` | Until next checkpoint/eval | Temporary computations |
+| `LVAL_ALLOC_SCRATCH` | Until the scratch arena is reset | Temporary computations |
 | `LVAL_ALLOC_HEAP` | Until GC collects it | Values that must survive |
 | `LVAL_ALLOC_GLOBAL` | Forever (immortal) | Builtins, stdlib |
 
@@ -102,8 +102,8 @@ typedef struct {
   valk_mem_allocator_t *allocator;  // Current allocator for valk_mem_alloc()
   void *heap;                       // Fallback GC heap for overflow
   valk_mem_arena_t *scratch;        // Scratch arena
-  struct valk_lenv_t *root_env;     // Root environment for checkpointing
-  // ...
+  struct valk_lenv_t *_Atomic root_env;  // Root environment for GC marking
+  // ... safepoint flags, parallel-GC state, root stacks
 } valk_thread_context_t;
 
 extern __thread valk_thread_context_t valk_thread_ctx;
@@ -142,43 +142,76 @@ The GC heap (`valk_gc_heap2_t`) is a proper garbage-collected heap with:
 ### When Values End Up on the GC Heap
 
 1. **Overflow**: Scratch arena full, allocation falls back
-2. **Checkpoint**: Reachable values copied from scratch to heap
-3. **Evacuation**: Explicit `valk_evacuate_to_heap()` call
-4. **Direct allocation**: Using `VALK_WITH_ALLOC((void*)gc_heap)`
+2. **Evacuation**: `valk_evacuate_to_heap()` at an escape point
+3. **Direct allocation**: Using `VALK_WITH_ALLOC((void*)gc_heap)`
 
 ---
 
-## Checkpoints: Moving Values to Safety
+## Evacuation: Moving Values to Safety
 
-A **checkpoint** is when we:
-1. Walk all reachable values from the root environment
-2. Copy scratch-allocated values to the GC heap
-3. Fix all pointers to point to new locations
-4. Reset the scratch arena
+There is **no separate checkpoint pass**. Scratch values are copied to the GC
+heap *eagerly*, at the moment they escape a short-lived scope:
 
 ```c
-// Triggered automatically when scratch > 75% full
-void valk_checkpoint(valk_mem_arena_t* scratch, 
-                     valk_gc_malloc_heap_t* heap,
-                     valk_lenv_t* root_env);
-
-// Or check manually:
-bool valk_should_checkpoint(valk_mem_arena_t* scratch, float threshold);
+valk_lval_t* valk_evacuate_to_heap(valk_lval_t* v);  // src/gc_evacuation.c
 ```
 
-### The Problem with Checkpoints
+### Where Evacuation Happens
 
-Checkpoints only save values **reachable from the root environment**. If you store a callback pointer in a C struct, the checkpoint doesn't know about it:
+Evacuation is driven by **lifetimes**, not by arena occupancy. Storing a value
+into something that outlives the scratch arena triggers a copy. The check lives
+in `__lenv_ensure_safe_val()` (`src/lenv.c:158`):
+
+```c
+valk_lifetime_e env_lt = valk_allocator_lifetime(env_alloc);
+valk_lifetime_e val_lt = valk_lval_alloc_lifetime(val);
+
+if (valk_lifetime_can_reference(env_lt, val_lt)) {
+  return val;                        // Safe as-is
+}
+if (LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH) {
+  return valk_evacuate_to_heap(val); // Escaping: copy to heap
+}
+```
+
+The main escape points are:
+
+| Escape point | Location |
+|---|---|
+| Binding into a longer-lived env | `lenv.c` (`valk_lenv_put`) |
+| Returning from `load` | `load.c` |
+| Storing into a dict | `builtins_dict.c` |
+| Async handle result/error | `aio/aio_async.c` |
+| Callbacks retained by C (server, pipe) | `builtins_server.c`, `builtins_pipe.c` |
+
+### Arena Checkpoints Are a Different Thing
+
+`valk_arena_checkpoint_save()` / `valk_arena_checkpoint_restore()` still exist,
+but they are only a **mark/release of the arena offset**:
+
+```c
+typedef struct { sz offset; } valk_arena_checkpoint_t;
+```
+
+They do not walk roots or copy anything. The only current user is HTTP chunk
+streaming (`aio/http2/stream/aio_stream_body.c`), which rewinds a per-request
+arena after each chunk is flushed.
+
+### The Hazard
+
+If C code stores a raw scratch pointer without evacuating it, the pointer dies
+when the arena resets:
 
 ```c
 // DANGER: This callback might be in scratch!
 timer_data->callback = callback;  // Raw pointer stored
 
-// Later, after a checkpoint...
-valk_lval_t *cb = timer_data->callback;  // CRASH! Memory was wiped!
+// Later, after the arena resets...
+valk_lval_t *cb = timer_data->callback;  // CRASH! Memory was reused!
 ```
 
-This is where evacuation and handles come in.
+This is why any value a C struct retains must be evacuated (or held via a
+handle) at the point of capture.
 
 ---
 
@@ -391,7 +424,7 @@ valk_lval_t *builtin_add(valk_lenv_t *env, valk_lval_t *args) {
   for (int i = 0; i < args->cells.count; i++) {
     sum += args->cells.items[i]->num;
   }
-  return valk_lval_num(sum);  // Scratch allocation, checkpoint will save it
+  return valk_lval_num(sum);  // Scratch alloc; evacuated if the caller binds it
 }
 ```
 
@@ -450,7 +483,7 @@ static void event_loop_callback(uv_timer_t *handle) {
 
 ### Symptom: Crash after timer fires
 
-**Cause**: Callback was in scratch, got wiped by checkpoint.
+**Cause**: Callback was in scratch and was never evacuated, so the arena reset reused its memory.
 
 **Fix**: Use `valk_evacuate_to_heap()` + handle pattern.
 

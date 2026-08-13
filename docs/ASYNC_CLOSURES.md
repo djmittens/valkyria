@@ -80,18 +80,24 @@ This chain ensures that:
 ## Example
 
 ```lisp
-(def make-counter {initial}
-  (let {count initial}
-    (fn {} 
-      (set! count (+ count 1))
-      count)))
+(def {aio} (aio/await (aio/start)))
 
-(def my-counter (make-counter 10))
-(aio/schedule aio 100 my-counter)  ; Callback fires in 100ms
+(def {make-greeter} (\ {name} {
+  (\ {} { (print "hello" name) })      ; Inner lambda captures `name`
+}))
+
+(def {g} (make-greeter "world"))
+
+(aio/schedule aio 50 (\ {} { (do (g) (aio/stop aio)) }))
+(aio/run aio)                          ; prints: hello world
 ```
 
 When `aio/schedule` is called:
-1. `my-counter` is a lambda with `fun.env` pointing to the `let` environment containing `count`
-2. `valk_evacuate_to_heap` copies both the lambda and its environment to the heap
-3. After 100ms, when the callback fires, it looks up `count` through the preserved environment chain
-4. The `set!` mutates `count` in the evacuated environment
+1. The callback is a lambda whose `fun.env` chain reaches the env holding `name`
+2. `valk_evacuate_to_heap` copies the lambda and its environment chain to the heap
+3. After 50ms the callback fires and resolves `name` through the preserved chain
+
+Note there is no `set!`. Bindings are introduced with `=` (local) and `def`
+(global); `=` inside a nested lambda creates a new binding in that call's
+environment rather than mutating the captured one. For shared mutable state, use
+a `dict` (`dict/set!`, `dict/put!`).

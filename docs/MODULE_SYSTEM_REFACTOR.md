@@ -3,6 +3,10 @@
 Status: **design draft**, not yet scheduled for implementation.
 Prereqs for item #6 in `TECH_DEBT_LOG.md`.
 
+Note: this analyses a narrower "pure macro" proposal. The broader target model
+(file-as-`do`, explicit resolution order, nesting) is in
+[MODULE_REFACTOR_INTENT.md](MODULE_REFACTOR_INTENT.md).
+
 ## Goal
 
 Replace the current C-side auto-prefixing module implementation with a simpler

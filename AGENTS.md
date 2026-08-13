@@ -7,13 +7,16 @@
 - Before creating or significantly expanding a file, check its current line count with `wc -l`
 - If a file reaches 1000 lines, STOP and split it before adding more code
 - When splitting: identify logical boundaries (related functions, a coherent feature), extract to a new file, `(load ...)` it from the original
-- The `lsp*.valk` files are the canonical example of the correct split pattern
+- The `scripts/lsp/*.valk` files are the canonical example of the correct split pattern
 
 Enforcement check:
 ```bash
-wc -l src/*.valk src/*.c | sort -rn | head -20
+find src stdlib scripts -name '*.c' -o -name '*.h' -o -name '*.valk' \
+  | xargs wc -l | sort -rn | awk '$1>1000 && $2!="total"'
 ```
 Any file over 1000 lines is a violation that must be fixed immediately.
+
+Known violation: `src/eval.c` (1046 lines) — split it before adding more there.
 
 ## Build & Test Commands
 - `make build` - Build into `build/` (CMake+Ninja)
@@ -94,8 +97,14 @@ grep -c "ERROR: AddressSanitizer" build/asan.log 2>/dev/null || echo "0 errors"
 - DO NOT ADD COMMENTS to code unless explicitly asked
 
 ## Project Layout
-- `src/` - C runtime + `.valk` stdlib; core: `parser.c`, `memory.c`, `gc.c`
-- `test/` - `test_*.c` (C) and `test_*.valk` (Lisp); `stress/` for long tests
+- `src/` - C runtime; core: `parser.c`, `eval.c`, `memory.c`, `gc.c`
+- `src/aio/` - Async I/O, HTTP/2 (`aio/http2/`), TLS
+- `src/llvm/`, `src/vir/` - AOT/JIT backend
+- `stdlib/` - Valk standard library (`prelude.valk` auto-loads at startup)
+- `scripts/` - Valk tooling (LSP in `scripts/lsp/`, coverage, benchmarks)
+- `test/<area>/` - `test_*.c` (C) and `test_*.valk` (Lisp); areas: `aio`, `gc`,
+  `http`, `lang`, `lsp`, `metrics`, `parser`, `unit`; `stress/` for long tests
+- `test/fakes/` - Test doubles (never mocking frameworks)
 - `build/` - Generated; never commit
 
 ## Error Handling
@@ -334,27 +343,35 @@ handle A completes
 
 If you can't write this out, you don't understand the code well enough to fix it.
 
-### Step 2: Verify ALL Completion Paths Call ALL Notify Functions
+### Step 2: Verify the Terminal Transition Actually Happened
 
-The canonical completion sequence is in `valk_async_handle_complete()` (aio_async.c):
+The completion sequence is centralized in `valk_async_handle_finish()`
+(`src/aio/aio_async.c:232`):
+
 ```c
-valk_async_notify_all_parent(handle);
-valk_async_notify_race_parent(handle);
-valk_async_notify_any_parent(handle);
-valk_async_notify_all_settled_parent(handle);
-valk_async_notify_within_parent(handle);
-valk_async_notify_retry_parent(handle);
-valk_async_notify_done(handle);
-valk_async_propagate_completion(handle);
+void valk_async_handle_finish(valk_async_handle_t *handle) {
+  valk_async_notify_parent(handle);
+  valk_async_notify_done(handle);
+  valk_async_propagate_completion(handle);
+  valk_async_handle_run_resource_cleanups(handle);
+}
 ```
 
-**EVERY** completion path must call this SAME sequence. Check:
-- `valk_async_all_child_completed()` and `valk_async_all_child_completed_with_ctx()`
-- `valk_async_race_child_resolved()`
-- `valk_async_any_child_completed()`
-- Any other `*_child_*` or `*_with_ctx` functions
+There is a **single** `valk_async_notify_parent()` — not one per combinator.
+Every terminal transition routes through `__reach_terminal()`, which calls
+`valk_async_handle_finish()` exactly once after a successful CAS out of
+PENDING/RUNNING. So a *missing notify call* is no longer a likely cause.
 
-If ANY of these is missing notify calls, parent combinators won't be notified.
+What to check instead:
+
+1. **Did the CAS succeed?** `__reach_terminal()` returns false if the handle was
+   already terminal. A double-complete silently does nothing.
+2. **Combinators that call `valk_async_handle_finish()` directly** — `aio_comb_all.c`,
+   `aio_comb_any.c`, `aio_comb_race.c`, `aio_comb_all_settled.c`,
+   `aio_comb_timeout.c`. These bypass `__reach_terminal`, so verify they set
+   result/error and status before calling it.
+3. **Is the parent link set?** `valk_async_notify_parent` needs `handle->parent`
+   wired at construction time.
 
 ### Step 3: Add ONE Debug Print at the Boundary
 
@@ -371,10 +388,11 @@ If this doesn't fire, the child's completion path is missing the notify call.
 
 | Symptom | Likely Cause |
 |---------|--------------|
-| `aio/all` completes but `aio/race` never fires | Missing `notify_race_parent` in all's completion |
-| `aio/within` source completes but within hangs | Missing `notify_within_parent` |
-| Wrapper completes but `aio/all` never finishes | `*_with_ctx` function missing notify calls |
-| Callback fires but next combinator hangs | Check `propagate_completion` is called |
+| Child settles but parent combinator never fires | `handle->parent` not wired, or already-terminal CAS failure |
+| Combinator completes but nothing downstream runs | `valk_async_handle_finish` not reached; check the direct callers in `aio_comb_*.c` |
+| Handle completes twice, second is a no-op | Expected: `__reach_terminal` only fires once |
+| Callback fires but next combinator hangs | Check `valk_async_propagate_completion` is called |
+| Arena pool count mismatch at exit | Resource created without `valk_async_handle_on_resource_cleanup` |
 
 ### Anti-Pattern: Adding More Code Without Understanding
 
@@ -388,8 +406,9 @@ If this doesn't fire, the child's completion path is missing the notify call.
 **RIGHT approach:**
 1. Tests hang
 2. Trace completion path on paper
-3. Find the ONE missing notify call
-4. Add it
+3. Find where the chain actually stops (failed CAS, unwired parent, direct
+   `handle_finish` caller that skipped setting status)
+4. Fix that one thing
 5. Tests pass
 
 ### GC Coordination Architecture
@@ -403,7 +422,8 @@ If this doesn't fire, the child's completion path is missing the notify call.
 
 ### Key Concurrency Invariants
 - `valk_gc_thread_register()` must happen BEFORE `uv_sem_post` in event loop startup
-- `valk_gc_safe_point_slow()` must NOT re-enter wait loop if a new checkpoint starts
+- `valk_gc_safe_point_slow()` must NOT re-enter the wait loop if a new STW cycle starts
+  (it compares `valk_thread_ctx.stw_epoch` against the system epoch)
 - `uv_async_send()` to `gc_wakeup` wakes event loop for GC coordination
 
 ### Adding Debug Output (LAST RESORT)
@@ -494,7 +514,9 @@ make test
 Before marking an async-related task complete, verify:
 
 - [ ] **Traced completion path on paper**: handle A → notifies → handle B → notifies → handle C
-- [ ] **Every `*_child_completed` or `*_with_ctx` function** calls the SAME notify sequence as `valk_async_handle_complete()`
+- [ ] **Every terminal transition goes through `__reach_terminal()`**, or, if it calls
+      `valk_async_handle_finish()` directly, sets result/error and status first
+- [ ] **Every new resource** is registered with `valk_async_handle_on_resource_cleanup()`
 - [ ] **Tested with minimal case** that exercises the specific completion path (not just "run all tests")
 - [ ] **If tests hang**, identified WHERE in the chain notification stops - didn't just add more code
 - [ ] **Compared against working code**: if `aio/race` works but `aio/all` doesn't, diff their completion handlers
