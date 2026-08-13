@@ -270,7 +270,7 @@ fully-qualified names (`analysis/foo`, `nav/handle-hover`, …). 190 suites,
   `valk_macro_env()` aliases the caller's env; macros def into the same env
   as regular defs. `runtime/src/eval.c` macro-lookup uses `cur_env` for lexical scope.
 - `(module X)` macro in `stdlib/prelude.valk`, backed by `set-module-prefix!`
-  thread-local in `runtime/src/builtins_io.c`. Script-entry path (`runtime/src/repl.c`) and
+  thread-local in `runtime/src/builtins_io.c`. Script-entry path (`repl/main.c`) and
   library-load path (`eval_loaded_ast`) both honor it.
 - Migrated 17 `.valk` files (lsp/, symdb/, stdlib/ast) to
   explicit `(module X)` declarations.

@@ -314,7 +314,7 @@
 })
 
 ; VALK_QUALITY_DIR is injected by the C-side `--quality-snapshot` flag
-; (see src/repl.c). The sig declaration is here purely so static
+; (see repl/main.c). The sig declaration is here purely so static
 ; analysis (valk-check) can see the symbol; the actual binding happens
 ; before this script is loaded.
 (sig 'VALK_QUALITY_DIR Str)

@@ -7,8 +7,8 @@
 ;   - Concurrency control
 ;   - Connection reuse (single HTTP/2 connection)
 ;
-; Usage: ./build/valk tools/bench.valk
-; First start: ./build/valk tools/test_server.valk
+; Usage: ./build/valk bench/bench.valk
+; First start: ./build/valk bench/test_server.valk
 
 
 ; ============================================================================

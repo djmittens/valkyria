@@ -11,7 +11,7 @@
 
 Enforcement check:
 ```bash
-find runtime/src stdlib testing symdb lsp quality coverage check scripts \
+find runtime/src repl bench profile stdlib testing symdb lsp quality coverage check \
   -name '*.c' -o -name '*.h' -o -name '*.valk' \
   | xargs wc -l | sort -rn | awk '$1>1000 && $2!="total"'
 ```
@@ -112,7 +112,10 @@ grep -c "ERROR: AddressSanitizer" build/asan.log 2>/dev/null || echo "0 errors"
 - `coverage/` - Coverage report/gate tooling
 - `quality/` - Quality snapshot (`quality.valk`) and diff (`quality-diff.valk`)
 - `check/` - Workspace diagnostics (`valk-check.valk`) and globals lint
-- `scripts/` - Misc: benchmarks, profiling and shell helpers
+- `repl/` - The `valk` CLI entry point (`main.c`): bootstrap, script mode, REPL
+- `bench/` - HTTP/2 load-testing tools (`bench.valk`, `hey.valk`, `test_server.valk`)
+- `profile/` - Profiling tools in Valk: `flamegraph.valk` (perf -> SVG, no
+  FlameGraph dependency), `lsp-profile.valk` (valk-lsp latency via headless nvim)
 - `build/` - Generated; never commit
 
 ## Error Handling

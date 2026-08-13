@@ -1,6 +1,6 @@
 ; test_server.valk - Simple test server for hey load testing
-; Run with: ./build/valk tools/test_server.valk
-; Then in another terminal: ./build/valk tools/hey.valk
+; Run with: ./build/valk bench/test_server.valk
+; Then in another terminal: ./build/valk bench/hey.valk
 
 
 (def {port} 18443)

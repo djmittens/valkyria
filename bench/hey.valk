@@ -1,7 +1,7 @@
 ; hey.valk - HTTP/2 Load Testing Tool for Valkyria
 ;
-; Usage: ./build/valk tools/hey.valk
-; First start: ./build/valk tools/test_server.valk
+; Usage: ./build/valk bench/hey.valk
+; First start: ./build/valk bench/test_server.valk
 ;
 ; Edit cfg-* values below to configure
 

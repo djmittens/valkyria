@@ -308,39 +308,21 @@ perf record -g build/valk src/prelude.valk
 hotspot
 ```
 
-## Automated Script
+## Automated Tool
 
-Create `scripts/flamegraph.sh`:
+This repo has a self-contained flame graph tool - do NOT create new
+scripts and do NOT clone FlameGraph; folding and SVG rendering are done
+in Valk (`profile/flame.valk`), perf is the only dependency:
+
 ```bash
-#!/bin/bash
-# Usage: ./scripts/flamegraph.sh [output.svg] [extra args...]
+build/valk profile/flamegraph.valk -- out.svg <command> [args...]
 
-OUTPUT="${1:-cpu.svg}"
-shift
-
-# Record
-perf record -F 99 -g -- "$@"
-
-# Generate
-perf script | stackcollapse-perf.pl | flamegraph.pl \
-  --title "Valkyria CPU Profile" \
-  --hash \
-  > "$OUTPUT"
-
-echo "Generated: $OUTPUT"
-
-# Open if possible
-if command -v xdg-open &>/dev/null; then
-  xdg-open "$OUTPUT"
-elif command -v open &>/dev/null; then
-  open "$OUTPUT"
-fi
+# Example: profile the workspace checker
+build/valk profile/flamegraph.valk -- check.svg build/valk check/valk-check.valk -- stdlib
 ```
 
-Usage:
-```bash
-./scripts/flamegraph.sh profile.svg build/valk src/prelude.valk
-```
+The raw perf pipelines above remain useful for filtered/differential
+graphs (grep the folded stacks before rendering).
 
 ## Tips
 

@@ -373,9 +373,9 @@ add_custom_command(
 )
 add_custom_target(valk_shim_staged ALL DEPENDS ${CMAKE_BINARY_DIR}/valk-shim.o)
 
-### REPL
+### REPL / CLI entry point (lives in the repl/ root project)
 add_executable(valk
-  "src/repl.c"
+  "../repl/main.c"
 )
 add_dependencies(valk valk_shim_staged)
 target_link_libraries(valk PRIVATE "-lc" PkgConfig::EDITLINE valkyria)
@@ -407,6 +407,7 @@ target_include_directories(valk SYSTEM PRIVATE
   ${PROJECT_SOURCE_DIR}/vendor
   ${MACOS_SDK_PATH}
 )
+target_include_directories(valk PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 # TESTS
 

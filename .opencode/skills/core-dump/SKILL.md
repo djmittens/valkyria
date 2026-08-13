@@ -290,42 +290,21 @@ gdb build/valk core
 (gdb) thread apply all bt  # Check all threads
 ```
 
-## Automated Core Analysis Script
+## Automated Core Analysis
 
-Create `scripts/analyze-core.sh`:
+This repo already has make targets for this - do NOT create new scripts:
+
 ```bash
-#!/bin/bash
-# Usage: ./scripts/analyze-core.sh <executable> <core-file>
+make cores        # List recent core dumps
+make debug-core   # Interactive gdb on the most recent crash
+make core-report  # One-shot batch report: crash frame, bt full,
+                  # registers, all threads (Makefile, works on Linux+macOS)
+```
 
-EXECUTABLE="${1:-build/valk}"
-COREFILE="${2:-core}"
-
-if [ ! -f "$COREFILE" ]; then
-    echo "Core file not found: $COREFILE"
-    echo "Available cores:"
-    coredumpctl list 2>/dev/null || ls /cores/ 2>/dev/null || ls core* 2>/dev/null
-    exit 1
-fi
-
-echo "=== Core Dump Analysis ==="
-echo "Executable: $EXECUTABLE"
-echo "Core file: $COREFILE"
-echo
-
-gdb -batch \
-    -ex "file $EXECUTABLE" \
-    -ex "core-file $COREFILE" \
-    -ex "echo === Signal ===\n" \
-    -ex "info signal" \
-    -ex "echo \n=== Backtrace ===\n" \
-    -ex "bt full" \
-    -ex "echo \n=== Registers ===\n" \
-    -ex "info registers" \
-    -ex "echo \n=== All Threads ===\n" \
-    -ex "thread apply all bt" \
-    -ex "echo \n=== Memory Map ===\n" \
-    -ex "info proc mappings" \
-    -ex "quit"
+For a core outside the coredumpctl registry, run gdb directly:
+```bash
+gdb -batch <executable> <core-file> \
+    -ex "bt full" -ex "info registers" -ex "thread apply all bt"
 ```
 
 ## Tips

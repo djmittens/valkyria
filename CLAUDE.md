@@ -35,7 +35,7 @@ make todo           # Find TODOs for current branch
 - `runtime/src/aio/` - Async I/O; `runtime/src/aio/aio_uv.c` is the libuv backend
 - `runtime/src/aio/http2/` - HTTP/2 client, server, sessions, TLS
 - `runtime/src/llvm/`, `runtime/src/vir/` - AOT/JIT backend
-- `runtime/src/repl.c` - Entry point and bootstrap
+- `repl/main.c` - Entry point and bootstrap (the `valk` CLI)
 - `stdlib/` - Valk standard library (`prelude.valk` auto-loads)
 
 ### Value Types
