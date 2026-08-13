@@ -1,0 +1,103 @@
+(load "testing/test.valk")
+
+(test/run (list
+
+  (test/case "macro-expansion-error-kept-in-forms"
+    {do
+      (= {r} (compile/process "(macro {cov-boom-mac} {error \"boom\"}) (cov-boom-mac)"))
+      (test/assert (list? r) "compile/process returns forms despite expansion error")
+      true})
+
+  (test/case "bare-def-and-bare-sig-qualification"
+    {do
+      (= {r} (compile/process "(def cov-bare-a 1) (sig cov-bare-a {-> Num}) (cov-bare-a)" "covq"))
+      (test/assert (list? r) "bare def name and bare sig qualify under prefix")
+      true})
+
+  (test/case "quoted-sig-qualification"
+    {do
+      (= {r} (compile/process "(def {cov-qsig-f} 1) (sig 'cov-qsig-f {-> Num})" "covq2"))
+      (test/assert (list? r) "quoted sig name qualifies under prefix")
+      true})
+
+  (test/case "lambda-builtin-head-rewrite"
+    {do
+      (= {r} (compile/process "(def {cov-lam-tgt} 1) (macro {cov-lam-mac} {list \\ {lx} {cov-lam-tgt}}) (cov-lam-mac)" "covlam"))
+      (test/assert (list? r) "macro expanding to lambda-builtin form rewrites body")
+      true})
+
+  (test/case "non-lambda-builtin-head"
+    {do
+      (= {r} (compile/process "(def {cov-nl-tgt} 1) (macro {cov-nl-mac} {list + 1 2}) (cov-nl-mac)" "covnl"))
+      (test/assert (list? r) "macro expanding to non-lambda builtin head is walked")
+      true})
+
+  (test/case "module-decl-sets-pending-prefix"
+    {do
+      (= {r} (compile/process "(module covcpmod) (def {cov-cpm-f} 2) (cov-cpm-f)"))
+      (test/assert (list? r) "module declaration inside text applies prefix")
+      true})
+
+  (test/case "macro-def-eval-error"
+    {do
+      (= {r} (compile/process "(macro)"))
+      (test/assert (list? r) "bad macro def is reported and skipped")
+      true})
+
+  (test/case "non-sym-head-and-quoted-top-forms"
+    {do
+      (= {r} (compile/process "((cov-hh) 1) {cov-quoted a} {sig cov-qsig 1} 5" "covnsh"))
+      (test/assert (list? r) "non-sym heads and quoted forms pass through")
+      true})
+
+  (test/case "def-edge-shapes"
+    {do
+      (= {r} (compile/process "(def) (def 5 1) (def (5) 1) (def {:covkw} 1) (def {covd})" "covdefs"))
+      (test/assert (list? r) "malformed and keyword defs pass through")
+      true})
+
+  (test/case "sig-edge-shapes"
+    {do
+      (= {r} (compile/process "(def {cov-sg} 1) (sig) (sig 5 1) (sig (5) 1) (sig :covskw 1) (sig cov-not-local 1) (sig covq/ext 1)" "covsigs"))
+      (test/assert (list? r) "malformed and foreign sigs pass through")
+      true})
+
+  (test/case "non-fun-head-value"
+    {do
+      (def {cov-nfv2} 5)
+      (= {r} (compile/process "(cov-nfv2 1)"))
+      (test/assert (list? r) "head bound to non-fun is left unexpanded")
+      true})
+
+  (test/case "macro-expanding-to-unquoted-macro-form"
+    {do
+      (= {r} (compile/process "(macro {cov-mm3} {cons (head {macro q}) {1}}) (cov-mm3)"))
+      (test/assert (list? r) "unquoted expansion with macro head stops expanding")
+      true})
+
+  (test/case "macro-expanding-to-macro-form"
+    {do
+      (= {r} (compile/process "(macro {cov-mm2} {list (head {macro q}) 1}) (cov-mm2)"))
+      (test/assert (list? r) "expansion producing a macro form stops expanding")
+      true})
+
+  (test/case "macro-expanding-to-num"
+    {do
+      (= {r} (compile/process "(macro {cov-num-mac} {+ 40 2}) (cov-num-mac)"))
+      (test/assert (list? r) "expansion producing a non-cons leaf is kept")
+      true})
+
+  (test/case "user-fun-head-not-lambda"
+    {do
+      (def {cov-usrf2} (\ {q} {q}))
+      (= {r} (compile/process "(macro {cov-usrf-mac} {list cov-usrf2 1}) (cov-usrf-mac)" "covuf"))
+      (test/assert (list? r) "user fun head is not the lambda builtin")
+      true})
+
+  (test/case "rewrite-binding-and-lambda-shapes"
+    {do
+      (= {r} (compile/process "(def {cov-rwl} 1) (=) (= cov-rw-x 1) (= {cov-rw-a cov-rw-b} 1 2) (\\ {lx 5} {cov-rwl}) (\\ {lx2}) (\\) (aliaszz/nomatch 1)" "covrw"))
+      (test/assert (list? r) "binding and lambda shapes rewrite without error")
+      true})
+
+) {:suite-name "Macro Coverage"})

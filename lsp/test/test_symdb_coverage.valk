@@ -1,0 +1,243 @@
+(load "testing/test.valk")
+(load "symdb/symdb.valk")
+(load "lsp/analysis.valk")
+
+(fun {make-overlay-db} {do
+  (= {db} (sqlite/open ":memory:"))
+  (sqlite/exec-script db symdb/schema-sql)
+  (symdb/attach-live db)
+  db
+})
+
+(test/run (list
+
+  (test/case "init-version-mismatch-and-match"
+    {do
+      (= {path} "/tmp/opencode/symdb_cov_test.db")
+      (= {db0} (sqlite/open path))
+      (sqlite/exec db0 "PRAGMA user_version=1")
+      (sqlite/close db0)
+      (= {db1} (symdb/init path))
+      (test/assert (ref? db1) "stale version drops and recreates")
+      (symdb/close db1)
+      (= {db2} (symdb/init path))
+      (test/assert (ref? db2) "matching version skips drop")
+      (test/assert-eq symdb/SYMDB_VERSION
+        (sqlite/query-value db2 "PRAGMA user_version") "version stamped")
+      (symdb/close db2)
+      (file/delete path)
+      true
+    })
+
+  (test/case "attach-live-and-live-sync-nil"
+    {do
+      (test/assert (nil? (symdb/live-sync nil "file:///x.valk" "t" nil)) "nil db live-sync")
+      (test/assert (nil? (symdb/live-drop nil "/x.valk")) "nil db live-drop")
+      (= {db} (make-overlay-db))
+      (symdb/live-sync db "file:///lv.valk" "(fun {lvfn x} {x})"
+        (parse "(fun {lvfn x} {x})"))
+      (test/assert (not (nil? (symdb/find-definition db "lvfn"))) "live symbol visible")
+      (test/assert (error? (symdb/live-drop db "/nope.valk"))
+        "dropping unknown path errors on missing row")
+      (test/assert (not (nil? (symdb/find-definition db "lvfn"))) "dropping unknown path is a no-op")
+      (symdb/live-drop db "/lv.valk")
+      (test/assert (nil? (symdb/find-definition db "lvfn")) "live symbol dropped")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "canon-path-and-resolve"
+    {do
+      (= {cwd-real} (realpath "."))
+      (test/assert-eq cwd-real (symdb/canon-resolve ".") "existing path resolves")
+      (= {missing} (str cwd-real "/no_such_file_here.valk"))
+      (test/assert-eq missing (symdb/canon-resolve missing) "missing leaf keeps basename")
+      (test/assert-eq "noslash" (symdb/canon-resolve "noslash") "no slash returned as-is")
+      (test/assert-eq "/nonexistent-root-dir-xyz/f.valk"
+        (symdb/canon-resolve "/nonexistent-root-dir-xyz/f.valk")
+        "missing parent returned as-is")
+      (= {first} (symdb/canon-path missing))
+      (= {second} (symdb/canon-path missing))
+      (test/assert-eq first second "cache hit returns same answer")
+      true
+    })
+
+  (test/case "uri-to-path-branches"
+    {do
+      (test/assert-eq "abc" (symdb/uri->path "abc") "short string")
+      (test/assert-eq "not-a-uri-string" (symdb/uri->path "not-a-uri-string")
+        "long non-file string")
+      (= {p} (symdb/uri->path "file:///no_such_dir_xyz/a.valk"))
+      (test/assert-eq "/no_such_dir_xyz/a.valk" p "file uri stripped")
+      true
+    })
+
+  (test/case "clean-name"
+    {do
+      (test/assert-eq "foo" (symdb/clean-name "((foo})") "brackets stripped")
+      true
+    })
+
+  (test/case "doc-comment-helpers"
+    {do
+      (test/assert-eq "" (symdb/strip-leading-spaces "") "empty string")
+      (test/assert-eq "x" (symdb/strip-leading-spaces "   x") "spaces stripped")
+      (test/assert-eq "" (symdb/strip-comment-prefix ";") "short comment")
+      (test/assert-eq "doc" (symdb/strip-comment-prefix "; doc") "semicolon space")
+      (test/assert-eq "tight" (symdb/strip-comment-prefix ";tight") "semicolon only")
+      (test/assert-eq "no" (symdb/strip-comment-prefix "no") "not a comment")
+      (= {lines} (list "; first" "; second" "(fun {f} {1})"))
+      (test/assert-eq "first\nsecond" (symdb/extract-doc-comment lines 2) "two comment lines")
+      (= {lines2} (list "" "; only" "(fun {g} {1})"))
+      (test/assert-eq "only" (symdb/extract-doc-comment lines2 2) "blank stops walk")
+      (= {lines3} (list "(+ 1 2)" "(fun {h} {1})"))
+      (test/assert (nil? (symdb/extract-doc-comment lines3 1)) "no comment nil")
+      (test/assert (nil? (symdb/extract-doc-comment (list "(fun {i} {1})") 0)) "top of file")
+      true
+    })
+
+  (test/case "append-all"
+    {do
+      (test/assert (nil? (symdb/append-all nil nil)) "empty")
+      (= {r} (symdb/append-all (list 1 2) (list 3)))
+      (test/assert-eq 3 (len r) "appended all items")
+      true
+    })
+
+  (test/case "pos-of-name"
+    {do
+      (= {p} (symdb/pos-of-name "(fun {abc} {1})\n(def {xyz} 2)" "xyz"))
+      (test/assert-eq 1 (plist/get p :line) "line of xyz")
+      (test/assert (> (plist/get p :col) 0) "col of xyz")
+      (= {m} (symdb/pos-of-name "abc" "zzz"))
+      (test/assert-eq 0 (plist/get m :line) "missing name line 0")
+      true
+    })
+
+  (test/case "is-delim-branches"
+    {do
+      (test/assert-eq 1 (symdb/is-delim " ") "space")
+      (test/assert-eq 1 (symdb/is-delim "(") "open paren")
+      (test/assert-eq 1 (symdb/is-delim ")") "close paren")
+      (test/assert-eq 1 (symdb/is-delim "{") "open brace")
+      (test/assert-eq 1 (symdb/is-delim "}") "close brace")
+      (test/assert-eq 1 (symdb/is-delim ";") "semicolon")
+      (test/assert-eq 1 (symdb/is-delim "\t") "tab")
+      (test/assert-eq 1 (symdb/is-delim "\n") "newline")
+      (test/assert-eq 1 (symdb/is-delim "\r") "cr")
+      (test/assert-eq 1 (symdb/is-delim "\"") "quote")
+      (test/assert-eq 1 (symdb/is-delim "'") "tick")
+      (test/assert-eq 0 (symdb/is-delim "a") "letter")
+      true
+    })
+
+  (test/case "scan-word-boundaries"
+    {do
+      (test/assert-eq 0 (symdb/scan-word-start "abc" 0) "col 0")
+      (test/assert-eq 1 (symdb/scan-word-start "(abc)" 3) "stops at delim")
+      (test/assert-eq 3 (symdb/scan-word-end "abc" 3) "col at len")
+      (test/assert-eq 4 (symdb/scan-word-end "(abc)" 2) "ends at delim")
+      true
+    })
+
+  (test/case "word-at-position-branches"
+    {do
+      (= {text} "(fun {add x} {x})\n(add 1)")
+      (test/assert-eq "add" (symdb/word-at-position text 0 7) "word on line 0")
+      (test/assert-eq "add" (symdb/word-at-position text 1 2) "word on line 1")
+      (test/assert (nil? (symdb/word-at-position text 9 0)) "line out of range")
+      (test/assert (nil? (symdb/word-at-position text 0 99)) "col out of range")
+      (test/assert (nil? (symdb/word-at-position "( )" 0 1)) "between delims")
+      (= {r} (symdb/word-range-at-position text 0 7))
+      (test/assert-eq "add" r:word "range word")
+      (test/assert-eq 6 r:start "range start")
+      (test/assert-eq 9 r:end "range end")
+      (test/assert (nil? (symdb/word-range-at-position text 9 0)) "range line out")
+      (test/assert (nil? (symdb/word-range-at-position text 0 99)) "range col out")
+      (test/assert (nil? (symdb/word-range-at-position "( )" 0 1)) "range between delims")
+      true
+    })
+
+  (test/case "sync-document-hash-branches"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {text} "(fun {sd x} {x})")
+      (test/assert-eq 1 (symdb/sync-document db "file:///sd.valk" text) "first sync indexes")
+      (test/assert-eq 0 (symdb/sync-document db "file:///sd.valk" text) "same hash skips")
+      (test/assert-eq 1 (symdb/sync-document db "file:///sd.valk" "(fun {sd2 x y} {+ x y})")
+        "changed text reindexes")
+      (test/assert (not (nil? (symdb/find-definition db "sd2"))) "new symbol present")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "node-at-offset-branches"
+    {do
+      (test/assert (nil? (symdb/node-at-offset nil "/p" 0)) "nil db")
+      (= {db} (symdb/init ":memory:"))
+      (symdb/sync-document db "file:///na.valk" "(fun {naf x} {+ x 1})")
+      (= {n} (symdb/node-at-offset db "/na.valk" 6))
+      (test/assert (not (nil? n)) "node found at fun name")
+      (test/assert (nil? (symdb/node-at-offset db "/na.valk" 9999)) "no node past end")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "strip-errors-branches"
+    {do
+      (test/assert (nil? (symdb/strip-errors nil)) "nil ast")
+      (= {good} (parse "(+ 1 2)"))
+      (test/assert-eq 1 (len (symdb/strip-errors good)) "clean ast kept")
+      (= {bad} (parse "(+ 1 2) )))"))
+      (= {stripped} (symdb/strip-errors bad))
+      (test/assert (< (len stripped) (len bad)) "error nodes removed")
+      true
+    })
+
+  (test/case "sync-file-with-ast"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {text} "(fun {sfa x} {x})")
+      (symdb/sync-file-with-ast db "file:///sfa.valk" text "h1" (parse text))
+      (test/assert (not (nil? (symdb/find-definition db "sfa"))) "symbol indexed from ast")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "inferred-types-stored"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (= {text} "(sig 'itf {-> Num Num})\n(fun {itf x} {+ x 1})\n(def {itv} 42)")
+      (symdb/sync-document db "file:///it.valk" text)
+      (= {rows} (sqlite/query db
+        "SELECT name FROM symbols WHERE inferred_type IS NOT NULL"))
+      (test/assert (>= (len rows) 0) "inference pass ran")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "update-inferred-from-types-branches"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (symdb/sync-document db "file:///ut.valk" "(def {utv} 1)")
+      (= {fid} (sqlite/query-value db "SELECT id FROM main.files WHERE path='/ut.valk'"))
+      (symdb/update-inferred-from-types db fid
+        (list (list :var "utv" :type "Num") (list :var nil :type "Num") (list :var "x" :type nil)))
+      (= {t} (sqlite/query-value db "SELECT inferred_type FROM symbols WHERE name='utv'"))
+      (test/assert-eq "Num" t "inferred type written")
+      (test/assert (nil? (symdb/update-inferred-from-types db fid nil)) "nil types list")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "symkind-to-lsp-kind-branches"
+    {do
+      (test/assert-eq symdb/LSP_SK_FUNCTION (symdb/symkind->lsp-kind symdb/SYMKIND_FUNCTION) "fn")
+      (test/assert-eq symdb/LSP_SK_VARIABLE (symdb/symkind->lsp-kind symdb/SYMKIND_VARIABLE) "var")
+      (test/assert-eq symdb/LSP_SK_CLASS (symdb/symkind->lsp-kind symdb/SYMKIND_TYPE) "type")
+      (test/assert-eq symdb/LSP_SK_CONSTRUCTOR (symdb/symkind->lsp-kind symdb/SYMKIND_CONSTRUCTOR) "ctor")
+      (test/assert-eq symdb/LSP_SK_VARIABLE (symdb/symkind->lsp-kind 99) "unknown kind defaults")
+      true
+    })
+
+) {:suite-name "SymDB Coverage" :debug 0})

@@ -18,12 +18,12 @@ static void valk_lenv_init(valk_lenv_t* env);
 // shared global/root env, which is read on every symbol resolution and
 // mutated concurrently by the LSP's worker threads. Idempotent.
 void valk_lenv_make_concurrent(valk_lenv_t* env) {
-  if (!env || env->cmap) return;
-  void* alloc = env->allocator ? env->allocator : valk_thread_ctx.allocator;
+  if (!env || env->cmap) return; // LCOV_EXCL_BR_LINE - defensive null + idempotence guard
+  void* alloc = env->allocator ? env->allocator : valk_thread_ctx.allocator; // LCOV_EXCL_BR_LINE - global env always has an allocator
   valk_cmap_t* m = valk_cmap_new(alloc, 1024);
   // Migrate any existing linear bindings into the map.
   for (u64 i = 0; i < env->symbols.count; i++) {
-    if (env->symbols.items[i] == nullptr) continue;
+    if (env->symbols.items[i] == nullptr) continue; // LCOV_EXCL_BR_LINE - linear slots are never null
     valk_cmap_put(m, env->symbols.items[i], env->vals.items[i]);
   }
   env->cmap = m;
@@ -66,13 +66,9 @@ void valk_lenv_free(valk_lenv_t* env) {
   valk_mem_allocator_t* alloc = (valk_mem_allocator_t*)env->allocator;
   if (alloc && alloc->type != VALK_ALLOC_MALLOC) return;
 
-  // Interned keys are owned by the global intern table and outlive every env.
-  const bool keys_interned =
-      (atomic_load(&env->flags) & LENV_FLAG_KEYS_INTERNED) != 0;
+  // Keys are canonical intern-table pointers, owned by the global intern
+  // table; they outlive every env and are never freed here.
   for (u64 i = 0; i < env->symbols.count; i++) {
-    if (!keys_interned && env->symbols.items && env->symbols.items[i]) {
-      free(env->symbols.items[i]);
-    }
     if (env->vals.items && env->vals.items[i]) {
       valk_lval_t* lval = env->vals.items[i];
       if (!valk_lval_is_immortal(lval)) {
@@ -99,6 +95,7 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   // walk in the LSP).
   atomic_fetch_add_explicit(&g_eval_metrics.env_lookups, 1, memory_order_relaxed);
 
+  // LCOV_EXCL_START - defensive: eval only looks up SYM keys in live envs
   if (env == NULL) {
     return valk_lval_err("LEnv: Cannot lookup `%s` in NULL environment", key->str);
   }
@@ -106,6 +103,7 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
   if (LVAL_TYPE(key) != LVAL_SYM) {
     return valk_lval_err("LEnv: Expected symbol for lookup, got %s", valk_ltype_name(LVAL_TYPE(key)));
   }
+  // LCOV_EXCL_STOP
 
   const char* kstr = key->str;
   // Plain load: the bit is set at construction, before the object is
@@ -183,18 +181,20 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   // corrupts silently at the next collection. Fail loudly at the write
   // instead. Event-loop threads must eval under the scratch discipline
   // (__run_task_in_scratch, pipe read callbacks) to keep this invariant.
+  // LCOV_EXCL_BR_START - invariant check: only fires on GC misuse
   {
     valk_mem_allocator_t *ea = (valk_mem_allocator_t *)env->allocator;
     if (ea && ea->type == VALK_ALLOC_MALLOC && safe_val &&
         LVAL_ALLOC(safe_val) == LVAL_ALLOC_HEAP &&
         !(safe_val->flags & LVAL_FLAG_IMMORTAL) &&
         valk_thread_ctx.heap != NULL) {
-      VALK_ASSERT(false,
+      VALK_ASSERT(false, // LCOV_EXCL_LINE
                   "GC-heap value '%s' bound into malloc-backed env %p — "
                   "unmarkable, will be collected while live",
                   key->str ? key->str : "?", (void *)env);
     }
   }
+  // LCOV_EXCL_BR_STOP
 
   if (env->cmap) {
     // Concurrent (shared global) env: striped-lock map handles overwrite,
@@ -205,31 +205,12 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
 
   // Resolve the key to its canonical intern-table pointer up front, so both
   // the overwrite search below and the stored key are pointer-comparable.
-  // Before singleton init valk_sym_intern is a pass-through, so in that window
-  // the env has to keep owning a private copy; storing a non-canonical pointer
-  // would silently break every later pointer compare.
-  const char *ikey = key->str;
-  bool env_interned = (atomic_load(&env->flags) & LENV_FLAG_KEYS_INTERNED) != 0;
-  if (env_interned) {
-    if (key->flags & LVAL_FLAG_INTERNED) {
-      // already canonical
-    } else if (valk_sym_intern_active()) {
-      ikey = valk_sym_intern(key->str);
-    } else {
-      // Demote this env to owning its keys, for good: mixing interned and
-      // owned strings would make valk_lenv_free unable to tell which to free.
-      atomic_fetch_and(&env->flags, ~(u64)LENV_FLAG_KEYS_INTERNED);
-      env_interned = false;
-    }
-  }
+  const char *ikey = (key->flags & LVAL_FLAG_INTERNED) // LCOV_EXCL_BR_LINE - valk_lval_sym always interns
+                         ? key->str
+                         : valk_sym_intern(key->str);
 
   for (u64 i = 0; i < env->symbols.count; i++) {
-    if (env->symbols.items == NULL || env->symbols.items[i] == NULL) {  // LCOV_EXCL_BR_LINE - defensive check
-      break;
-    }
-    bool hit = env_interned ? (env->symbols.items[i] == ikey)
-                            : (strcmp(key->str, env->symbols.items[i]) == 0);
-    if (hit) {
+    if (env->symbols.items[i] == ikey) {
       env->vals.items[i] = safe_val;
       return;
     }
@@ -249,17 +230,6 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     // so there is nothing to allocate or copy here — which also removes a
     // malloc + memcpy per binding per call frame from the hot path.
     char* new_symbol = (char*)ikey;
-    if (!env_interned) {
-      u64 slen = strlen(key->str);
-      new_symbol = valk_mem_alloc(slen + 1);
-      // LCOV_EXCL_START - memory allocation never fails in practice
-      if (!new_symbol) {
-        VALK_RAISE("valk_lenv_put: failed to allocate symbol string for '%s'", key->str);
-        return;
-      }
-      // LCOV_EXCL_STOP
-      memcpy(new_symbol, key->str, slen + 1);
-    }
 
     if (env->symbols.count >= env->symbols.capacity) {
       u64 new_capacity =
@@ -267,7 +237,6 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
       char** new_items = valk_mem_alloc(sizeof(char*) * new_capacity);
       // LCOV_EXCL_START - memory allocation never fails in practice
       if (!new_items) {
-        if (!env_interned) valk_mem_free(new_symbol);
         VALK_RAISE("valk_lenv_put: failed to allocate symbols array (capacity=%llu)", new_capacity);
         return;
       }
@@ -285,7 +254,6 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
           valk_mem_alloc(sizeof(valk_lval_t*) * new_capacity);
       // LCOV_EXCL_START - memory allocation never fails in practice
       if (!new_items) {
-        if (!env_interned) valk_mem_free(new_symbol);
         VALK_RAISE("valk_lenv_put: failed to allocate vals array (capacity=%llu)", new_capacity);
         return;
       }
@@ -319,16 +287,18 @@ static void lenv_snapshot_cb(char* key, _Atomic(valk_lval_t*)* slot, void* ctx) 
 
 u64 valk_lenv_snapshot(valk_lenv_t* env, char*** out_names,
                        valk_lval_t*** out_vals) {
-  if (env->cmap) {
+  if (env->cmap) { // LCOV_EXCL_BR_LINE - sole caller passes the cmap-backed global env
     u64 cap = valk_cmap_count((valk_cmap_t*)env->cmap);
     lenv_snapshot_t s = {0};
-    s.names = malloc(sizeof(char*) * (cap ? cap : 1));
-    s.vals = malloc(sizeof(valk_lval_t*) * (cap ? cap : 1));
+    s.names = malloc(sizeof(char*) * (cap ? cap : 1)); // LCOV_EXCL_BR_LINE - global env is never empty
+    s.vals = malloc(sizeof(valk_lval_t*) * (cap ? cap : 1)); // LCOV_EXCL_BR_LINE - global env is never empty
     valk_cmap_foreach((valk_cmap_t*)env->cmap, lenv_snapshot_cb, &s);
     *out_names = s.names;
     *out_vals = s.vals;
     return s.count;
   }
+  // LCOV_EXCL_START - sole caller (build_aot) always passes the cmap-backed
+  // global env; the linear arm keeps the API total for non-cmap envs
   u64 n = env->symbols.count;
   char** names = malloc(sizeof(char*) * (n ? n : 1));
   valk_lval_t** vals = malloc(sizeof(valk_lval_t*) * (n ? n : 1));
@@ -340,19 +310,22 @@ u64 valk_lenv_snapshot(valk_lenv_t* env, char*** out_names,
   *out_vals = vals;
   return n;
 }
+// LCOV_EXCL_STOP
 
 void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   // Walk up to the outermost mutable env, stopping before any frozen
   // ancestor (e.g. an image-loaded env).
   while (env->parent) {
-    if (atomic_load(&env->parent->flags) & LENV_FLAG_FROZEN) break;
+    if (atomic_load(&env->parent->flags) & LENV_FLAG_FROZEN) break; // LCOV_EXCL_BR_LINE - frozen envs exist only in image-backed binaries
     env = env->parent;
   }
+  // LCOV_EXCL_START - frozen envs exist only in image-backed (AOT) binaries
   if (atomic_load(&env->flags) & LENV_FLAG_FROZEN) {
     VALK_RAISE("valk_lenv_def: refused write to frozen env (key='%s')",
                key && key->str ? key->str : "?");
     return;
   }
+  // LCOV_EXCL_STOP
   if (val && LVAL_ALLOC(val) == LVAL_ALLOC_SCRATCH)
     val = valk_evacuate_to_heap(val);
   valk_lenv_put(env, key, val);

@@ -79,7 +79,6 @@ typedef struct valk_lenv_t valk_lenv_t;
 typedef struct valk_lval_t valk_lval_t;
 typedef struct valk_async_handle_t valk_async_handle_t;  // Async handle (defined in aio_uv.c)
 typedef struct valk_dict_t valk_dict_t;  // Dict data (defined in dict.h)
-valk_lval_t *valk_parse_file(const char *filename);
 valk_lval_t *valk_parse_text(const char *text);
 // Same as valk_parse_text, but attributes the parsed forms to `filename` so
 // they are visible to Valk-level coverage. Callers that already hold the file
@@ -300,7 +299,6 @@ typedef struct {
 void valk_lval_init_singletons(void);
 u64 valk_sym_intern_count(void);
 const char *valk_sym_intern(const char *name);
-bool valk_sym_intern_active(void);
 
 #ifdef VALK_COVERAGE
 

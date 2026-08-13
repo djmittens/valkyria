@@ -86,8 +86,13 @@ void valk_coverage_record_expr(u16 file_id, u16 line, u16 column);
 // never be hit. Retract those marks or the metric reports unreachable
 // denominators.
 void valk_coverage_unmark_line(u16 file_id, u16 line);
+void valk_coverage_unmark_expr(u16 file_id, u16 line, u16 column);
 void valk_coverage_mark_tree(valk_lval_t *lval);
 void valk_coverage_unmark_tree(valk_lval_t *lval);
+// Retract the expr marks of a subtree without touching line marks: used for
+// match patterns, which are data — parsed as unquoted cons (and thus marked)
+// but never evaluated.
+void valk_coverage_unmark_expr_tree(valk_lval_t *lval);
 u64 valk_coverage_get_line_expr_count(u16 file_id, u16 line, u64 *hit, u64 *total);
 
 #define VALK_COVERAGE_RECORD_LINE(fid, line) valk_coverage_record_line(fid, line)

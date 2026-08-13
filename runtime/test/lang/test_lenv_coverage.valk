@@ -1,0 +1,70 @@
+(load "testing/test.valk")
+
+(test/run (list
+
+  (test/case "lookup-miss-through-nested-envs"
+    {do
+      (= {cov-lenv-inner} (\ {y} {+ y cov-lenv-unbound-xyz}))
+      (= {cov-lenv-outer} (\ {x} {cov-lenv-inner x}))
+      (= {r} (cov-lenv-outer 1))
+      (test/assert (error? r) "miss walks lambda envs up to global and errors")
+      true})
+
+  (test/case "global-lookup-miss"
+    {do
+      (test/assert (error? cov-lenv-no-such-global) "unbound global returns error")
+      true})
+
+  (test/case "put-overwrite-local"
+    {do
+      (= {cov-lenv-loc} 1)
+      (= {cov-lenv-loc} 2)
+      (test/assert-eq 2 cov-lenv-loc "= overwrites existing local binding")
+      true})
+
+  (test/case "def-overwrite-global"
+    {do
+      (def {cov-lenv-glob} 10)
+      (def {cov-lenv-glob} 20)
+      (test/assert-eq 20 cov-lenv-glob "def overwrites existing global binding")
+      true})
+
+  (test/case "def-from-nested-scope-reaches-root"
+    {do
+      (= {setter} (\ {v} {def {cov-lenv-deep-def} v}))
+      (setter 77)
+      (test/assert-eq 77 cov-lenv-deep-def "def inside lambda walks to root env")
+      true})
+
+  (test/case "formals-shadow-globals"
+    {do
+      (def {cov-lenv-shadowed} 1)
+      (= {f} (\ {cov-lenv-shadowed} {+ cov-lenv-shadowed 1}))
+      (test/assert-eq 6 (f 5) "formal shadows global of same name")
+      (test/assert-eq 1 cov-lenv-shadowed "global unchanged after call")
+      true})
+
+  (test/case "env-capacity-growth-many-formals"
+    {do
+      (= {f} (\ {a1 a2 a3 a4 a5 a6 a7 a8 a9 a10}
+              {+ a1 (+ a2 (+ a3 (+ a4 (+ a5 (+ a6 (+ a7 (+ a8 (+ a9 a10))))))))}))
+      (test/assert-eq 55 (f 1 2 3 4 5 6 7 8 9 10) "call env grows past initial capacity")
+      true})
+
+  (test/case "env-capacity-growth-many-locals"
+    {do
+      (= {g} (\ {}
+              {do
+                (= {l1} 1) (= {l2} 2) (= {l3} 3) (= {l4} 4) (= {l5} 5)
+                (= {l6} 6) (= {l7} 7) (= {l8} 8) (= {l9} 9) (= {l10} 10)
+                (+ l1 l10)}))
+      (test/assert-eq 11 (g) "local env grows past initial capacity")
+      true})
+
+  (test/case "penv-lists-bindings"
+    {do
+      (= {e} (penv))
+      (test/assert (list? e) "penv returns a list")
+      true})
+
+) {:suite-name "LEnv Coverage"})

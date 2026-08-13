@@ -14,7 +14,6 @@
 #include <unistd.h>
 
 #include "coverage.h"
-#include "diag.h"
 #include "gc.h"
 #include "macro.h"
 #include "type_env.h"

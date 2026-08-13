@@ -1,0 +1,119 @@
+(load "testing/test.valk")
+
+(test/run (list
+  (test/case "def-single-symbol-arg"
+    {do
+    (def (head (parse "pipe-env-test-defsym")) 42)
+    (test/assert-eq 42 pipe-env-test-defsym "def with bare symbol wraps and binds")
+    true
+  })
+  (test/case "def-error-value-passthrough"
+    {do
+    (= {r} (def {pipe-env-test-errval} (error "boom")))
+    (test/assert (error? r) "def with error value returns the error")
+    true
+  })
+  (test/case "def-non-symbol-in-list"
+    {do
+    (= {r} (def {a 1} 2 3))
+    (test/assert (error? r) "def with number in symbol list errors")
+    true
+  })
+  (test/case "def-count-mismatch"
+    {do
+    (= {r} (def {a b} 1))
+    (test/assert (error? r) "def with symbol/value count mismatch errors")
+    true
+  })
+  (test/case "put-type-error"
+    {do
+    (= {r} (= 42 1))
+    (test/assert (error? r) "= with number first arg errors")
+    true
+  })
+  (test/case "lambda-non-symbol-formal"
+    {do
+    (= {r} (\ {1} {1}))
+    (test/assert (error? r) "lambda with number formal errors")
+    true
+  })
+  (test/case "lambda-formals-type-error"
+    {do
+    (= {r} (\ 42 {1}))
+    (test/assert (error? r) "lambda with number formals errors")
+    true
+  })
+  (test/case "pipe-stdin-open-errors"
+    {do
+    (= {r1} (pipe/stdin-open 42))
+    (test/assert (error? r1) "stdin-open with non-ref errors")
+    (= {r2} (pipe/stdin-open))
+    (test/assert (error? r2) "stdin-open with 0 args errors")
+    true
+  })
+  (test/case "pipe-stdout-open-errors"
+    {do
+    (= {r1} (pipe/stdout-open 42))
+    (test/assert (error? r1) "stdout-open with non-ref errors")
+    (= {r2} (pipe/stdout-open))
+    (test/assert (error? r2) "stdout-open with 0 args errors")
+    true
+  })
+  (test/case "pipe-write-errors"
+    {do
+    (= {r1} (pipe/write 42 "x"))
+    (test/assert (error? r1) "write with non-pipe errors")
+    (= {r2} (pipe/write 42))
+    (test/assert (error? r2) "write with 1 arg errors")
+    true
+  })
+  (test/case "pipe-on-data-errors"
+    {do
+    (= {r1} (pipe/on-data 42 (\ {c} {c})))
+    (test/assert (error? r1) "on-data with non-pipe errors")
+    (= {r2} (pipe/on-data 42))
+    (test/assert (error? r2) "on-data with 1 arg errors")
+    true
+  })
+  (test/case "pipe-close-errors"
+    {do
+    (= {r1} (pipe/close 42))
+    (test/assert (error? r1) "close with non-pipe errors")
+    (= {r2} (pipe/close))
+    (test/assert (error? r2) "close with 0 args errors")
+    true
+  })
+  (test/case "pipe-lsp-reader-errors"
+    {do
+    (= {r1} (pipe/lsp-reader 42 (\ {c} {c})))
+    (test/assert (error? r1) "lsp-reader with non-pipe errors")
+    (= {r2} (pipe/lsp-reader 42))
+    (test/assert (error? r2) "lsp-reader with 1 arg errors")
+    true
+  })
+  (test/case "aio-dispatch-errors"
+    {do
+    (= {sys} (aio/await (aio/start)))
+    (= {r1} (aio/dispatch 42 (\ {x} {x}) 1 (\ {x} {x})))
+    (test/assert (error? r1) "dispatch with non-sys errors")
+    (= {r2} (aio/dispatch sys 42 1 (\ {x} {x})))
+    (test/assert (error? r2) "dispatch with non-fun fn errors")
+    (= {r3} (aio/dispatch sys (\ {x} {x}) 1 42))
+    (test/assert (error? r3) "dispatch with non-fun cb errors")
+    (= {r4} (aio/dispatch sys (\ {x} {x}) 1))
+    (test/assert (error? r4) "dispatch with 3 args errors")
+    (= {_} (aio/stop sys))
+    true
+  })
+  (test/case "pipe-stdin-open-non-pipe-stdin"
+    {do
+    (= {self} (realpath "/proc/self/exe"))
+    (= {script} "/tmp/valk_test_pipe_stdin_err.valk")
+    (write-file script "(= {sys} (aio/await (aio/start))) (= {r} (pipe/stdin-open sys)) (if (error? r) {print \"STDIN-ERR\"} {print \"STDIN-OK\"}) (aio/stop sys)")
+    (= {r} (exec "sh" "-c" (str self " " script " < /dev/null")))
+    (file/delete script)
+    (test/assert-eq 0 r:exit-code "child exits cleanly")
+    (test/assert (str/contains? r:stdout "STDIN-ERR") "stdin-open on /dev/null stdin errors")
+    true
+  })
+) (test/context-new))

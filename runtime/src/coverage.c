@@ -381,10 +381,10 @@ void valk_coverage_mark_expr(u16 file_id, u16 line, u16 column, u16 end_column) 
   valk_mutex_lock(&g_line_coverage.lock);
   
   valk_line_coverage_file_t *fc = get_or_create_file(file_id);
-  if (fc == nullptr || fc->expr_buckets == nullptr) {
+  if (fc == nullptr || fc->expr_buckets == nullptr) { // LCOV_EXCL_START - OOM
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
-  }
+  } // LCOV_EXCL_STOP
   
   ensure_line_capacity(fc, line);
   if (fc->line_counts[line] == UINT32_MAX) {
@@ -418,6 +418,37 @@ void valk_coverage_mark_expr(u16 file_id, u16 line, u16 column, u16 end_column) 
   valk_mutex_unlock(&g_line_coverage.lock);
 }
 
+void valk_coverage_unmark_expr(u16 file_id, u16 line, u16 column) {
+  if (file_id == 0 || line == 0) return;
+  ensure_line_coverage_init();
+
+  valk_mutex_lock(&g_line_coverage.lock);
+
+  valk_line_coverage_file_t *fc = valk_coverage_get_file(file_id);
+  // LCOV_EXCL_START - unmark is only called for files the reader marked
+  if (fc == nullptr || fc->expr_buckets == nullptr) {
+    valk_mutex_unlock(&g_line_coverage.lock);
+    return;
+  }
+  // LCOV_EXCL_STOP
+
+  u32 bucket = expr_hash(line, column);
+  valk_expr_t **link = &fc->expr_buckets[bucket];
+  while (*link != nullptr) {
+    valk_expr_t *expr = *link;
+    if (expr->line == line && expr->column == column) {
+      if (expr->hit_count > 0 && fc->exprs_hit > 0) fc->exprs_hit--;
+      if (fc->exprs_found > 0) fc->exprs_found--;
+      *link = expr->next;
+      free(expr);
+      break;
+    }
+    link = &expr->next;
+  }
+
+  valk_mutex_unlock(&g_line_coverage.lock);
+}
+
 void valk_coverage_unmark_line(u16 file_id, u16 line) {
   if (file_id == 0 || line == 0) return;
   ensure_line_coverage_init();
@@ -425,10 +456,12 @@ void valk_coverage_unmark_line(u16 file_id, u16 line) {
   valk_mutex_lock(&g_line_coverage.lock);
 
   valk_line_coverage_file_t *fc = valk_coverage_get_file(file_id);
+  // LCOV_EXCL_START - unmark is only called for files the reader marked
   if (fc == nullptr) {
     valk_mutex_unlock(&g_line_coverage.lock);
     return;
   }
+  // LCOV_EXCL_STOP
 
   // Drop every expression recorded on the line rather than matching the
   // erased form's own (line, column): macro expansion can rebuild a form and

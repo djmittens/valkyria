@@ -669,7 +669,6 @@
 (sig 'ast/head-name {-> List Str})
 (sig 'ast/head-type {-> List Str})
 (sig 'ast/nth-name {-> Num List Str})
-(sig 'ast/visit {-> Any QExpr Nil})
 
 ; === Compile pipeline ===
 

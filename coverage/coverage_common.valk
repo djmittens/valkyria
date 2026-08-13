@@ -479,6 +479,28 @@
   local-files
 })
 
+; Merge expr entries per column: union of both sides, max hit count wins for
+; a given column. Replacing the whole list ("longer list wins") loses hits
+; when different processes exercise different expressions on the same line.
+(fun {*exprs-into-map* m exprs} {
+  (if (== exprs nil) {}
+    {do
+      (= {col} (nth 1 exprs))
+      (= {end-col} (nth 2 exprs))
+      (= {hit} (nth 3 exprs))
+      (= {k} (str col))
+      (= {prev} (dict/get m k))
+      (if (or (== prev nil) (> hit (nth 3 prev)))
+        {(dict/set! m k (list col end-col hit))}
+        {})
+      (*exprs-into-map* m (tail (tail (tail exprs))))})
+})
+
+(fun {*exprs-map-flatten* keys m acc} {
+  (if (== keys nil) {acc}
+    {(*exprs-map-flatten* (tail keys) m (join acc (dict/get m (head keys))))})
+})
+
 (fun {*merge-line-cov* dst-lc src-lc} {
   (= {src-hit} (dict/get src-lc "hit"))
   (= {dst-hit} (dict/get dst-lc "hit"))
@@ -489,9 +511,12 @@
       (= {dst-exprs} (dict/get dst-lc "exprs"))
       (if (== dst-exprs nil)
         {(dict/set! dst-lc "exprs" src-exprs)}
-        {(if (> (len src-exprs) (len dst-exprs))
-          {(dict/set! dst-lc "exprs" src-exprs)}
-          {})})}
+        {do
+          (= {m} (dict/new))
+          (*exprs-into-map* m dst-exprs)
+          (*exprs-into-map* m src-exprs)
+          (dict/set! dst-lc "exprs"
+            (*exprs-map-flatten* (dict/keys m) m {}))})}
     {})
 })
 

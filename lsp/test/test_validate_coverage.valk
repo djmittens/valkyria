@@ -1,0 +1,503 @@
+(load "testing/test.valk")
+(load "symdb/symdb.valk")
+(load "lsp/analysis.valk")
+(load "symdb/validate.valk")
+
+(= {BUILTIN_KNOWN} (dict/new 400))
+(= {_seed_loop} (\ {pairs} {
+  if (nil? pairs) {BUILTIN_KNOWN}
+  {do
+    (= {pair} (head pairs))
+    (= {name} (str (head pair)))
+    (= {_} (dict/put! BUILTIN_KNOWN name))
+    (_seed_loop (tail pairs))
+  }
+}))
+(= {_} (_seed_loop (penv)))
+
+(fun {diag-count text} {do
+  (= {ast} (parse text))
+  (len (vd/validate-with-known nil "" ast text BUILTIN_KNOWN))
+})
+
+(fun {db-diags db path text} {
+  vd/validate db path (parse text) text
+})
+
+(fun {db-diag-count db path text} {
+  len (db-diags db path text)
+})
+
+(fun {mk-ctx} {
+  list :scope (list (dict/new)) :globals (dict/new) :known (dict/new)
+       :types (dict/new) :db nil :path "" :visible nil :arity-cache nil
+       :text "xxxxxxxx" :diags nil
+})
+
+(fun {add-vfile db path} {do
+  (sqlite/exec db "INSERT INTO files (path, hash) VALUES (?1, 'h')" path)
+  (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path)
+})
+
+(fun {add-vsym db fid name kind arity sig} {
+  sqlite/exec db
+    "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES (?1, ?2, 0, 0, ?3, ?4, ?5)"
+    name fid kind arity sig
+})
+
+(fun {make-vdb} {do
+  (= {db} (sqlite/open ":memory:"))
+  (sqlite/exec-script db symdb/schema-sql)
+  (= {amb} (add-vfile db "/amb/stdlib/builtins.valk"))
+  (add-vsym db amb "head" 1 1 nil)
+  (= {lib} (add-vfile db "/w/lib.valk"))
+  (add-vsym db lib "w/util" 1 1 "{-> Num Num}")
+  (add-vsym db lib "VPoint" 4 2 ":x Num :y Num")
+  (add-vsym db lib "VJust" 4 1 ":val Num")
+  (add-vsym db lib "vvar" 1 -1 "{-> Num Num & Num Num}")
+  (add-vsym db lib "NoSigC" 4 1 nil)
+  (add-vsym db lib "noshape" 1 -1 nil)
+  (add-vsym db lib "solo" 1 1 "{-> Num Num}")
+  (add-vsym db lib "LibType" 3 -1 nil)
+  (= {main} (add-vfile db "/w/main.valk"))
+  (sqlite/exec db "INSERT INTO loads (file_id, target_path) VALUES (?1, '/w/lib.valk')" main)
+  (= {liba} (add-vfile db "/w/liba.valk"))
+  (add-vsym db liba "cfl" 1 1 "{-> Num Num}")
+  (= {libb} (add-vfile db "/w/libb.valk"))
+  (add-vsym db libb "cfl" 1 2 "{-> Num Num Num}")
+  (= {mainc} (add-vfile db "/w/mainc.valk"))
+  (sqlite/exec db "INSERT INTO loads (file_id, target_path) VALUES (?1, '/w/liba.valk')" mainc)
+  (sqlite/exec db "INSERT INTO loads (file_id, target_path) VALUES (?1, '/w/libb.valk')" mainc)
+  db
+})
+
+(test/run (list
+
+  (test/case "collect-globals-shapes"
+    {do
+      (= {names} (vd/collect-globals (parse "(fun {cg1 x} {x})\n(def {cg2} 1)\n(def cg3 2)\n(type {CGT} {CGC :a})\n(sig 'cg4 {-> Num})\n(sig cg5 {-> Num})\n42\n(1 2)\n(fun)\n(fun 5 6)\n(def)\n(def 5 6)\n(type)\n(type 5 {X1})\n(type {5} {X2})\n(type {T2} 5)\n(type {T3} {5 6})\n(sig)\n(sig 5 {-> Num})")))
+      (test/assert (member? "cg1" names) "fun name collected")
+      (test/assert (member? "cg2" names) "def qexpr name collected")
+      (test/assert (member? "cg3" names) "def sym name collected")
+      (test/assert (member? "CGT" names) "type name collected")
+      (test/assert (member? "CGC" names) "ctor name collected")
+      (test/assert (member? "cg4" names) "quoted sig name collected")
+      (test/assert (member? "cg5" names) "bare sig name collected")
+      (test/assert (member? "X1" names) "ctor under non-list type name")
+      (test/assert (member? "X2" names) "ctor under non-sym type head")
+      true
+    })
+
+  (test/case "collect-ast-types-shapes"
+    {do
+      (= {types} (vd/collect-ast-types (parse "(type {T1} {C1})\n(type x {C2})\n(type)\n(type {5} {C3})\n42")))
+      (test/assert (member? "T1" types) "type decl name collected")
+      (test/assert (not (member? "C1" types)) "ctors not collected as types")
+      true
+    })
+
+  (test/case "builtin-names-cached"
+    {do
+      (= {d1} (vd/builtin-names))
+      (= {d2} (vd/builtin-names))
+      (test/assert (dict/has? d1 "head") "penv names present")
+      (test/assert (dict/has? d2 "head") "cache path works")
+      true
+    })
+
+  (test/case "load-known-set-branches"
+    {do
+      (= {empty} (vd/load-known-set nil))
+      (test/assert (not (dict/has? empty "anything")) "nil db gives empty dict")
+      (= {db} (make-vdb))
+      (= {known} (vd/load-known-set db))
+      (test/assert (dict/has? known "w/util") "qualified name known")
+      (test/assert (dict/has? known "util") "basename registered")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "types-set-helpers"
+    {do
+      (= {d} (dict/new))
+      (test/assert (not (nil? (vd/load-symdb-types nil "/p" d))) "nil db returns dict")
+      (= {db} (make-vdb))
+      (= {ts} (vd/build-types-set db "/w/main.valk" (parse "(type {LocalT} {LC :a})")))
+      (test/assert (dict/has? ts "LocalT") "ast type in set")
+      (test/assert (dict/has? ts "LibType") "symdb type row added to set")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "lookup-arity-branches"
+    {do
+      (test/assert (nil? (vd/lookup-arity nil "/p" "x")) "nil db")
+      (= {db} (make-vdb))
+      (= {g} (vd/lookup-arity db nil "solo"))
+      (test/assert (not (nil? g)) "global unambiguous")
+      (test/assert-eq 1 (plist/get g :arity) "global arity")
+      (test/assert (nil? (vd/lookup-arity db "" "cfl")) "global ambiguous nil")
+      (= {c} (vd/lookup-arity db "/w/main.valk" "w/util"))
+      (test/assert (not (nil? c)) "closure single row")
+      (test/assert (nil? (vd/lookup-arity db "/w/main.valk" "cfl")) "not visible from main")
+      (test/assert (nil? (vd/lookup-arity db "/w/mainc.valk" "cfl")) "closure conflict nil")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "load-visible-set-branches"
+    {do
+      (test/assert (nil? (vd/load-visible-set nil "/p")) "nil db")
+      (= {db} (make-vdb))
+      (test/assert (nil? (vd/load-visible-set db nil)) "nil path")
+      (test/assert (nil? (vd/load-visible-set db "")) "empty path")
+      (= {vis} (vd/load-visible-set db "/w/main.valk"))
+      (test/assert (dict/has? vis "w/util") "closure names visible")
+      (sqlite/close db)
+      (= {db2} (sqlite/open ":memory:"))
+      (sqlite/exec-script db2 symdb/schema-sql)
+      (test/assert (nil? (vd/load-visible-set db2 "/w/x.valk")) "no ambient files disables")
+      (sqlite/close db2)
+      true
+    })
+
+  (test/case "check-missing-dep-branches"
+    {do
+      (= {e} (head (parse "foo")))
+      (= {ctx} (mk-ctx))
+      (test/assert (not (nil? (vd/check-missing-dep e e "foo" ctx))) "nil visible passthrough")
+      (= {ctx2} (plist/set ctx :visible (dict/from-keys (list "foo"))))
+      (= {r2} (vd/check-missing-dep e e "foo" ctx2))
+      (test/assert (nil? (plist/get r2 :diags)) "visible name no warning")
+      (= {db} (make-vdb))
+      (= {ctx3} (plist/set (plist/set ctx2 :db db) :visible (dict/new)))
+      (= {r3} (vd/check-missing-dep e e "no-definer-anywhere" ctx3))
+      (test/assert (nil? (plist/get r3 :diags)) "no definer no warning")
+      (= {miss} (db-diags db "/w/notloading.valk" "(w/util 1)"))
+      (test/assert-eq 1 (len miss) "unreachable dependency warned")
+      (test/assert (>= (str/index-of (plist/get (head miss) :message) "never loads") 0)
+        "message explains missing load")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(w/util 1)")
+        "loaded dependency ok")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "make-diag-position"
+    {do
+      (= {d} (vd/make-diag "ab\ncdef" 5 2 1 "msg"))
+      (test/assert-eq 1 (plist/get d :line) "line computed")
+      (test/assert-eq 2 (plist/get d :col) "col computed")
+      (test/assert-eq 4 (plist/get d :end-col) "end col computed")
+      (test/assert-eq "msg" (plist/get d :message) "message kept")
+      true
+    })
+
+  (test/case "is-accessor-branches"
+    {do
+      (test/assert-eq 0 (vd/is-accessor "x") "too short")
+      (test/assert-eq 0 (vd/is-accessor "ab") "lowercase first")
+      (test/assert-eq 0 (vd/is-accessor "AB") "no colon")
+      (test/assert-eq 1 (vd/is-accessor "A:b") "accessor shape")
+      (test/assert-eq 0 (vd/is-accessor "Ab:") "colon at end")
+      (test/assert-eq 0 (vd/is-accessor "A::b") "double colon")
+      (test/assert-eq 0 (vd/is-accessor ":x") "leading colon")
+      true
+    })
+
+  (test/case "in-scope-branches"
+    {do
+      (test/assert-eq 0 (vd/in-scope? "x" nil) "empty chain")
+      (= {chain} (list (dict/new) (dict/from-keys (list "x"))))
+      (test/assert-eq 1 (vd/in-scope? "x" chain) "found in outer scope")
+      (test/assert-eq 0 (vd/in-scope? "y" chain) "not found")
+      true
+    })
+
+  (test/case "strip-module-prefix-branches"
+    {do
+      (test/assert (nil? (vd/strip-module-prefix "plain")) "no slash")
+      (test/assert-eq "b" (vd/strip-module-prefix "a/b") "prefix stripped")
+      true
+    })
+
+  (test/case "is-known-branches"
+    {do
+      (= {scope} (list (dict/from-keys (list "sc"))))
+      (= {globals} (dict/from-keys (list "gl")))
+      (= {known} (dict/from-keys (list "kn" "head")))
+      (test/assert-eq 1 (vd/is-known "true" scope globals known) "constant")
+      (test/assert-eq 1 (vd/is-known "if" scope globals known) "special form")
+      (test/assert-eq 1 (vd/is-known "sc" scope globals known) "scope")
+      (test/assert-eq 1 (vd/is-known "gl" scope globals known) "globals")
+      (test/assert-eq 1 (vd/is-known "kn" scope globals known) "known set")
+      (test/assert-eq 1 (vd/is-known "+" scope globals known) "builtin env")
+      (test/assert-eq 1 (vd/is-known "A:b" scope globals known) "accessor")
+      (test/assert-eq 1 (vd/is-known "mod/head" scope globals known) "basename")
+      (test/assert-eq 0 (vd/is-known "zzz-unknown" scope globals known) "unknown")
+      (test/assert-eq 0 (vd/is-known-by-basename "plain" known) "no prefix no basename")
+      true
+    })
+
+  (test/case "is-lowercase-and-field-access"
+    {do
+      (test/assert (vd/is-lowercase-char "a") "lowercase yes")
+      (test/assert (not (vd/is-lowercase-char "Z")) "uppercase no")
+      (test/assert-eq 0 (vd/is-field-access "ab") "too short")
+      (test/assert-eq 0 (vd/is-field-access "Abc") "uppercase first")
+      (test/assert-eq 0 (vd/is-field-access "abc") "no colon")
+      (test/assert-eq 1 (vd/is-field-access "a:b") "field access shape")
+      (test/assert-eq 0 (vd/is-field-access "ab:") "colon at end")
+      (test/assert-eq 0 (vd/is-field-access "a:B") "uppercase field")
+      (test/assert-eq 0 (vd/is-field-access "a::b") "double colon")
+      true
+    })
+
+  (test/case "check-sym-name-branches"
+    {do
+      (= {e} (head (parse "foo")))
+      (= {ctx} (mk-ctx))
+      (test/assert (nil? (plist/get (vd/check-sym-name e "" ctx) :diags)) "empty name")
+      (test/assert (nil? (plist/get (vd/check-sym-name e ":kw" ctx) :diags)) "keyword")
+      (test/assert (nil? (plist/get (vd/check-sym-name e "a:b" ctx) :diags)) "field access")
+      (= {qctx} (plist/set ctx :in-qexpr 1))
+      (test/assert (nil? (plist/get (vd/check-sym-name e "mystery" qctx) :diags))
+        "qexpr data suppressed")
+      (= {r} (vd/check-sym-name e "mystery" ctx))
+      (test/assert-eq 1 (len (plist/get r :diags)) "undefined flagged")
+      true
+    })
+
+  (test/case "sig-varargs-and-min-arity"
+    {do
+      (test/assert-eq 0 (vd/sig-has-varargs nil) "nil sig")
+      (test/assert-eq 1 (if (>= (str/index-of "{-> & Num Num}" "& ") 0) {1} {0}) "sanity")
+      (test/assert (vd/sig-has-varargs "{-> & Num Num}") "varargs detected")
+      (test/assert (not (vd/sig-has-varargs "{-> Num Num}")) "fixed arity")
+      (test/assert-eq -1 (vd/sig-min-arity nil) "nil sig min")
+      (test/assert-eq 1 (vd/sig-min-arity "{-> Num Num & Num Num}") "min before amp")
+      (test/assert-eq 0 (vd/sig-min-arity "{-> & Num Num}") "amp first")
+      (test/assert (>= (vd/sig-min-arity "{-> (List Num) Num Num}") 0) "nested type counted")
+      (test/assert-eq 0 (vd/count-sig-params nil 0 0) "empty parts")
+      (test/assert (>= (vd/count-sig-params (str/split "-> Num } Num" " ") 0 0) 0)
+        "brace part skipped")
+      (test/assert-eq 2 (vd/count-char "aXbXc" "X") "count-char")
+      (test/assert-eq 0 (vd/count-char "abc" "X") "count-char none")
+      true
+    })
+
+  (test/case "check-arity-branches"
+    {do
+      (= {db} (make-vdb))
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(w/util 1)") "correct arity")
+      (= {over} (db-diags db "/w/main.valk" "(w/util 1 2)"))
+      (test/assert-eq 1 (len over) "too many args flagged")
+      (test/assert (>= (str/index-of (plist/get (head over) :message) "expects 1") 0)
+        "arity message")
+      (= {mv} (db-diags db "/w/main.valk" "(vvar)"))
+      (test/assert-eq 1 (len mv) "varargs zero args below min")
+      (test/assert (>= (str/index-of (plist/get (head mv) :message) "at least") 0)
+        "min arity message")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(vvar 1 2 3)") "varargs many ok")
+      (test/assert-eq 0 (db-diag-count db "/w/mainc.valk" "(cfl 1 2 3)")
+        "conflicting shapes not checked")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(noshape 1 2 3)")
+        "no shape info no check")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "special-form-arity-all"
+    {do
+      (test/assert-eq 1 (diag-count "(if true)") "if too few")
+      (test/assert-eq 1 (diag-count "(if 1 2 3 4)") "if too many")
+      (test/assert-eq 0 (diag-count "(if true 1 2)") "if ok")
+      (test/assert-eq 1 (diag-count "(fun {x})") "fun no body")
+      (test/assert-eq 1 (diag-count "(\\ {x})") "lambda no body")
+      (test/assert-eq 1 (diag-count "(def {x})") "def no value")
+      (test/assert-eq 1 (diag-count "(= {x})") "= no value")
+      (test/assert-eq 1 (diag-count "(type {T})") "type no variants")
+      (test/assert-eq 1 (diag-count "(match 1)") "match no clauses")
+      (test/assert-eq 1 (diag-count "(sig 'x)") "sig no type")
+      (test/assert-eq 1 (diag-count "(load)") "load no args")
+      (test/assert-eq 1 (diag-count "(load \"a\" \"b\")") "load two args")
+      (test/assert-eq 0 (diag-count "(load \"a\")") "load ok")
+      (test/assert-eq 0 (diag-count "(do 1 2)") "other special form ok")
+      true
+    })
+
+  (test/case "is-keyword-sym-branches"
+    {do
+      (test/assert-eq 0 (vd/is-keyword-sym 5) "non-sym")
+      (test/assert-eq 0 (vd/is-keyword-sym (head (parse "a"))) "short sym")
+      (test/assert-eq 0 (vd/is-keyword-sym (head (parse "ab"))) "plain sym")
+      (test/assert-eq 1 (vd/is-keyword-sym (head (parse ":x"))) "keyword sym")
+      true
+    })
+
+  (test/case "ctor-arity-branches"
+    {do
+      (= {db} (make-vdb))
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(VPoint 1 2)") "positional ok")
+      (= {bad} (db-diags db "/w/main.valk" "(VPoint 1)"))
+      (test/assert-eq 1 (len bad) "positional wrong count")
+      (test/assert (>= (str/index-of (plist/get (head bad) :message) "expects 2 fields") 0)
+        "positional message")
+      (test/assert-eq 1 (db-diag-count db "/w/main.valk" "(VPoint)") "zero args flagged")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(list {VPoint})")
+        "bare tag in qexpr allowed")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(VPoint :x 1 :y 2)") "keywords ok")
+      (= {kc} (db-diags db "/w/main.valk" "(VPoint :x 1)"))
+      (test/assert-eq 1 (len kc) "keyword count wrong")
+      (test/assert (>= (str/index-of (plist/get (head kc) :message) "keyword-value pairs") 0)
+        "keyword count message")
+      (= {kf} (db-diags db "/w/main.valk" "(VPoint :x 1 :z 2)"))
+      (test/assert-eq 1 (len kf) "bad field name")
+      (test/assert (>= (str/index-of (plist/get (head kf) :message) ":z") 0)
+        "field message names key")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(NoSigC :x 1)")
+        "keyword mode without sig skips field check")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(UnknownCtor 1)")
+        "unknown ctor no info")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "ctor-field-names-direct"
+    {do
+      (= {ctx} (mk-ctx))
+      (test/assert (not (nil? (vd/check-ctor-field-names nil "P" ":x Num" nil ctx)))
+        "nil tail")
+      (= {one} (list (head (parse ":x"))))
+      (test/assert (not (nil? (vd/check-ctor-field-names nil "P" ":x Num" one ctx)))
+        "odd tail stops")
+      (= {nonsym} (parse "1 2"))
+      (= {r} (vd/check-ctor-field-names nil "P" ":x Num" nonsym ctx))
+      (test/assert (nil? (plist/get r :diags)) "non-sym key skipped")
+      true
+    })
+
+  (test/case "check-accessor-branches"
+    {do
+      (= {db} (make-vdb))
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(fun {af p} {list VPoint:x})")
+        "valid accessor field")
+      (= {bad} (db-diags db "/w/main.valk" "(fun {af p} {list VPoint:zz})"))
+      (test/assert-eq 1 (len bad) "invalid field flagged")
+      (test/assert (>= (str/index-of (plist/get (head bad) :message) "no field") 0)
+        "accessor message")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(fun {af p} {list Unknown:zz})")
+        "unknown type accessor skipped")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(fun {af p} {list NoSigC:zz})")
+        "accessor without ctor sig skipped")
+      (= {e} (head (parse "foo")))
+      (= {ctx} (plist/set (mk-ctx) :db db))
+      (test/assert (nil? (plist/get (vd/check-accessor e e "plain" ctx) :diags))
+        "no colon passthrough")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "match-clause-branches"
+    {do
+      (= {db} (make-vdb))
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk"
+        "(match (VJust 1) {(VJust v) v} {_ 0})") "flat pattern binds cleanly")
+      (= {w} (db-diags db "/w/main.valk" "(match 1 {((VJust a b) x) x})"))
+      (= {warns} (filter (\ {d} {== (plist/get d :severity) 2}) w))
+      (test/assert-eq 1 (len warns) "over-binding warned")
+      (test/assert (>= (str/index-of (plist/get (head warns) :message) "binds 2") 0)
+        "match message")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(match 1 {((VJust v) x) x})")
+        "matching bind count no warning")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(match 1 5)") "non-list clause")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(match 1 {a})") "short clause")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(match 1 {((5) x) 2})")
+        "non-sym pattern head")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(match 1 {5 1})")
+        "non-list pattern")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(match 1 {((_ x) y) 1})")
+        "wildcard ctor name")
+      (test/assert-eq 0 (db-diag-count db "/w/main.valk" "(match 1 {((vlower v) x) x})")
+        "unknown pattern ctor")
+      (= {ctx} (mk-ctx))
+      (= {pat} (head (parse "((VJust a b) x)")))
+      (test/assert (nil? (plist/get (vd/check-match-clause pat ctx) :diags))
+        "nil db skips ctor check")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "div-zero-branches"
+    {do
+      (test/assert-eq 1 (diag-count "(/ 10 0)") "div by literal zero")
+      (test/assert-eq 1 (diag-count "(mod 10 0)") "mod by literal zero")
+      (test/assert-eq 0 (diag-count "(/ 10 2)") "nonzero literal")
+      (test/assert-eq 0 (diag-count "(/ 10)") "single arg")
+      (test/assert-eq 0 (diag-count "(fun {dz x} {/ 10 x})") "variable divisor")
+      (test/assert-eq 0 (diag-count "(+ 1 0)") "other operator")
+      true
+    })
+
+  (test/case "sig-type-name-branches"
+    {do
+      (test/assert-eq 1 (diag-count "(sig 'f {-> Nmu Num})") "unknown type flagged")
+      (test/assert-eq 0 (diag-count "(sig 'f {-> (| :a :b) _ & lower Num})")
+        "punctuation and lowercase skipped")
+      (test/assert-eq 0 (diag-count "(type {MyT} {MyC :a})\n(sig 'f {-> MyT Num})")
+        "user type known")
+      (= {ctx} (mk-ctx))
+      (= {e} (head (parse "foo")))
+      (test/assert (nil? (plist/get (vd/check-sig-type-name e "" ctx) :diags)) "empty name")
+      (test/assert (nil? (plist/get (vd/check-sig-type-name e "->" ctx) :diags)) "arrow")
+      (test/assert (nil? (plist/get (vd/check-sig-type-name e "|" ctx) :diags)) "pipe")
+      (test/assert (nil? (plist/get (vd/check-sig-type-name e "&" ctx) :diags)) "amp")
+      (test/assert (nil? (plist/get (vd/check-sig-type-name e "_" ctx) :diags)) "wildcard")
+      (test/assert-eq 0 (vd/should-validate-type "N") "single letter")
+      (test/assert-eq 0 (vd/should-validate-type "num") "lowercase")
+      (test/assert-eq 1 (vd/should-validate-type "Num") "type name")
+      (test/assert-eq 1 (vd/is-known-type "Num" (dict/new)) "builtin type")
+      (test/assert-eq 1 (vd/is-known-type "Mine" (dict/from-keys (list "Mine"))) "set type")
+      (test/assert-eq 0 (vd/is-known-type "Nope" (dict/new)) "unknown type")
+      true
+    })
+
+  (test/case "is-ctor-call-branches"
+    {do
+      (test/assert-eq 0 (vd/is-ctor-call "") "empty")
+      (test/assert-eq 1 (vd/is-ctor-call "Abc") "uppercase")
+      (test/assert-eq 0 (vd/is-ctor-call "A:b") "accessor excluded")
+      (test/assert-eq 0 (vd/is-ctor-call "abc") "lowercase")
+      true
+    })
+
+  (test/case "arity-cache-branches"
+    {do
+      (test/assert (nil? (vd/lookup-arity-cached-direct
+        (list :db nil :path "" :arity-cache nil) "x")) "nil cache falls through")
+      (= {db} (make-vdb))
+      (= {cache} (vd/preload-arity-cache db))
+      (test/assert (not (nil? (dict/get cache "w/util"))) "cache holds shapes")
+      (test/assert (nil? (dict/get cache "cfl")) "conflicting shapes excluded")
+      (= {ctx} (plist/set (plist/set (mk-ctx) :db db) :arity-cache cache))
+      (test/assert (not (nil? (vd/lookup-arity-cached ctx "w/util"))) "cache hit")
+      (test/assert (nil? (vd/lookup-arity-cached ctx "cfl")) "cache miss re-queries")
+      (test/assert (not (dict/has? (vd/preload-arity-cache nil) "w/util")) "nil db empty cache")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "validate-cached-matches-validate"
+    {do
+      (= {db} (make-vdb))
+      (= {cache} (vd/preload-caches db))
+      (= {text} "(w/util 1 2)")
+      (= {d1} (vd/validate db "/w/main.valk" (parse text) text))
+      (= {d2} (vd/validate-cached db "/w/main.valk" (parse text) text cache))
+      (test/assert-eq (len d1) (len d2) "cached validation agrees")
+      (test/assert-eq 1 (len d2) "arity diag through cache")
+      (sqlite/close db)
+      true
+    })
+
+) {:suite-name "Validate Checks Coverage" :debug 0})

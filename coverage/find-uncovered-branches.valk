@@ -10,7 +10,9 @@
   {true})
 
 (= {target} (nth (len args) args))
-(= {xml-path} "coverage-report/coverage.xml")
+(= {xml-path} (if (file/exists? "coverage-report/latest/coverage.xml")
+  {"coverage-report/latest/coverage.xml"}
+  {"coverage-report/coverage.xml"}))
 
 (if (not (file/exists? xml-path))
   {do

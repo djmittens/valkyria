@@ -9,10 +9,12 @@
 // LCOV_EXCL_BR_START - heap creation calloc/mmap failures
 valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
   valk_gc_heap_t *heap = calloc(1, sizeof(valk_gc_heap_t));
+  // LCOV_EXCL_START - OOM
   if (!heap) {
     VALK_ERROR("Failed to allocate heap structure");
     return nullptr;
   }
+  // LCOV_EXCL_STOP
 
   heap->type = VALK_ALLOC_GC_HEAP;
   heap->generation = valk_gc_heap_next_generation();
@@ -23,28 +25,26 @@ valk_gc_heap_t *valk_gc_heap_create(sz hard_limit) {
 
   heap->reserved = VALK_GC_VIRTUAL_RESERVE;
   heap->base = mmap(nullptr, heap->reserved, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  // LCOV_EXCL_START - mmap of virtual reserve essentially never fails
   if (heap->base == MAP_FAILED) {
     VALK_ERROR("Failed to reserve %zu bytes of virtual address space", heap->reserved);
     free(heap);
     return nullptr;
   }
+  // LCOV_EXCL_STOP
   // LCOV_EXCL_BR_STOP
 
 #ifdef MADV_NOHUGEPAGE
   madvise(heap->base, heap->reserved, MADV_NOHUGEPAGE);
 #endif
 
+  static_assert(VALK_GC_VIRTUAL_RESERVE / VALK_GC_NUM_SIZE_CLASSES >=
+                    VALK_GC_PAGE_SIZE,
+                "virtual reserve too small to carve size-class regions");
   sz region_size = heap->reserved / VALK_GC_NUM_SIZE_CLASSES;
   // Round the stride down to a power of two so valk_gc_ptr_to_location can
   // recover the size class with a shift. The reserve is virtual address
   // space, so rounding down costs no physical memory.
-  if (region_size < VALK_GC_PAGE_SIZE) {
-    VALK_ERROR("Reserve %zu is too small to carve %d size-class regions",
-               heap->reserved, VALK_GC_NUM_SIZE_CLASSES);
-    munmap(heap->base, heap->reserved);
-    free(heap);
-    return nullptr;
-  }
   heap->region_shift = valk_gc_log2_pow2(region_size);
   region_size = (sz)1 << heap->region_shift;
 

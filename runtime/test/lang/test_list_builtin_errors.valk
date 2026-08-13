@@ -1,0 +1,402 @@
+(load "testing/test.valk")
+
+(test/run (list
+  (test/case "len-arity-error"
+    {do
+    (= {r} (len (list 1) (list 2)))
+    (test/assert (error? r) "len with 2 args errors")
+    true
+  })
+  (test/case "len-invalid-type-fun"
+    {do
+    (= {r} (len (\ {x} {x})))
+    (test/assert (error? r) "len on function errors")
+    true
+  })
+  (test/case "head-arity-error"
+    {do
+    (= {r} (head (list 1) (list 2)))
+    (test/assert (error? r) "head with 2 args errors")
+    true
+  })
+  (test/case "head-type-error"
+    {do
+    (= {r} (head 42))
+    (test/assert (error? r) "head on number errors")
+    true
+  })
+  (test/case "tail-arity-error"
+    {do
+    (= {r} (tail (list 1) (list 2)))
+    (test/assert (error? r) "tail with 2 args errors")
+    true
+  })
+  (test/case "tail-type-error"
+    {do
+    (= {r} (tail "not-a-list"))
+    (test/assert (error? r) "tail on string errors")
+    true
+  })
+  (test/case "init-type-error"
+    {do
+    (= {r} (init 42))
+    (test/assert (error? r) "init on number errors")
+    true
+  })
+  (test/case "init-arity-error"
+    {do
+    (= {r} (init (list 1) (list 2)))
+    (test/assert (error? r) "init with 2 args errors")
+    true
+  })
+  (test/case "join-type-error"
+    {do
+    (= {r} (join 42 (list 1)))
+    (test/assert (error? r) "join with number first arg errors")
+    true
+  })
+  (test/case "range-type-errors"
+    {do
+    (= {r1} (range "a" 5))
+    (test/assert (error? r1) "range with string start errors")
+    (= {r2} (range 0 "b"))
+    (test/assert (error? r2) "range with string end errors")
+    (= {r3} (range 1))
+    (test/assert (error? r3) "range with 1 arg errors")
+    true
+  })
+  (test/case "repeat-type-errors"
+    {do
+    (= {r1} (repeat (\ {i} {i}) "x"))
+    (test/assert (error? r1) "repeat with string count errors")
+    (= {r2} (repeat (\ {i} {i})))
+    (test/assert (error? r2) "repeat with 1 arg errors")
+    (= {r3} (repeat (\ {i} {i}) -3))
+    (test/assert-eq nil r3 "repeat negative count is nil")
+    true
+  })
+  (test/case "nth-type-errors"
+    {do
+    (= {r1} (nth "x" (list 1 2)))
+    (test/assert (error? r1) "nth with string index errors")
+    (= {r2} (nth 1))
+    (test/assert (error? r2) "nth with 1 arg errors")
+    true
+  })
+  (test/case "cons-arity-error"
+    {do
+    (= {r} (cons 1))
+    (test/assert (error? r) "cons with 1 arg errors")
+    true
+  })
+  (test/case "eval-arity-error"
+    {do
+    (= {r} (eval 1 2))
+    (test/assert (error? r) "eval with 2 args errors")
+    true
+  })
+  (test/case "reverse-cons-list"
+    {do
+    (= {r} (reverse (cons 1 (cons 2 (cons 3 nil)))))
+    (test/assert-eq 3 (head r) "reverse non-qexpr cons list")
+    (test/assert-eq 1 (nth 3 r) "reverse cons list last")
+    true
+  })
+  (test/case "reverse-arity-error"
+    {do
+    (= {r} (reverse (list 1) (list 2)))
+    (test/assert (error? r) "reverse with 2 args errors")
+    true
+  })
+  (test/case "list-group-type-errors"
+    {do
+    (= {r1} (list/group "a" (list 1 2)))
+    (test/assert (error? r1) "list/group with string n errors")
+    (= {r2} (list/group 2))
+    (test/assert (error? r2) "list/group with 1 arg errors")
+    true
+  })
+  (test/case "plist-get-arity-error"
+    {do
+    (= {r} (plist/get (list :a 1)))
+    (test/assert (error? r) "plist/get with 1 arg errors")
+    true
+  })
+  (test/case "member-arity-error"
+    {do
+    (= {r} (member? 1))
+    (test/assert (error? r) "member? with 1 arg errors")
+    true
+  })
+  (test/case "record-field-positional"
+    {do
+    (= {tag} (head (parse "pt")))
+    (= {rec} (list tag 10 20))
+    (test/assert-eq 10 (record/field rec tag 2 :x) "positional field 2")
+    (test/assert-eq 20 (record/field rec tag 3 :y) "positional field 3")
+    true
+  })
+  (test/case "record-field-non-cons-value"
+    {do
+    (= {tag} (head (parse "pt")))
+    (test/assert-eq nil (record/field 42 tag 1 :x) "num value gives nil")
+    (test/assert-eq nil (record/field nil tag 1 :x) "nil value gives nil")
+    (test/assert-eq nil (record/field "s" tag 1 :x) "str value gives nil")
+    true
+  })
+  (test/case "record-field-positional-out-of-bounds"
+    {do
+    (= {tag} (head (parse "pt")))
+    (= {rec} (list tag 10))
+    (test/assert-eq nil (record/field rec tag 4 :x) "walk past end mid-loop gives nil")
+    (test/assert-eq nil (record/field rec tag 3 :x) "walk to end gives nil")
+    true
+  })
+  (test/case "record-field-plist-path"
+    {do
+    (= {tag} (head (parse "pt")))
+    (test/assert-eq "v" (record/field (list :a "v" :b 2) tag 1 :a) "plist key found")
+    (test/assert-eq 2 (record/field (list :a "v" :b 2) tag 1 :b) "plist second key found")
+    (test/assert-eq nil (record/field (list :a 1) tag 1 :missing) "plist key missing gives nil")
+    true
+  })
+  (test/case "record-field-idx-type-error"
+    {do
+    (= {tag} (head (parse "pt")))
+    (= {r} (record/field (list tag 1) tag "x" :x))
+    (test/assert (error? r) "record/field with string idx errors")
+    true
+  })
+  (test/case "record-field-arity-error"
+    {do
+    (= {r} (record/field 1 2 3))
+    (test/assert (error? r) "record/field with 3 args errors")
+    true
+  })
+  (test/case "ast-node-type-all"
+    {do
+    (= {p} (parse "(a b) 42 \"s\" {q w}"))
+    (test/assert-eq "sexpr" (ast/node-type (head p)) "sexpr node")
+    (test/assert-eq "num" (ast/node-type 42) "num node")
+    (test/assert-eq "str" (ast/node-type "hi") "str node")
+    (test/assert-eq "qexpr" (ast/node-type {q w}) "qexpr node")
+    (test/assert-eq "nil" (ast/node-type nil) "nil node")
+    (test/assert-eq "fun" (ast/node-type (\ {x} {x})) "fun node")
+    (test/assert-eq "sym" (ast/node-type (head (parse "foo"))) "sym node")
+    (test/assert-eq "unknown" (ast/node-type (dict/new)) "ref node is unknown")
+    (= {r} (ast/node-type))
+    (test/assert (error? r) "ast/node-type arity error")
+    true
+  })
+  (test/case "ast-node-name-all"
+    {do
+    (test/assert-eq "foo" (ast/node-name (head (parse "foo"))) "sym name")
+    (test/assert-eq "hi" (ast/node-name "hi") "str name")
+    (test/assert-eq "42" (ast/node-name 42) "num name")
+    (test/assert-eq nil (ast/node-name {q w}) "qexpr has no name")
+    (= {r} (ast/node-name))
+    (test/assert (error? r) "ast/node-name arity error")
+    true
+  })
+  (test/case "ast-head-name-all"
+    {do
+    (test/assert-eq "def" (ast/head-name (head (parse "(def foo 1)"))) "sym head name")
+    (test/assert-eq "" (ast/head-name 42) "non-cons gives empty")
+    (test/assert-eq "" (ast/head-name (head (parse "(1 2)"))) "non-sym head gives empty")
+    (= {r} (ast/head-name))
+    (test/assert (error? r) "ast/head-name arity error")
+    true
+  })
+  (test/case "ast-head-type-all"
+    {do
+    (test/assert-eq "sym" (ast/head-type (head (parse "(a b)"))) "sym head")
+    (test/assert-eq "num" (ast/head-type (head (parse "(1 2)"))) "num head")
+    (test/assert-eq "str" (ast/head-type (head (parse "(\"s\" 2)"))) "str head")
+    (test/assert-eq "sexpr" (ast/head-type (head (parse "((a) b)"))) "sexpr head")
+    (test/assert-eq "qexpr" (ast/head-type (head (parse "({a} b)"))) "qexpr head")
+    (test/assert-eq "nil" (ast/head-type (cons nil nil)) "nil head")
+    (test/assert-eq "other" (ast/head-type (cons (\ {x} {x}) nil)) "fun head is other")
+    (test/assert-eq "" (ast/head-type 42) "non-cons gives empty")
+    (= {r} (ast/head-type))
+    (test/assert (error? r) "ast/head-type arity error")
+    true
+  })
+  (test/case "ast-nth-name-all"
+    {do
+    (= {e} (head (parse "(def foo 42)")))
+    (test/assert-eq "def" (ast/nth-name 1 e) "nth-name 1")
+    (test/assert-eq "foo" (ast/nth-name 2 e) "nth-name 2")
+    (test/assert-eq "" (ast/nth-name 3 e) "non-sym element gives empty")
+    (test/assert-eq "" (ast/nth-name 9 e) "out of range gives empty")
+    (test/assert-eq "" (ast/nth-name 1 42) "non-cons gives empty")
+    (= {r} (ast/nth-name 1))
+    (test/assert (error? r) "ast/nth-name arity error")
+    true
+  })
+  (test/case "ast-to-data-all"
+    {do
+    (= {d} (ast/to-data (parse "(def foo \"bar\") 42 {q w}")))
+    (test/assert-eq 3 (len d) "3 top-level nodes")
+    (= {p1} (nth 1 d))
+    (test/assert-eq "sexpr" (plist/get p1 :type) "first is sexpr")
+    (= {kids} (plist/get p1 :children))
+    (test/assert-eq 3 (len kids) "sexpr has 3 children")
+    (test/assert-eq "sym" (plist/get (nth 1 kids) :type) "child 1 is sym")
+    (test/assert-eq "def" (plist/get (nth 1 kids) :name) "child 1 name")
+    (test/assert-eq "str" (plist/get (nth 3 kids) :type) "child 3 is str")
+    (test/assert-eq 5 (plist/get (nth 3 kids) :len) "str node len includes quotes")
+    (= {p2} (nth 2 d))
+    (test/assert-eq "num" (plist/get p2 :type) "second is num")
+    (test/assert-eq "42" (plist/get p2 :name) "num name")
+    (= {p3} (nth 3 d))
+    (test/assert-eq "qexpr" (plist/get p3 :type) "third is qexpr")
+    (test/assert-eq 1 (len (ast/to-data 42)) "non-list arg wraps single node")
+    (test/assert-eq nil (nth 1 (ast/to-data (\ {x} {x}))) "fun node gives nil data")
+    (test/assert-eq nil (ast/to-data nil) "nil gives nil")
+    (= {r} (ast/to-data))
+    (test/assert (error? r) "ast/to-data arity error")
+    true
+  })
+  (test/case "ast-src-pos-all"
+    {do
+    (= {p} (parse "  (a b)"))
+    (test/assert (num? (ast/src-pos (head p))) "src-pos is a number")
+    (= {r} (ast/src-pos))
+    (test/assert (error? r) "ast/src-pos arity error")
+    true
+  })
+  (test/case "ast-nil-all"
+    {do
+    (test/assert-eq 1 (ast/nil? nil) "nil is nil")
+    (test/assert-eq 0 (ast/nil? (head (parse "(a)"))) "non-empty cons not nil")
+    (test/assert-eq 0 (ast/nil? 42) "num not nil")
+    (= {r} (ast/nil?))
+    (test/assert (error? r) "ast/nil? arity error")
+    true
+  })
+  (test/case "ast-len-all"
+    {do
+    (test/assert-eq 3 (ast/len (parse "1 2 3")) "3 top-level nodes")
+    (test/assert-eq 0 (ast/len nil) "nil has len 0")
+    (= {r} (ast/len 1 2))
+    (test/assert (error? r) "ast/len arity error")
+    true
+  })
+  (test/case "head-tail-init-success"
+    {do
+    (test/assert-eq 1 (head (list 1 2)) "head success")
+    (test/assert-eq 2 (head (tail (list 1 2))) "tail success")
+    (= {i3} (init (list 1 2 3)))
+    (test/assert-eq 2 (len i3) "init drops last")
+    (test/assert-eq 2 (nth 2 i3) "init keeps prefix")
+    (test/assert-eq nil (init (list 1)) "init single is nil")
+    (= {ic} (init (cons 1 (cons 2 nil))))
+    (test/assert-eq 1 (len ic) "init cons list")
+    true
+  })
+  (test/case "len-success-variants"
+    {do
+    (test/assert-eq 2 (len (list 1 2)) "len list")
+    (test/assert-eq 0 (len nil) "len nil")
+    (test/assert-eq 3 (len "abc") "len string")
+    true
+  })
+  (test/case "cons-join-range-repeat-success"
+    {do
+    (= {c} (cons 1 (list 2 3)))
+    (test/assert-eq 3 (len c) "cons onto list")
+    (= {j} (join (list 1) (list 2 3)))
+    (test/assert-eq 3 (len j) "join lists")
+    (= {jn} (join nil (list 1)))
+    (test/assert-eq 1 (len jn) "join nil first")
+    (= {rg} (range 2 5))
+    (test/assert-eq 3 (len rg) "range count")
+    (test/assert-eq 2 (head rg) "range start")
+    (test/assert-eq nil (range 5 2) "range start>=end nil")
+    (= {rp} (repeat (\ {i} {i}) 3))
+    (test/assert-eq 3 (len rp) "repeat count")
+    (test/assert-eq 0 (head rp) "repeat first idx")
+    true
+  })
+  (test/case "list-eval-success"
+    {do
+    (test/assert-eq nil (list) "list no args is nil")
+    (test/assert-eq 2 (len (list 1 2)) "list two args")
+    (test/assert-eq 3 (eval {+ 1 2}) "eval qexpr")
+    (test/assert-eq 7 (eval 7) "eval non-cons passthrough")
+    (test/assert-eq nil (eval (cons list nil)) "eval unquoted cons")
+    true
+  })
+  (test/case "cons-tail-variants"
+    {do
+    (test/assert-eq 1 (len (cons 1 nil)) "cons nil tail")
+    (= {r} (cons 1 2))
+    (test/assert (error? r) "cons non-list tail errors")
+    true
+  })
+  (test/case "reverse-nil-and-type"
+    {do
+    (test/assert-eq nil (reverse nil) "reverse nil is nil")
+    (= {r} (reverse 42))
+    (test/assert (error? r) "reverse on num errors")
+    (= {q} (reverse {1 2 3}))
+    (test/assert-eq 3 (head q) "reverse qexpr head")
+    true
+  })
+  (test/case "list-group-success-variants"
+    {do
+    (test/assert-eq nil (list/group 0 (list 1 2)) "n<=0 gives nil")
+    (test/assert-eq nil (list/group 2 nil) "nil list passes through")
+    (= {g} (list/group 2 (list 1 2 3 4)))
+    (test/assert-eq 2 (len g) "two full groups")
+    (test/assert-eq 1 (head (head g)) "first group first elem")
+    (= {p} (list/group 3 (list 1 2 3 4)))
+    (test/assert-eq 1 (len p) "partial final group dropped")
+    true
+  })
+  (test/case "nth-success-and-bounds"
+    {do
+    (test/assert-eq 2 (nth 2 (list 1 2 3)) "nth success")
+    (= {r0} (nth 0 (list 1)))
+    (test/assert (error? r0) "nth index 0 errors")
+    (= {r1} (nth 5 (list 1 2)))
+    (test/assert (error? r1) "nth mid-walk out of bounds errors")
+    (= {r2} (nth 3 (list 1 2)))
+    (test/assert (error? r2) "nth end out of bounds errors")
+    true
+  })
+  (test/case "member-found-and-not"
+    {do
+    (test/assert-eq 1 (member? 2 (list 1 2 3)) "member found")
+    (test/assert-eq 0 (member? 9 (list 1 2 3)) "member not found")
+    (test/assert-eq 0 (member? 1 nil) "member nil list")
+    true
+  })
+  (test/case "plist-get-variants"
+    {do
+    (test/assert-eq 2 (plist/get (list :a 1 :b 2) :b) "plist key found")
+    (test/assert-eq nil (plist/get (list :a 1) :zz) "plist key missing")
+    (test/assert-eq nil (plist/get nil :a) "plist nil gives nil")
+    (test/assert-eq 1 (plist/get (list :a 1) ":a") "string key")
+    (test/assert-eq nil (plist/get (list :a 1) 42) "num key gives nil")
+    (test/assert-eq nil (plist/get (list :a 1 :b) :b) "odd plist truncated pair")
+    (test/assert-eq 2 (plist/get (list :a 1 ":b" 2) :b) "string plist key matches")
+    true
+  })
+  (test/case "record-field-more-variants"
+    {do
+    (= {tag} (head (parse "pt")))
+    (test/assert-eq 2 (record/field (list 1 2 3) tag 2 :x) "num-headed value positional")
+    (test/assert-eq 1 (record/field (list :a 1) tag 1 ":a") "string field key")
+    (test/assert-eq nil (record/field (list :a 1) tag 1 42) "num field key gives nil")
+    (test/assert-eq nil (record/field (list :a 1 :b) tag 1 :b) "odd plist gives nil")
+    (test/assert-eq nil (record/field (list :a 1 2 3) tag 1 :zz) "non-key element skipped")
+    (test/assert-eq 2 (record/field (list :a 1 ":b" 2) tag 1 :b) "string plist key matches")
+    true
+  })
+  (test/case "ast-to-data-nil-head"
+    {do
+    (test/assert-eq nil (nth 1 (ast/to-data (cons nil nil))) "nil child gives nil data")
+    true
+  })
+) (test/context-new))

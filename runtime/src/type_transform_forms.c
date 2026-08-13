@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "common.h"
+#include "coverage.h"
 #include "memory.h"
 #include "parser.h"
 
@@ -293,6 +294,9 @@ valk_lval_t *valk_tt_transform_match(valk_type_env_t *env,
     if (clause_len < 2) continue; // LCOV_EXCL_BR_LINE — parser prevents empty match clauses
 
     valk_lval_t *pattern = valk_lval_list_nth(clause, 0);
+#ifdef VALK_COVERAGE
+    valk_coverage_unmark_expr_tree(pattern);
+#endif
     valk_lval_t *body;
     if (clause_len == 2) {
       body = valk_lval_list_nth(clause, 1);

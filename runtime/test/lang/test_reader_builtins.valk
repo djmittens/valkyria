@@ -1,0 +1,59 @@
+(load "testing/test.valk")
+
+(test/run (list
+
+  (test/case "read-escape-sequences"
+    {do
+      (= {s} (read "\"a\\nb\\tc\\rd\\ae\\bf\\fg\\vh\\\\i\\'j\\\"k\""))
+      (test/assert (str? s) "read parses all escape sequences")
+      true})
+
+  (test/case "read-invalid-escape"
+    {do
+      (= {r} (read "\"a\\qb\""))
+      (test/assert (error? r) "invalid escape character errors")
+      true})
+
+  (test/case "read-unterminated-string"
+    {do
+      (test/assert (error? (read "\"abc")) "unterminated string errors")
+      (test/assert (error? (read "\"abc\\")) "escape at end of input errors")
+      true})
+
+  (test/case "coverage-mark-record-branch"
+    {do
+      (if (error? coverage-mark)
+        {true}
+        {do
+          (test/assert-eq 42 (coverage-mark 42) "coverage-mark returns its argument")
+          (test/assert-eq 43 (coverage-record 43) "coverage-record returns its argument")
+          (test/assert-eq 1 (coverage-branch 10 1) "coverage-branch taken returns 1")
+          (test/assert-eq 0 (coverage-branch 10 0) "coverage-branch not-taken returns 0")
+          true})
+      true})
+
+  (test/case "source-builtins-unnamed-parse"
+    {do
+      (if (error? source-line)
+        {true}
+        {do
+          (= {form} (head (parse "(cov-reader-dummy 1)")))
+          (test/assert (num? (source-line form)) "source-line returns num")
+          (test/assert (num? (source-column form)) "source-column returns num")
+          (test/assert-eq "<unknown>" (source-file form) "unnamed parse has no file")
+          true})
+      true})
+
+  (test/case "source-builtins-named-file"
+    {do
+      (if (error? source-file)
+        {true}
+        {do
+          (= {ast} (parse-file "runtime/test/fixtures/modules/ret42.valk"))
+          (= {form} (head ast))
+          (test/assert (num? (source-line form)) "source-line on parsed file form")
+          (test/assert (str? (source-file form)) "source-file returns filename string")
+          true})
+      true})
+
+) {:suite-name "Reader Builtins"})

@@ -201,8 +201,8 @@ static void valk_async_all_child_completed(valk_async_handle_t *child) {
   if (idx < 0) return; // LCOV_EXCL_LINE - child always in handles
 
   u8 expected = 0;
-  if (!atomic_compare_exchange_strong(&ctx->notified[idx], &expected, 1))
-    return;
+  if (!atomic_compare_exchange_strong(&ctx->notified[idx], &expected, 1)) // LCOV_EXCL_BR_LINE - race protection
+    return; // LCOV_EXCL_LINE
 
   ctx->results[idx] = atomic_load_explicit(&child->result, memory_order_acquire);
   u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;
@@ -248,8 +248,8 @@ static void valk_async_all_child_completed_with_ctx(valk_all_ctx_t *ctx, u64 idx
   }
 
   u8 expected = 0;
-  if (!atomic_compare_exchange_strong(&ctx->notified[idx], &expected, 1))
-    return;
+  if (!atomic_compare_exchange_strong(&ctx->notified[idx], &expected, 1)) // LCOV_EXCL_BR_LINE - race protection
+    return; // LCOV_EXCL_LINE
 
   ctx->results[idx] = atomic_load_explicit(&child->result, memory_order_acquire);
   u64 new_completed = atomic_fetch_add(&ctx->completed, 1) + 1;

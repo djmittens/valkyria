@@ -374,7 +374,22 @@ static valk_lval_t *transform_do_body(valk_type_env_t *env,
 // Main dispatcher
 // ---------------------------------------------------------------------------
 
+static valk_lval_t *tt_transform_expr_inner(valk_type_env_t *env, valk_type_scope_t *scope, valk_lval_t *expr);
+
+// The transform rebuilds cons cells, which would otherwise lose the reader's
+// coverage source loc — eval-time expr records must land on the same
+// (file, line, column) as the parse-time marks.
 valk_lval_t *valk_tt_transform_expr(valk_type_env_t *env, valk_type_scope_t *scope, valk_lval_t *expr) {
+  valk_lval_t *result = tt_transform_expr_inner(env, scope, expr);
+#ifdef VALK_COVERAGE
+  if (result != NULL && result != expr && LVAL_TYPE(result) == LVAL_CONS &&
+      expr != NULL && LVAL_TYPE(expr) == LVAL_CONS)
+    INHERIT_SOURCE_LOC(result, expr);
+#endif
+  return result;
+}
+
+static valk_lval_t *tt_transform_expr_inner(valk_type_env_t *env, valk_type_scope_t *scope, valk_lval_t *expr) {
   if (expr == NULL) return valk_lval_nil(); // LCOV_EXCL_BR_LINE — AST nodes are never NULL
 
   valk_ltype_e type = LVAL_TYPE(expr);

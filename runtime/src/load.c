@@ -285,6 +285,9 @@ static valk_lval_t *deep_clone_ast(valk_lval_t *v) {
     : valk_lval_cons(h, t);
   // Preserve src-pos for error reporting.
   LVAL_SRC_POS_SET(res, LVAL_SRC_POS(v));
+  // Preserve coverage source loc so eval-time expr records match the
+  // parse-time marks made on the cached original tree.
+  INHERIT_SOURCE_LOC(res, v);
   return res;
 }
 

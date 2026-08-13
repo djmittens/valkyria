@@ -3,7 +3,6 @@
 
 valk_lenv_t *valk_macro_env(void);
 void valk_macro_env_init(valk_lenv_t *env);
-void valk_macro_env_set(const char *key, valk_lval_t *val);
 valk_lval_t *valk_macro_expand_one(valk_lenv_t *macro_env, valk_lval_t *expr);
 bool valk_macro_is_def(valk_lval_t *expr);
 
@@ -43,5 +42,4 @@ char *valk_load_resolve_alias(const char *name);
 bool valk_load_resolve_from(const char *dir, const char *path,
                             char *resolved);
 
-valk_lval_t *valk_eval_form(valk_lenv_t *env, valk_lval_t *form);
 valk_lval_t *valk_load_file(valk_lenv_t *env, const char *path);

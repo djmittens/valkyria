@@ -127,7 +127,6 @@ set(VALKYRIA_SOURCES
   src/builtins_sqlite.c
   src/lsp_index.c
   src/lsp_index_emit.c
-  src/ast_visit.c
   src/builtins_dict.c
   src/builtins_xml.c
   src/builtins_pipe.c
@@ -148,7 +147,6 @@ set(VALKYRIA_SOURCES
   src/log.c
   src/coverage.c
   src/source_loc.c
-  src/diag.c
   # AIO core (src/aio/)
   src/aio/aio_uv.c
   src/aio/aio_alloc.c
@@ -431,6 +429,9 @@ target_link_libraries(test_std PRIVATE "-lc" valkyria)
 
 add_executable(test_image test/lang/test_image.c ../testing/c/testing.c)
 target_link_libraries(test_image PRIVATE "-lc" valkyria)
+
+add_executable(test_image_corrupt test/lang/test_image_corrupt.c ../testing/c/testing.c)
+target_link_libraries(test_image_corrupt PRIVATE "-lc" valkyria)
 
 add_executable(test_build test/lang/test_build.c ../testing/c/testing.c)
 target_link_libraries(test_build PRIVATE "-lc" valkyria)

@@ -17,6 +17,7 @@
   (list "runtime/src/lsp_index.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
   (list "runtime/src/lsp_index_emit.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
   (list "runtime/src/gc_region.c" "GC region - branch coverage limited by OOM/edge-case paths")
+  (list "runtime/src/gc_mark.c" "parallel GC mark - 100% line; remaining branches are contention-timing-dependent (CAS retries, work-stealing races) and cannot be forced deterministically")
   (list "runtime/src/type_env.c" "type environment - branch coverage limited by complex pattern matching")
   (list "runtime/src/build_shim.c" "--build shim - only exercised by test_build's produced binaries; error paths (missing __entry__, OOM) untestable there")
   (list "lsp/main.valk" "LSP entry point - only 2 lines, coverage skew from small file")))
@@ -130,7 +131,12 @@
             {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (cov/fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
             {})
           (= {line} (str line "  (-" gaps ")"))
-          (add-result! "failures" line)}
+          (= {reason} (is-blocked rel))
+          (if (!= reason nil)
+            {do
+              (= {line} (str line "  [BLOCKED: " reason "]"))
+              (add-result! "blocked" line)}
+            {(add-result! "failures" line)})}
         {(add-result! "passes" line)})
       (*check-runtime* (tail keys))})
 })

@@ -1,5 +1,6 @@
 #include "macro.h"
 
+#include "coverage.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,11 +20,6 @@ valk_lenv_t *valk_macro_env(void) {
 // expansion looks up in the unified env. Call once after valk_lenv_builtins.
 void valk_macro_env_init(valk_lenv_t *env) {
   g_macro_env = env;
-}
-
-void valk_macro_env_set(const char *key, valk_lval_t *val) {
-  valk_lenv_t *menv = valk_macro_env();
-  valk_lenv_def(menv, valk_lval_sym(key), val);
 }
 
 bool valk_macro_is_def(valk_lval_t *expr) {
@@ -55,16 +51,23 @@ static valk_lval_t *expand_expr(valk_lenv_t *menv, valk_lval_t *expr) {
     valk_lval_println(result);
     return result;
   }
-  return expand_expr(menv, result);
+  result = expand_expr(menv, result);
+#ifdef VALK_COVERAGE
+  // Attribute the expansion to the call site: the original form's cell was
+  // marked for coverage at parse time; the expansion replaces it and must
+  // record at the same (file, line, column) or the mark can never be hit.
+  if (result && LVAL_TYPE(result) == LVAL_CONS)
+    INHERIT_SOURCE_LOC(result, expr);
+  // Side-effect-only macros (e.g. module) erase the form entirely; the
+  // parse-time marks can never be hit. Retract them like sig/type lines.
+  if (result && LVAL_TYPE(result) == LVAL_NIL)
+    valk_coverage_unmark_tree(expr);
+#endif
+  return result;
 }
 
 valk_lval_t *valk_macro_expand_one(valk_lenv_t *menv, valk_lval_t *expr) {
   return expand_expr(menv, expr);
-}
-
-valk_lval_t *valk_eval_form(valk_lenv_t *env, valk_lval_t *form) {
-  form = valk_macro_expand_one(env, form);
-  return valk_lval_eval(env, form);
 }
 
 // ---------------------------------------------------------------------------

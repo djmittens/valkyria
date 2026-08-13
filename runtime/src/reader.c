@@ -340,72 +340,8 @@ valk_lval_t* valk_lval_read_expr(int* i, const char* s) {
 }
 
 // ---------------------------------------------------------------------------
-// File and text parsing — both use ctx reader
+// Text parsing — uses ctx reader
 // ---------------------------------------------------------------------------
-
-valk_lval_t* valk_parse_file(const char* filename) {
-  valk_coverage_record_file(filename);
-  u16 file_id = 0;
-#ifdef VALK_COVERAGE
-  file_id = valk_source_register_file(filename);
-#endif
-
-  FILE* f = fopen(filename, "rb");
-  if (f == nullptr) { // LCOV_EXCL_BR_LINE - file open failure
-    LVAL_RAISE(valk_lval_nil(), "Could not open file (%s)", filename); // LCOV_EXCL_LINE
-  }
-
-  fseek(f, 0, SEEK_END);
-  u64 length = ftell(f);
-  fseek(f, 0, SEEK_SET);
-
-  if (length == UINT64_MAX) { // LCOV_EXCL_BR_LINE - impossible file size
-    fclose(f); // LCOV_EXCL_LINE
-    LVAL_RAISE(valk_lval_nil(), "File is way too big buddy (%s)", filename); // LCOV_EXCL_LINE
-  }
-
-  char* input = calloc(length + 1, sizeof(char));
-  u64 nread = fread(input, 1, length, f);
-  (void)nread;
-  fclose(f);
-
-  struct tmp_arr {
-    valk_lval_t** items;
-    u64 count;
-    u64 capacity;
-  } tmp = {0};
-
-  da_init(&tmp); // LCOV_EXCL_BR_LINE - macro reinit check
-
-  valk_parse_ctx_t ctx = {
-    .source = input,
-    .pos = 0,
-    .line = 1,
-    .line_start = 0,
-    .file_id = file_id
-  };
-
-  // LCOV_EXCL_BR_START - parse error handling and da_add branches
-  while (ctx.source[ctx.pos] != '\0') {
-    valk_lval_t* expr = valk_lval_read_ctx(&ctx);
-    if (LVAL_TYPE(expr) == LVAL_ERR) {
-      if (strstr(expr->str, "Unexpected") && strstr(expr->str, "end of input"))
-        break;
-      da_add(&tmp, expr);
-      break;
-    }
-#ifdef VALK_COVERAGE
-    valk_coverage_mark_tree(expr);
-#endif
-    da_add(&tmp, expr);
-  }
-  // LCOV_EXCL_BR_STOP
-
-  free(input);
-  valk_lval_t* res = valk_lval_list(tmp.items, tmp.count);
-  da_free(&tmp);
-  return res;
-}
 
 // Parse a complete text buffer into a list of top-level expressions.
 // Errors (including unexpected end-of-input) are appended to the result list

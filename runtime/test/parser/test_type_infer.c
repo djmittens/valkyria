@@ -17,7 +17,7 @@ static void test_create_destroy(VALK_TEST_ARGS()) {
   ASSERT_NOT_NULL(ctx->t_nil);
   ASSERT_EQ(ctx->error_count, 0);
   ASSERT_EQ(ctx->next_var, 0);
-  valk_ti_destroy(ctx);
+  valk_ti_destroy(nullptr); valk_ti_destroy(ctx);
   VALK_PASS();
 }
 
@@ -84,6 +84,8 @@ static void test_find_no_link(VALK_TEST_ARGS()) {
   ASSERT_EQ(valk_type_find(v), v);
   ASSERT_EQ(valk_type_find(ctx->t_num), ctx->t_num);
   VALK_TEST_ASSERT(valk_type_find(nullptr) == nullptr, "find(nullptr) should be nullptr");
+  VALK_TEST_ASSERT(valk_type_unify(ctx, nullptr, ctx->t_num, 0, 0) == nullptr, "unify null a");
+  VALK_TEST_ASSERT(valk_type_unify(ctx, ctx->t_num, nullptr, 0, 0) == nullptr, "unify null b");
   valk_ti_destroy(ctx);
   VALK_PASS();
 }
@@ -234,6 +236,9 @@ static void test_occurs_simple(VALK_TEST_ARGS()) {
   ASSERT_TRUE(valk_type_occurs(v, list_v));
   valk_type_t *w = valk_ti_fresh_var(ctx);
   ASSERT_FALSE(valk_type_occurs(w, list_v));
+  valk_type_t *fp[] = {v};
+  ASSERT_TRUE(valk_type_occurs(v, valk_ti_fun(ctx, fp, 1, ctx->t_num)));
+  ASSERT_FALSE(valk_type_occurs(w, valk_ti_fun(ctx, fp, 1, ctx->t_num))); ASSERT_FALSE(valk_type_occurs(w, nullptr));
   valk_ti_destroy(ctx);
   VALK_PASS();
 }
@@ -294,6 +299,7 @@ static void test_scope_bind_lookup(VALK_TEST_ARGS()) {
   valk_ti_scope_t *s = valk_ti_scope_new(ctx, nullptr);
   valk_type_scheme_t mono = {.type = ctx->t_num, .bound_vars = nullptr, .bound_count = 0};
   valk_ti_scope_bind(ctx, s, "x", mono);
+  valk_ti_scope_bind(ctx, nullptr, "n", mono); valk_ti_scope_bind(ctx, s, nullptr, mono);
   valk_type_scheme_t *found = valk_ti_scope_lookup(s, "x");
   ASSERT_NOT_NULL(found);
   ASSERT_EQ(valk_type_find(found->type), ctx->t_num);
@@ -438,6 +444,8 @@ static void test_parse_sig_simple(VALK_TEST_ARGS()) {
 
   valk_type_t *any = valk_ti_parse_sig_str(ctx, "Any");
   ASSERT_EQ(any->kind, VALK_TY_VAR);
+  ASSERT_NOT_NULL(valk_ti_parse_sig_str(ctx, nullptr)); ASSERT_NOT_NULL(valk_ti_parse_sig_str(ctx, ""));
+  ASSERT_NOT_NULL(valk_ti_parse_sig_str(ctx, "(T Num")); ASSERT_NOT_NULL(valk_ti_parse_sig_str(ctx, "(->)"));
 
   valk_ti_destroy(ctx);
   VALK_PASS();
@@ -571,6 +579,10 @@ static void test_infer_binding(VALK_TEST_ARGS()) {
   ASSERT_NOT_NULL(s);
   valk_type_to_str(valk_type_find(s->type), buf, sizeof(buf));
   ASSERT_STR_EQ(buf, "Num");
+  ASSERT_NOT_NULL(valk_ti_lookup_binding(ctx, "x"));
+  ASSERT_NULL(valk_ti_lookup_binding(ctx, "nope")); ASSERT_NULL(valk_ti_lookup_binding(nullptr, "x"));
+  valk_ti_infer_file(ctx, nullptr);
+  valk_ti_infer_expr(ctx, ctx->scope, parse_expr("(Foo 1)"));
 
   valk_ti_destroy(ctx);
   VALK_PASS();
@@ -800,6 +812,127 @@ static void test_infer_many_params(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static void test_unify_fun_vs_arrow_con(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
+  valk_type_t *args[] = {ctx->t_num, ctx->t_str, ctx->t_num};
+  valk_type_t *arrow = valk_ti_con(ctx, "->", args, 3);
+  valk_type_t *p[] = {ctx->t_num, ctx->t_str};
+  valk_type_t *fn = valk_ti_fun(ctx, p, 2, ctx->t_num);
+  ASSERT_NOT_NULL(valk_type_unify(ctx, fn, arrow, 0, 0)); ASSERT_EQ(ctx->error_count, 0);
+  valk_type_t *arrow2 = valk_ti_con(ctx, "->", args, 3);
+  ASSERT_NOT_NULL(valk_type_unify(ctx, arrow2, fn, 0, 0)); ASSERT_EQ(ctx->error_count, 0);
+  valk_type_t *ret_bad[] = {ctx->t_num, ctx->t_str, ctx->t_str};
+  valk_type_t *arrow3 = valk_ti_con(ctx, "->", ret_bad, 3);
+  ASSERT_NULL(valk_type_unify(ctx, fn, arrow3, 0, 0)); ASSERT_GT(ctx->error_count, 0);
+  valk_type_t *param_bad[] = {ctx->t_str, ctx->t_str, ctx->t_num};
+  valk_type_t *arrow4 = valk_ti_con(ctx, "->", param_bad, 3);
+  ASSERT_NULL(valk_type_unify(ctx, fn, arrow4, 0, 0));
+  ASSERT_NULL(valk_type_unify(ctx, fn, valk_ti_con(ctx, "->", args, 2), 0, 0));
+  valk_ti_destroy(ctx);
+  VALK_PASS();
+}
+
+static void test_generalize_with_scope_var(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
+  valk_ti_scope_t *s = valk_ti_scope_new(ctx, nullptr);
+  valk_type_t *v = valk_ti_fresh_var(ctx);
+  valk_ti_scope_bind(ctx, s, "x", (valk_type_scheme_t){.type = v});
+  valk_type_t *w = valk_ti_fresh_var(ctx);
+  valk_type_t *p[] = {v, w};
+  valk_type_t *fn = valk_ti_fun(ctx, p, 2, w);
+  valk_type_scheme_t scheme = valk_type_generalize(ctx, s, fn);
+  ASSERT_EQ(scheme.bound_count, 1); ASSERT_EQ(scheme.bound_vars[0], w->var.id);
+  valk_type_t *many[140];
+  for (int i = 0; i < 140; i++) many[i] = valk_ti_fresh_var(ctx);
+  valk_type_scheme_t big = valk_type_generalize(ctx, s, valk_ti_con(ctx, "Wide", many, 140));
+  ASSERT_EQ(big.bound_count, 128);
+  valk_ti_destroy(ctx);
+  VALK_PASS();
+}
+
+static void test_instantiate_truncation_warnings(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
+  valk_type_t *v = valk_ti_fresh_var(ctx);
+  valk_type_t *free_v = valk_ti_fresh_var(ctx);
+  valk_type_t *cargs[17];
+  for (int i = 0; i < 17; i++) cargs[i] = i ? free_v : v;
+  valk_type_t *big = valk_ti_con(ctx, "Big", cargs, 17);
+  u32 bound[] = {v->var.id};
+  valk_type_scheme_t s1 = {.type = big, .bound_vars = bound, .bound_count = 1};
+  valk_type_t *r1 = valk_type_instantiate(ctx, &s1);
+  ASSERT_EQ(r1->con.arity, 16); VALK_TEST_ASSERT(valk_type_find(r1->con.args[1]) == free_v, "unbound var kept");
+  u32 ids[200];
+  for (u32 i = 0; i < 200; i++) ids[i] = i ? 1000 + i : v->var.id;
+  valk_type_scheme_t s2 = {.type = v, .bound_vars = ids, .bound_count = 200};
+  valk_type_t *r2 = valk_type_instantiate(ctx, &s2);
+  ASSERT_EQ(r2->kind, VALK_TY_VAR); VALK_TEST_ASSERT(r2 != v, "bound var replaced with fresh var");
+  VALK_TEST_ASSERT(valk_type_instantiate(ctx, nullptr) == nullptr, "null scheme");
+  valk_type_t *cp[] = {ctx->t_num};
+  valk_type_scheme_t s3 = {.type = valk_ti_fun(ctx, cp, 1, ctx->t_str), .bound_vars = bound, .bound_count = 1};
+  VALK_TEST_ASSERT(valk_type_instantiate(ctx, &s3) == s3.type, "unchanged fun returned as-is");
+  valk_ti_destroy(ctx);
+  VALK_PASS();
+}
+
+void *ti_alloc(valk_ti_ctx_t *ctx, sz bytes);
+static void test_expr_buffer_overflow_fallback(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
+  valk_ti_reset(ctx);
+  for (int i = 0; i < 20000; i++) valk_ti_fresh_var(ctx);
+  ASSERT_NOT_NULL(ti_alloc(ctx, 300 * 1024)); ASSERT_EQ(ctx->error_count, 0);
+  valk_ti_destroy(ctx);
+  VALK_PASS();
+}
+
+void valk_ti_resolve_scopes(valk_ti_ctx_t *ctx, valk_ti_scope_t *scope);
+valk_ti_scope_t *valk_ti_scope_at_pos(valk_ti_scope_t *scope, i32 pos);
+const char *valk_ti_scope_resolve(valk_ti_scope_t *scope, const char *name);
+
+static void test_scope_resolution_api(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_ti_ctx_t *ctx = valk_ti_create(nullptr);
+  valk_ti_scope_t *root = valk_ti_scope_new(ctx, nullptr);
+  valk_ti_scope_t *child = valk_ti_scope_new(ctx, root);
+  valk_ti_scope_t *child2 = valk_ti_scope_new(ctx, root);
+  child->start_pos = 10; child->end_pos = 20;
+  child2->start_pos = 30; child2->end_pos = -1;
+  valk_ti_scope_t *kids[2] = {child, child2};
+  root->children = kids; root->child_count = 2;
+  valk_type_t *largs[] = {ctx->t_num};
+  valk_ti_scope_bind(ctx, root, "a", (valk_type_scheme_t){.type = ctx->t_num});
+  valk_ti_scope_bind(ctx, root, "l", (valk_type_scheme_t){.type = valk_ti_con(ctx, "List", largs, 1)});
+  valk_ti_scope_bind(ctx, root, "f", (valk_type_scheme_t){.type = valk_ti_fun(ctx, largs, 1, ctx->t_num)});
+  valk_ti_scope_bind(ctx, root, "g", (valk_type_scheme_t){.type = valk_ti_fun(ctx, largs, 1, valk_ti_fresh_var(ctx))});
+  valk_ti_scope_bind(ctx, child, "v", (valk_type_scheme_t){.type = valk_ti_fresh_var(ctx)});
+  valk_ti_resolve_scopes(ctx, nullptr);
+  valk_ti_resolve_scopes(ctx, root);
+  ASSERT_STR_EQ(valk_ti_scope_resolve(root, "a"), "Num");
+  ASSERT_STR_EQ(valk_ti_scope_resolve(root, "l"), "(List Num)");
+  ASSERT_STR_EQ(valk_ti_scope_resolve(root, "f"), "Num");
+  ASSERT_NULL(valk_ti_scope_resolve(root, "g")); ASSERT_NULL(valk_ti_scope_resolve(child, "v"));
+  ASSERT_STR_EQ(valk_ti_scope_resolve(child, "a"), "Num");
+  ASSERT_NULL(valk_ti_scope_resolve(root, "missing"));
+  valk_ti_scope_bind(ctx, root, "b", (valk_type_scheme_t){.type = ctx->t_str});
+  ASSERT_STR_EQ(valk_ti_scope_resolve(root, "b"), "Str");
+  ASSERT_EQ(valk_ti_scope_at_pos(root, 15), child); ASSERT_EQ(valk_ti_scope_at_pos(root, 99), child2);
+  ASSERT_EQ(valk_ti_scope_at_pos(root, 5), root); ASSERT_EQ(valk_ti_scope_at_pos(root, -1), root);
+  ASSERT_NULL(valk_ti_scope_at_pos(nullptr, 5));
+  valk_ti_destroy(ctx);
+  VALK_PASS();
+}
+
+static void test_type_transform_register_error(VALK_TEST_ARGS()) {
+  VALK_TEST();
+  valk_lval_t *result = valk_type_transform(parse_file("(type {Bad})"));
+  ASSERT_EQ(LVAL_TYPE(result->cons.head), LVAL_ERR);
+  valk_type_env_reset();
+  VALK_PASS();
+}
+
 int main(void) {
   valk_gc_heap_t *heap = valk_gc_heap_create(0);
   valk_thread_ctx.allocator = (valk_mem_allocator_t *)heap;
@@ -853,6 +986,12 @@ int main(void) {
   valk_testsuite_add_test(suite, "infer_file_error_position", test_infer_file_error_position);
   valk_testsuite_add_test(suite, "infer_error_cap", test_infer_error_cap);
   valk_testsuite_add_test(suite, "infer_many_params", test_infer_many_params);
+  valk_testsuite_add_test(suite, "unify_fun_vs_arrow_con", test_unify_fun_vs_arrow_con);
+  valk_testsuite_add_test(suite, "generalize_with_scope_var", test_generalize_with_scope_var);
+  valk_testsuite_add_test(suite, "instantiate_truncation_warnings", test_instantiate_truncation_warnings);
+  valk_testsuite_add_test(suite, "expr_buffer_overflow_fallback", test_expr_buffer_overflow_fallback);
+  valk_testsuite_add_test(suite, "scope_resolution_api", test_scope_resolution_api);
+  valk_testsuite_add_test(suite, "type_transform_register_error", test_type_transform_register_error);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

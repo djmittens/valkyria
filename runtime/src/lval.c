@@ -125,7 +125,6 @@ const char *valk_sym_intern(const char *name) {
 // Interning is now unconditional (the table initializes lazily), so this is
 // always true. Kept as the single place callers ask the question, in case the
 // table ever needs a real teardown.
-bool valk_sym_intern_active(void) { return true; }
 
 
 void valk_lval_init_singletons(void) {
@@ -402,6 +401,18 @@ void valk_coverage_unmark_tree(valk_lval_t* lval) {
     valk_coverage_unmark_line(lval->cov_file_id, lval->cov_line);
   }
 }
+
+void valk_coverage_unmark_expr_tree(valk_lval_t* lval) {
+  if (lval == NULL) return;
+  if (LVAL_TYPE(lval) != LVAL_CONS) return;
+
+  if (!(lval->flags & LVAL_FLAG_QUOTED) && lval->cov_line > 0) {
+    valk_coverage_unmark_expr(lval->cov_file_id, lval->cov_line,
+                              lval->cov_column);
+  }
+  valk_coverage_unmark_expr_tree(lval->cons.head);
+  valk_coverage_unmark_expr_tree(lval->cons.tail);
+}
 #endif
 // LCOV_EXCL_STOP
 
@@ -454,10 +465,6 @@ valk_lval_t* valk_lval_lambda(valk_lenv_t* env, valk_lval_t* formals,
   res->fun.body = body;
   res->fun.native_fn = nullptr;
   res->fun.native_name = nullptr;
-
-#ifdef VALK_COVERAGE
-  valk_coverage_mark_tree(body);
-#endif
 
   return res;
 }

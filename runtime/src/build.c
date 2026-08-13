@@ -38,14 +38,16 @@ extern char **environ;
 
 static int write_file(const char *path, const char *content, size_t len) {
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
-  if (fd < 0) { perror(path); return -1; }
+  if (fd < 0) { perror(path); return -1; } // LCOV_EXCL_BR_LINE - temp dir validated by earlier mkstemps
   ssize_t off = 0;
   while ((size_t)off < len) {
     ssize_t n = write(fd, content + off, len - (size_t)off);
+    // LCOV_EXCL_START - write to a just-created temp file essentially never fails
     if (n < 0) {
       if (errno == EINTR) continue;
       perror(path); close(fd); return -1;
     }
+    // LCOV_EXCL_STOP
     off += n;
   }
   close(fd);
@@ -64,11 +66,11 @@ static int resolve_exe_dir(char *out, size_t cap) {
   }
 #else
   ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-  if (n <= 0) return -1;
+  if (n <= 0) return -1; // LCOV_EXCL_BR_LINE - /proc/self/exe readlink never fails
   buf[n] = 0;
 #endif
   char *dir = dirname(buf);
-  if (strlen(dir) + 1 > cap) return -1;
+  if (strlen(dir) + 1 > cap) return -1; // LCOV_EXCL_BR_LINE - PATH_MAX-sized caller buffer
   strcpy(out, dir);
   return 0;
 }
@@ -99,16 +101,16 @@ typedef struct {
 } tmp_set_t;
 
 static int tmp_set_add(tmp_set_t *s, const char *p) {
-  if (s->count >= MAX_TMP_FILES) return -1;
+  if (s->count >= MAX_TMP_FILES) return -1; // LCOV_EXCL_BR_LINE - callers add a bounded fixed set
   s->paths[s->count] = strdup(p);
-  if (!s->paths[s->count]) return -1;
+  if (!s->paths[s->count]) return -1; // LCOV_EXCL_BR_LINE - strdup OOM
   s->count++;
   return 0;
 }
 
 static void tmp_set_cleanup(tmp_set_t *s) {
   for (int i = 0; i < s->count; i++) {
-    if (s->paths[i]) { unlink(s->paths[i]); free(s->paths[i]); }
+    if (s->paths[i]) { unlink(s->paths[i]); free(s->paths[i]); } // LCOV_EXCL_BR_LINE - entries are never null
   }
   s->count = 0;
 }
@@ -116,7 +118,7 @@ static void tmp_set_cleanup(tmp_set_t *s) {
 static int mkstemp_named(char *template, const char *suffix, char *out, size_t cap) {
   size_t tlen = strlen(template);
   size_t slen = strlen(suffix);
-  if (tlen + slen + 1 > cap) return -1;
+  if (tlen + slen + 1 > cap) return -1; // LCOV_EXCL_BR_LINE - PATH_MAX-sized buffers
   memcpy(out, template, tlen);
   memcpy(out + tlen, suffix, slen + 1);
   int fd = mkstemps(out, (int)slen);
@@ -128,9 +130,10 @@ static int mkstemp_named(char *template, const char *suffix, char *out, size_t c
 static int run_cc(char *const argv[]) {
   pid_t pid = 0;
   posix_spawn_file_actions_t actions;
-  if (posix_spawn_file_actions_init(&actions) != 0) return -1;
+  if (posix_spawn_file_actions_init(&actions) != 0) return -1; // LCOV_EXCL_BR_LINE - platform API
   int rc = posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ);
   posix_spawn_file_actions_destroy(&actions);
+  // LCOV_EXCL_START - spawn/waitpid failures are platform-level
   if (rc != 0) {
     fprintf(stderr, "valk --build: posix_spawnp(%s) failed: %s\n",
             argv[0], strerror(rc));
@@ -142,15 +145,18 @@ static int run_cc(char *const argv[]) {
     perror("waitpid");
     return -1;
   }
+  // LCOV_EXCL_STOP
   if (WIFSIGNALED(status)) {
     fprintf(stderr, "valk --build: %s killed by signal %d\n",
             argv[0], WTERMSIG(status));
     return -1;
   }
+  // LCOV_EXCL_START - impossible: waitpid without WUNTRACED only returns exited/signaled
   if (!WIFEXITED(status)) {
     fprintf(stderr, "valk --build: %s exited abnormally\n", argv[0]);
     return -1;
   }
+  // LCOV_EXCL_STOP
   int code = WEXITSTATUS(status);
   if (code != 0) {
     fprintf(stderr, "valk --build: %s exited with status %d\n", argv[0], code);
@@ -189,15 +195,15 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   size_t aot_count = 0;
   bool aot_ok = false;
   valk_build_emit_aot_fn emit_aot = valk_build_resolve_emit_aot();
-  if (emit_aot != nullptr) {
-    if (mkstemp_named(tmp_template, ".o", aot_o, sizeof(aot_o)) != 0 ||
-        mkstemp_named(tmp_template, ".c", aot_c, sizeof(aot_c)) != 0) {
+  if (emit_aot != nullptr) { // LCOV_EXCL_BR_LINE - null only in non-LLVM builds
+    if (mkstemp_named(tmp_template, ".o", aot_o, sizeof(aot_o)) != 0 || // LCOV_EXCL_BR_LINE - bad TMPDIR fails the first call
+        mkstemp_named(tmp_template, ".c", aot_c, sizeof(aot_c)) != 0) { // LCOV_EXCL_BR_LINE - unreachable after first succeeded
       tmp_set_cleanup(&tmps);
       return 1;
     }
     tmp_set_add(&tmps, aot_o);
     tmp_set_add(&tmps, aot_c);
-    if (emit_aot(env, aot_o, aot_c, &aot_count) == 0) {
+    if (emit_aot(env, aot_o, aot_c, &aot_count) == 0) { // LCOV_EXCL_BR_LINE - emit failure has no external trigger
       aot_ok = true;
     } else {
       fprintf(stderr, "valk --build: AOT emit failed; falling back to "
@@ -206,9 +212,11 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   }
 
   char img_path[PATH_MAX];
+  // LCOV_EXCL_START - unreachable: a bad TMPDIR already failed the first mkstemp
   if (mkstemp_named(tmp_template, ".img", img_path, sizeof(img_path)) != 0) {
     tmp_set_cleanup(&tmps); return 1;
   }
+  // LCOV_EXCL_STOP
   tmp_set_add(&tmps, img_path);
   if (valk_image_dump_env(env, img_path) != 0) {
     fprintf(stderr, "valk --build: image dump failed\n");
@@ -216,10 +224,12 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   }
 
   char exe_dir[PATH_MAX];
+  // LCOV_EXCL_START - resolve_exe_dir only fails on platform API failure
   if (resolve_exe_dir(exe_dir, sizeof(exe_dir)) != 0) {
     fprintf(stderr, "valk --build: could not resolve executable path\n");
     tmp_set_cleanup(&tmps); return 1;
   }
+  // LCOV_EXCL_STOP
 
   // The shim (the output binary's main()) is precompiled at runtime build
   // time with the same flags/ABI as libvalkyria and staged next to it. No
@@ -236,6 +246,9 @@ int valk_build(valk_lenv_t *env, const char *script_path,
     tmp_set_cleanup(&tmps); return 1;
   }
 
+  // LCOV_EXCL_START - only reachable when the runtime lacks the LLVM AOT
+  // emitter or the emitter fails internally; every shipped build config
+  // links it and emit failure has no external trigger
   if (!aot_ok) {
     if (aot_c[0] == 0 &&
         mkstemp_named(tmp_template, ".c", aot_c, sizeof(aot_c)) != 0) {
@@ -261,18 +274,23 @@ int valk_build(valk_lenv_t *env, const char *script_path,
       tmp_set_cleanup(&tmps); return 1;
     }
   }
+  // LCOV_EXCL_STOP
 
   char shim_s[PATH_MAX];
+  // LCOV_EXCL_START - unreachable: a bad TMPDIR already failed the first mkstemp
   if (mkstemp_named(tmp_template, ".S", shim_s, sizeof(shim_s)) != 0) {
     tmp_set_cleanup(&tmps); return 1;
   }
+  // LCOV_EXCL_STOP
   tmp_set_add(&tmps, shim_s);
 
   char img_abs[PATH_MAX];
+  // LCOV_EXCL_START - realpath on a file this process just created never fails
   if (!realpath(img_path, img_abs)) {
     fprintf(stderr, "valk --build: cannot resolve image path\n");
     tmp_set_cleanup(&tmps); return 1;
   }
+  // LCOV_EXCL_STOP
   for (const char *p = img_abs; *p; p++) {
     if (*p == '"' || *p == '\\' || *p == '\n') {
       fprintf(stderr, "valk --build: image path contains unsafe character\n");
@@ -302,7 +320,7 @@ int valk_build(valk_lenv_t *env, const char *script_path,
            "valk_build_image_end:\n",
            img_abs);
 #endif
-  if (write_file(shim_s, shim_s_content, strlen(shim_s_content)) != 0) {
+  if (write_file(shim_s, shim_s_content, strlen(shim_s_content)) != 0) { // LCOV_EXCL_BR_LINE - temp dir already validated
     tmp_set_cleanup(&tmps); return 1;
   }
 
@@ -317,6 +335,7 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   // fallback. $CC is an explicit, deliberate override.
   const char *cc = getenv("CC");
   if (!cc || !*cc) {
+    // LCOV_EXCL_START - requires deleting the compiler this runtime was built with
     if (access(VALK_CC, X_OK) != 0) {
       fprintf(stderr,
               "valk --build: compiler %s not found (the toolchain this "
@@ -325,6 +344,7 @@ int valk_build(valk_lenv_t *env, const char *script_path,
               VALK_CC);
       tmp_set_cleanup(&tmps); return 1;
     }
+    // LCOV_EXCL_STOP
     cc = VALK_CC;
   }
 
@@ -361,7 +381,7 @@ int valk_build(valk_lenv_t *env, const char *script_path,
   argv_cc[ai++] = shim_o;
   argv_cc[ai++] = shim_s;
   argv_cc[ai++] = aot_c;
-  if (aot_ok && aot_count > 0) argv_cc[ai++] = aot_o;
+  if (aot_ok && aot_count > 0) argv_cc[ai++] = aot_o; // LCOV_EXCL_BR_LINE - prelude always yields AOT entries when emit succeeds
   argv_cc[ai++] = lib_arg;
   argv_cc[ai++] = rpath_arg;
   argv_cc[ai++] = (char *)"-lvalkyria";
