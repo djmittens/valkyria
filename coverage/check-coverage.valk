@@ -18,6 +18,7 @@
   (list "runtime/src/lsp_index_emit.c" "LSP indexer - tested via integration test subprocess, no in-process coverage")
   (list "runtime/src/gc_region.c" "GC region - branch coverage limited by OOM/edge-case paths")
   (list "runtime/src/type_env.c" "type environment - branch coverage limited by complex pattern matching")
+  (list "runtime/src/build_shim.c" "--build shim - only exercised by test_build's produced binaries; error paths (missing __entry__, OOM) untestable there")
   (list "lsp/main.valk" "LSP entry point - only 2 lines, coverage skew from small file")))
 
 (fun {is-blocked rel-path} {

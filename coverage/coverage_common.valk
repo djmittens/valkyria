@@ -434,14 +434,18 @@
 ; --- Run gcov on build directory ---
 
 (fun {parse-gcov-files-par build-dir source-root files nthreads aio} {
-  (= {gcda-dir} (str build-dir "/CMakeFiles/valkyria.dir/src"))
-  (if (not (file/exists? gcda-dir)) {}
+  ; Every instrumented target whose sources are gated: the library and the
+  ; precompiled --build shim (exercised by the binaries test_build produces).
+  (= {gcda-dirs} (filter (\ {d} {file/exists? d}) (list
+    (str build-dir "/CMakeFiles/valkyria.dir/src")
+    (str build-dir "/CMakeFiles/valk_shim.dir/src"))))
+  (if (== (len gcda-dirs) 0) {}
     {do
       (= {llvm-cov} (find-llvm-cov))
       (if (== llvm-cov nil)
         {(print "Warning: llvm-cov not found, skipping C coverage")}
         {do
-          (= {all-files} (walk-dir gcda-dir))
+          (= {all-files} (foldl (\ {acc d} {(join acc (walk-dir d))}) {} gcda-dirs))
           (= {gcda-files} (filter (\ {f} {str/ends-with? f ".gcda"}) all-files))
           (= {local-dicts} (aio/await (aio/pmap aio
             (\ {gcda} {(*run-gcov-and-parse* gcda llvm-cov source-root)})
