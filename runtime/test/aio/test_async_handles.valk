@@ -53,53 +53,53 @@
   (test/case "handle? returns true for completed handle"
     {do
     (def {h} (aio/pure 42))
-    (== (handle? h) true)
+    (== (aio/handle? h) true)
   })
   (test/case "handle? returns true for failed handle"
     {do
     (def {h} (aio/fail "error"))
-    (== (handle? h) true)
+    (== (aio/handle? h) true)
   })
   (test/case "handle? returns false for number"
     {do
-    (== (handle? 42) false)
+    (== (aio/handle? 42) false)
   })
   (test/case "handle? returns false for string"
     {do
-    (== (handle? "hello") false)
+    (== (aio/handle? "hello") false)
   })
   (test/case "handle? returns false for list"
     {do
-    (== (handle? (list 1 2 3)) false)
+    (== (aio/handle? (list 1 2 3)) false)
   })
   (test/case "handle? returns false for nil"
     {do
-    (== (handle? nil) false)
+    (== (aio/handle? nil) false)
   })
   (test/case "as-handle returns handle unchanged"
     {do
     (def {h} (aio/pure 42))
-    (def {h2} (as-handle h))
+    (def {h2} (aio/as-handle h))
     (== (aio/status h2) :completed)
   })
   (test/case "as-handle wraps non-handle value"
     {do
-    (def {h} (as-handle 42))
+    (def {h} (aio/as-handle 42))
     (== (aio/status h) :completed)
   })
   (test/case "as-handle wraps string"
     {do
-    (def {h} (as-handle "hello"))
+    (def {h} (aio/as-handle "hello"))
     (== (aio/status h) :completed)
   })
   (test/case "as-handle wraps list"
     {do
-    (def {h} (as-handle (list 1 2 3)))
+    (def {h} (aio/as-handle (list 1 2 3)))
     (== (aio/status h) :completed)
   })
   (test/case "as-handle wraps nil"
     {do
-    (def {h} (as-handle nil))
+    (def {h} (aio/as-handle nil))
     (== (aio/status h) :completed)
   })
   (test/case "aio/try wraps success in :ok"
@@ -115,13 +115,13 @@
   (test/case "chain with empty fns returns start"
     {do
     (def {start} (aio/pure 10))
-    (def {result} (chain start ()))
+    (def {result} (aio/chain start ()))
     (== (aio/status result) :completed)
   })
   (test/case "chain with single fn"
     {do
     (def {start} (aio/pure 10))
-    (def {result} (chain start (list (\ {x} {(aio/pure (* x 2))}))))
+    (def {result} (aio/chain start (list (\ {x} {(aio/pure (* x 2))}))))
     (== (aio/status result) :completed)
   })
   (test/case "chain with multiple fns"
@@ -132,7 +132,7 @@
       (\ {x} {(aio/pure (* x 2))})
       (\ {x} {(aio/pure (+ x 10))})
     ))
-    (def {result} (chain start fns))
+    (def {result} (aio/chain start fns))
     (== (aio/status result) :completed)
   })
   (test/case "aio/map transforms value"
@@ -149,38 +149,38 @@
   })
   (test/case "parallel-map with empty list"
     {do
-    (def {result} (parallel-map (\ {x} {(aio/pure (* x 2))}) ()))
+    (def {result} (aio/parallel-map (\ {x} {(aio/pure (* x 2))}) ()))
     (== (aio/status result) :completed)
   })
   (test/case "parallel-map with single item"
     {do
-    (def {result} (parallel-map (\ {x} {(aio/pure (* x 2))}) (list 5)))
+    (def {result} (aio/parallel-map (\ {x} {(aio/pure (* x 2))}) (list 5)))
     (== (aio/status result) :completed)
   })
   (test/case "parallel-map with multiple items"
     {do
-    (def {result} (parallel-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
+    (def {result} (aio/parallel-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
     (== (aio/status result) :completed)
   })
   (test/case "sequential-map with empty list"
     {do
-    (def {result} (sequential-map (\ {x} {(aio/pure (* x 2))}) ()))
+    (def {result} (aio/sequential-map (\ {x} {(aio/pure (* x 2))}) ()))
     (== (aio/status result) :completed)
   })
   (test/case "sequential-map with single item"
     {do
-    (def {result} (sequential-map (\ {x} {(aio/pure (* x 2))}) (list 5)))
+    (def {result} (aio/sequential-map (\ {x} {(aio/pure (* x 2))}) (list 5)))
     (== (aio/status result) :completed)
   })
   (test/case "sequential-map with multiple items"
     {do
-    (def {result} (sequential-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
+    (def {result} (aio/sequential-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
     (== (aio/status result) :completed)
   })
   (test/case "delay-value returns handle"
     {do
     (def {sys} (aio/await (aio/start)))
-    (def {h} (delay-value sys 1 42))
+    (def {h} (aio/delay-value sys 1 42))
     (def {status} (aio/status h))
     (aio/stop sys)
     (or (== status :pending) (or (== status :running) (== status :completed)))
@@ -189,7 +189,7 @@
     {do
     (def {sys} (aio/await (aio/start)))
     (def {h} (aio/pure 42))
-    (def {result} (with-timeout sys 1000 h))
+    (def {result} (aio/with-timeout sys 1000 h))
     (aio/stop sys)
     (== (aio/status result) :completed)
   })
@@ -197,7 +197,7 @@
     {do
     (def {sys} (aio/await (aio/start)))
     (def {h} (aio/pure "test-value"))
-    (def {result} (with-timeout sys 5000 h))
+    (def {result} (aio/with-timeout sys 5000 h))
     (aio/stop sys)
     (== (aio/status result) :completed)
   })
@@ -205,7 +205,7 @@
     {do
     (def {sys} (aio/await (aio/start)))
     (def {call-count} 0)
-    (def {result} (retry-backoff sys 0 10 (\ {} {
+    (def {result} (aio/retry-backoff sys 0 10 (\ {} {
       (def {call-count} (+ call-count 1))
       (aio/pure "success")
     })))
@@ -215,7 +215,7 @@
   (test/case "retry-backoff with n>0 and failure triggers catch path"
     {do
     (def {sys} (aio/await (aio/start)))
-    (def {result} (retry-backoff sys 1 1 (\ {} {
+    (def {result} (aio/retry-backoff sys 1 1 (\ {} {
       (aio/fail "transient-error")
     })))
     (= {_} (aio/stop sys))
@@ -224,7 +224,7 @@
   (test/case "retry-backoff with n>0 and success returns immediately"
     {do
     (def {sys} (aio/await (aio/start)))
-    (def {result} (retry-backoff sys 3 10 (\ {} {
+    (def {result} (aio/retry-backoff sys 3 10 (\ {} {
       (aio/pure "first-try-success")
     })))
     (aio/stop sys)
@@ -233,7 +233,7 @@
   (test/case "graceful-shutdown with empty handle list"
     {do
     (def {sys} (aio/await (aio/start)))
-    (def {result} (graceful-shutdown sys () 1000))
+    (def {result} (aio/graceful-shutdown sys () 1000))
     (aio/stop sys)
     (== (aio/status result) :completed)
   })
@@ -241,7 +241,7 @@
     {do
     (def {sys} (aio/await (aio/start)))
     (def {handles} (list (aio/pure 1) (aio/pure 2)))
-    (def {result} (graceful-shutdown sys handles 1000))
+    (def {result} (aio/graceful-shutdown sys handles 1000))
     (aio/stop sys)
     (== (aio/status result) :completed)
   }))

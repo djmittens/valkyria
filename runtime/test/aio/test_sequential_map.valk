@@ -37,19 +37,19 @@
 
 (test/run-async aio (list
   (test/case-async "sequential-map with empty list returns empty list" (\ {} {
-    (def {result-handle} (sequential-map (\ {x} {(aio/pure (* x 2))}) ()))
+    (def {result-handle} (aio/sequential-map (\ {x} {(aio/pure (* x 2))}) ()))
     (aio/then result-handle (\ {result} {
       (== result ())
     }))
   }))
   (test/case-async "sequential-map with single element" (\ {} {
-    (def {result-handle} (sequential-map (\ {x} {(aio/pure (* x 10))}) (list 5)))
+    (def {result-handle} (aio/sequential-map (\ {x} {(aio/pure (* x 10))}) (list 5)))
     (aio/then result-handle (\ {result} {
       (== (head result) 50)
     }))
   }))
   (test/case-async "sequential-map with multiple elements" (\ {} {
-    (def {result-handle} (sequential-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
+    (def {result-handle} (aio/sequential-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3)))
     (aio/then result-handle (\ {result} {
       ; Result should be (2 4 6)
       (def {first} (head result))
@@ -68,7 +68,7 @@
       (aio/pure (* x 2))
     }))
     
-    (def {result-handle} (sequential-map track-and-double (list 1 2 3 4)))
+    (def {result-handle} (aio/sequential-map track-and-double (list 1 2 3 4)))
     (aio/then result-handle (\ {result} {
       ; Order should be (1 2 3 4) - items processed in sequence
       (def {o1} (head order))
@@ -79,7 +79,7 @@
     }))
   }))
   (test/case-async "sequential-map with identity transform" (\ {} {
-    (def {result-handle} (sequential-map (\ {x} {(aio/pure x)}) (list 10 20 30)))
+    (def {result-handle} (aio/sequential-map (\ {x} {(aio/pure x)}) (list 10 20 30)))
     (aio/then result-handle (\ {result} {
       (def {first} (head result))
       (def {second} (head (tail result)))
@@ -89,7 +89,7 @@
   }))
   (test/case-async "sequential-map with constant transform" (\ {} {
     (def {to-const} (\ {x} {(aio/pure "constant")}))
-    (def {result-handle} (sequential-map to-const (list 1 2)))
+    (def {result-handle} (aio/sequential-map to-const (list 1 2)))
     (aio/then result-handle (\ {result} {
       (def {first} (head result))
       (def {second} (head (tail result)))
@@ -102,7 +102,7 @@
       (aio/then (aio/sleep aio 5) (\ {_} {(aio/pure (* x 2))}))
     }))
     
-    (def {result-handle} (sequential-map delayed-double (list 1 2 3)))
+    (def {result-handle} (aio/sequential-map delayed-double (list 1 2 3)))
     (aio/then result-handle (\ {result} {
       (def {first} (head result))
       (def {second} (head (tail result)))
@@ -113,7 +113,7 @@
   (test/case-async "sequential-map preserves result types" (\ {} {
     ; Mix of different result types
     (def {items} (list 1 2 3))
-    (def {result-handle} (sequential-map (\ {x} {
+    (def {result-handle} (aio/sequential-map (\ {x} {
       (if (== x 1)
         {(aio/pure "one")}
         {(if (== x 2)
@@ -131,7 +131,7 @@
     }))
   }))
   (test/case-async "sequential-map with nil elements in list" (\ {} {
-    (def {result-handle} (sequential-map (\ {x} {(aio/pure x)}) (list nil nil)))
+    (def {result-handle} (aio/sequential-map (\ {x} {(aio/pure x)}) (list nil nil)))
     (aio/then result-handle (\ {result} {
       (def {first} (head result))
       (def {second} (head (tail result)))
@@ -140,7 +140,7 @@
   }))
   (test/case-async "sequential-map with larger list" (\ {} {
     (def {items} (list 1 2 3 4 5 6 7 8 9 10))
-    (def {result-handle} (sequential-map (\ {x} {(aio/pure (* x x))}) items))
+    (def {result-handle} (aio/sequential-map (\ {x} {(aio/pure (* x x))}) items))
     (aio/then result-handle (\ {result} {
       ; Check first and last elements: 1^2 = 1, 10^2 = 100
       (def {first} (head result))

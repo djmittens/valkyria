@@ -407,28 +407,28 @@
 (def {with-timeout-wins-handler}
   (\ {req} {
     (aio/catch
-      (with-timeout aio 10 (aio/sleep aio 10000))
+      (aio/with-timeout aio 10 (aio/sleep aio 10000))
       (\ {err} {{:status "200" :body "timeout-won"}}))
   }))
 
 (def {retry-backoff-success-handler}
   (\ {req} {
     (aio/then
-      (retry-backoff aio 0 10 (\ {} {(aio/pure "success")}))
+      (aio/retry-backoff aio 0 10 (\ {} {(aio/pure "success")}))
       (\ {result} {{:status "200" :body "retry-success"}}))
   }))
 
 (def {delay-value-handler}
   (\ {req} {
     (aio/then
-      (delay-value aio 10 "delayed-val")
+      (aio/delay-value aio 10 "delayed-val")
       (\ {result} {(list :status "200" :body result)}))
   }))
 
 (def {chain-fns-handler}
   (\ {req} {
     (aio/then
-      (chain (aio/pure 1) (list
+      (aio/chain (aio/pure 1) (list
         (\ {x} {(aio/pure (+ x 1))})
         (\ {x} {(aio/pure (* x 2))})
         (\ {x} {(aio/pure (+ x 10))})))

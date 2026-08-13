@@ -8,7 +8,7 @@
 (test/run-async aio (list
   (test/case-async "aio/interval returns a handle" (\ {} {
     (= {h} (aio/interval aio 100 (\ {} {nil})))
-    (= {is-handle} (handle? h))
+    (= {is-handle} (aio/handle? h))
     (aio/cancel h)
     (aio/pure is-handle)
   }))

@@ -8,18 +8,21 @@
     {do
     (= {test-sys} (aio/await (aio/start)))
     (test/assert (not (== test-sys nil)) "aio/start with defaults should succeed")
+    (aio/stop test-sys)
     true
   })
   (test/case "aio-config-custom-connections"
     {do
     (= {test-sys} (aio/await (aio/start {:max-connections 50})))
     (test/assert (not (== test-sys nil)) "aio/start with max-connections should succeed")
+    (aio/stop test-sys)
     true
   })
   (test/case "aio-config-custom-streams"
     {do
     (= {test-sys} (aio/await (aio/start {:max-concurrent-streams 50})))
     (test/assert (not (== test-sys nil)) "aio/start with max-concurrent-streams should succeed")
+    (aio/stop test-sys)
     true
   })
   (test/case "aio-config-full"
@@ -30,6 +33,7 @@
       :arena-pool-size 100
     })))
     (test/assert (not (== test-sys nil)) "aio/start with full config should succeed")
+    (aio/stop test-sys)
     true
   })
   ; 0 is NOT invalid: valk_aio_system_config_resolve treats 0 as "unset" for
@@ -47,12 +51,14 @@
     {do
     (= {test-sys} (aio/await (aio/start)))
     (test/assert (not (== test-sys nil)) "legacy aio/start call should still work")
+    (aio/stop test-sys)
     true
   })
   (test/case "aio-config-tcp-buffer-pool"
     {do
     (= {test-sys} (aio/await (aio/start {:tcp-buffer-pool-size 256})))
     (test/assert (not (== test-sys nil)) "aio/start with tcp-buffer-pool-size should succeed")
+    (aio/stop test-sys)
     true
   })
   (test/case "aio-config-arena-size"
@@ -60,12 +66,14 @@
     ; arena-size must be between 1MB and 256MB
     (= {test-sys} (aio/await (aio/start {:arena-size 1048576})))
     (test/assert (not (== test-sys nil)) "aio/start with arena-size should succeed")
+    (aio/stop test-sys)
     true
   })
   (test/case "aio-config-max-request-body"
     {do
     (= {test-sys} (aio/await (aio/start {:max-request-body-size 1048576})))
     (test/assert (not (== test-sys nil)) "aio/start with max-request-body-size should succeed")
+    (aio/stop test-sys)
     true
   })
   (test/case "aio-config-all-options"
@@ -79,6 +87,7 @@
       :max-request-body-size 524288
     })))
     (test/assert (not (== test-sys nil)) "aio/start with all config options should succeed")
+    (aio/stop test-sys)
     true
   }))
   {:suite-name "AIO Configuration Tests"})
