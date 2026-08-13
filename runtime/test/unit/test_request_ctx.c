@@ -372,6 +372,32 @@ void test_thread_ctx_request_ctx(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+void test_def_rejected_in_request_ctx(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env);
+
+  valk_request_ctx_t ctx = {.deadline_us = VALK_NO_DEADLINE};
+  VALK_WITH_REQUEST_CTX(&ctx) {
+    int pos = 0;
+    valk_lval_t *expr = valk_lval_read(&pos, "(def {x} 42)");
+    valk_lval_t *res = valk_lval_eval(env, expr);
+    VALK_TEST_ASSERT(LVAL_TYPE(res) == LVAL_ERR,
+                     "def must be rejected inside request handler context");
+    VALK_TEST_ASSERT(strstr(res->str, "request handler") != nullptr,
+                     "error should mention request handler context");
+  }
+
+  int pos = 0;
+  valk_lval_t *expr = valk_lval_read(&pos, "(def {x} 42)");
+  valk_lval_t *res = valk_lval_eval(env, expr);
+  VALK_TEST_ASSERT(LVAL_TYPE(res) != LVAL_ERR,
+                   "def must work outside request handler context");
+
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -397,6 +423,7 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_trace_id_generation", test_trace_id_generation);
   valk_testsuite_add_test(suite, "test_span_id_generation", test_span_id_generation);
   valk_testsuite_add_test(suite, "test_thread_ctx_request_ctx", test_thread_ctx_request_ctx);
+  valk_testsuite_add_test(suite, "test_def_rejected_in_request_ctx", test_def_rejected_in_request_ctx);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

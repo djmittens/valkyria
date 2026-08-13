@@ -80,7 +80,87 @@
     (aio/then (http2/client-request aio "127.0.0.1" test-port "/error") (\ {resp} {
       (== (http2/response-ok? resp) 0)
     }))
+  }))
+  (test/case-async "http2/fetch returns response" (\ {} {
+    ((http2/fetch aio "127.0.0.1" test-port "/") (\ {resp} {
+      (== (http2/response-status resp) "200")
+    }))
+  }))
+  (test/case-async "http2/fetch-text extracts body" (\ {} {
+    ((http2/fetch-text aio "127.0.0.1" test-port "/") (\ {body} {
+      (== body "Hello from test server")
+    }))
+  }))
+  (test/case-async "http2/fetch-ok? is true for 200" (\ {} {
+    ((http2/fetch-ok? aio "127.0.0.1" test-port "/") (\ {ok} {
+      (== ok 1)
+    }))
+  }))
+  (test/case-async "http2/fetch-all collects responses" (\ {} {
+    ((http2/fetch-all aio (list
+        (list "127.0.0.1" test-port "/")
+        (list "127.0.0.1" test-port "/error")))
+     (\ {resps} {
+       (and (== (len resps) 2)
+            (== (http2/response-status (nth 1 resps)) "200")
+            (== (http2/response-status (nth 2 resps)) "500"))
+     }))
+  }))
+  (test/case-async "http2/fetch-all-text collects bodies" (\ {} {
+    ((http2/fetch-all-text aio (list
+        (list "127.0.0.1" test-port "/")
+        (list "127.0.0.1" test-port "/")))
+     (\ {bodies} {
+       (and (== (len bodies) 2)
+            (== (nth 1 bodies) "Hello from test server"))
+     }))
+  }))
+  (test/case-async "http2/fetch-retry returns 200 response immediately" (\ {} {
+    ((http2/fetch-retry aio "127.0.0.1" test-port "/" 2) (\ {resp} {
+      (== (http2/response-status resp) "200")
+    }))
+  }))
+  (test/case-async "http2/fetch-retry exhausts retries on 500" (\ {} {
+    ((http2/fetch-retry aio "127.0.0.1" test-port "/error" 2) (\ {resp} {
+      (== (http2/response-status resp) "500")
+    }))
+  }))
+  (test/case-async "http2/sequential returns the last network result" (\ {} {
+    ((http2/sequential (list
+        (http2/fetch aio "127.0.0.1" test-port "/")
+        (http2/fetch aio "127.0.0.1" test-port "/error")))
+     (\ {last-resp} {
+       (== (http2/response-status last-resp) "500")
+     }))
+  }))
+  (test/case-async "http2/fan-out fetches extracted endpoints" (\ {} {
+    ((http2/fan-out aio "127.0.0.1" test-port "/"
+        (list (\ {resp} {(list "127.0.0.1" test-port "/")})))
+     (\ {resps} {
+       (and (== (len resps) 1)
+            (== (http2/response-status (nth 1 resps)) "200"))
+     }))
+  }))
+  (test/case-async "http2/aggregate combines responses" (\ {} {
+    ((http2/aggregate aio (list
+        (list "127.0.0.1" test-port "/")
+        (list "127.0.0.1" test-port "/"))
+        (\ {resps} {(len resps)}))
+     (\ {n} {(== n 2)}))
+  }))
+  (test/case-async "http2/health-check is true for healthy endpoint" (\ {} {
+    ((http2/health-check aio "127.0.0.1" test-port "/") (\ {ok} {
+      (== ok 1)
+    }))
+  }))
+  (test/case-async "http2/health-check-all checks each endpoint" (\ {} {
+    ((http2/health-check-all aio (list
+        (list "127.0.0.1" test-port "/")
+        (list "127.0.0.1" test-port "/error")))
+     (\ {oks} {
+       (and (== (len oks) 2) (== (nth 1 oks) 1) (== (nth 2 oks) 0))
+     }))
   })))
   {:suite-name "HTTP API Network Tests"
-   :timeout-ms 2000
-   :suite-timeout-ms 30000})
+   :timeout-ms 5000
+   :suite-timeout-ms 60000})

@@ -28,10 +28,10 @@ void valk_type_env_free(valk_type_env_t *env) {
     for (u64 c = 0; c < t->constructor_count; c++) {
       valk_constructor_t *ctor = t->constructors[c];
       free(ctor->name);
-      if (ctor->type_name) free(ctor->type_name);
+      free(ctor->type_name);
       for (u64 f = 0; f < ctor->field_count; f++) {
         free(ctor->fields[f].name);
-        if (ctor->fields[f].type_name) free(ctor->fields[f].type_name);
+        free(ctor->fields[f].type_name);
       }
       free(ctor->fields);
       free(ctor);
@@ -226,7 +226,7 @@ static char *serialize_type_expr(valk_lval_t *type_expr) {
       pos += len;
     } else if (LVAL_TYPE(elem) == LVAL_CONS) {
       char *inner = serialize_type_expr(elem);
-      if (inner) {
+      if (inner) { // LCOV_EXCL_BR_LINE - serialize of a cons never returns NULL
         int len = strlen(inner);
         memcpy(buf + pos, inner, len);
         pos += len;

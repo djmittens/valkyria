@@ -5,13 +5,11 @@
 #include "coverage.h"
 
 static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
-  // LCOV_EXCL_START - request context guard: only triggers in HTTP handler
   if (valk_thread_ctx.request_ctx != nullptr) {
     return valk_lval_err(
         "def cannot be used in request handler context. "
         "Use = for local bindings instead.");
   }
-  // LCOV_EXCL_STOP
 
   LVAL_ASSERT_COUNT_GT(a, a, 1);
 

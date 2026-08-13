@@ -1,93 +1,123 @@
+; find-uncovered-branches.valk — list branches never taken for a given file
+;
+; Reads the same gcov/lcov data as check-coverage.valk (coverage.xml no
+; longer carries per-line branch detail), so output matches the gate.
+;
+; Usage: build/valk coverage/find-uncovered-branches.valk -- <file> [--build-dir DIR]
 
-; --- Arg parsing ---
+(load "coverage/coverage_common.valk")
 
-(= {args} (filter (\ {a} {(not (or (str/contains? a "valk") (== a "--")))}) sys/argv))
-(if (< (len args) 1)
+(= {argv} sys/argv)
+(= {argc} (len argv))
+(= {opts} (dict/new))
+(dict/set! opts "build-dir" "build-coverage")
+(dict/set! opts "target" "")
+
+(fun {*parse-args* i} {
+  (if (> i argc) {}
+    {do
+      (= {arg} (nth i argv))
+      (select
+        {(== arg "--build-dir")
+         (do (dict/set! opts "build-dir" (nth (+ i 1) argv)) (*parse-args* (+ i 2)))}
+        {(or (== arg "--") (str/ends-with? arg "find-uncovered-branches.valk"))
+         (*parse-args* (+ i 1))}
+        {(str/ends-with? arg "/valk")
+         (*parse-args* (+ i 1))}
+        {true (do (dict/set! opts "target" arg) (*parse-args* (+ i 1)))})})
+})
+(*parse-args* 1)
+
+(= {target} (dict/get opts "target"))
+(if (== target "")
   {do
-    (printf "Usage: find-uncovered-branches.valk <filename>\n")
+    (printf "Usage: find-uncovered-branches.valk <filename> [--build-dir DIR]\n")
     (printf "Example: find-uncovered-branches.valk memory.c\n")
     (shutdown 1)}
   {true})
 
-(= {target} (nth (len args) args))
-(= {xml-path} (if (file/exists? "coverage-report/latest/coverage.xml")
-  {"coverage-report/latest/coverage.xml"}
-  {"coverage-report/coverage.xml"}))
-
-(if (not (file/exists? xml-path))
+(= {build-dir} (realpath (dict/get opts "build-dir")))
+(if (not (file/exists? build-dir))
   {do
-    (printf "error: %s not found\n" xml-path)
-    (printf "hint: run 'make coverage' first\n")
+    (printf "error: build dir %s not found (run 'make coverage' first)\n" build-dir)
     (shutdown 1)}
   {true})
+(= {source-root} (realpath (str/join (init (str/split build-dir "/")) "/")))
 
-; --- Parse XML ---
+(= {files} (cov/collect-coverage build-dir source-root))
 
-(= {xml-str} (read-file xml-path))
-(= {doc} (xml/parse xml-str))
-
-; Format "0.9645" as "96.5%" (multiply by 100, round to 1 decimal)
-(fun {format-rate rate-str} {
-  (if (str/starts-with? rate-str "1")
-    {"100.0%"}
+; Group never-taken branches by line: line-no -> "miss-count/total-count"
+(fun {*collect-lines* bkeys bd miss-d total-d} {
+  (if (== bkeys nil) {}
     {do
-      (= {parts} (str/split rate-str "."))
-      (if (< (len parts) 2) {(str rate-str "%")}
+      (= {bkey} (head bkeys))
+      (= {taken} (dict/get bd bkey))
+      (= {line-no} (nth 1 (str/split bkey ":")))
+      (= {old-total} (dict/get total-d line-no))
+      (dict/set! total-d line-no (if (== old-total nil) {1} {(+ old-total 1)}))
+      (if (== taken 0)
         {do
-          (= {digits} (nth 2 parts))
-          (= {padded} (str digits "0000"))
-          (= {d0} (str->num (str/slice padded 0 1)))
-          (= {d1} (str->num (str/slice padded 1 2)))
-          (= {d2} (str->num (str/slice padded 2 3)))
-          (= {d3} (str->num (str/slice padded 3 4)))
-          (= {tenths} (+ (* (+ (* d0 100) (* d1 10)) 1) d2))
-          (= {rounded} (if (>= d3 5) {(+ tenths 1)} {tenths}))
-          (= {whole} (/ rounded 10))
-          (= {frac} (mod rounded 10))
-          (str whole "." frac "%")})})
+          (= {old-miss} (dict/get miss-d line-no))
+          (dict/set! miss-d line-no (if (== old-miss nil) {1} {(+ old-miss 1)}))}
+        {})
+      (*collect-lines* (tail bkeys) bd miss-d total-d)})
 })
 
-; --- Find matching classes and print uncovered branches ---
-
-(fun {process-line line-elem} {do
-  (= {attrs} (plist/get line-elem :attrs))
-  (if (!= (plist/get attrs :branch) "true") {0}
+(fun {*print-lines* line-no max-line miss-d total-d src-lines n-src} {
+  (if (> line-no max-line) {}
     {do
-      (= {cond-cov} (plist/get attrs :condition-coverage))
-      (if (str/contains? cond-cov "100%") {0}
+      (= {lkey} (str line-no))
+      (= {miss} (dict/get miss-d lkey))
+      (if (== miss nil) {}
         {do
-          (printf "  Line %s: %s (hits: %s)\n"
-            (plist/get attrs :number) cond-cov (plist/get attrs :hits))
-          1})})
+          (= {total} (dict/get total-d lkey))
+          (= {src} (if (and (> n-src 0) (<= line-no n-src))
+            {(str/trim (nth line-no src-lines))}
+            {""}))
+          (printf "  Line %d: %d/%d branches never taken  %s\n" line-no miss total src)})
+      (*print-lines* (+ line-no 1) max-line miss-d total-d src-lines n-src)})
 })
 
-(fun {process-class cls} {do
-  (= {attrs} (plist/get cls :attrs))
-  (= {filename} (plist/get attrs :filename))
-  (if (not (str/contains? filename target)) {0}
+(fun {*max-line* bkeys acc} {
+  (if (== bkeys nil) {acc}
     {do
-      (= {lr} (plist/get attrs :line-rate))
-      (= {br} (plist/get attrs :branch-rate))
-      (printf "File: %s\n" filename)
-      (printf "Line rate: %s\n" (format-rate lr))
-      (printf "Branch rate: %s\n" (format-rate br))
-      (printf "\nUncovered/partial branches:\n")
-      (printf "------------------------------------------------------------\n")
-      (= {lines-elem} (filter (\ {c} {(== (plist/get c :tag) "lines")}) (plist/get cls :children)))
-      (= {lines} (if (nil? lines-elem) {nil} {(plist/get (head lines-elem) :children)}))
-      (foldl (\ {count line-elem} {(+ count (process-line line-elem))}) 0 lines)})
+      (= {n} (str->num (nth 1 (str/split (head bkeys) ":"))))
+      (*max-line* (tail bkeys) (if (> n acc) {n} {acc}))})
 })
 
-(fun {find-classes node} {
-  (if (== (plist/get node :tag) "class")
-    {(list node)}
-    {(foldl (\ {acc child} {(join acc (find-classes child))})
-            {} (plist/get node :children))})
+(fun {process-file filepath fc} {
+  (printf "\nFile: %s\n" filepath)
+  (printf "Line rate: %s\n" (cov/fmt-pct (cov/line-pct fc)))
+  (printf "Branch rate: %s\n" (cov/fmt-pct (cov/branch-pct fc)))
+  (printf "\nBranches never taken:\n")
+  (printf "------------------------------------------------------------\n")
+  (= {bd} (dict/get fc "branch-data"))
+  (= {bkeys} (dict/keys bd))
+  (= {miss-d} (dict/new))
+  (= {total-d} (dict/new))
+  (*collect-lines* bkeys bd miss-d total-d)
+  (if (== (dict/count miss-d) 0)
+    {(printf "  (none - all counted branches taken at least once)\n")}
+    {do
+      (= {src-lines} (if (file/exists? filepath)
+        {(str/split (read-file filepath) "\n")}
+        {nil}))
+      (= {n-src} (if (== src-lines nil) {0} {(len src-lines)}))
+      (*print-lines* 1 (*max-line* bkeys 0) miss-d total-d src-lines n-src)})
 })
 
-(= {classes} (find-classes doc))
-(= {total} (foldl (\ {count cls} {(+ count (process-class cls))}) 0 classes))
+(fun {*scan-files* keys found} {
+  (if (== keys nil) {found}
+    {do
+      (= {filepath} (head keys))
+      (if (str/contains? filepath target)
+        {do
+          (process-file filepath (dict/get files filepath))
+          (*scan-files* (tail keys) (+ found 1))}
+        {(*scan-files* (tail keys) found)})})
+})
 
-(if (== total 0)
-  {(printf "  (none found - all branches covered or file not found)\n")}
+(= {n-found} (*scan-files* (dict/keys files) 0))
+(if (== n-found 0)
+  {(printf "error: no coverage data for '%s'\n" target)}
   {true})

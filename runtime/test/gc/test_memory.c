@@ -2413,21 +2413,142 @@ void test_evacuate_dict_to_heap(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static valk_dict_t *build_test_dict(valk_lval_t *value, bool add_valueless_cell) {
+  u32 nbuckets = 4, cap = 4;
+  u64 strings_cap = 64;
+  u64 sz = dict_block_size(nbuckets, cap, strings_cap);
+  valk_dict_t *d = valk_mem_calloc(1, sz);
+  d->num_buckets = nbuckets;
+  d->capacity = cap;
+  d->strings_cap = strings_cap;
+
+  u32 *buckets = dict_buckets(d);
+  for (u32 i = 0; i < nbuckets; i++) buckets[i] = DICT_EMPTY;
+  valk_dict_cell_t *cells = dict_cells(d);
+  for (u32 i = 0; i < cap - 1; i++) cells[i].next = i + 1;
+  cells[cap - 1].next = DICT_EMPTY;
+  d->free_head = 0;
+
+  const char *keys[2] = {"name", "tag"};
+  int n = add_valueless_cell ? 2 : 1;
+  for (int k = 0; k < n; k++) {
+    u64 klen = strlen(keys[k]);
+    u64 hash = dict_hash(keys[k]);
+    u32 ci = d->free_head;
+    d->free_head = cells[ci].next;
+    u32 off = (u32)d->strings_used;
+    memcpy(dict_strings(d) + off, keys[k], klen + 1);
+    d->strings_used += klen + 1;
+    cells[ci].hash = hash;
+    cells[ci].key_offset = off;
+    cells[ci].value = (k == 0) ? value : nullptr;
+    u32 bi = hash % nbuckets;
+    cells[ci].next = buckets[bi];
+    buckets[bi] = ci;
+    d->count++;
+  }
+  return d;
+}
+
+void test_region_promote_lval_dict(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_system_create(NULL);
+
+  valk_region_t *session = valk_region_create(VALK_LIFETIME_SESSION, nullptr);
+  valk_region_t *request = valk_region_create(VALK_LIFETIME_REQUEST, session);
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t *)request) {
+    valk_dict_t *d = build_test_dict(valk_lval_str("promoted"), true);
+    valk_lval_t *dict_val = valk_lval_dict(d);
+    VALK_TEST_ASSERT(LVAL_TYPE(dict_val) == LVAL_DICT, "Should be dict");
+
+    valk_lval_t *promoted = valk_region_promote_lval(session, dict_val);
+    ASSERT_NOT_NULL(promoted);
+    ASSERT_EQ(LVAL_TYPE(promoted), LVAL_DICT);
+    VALK_TEST_ASSERT(promoted != dict_val, "Promotion should copy the dict");
+    VALK_TEST_ASSERT(promoted->dict.data != d, "Dict block should be copied");
+
+    valk_dict_cell_t *cells = dict_cells(promoted->dict.data);
+    u32 *buckets = dict_buckets(promoted->dict.data);
+    bool found_value = false;
+    for (u32 b = 0; b < promoted->dict.data->num_buckets; b++) {
+      u32 ci = buckets[b];
+      while (ci != DICT_EMPTY) {
+        if (cells[ci].value != nullptr) {
+          VALK_TEST_ASSERT(LVAL_TYPE(cells[ci].value) == LVAL_STR,
+                           "Copied value should still be a string");
+          VALK_TEST_ASSERT(strcmp(cells[ci].value->str, "promoted") == 0,
+                           "Copied value should match");
+          found_value = true;
+        }
+        ci = cells[ci].next;
+      }
+    }
+    VALK_TEST_ASSERT(found_value, "Promoted dict should contain the copied value");
+  }
+
+  valk_region_destroy(request);
+  valk_region_destroy(session);
+
+  valk_system_destroy(valk_sys);
+  VALK_PASS();
+}
+
+void test_region_ensure_safe_ref(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  size_t arena_size = 64 * 1024;
+  valk_mem_arena_t *arena = malloc(arena_size);
+  valk_mem_arena_init(arena, arena_size - sizeof(*arena));
+
+  valk_gc_heap_t *heap = valk_gc_heap_create(0);
+
+  valk_thread_context_t old_ctx = valk_thread_ctx;
+  valk_thread_ctx.allocator = (void *)heap;
+  valk_thread_ctx.heap = heap;
+  valk_thread_ctx.scratch = arena;
+
+  VALK_WITH_ALLOC((void *)heap) {
+    valk_lval_t *parent = valk_lval_cons(valk_lval_num(1), valk_lval_nil());
+    VALK_TEST_ASSERT(LVAL_ALLOC(parent) == LVAL_ALLOC_HEAP, "Parent should be on heap");
+
+    valk_lval_t *heap_child = valk_lval_num(7);
+    VALK_TEST_ASSERT(valk_region_ensure_safe_ref(parent, heap_child) == heap_child,
+                     "Heap child is already safe to reference");
+
+    valk_lval_t *scratch_child;
+    VALK_WITH_ALLOC((void *)arena) {
+      scratch_child = valk_lval_num(42);
+    }
+    VALK_TEST_ASSERT(LVAL_ALLOC(scratch_child) == LVAL_ALLOC_SCRATCH,
+                     "Child should be on scratch");
+
+    valk_lval_t *safe = valk_region_ensure_safe_ref(parent, scratch_child);
+    VALK_TEST_ASSERT(LVAL_ALLOC(safe) == LVAL_ALLOC_HEAP,
+                     "Scratch child must be evacuated to heap");
+    VALK_TEST_ASSERT(safe->num == 42, "Evacuated child keeps its value");
+
+    VALK_WITH_ALLOC((void *)arena) {
+      valk_lval_t *scratch_parent = valk_lval_cons(valk_lval_num(2), valk_lval_nil());
+      VALK_TEST_ASSERT(valk_region_ensure_safe_ref(scratch_parent, heap_child) == heap_child,
+                       "Scratch parent may reference heap child");
+    }
+  }
+
+  valk_thread_ctx = old_ctx;
+  free(arena);
+  valk_gc_heap_destroy(heap);
+  VALK_PASS();
+}
+
 int main(int argc, const char **argv) {
   UNUSED(argc);
   UNUSED(argv);
 
-  size_t seed;
-#if 0
-  // seed = 1746502782; // 8 threads with 1000 items
-  // seed = 1746685013; // floating point exception
-  seed = 1746685993; // crashig singlethreaded
-#else
-
   struct timespec ts;
   timespec_get(&ts, TIME_UTC);
-  seed = ts.tv_sec;
-#endif
+  size_t seed = ts.tv_sec;
   srand(seed);
 
   printf("Seeding rand with %ld\n", seed);
@@ -2512,6 +2633,8 @@ int main(int argc, const char **argv) {
   valk_testsuite_add_test(suite, "test_region_promote_lval_cons", test_region_promote_lval_cons);
   valk_testsuite_add_test(suite, "test_region_promote_lval_error", test_region_promote_lval_error);
   valk_testsuite_add_test(suite, "test_region_promote_lval_lambda", test_region_promote_lval_lambda);
+  valk_testsuite_add_test(suite, "test_region_promote_lval_dict", test_region_promote_lval_dict);
+  valk_testsuite_add_test(suite, "test_region_ensure_safe_ref", test_region_ensure_safe_ref);
   valk_testsuite_add_test(suite, "test_region_init_embedded", test_region_init_embedded);
 
   // Branch coverage improvement tests

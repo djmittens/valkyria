@@ -329,6 +329,135 @@ void test_task_queue_empty_null_loops(VALK_TEST_ARGS()) {
   VALK_PASS();
 }
 
+static _Atomic int g_task_dropped = 0;
+
+static void drop_task(void *ctx) {
+  (void)ctx;
+  atomic_fetch_add(&g_task_dropped, 1);
+}
+
+void test_task_queue_destroy_uninitialized(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  valk_aio_loop_t aio_loop;
+  memset(&aio_loop, 0, sizeof(aio_loop));
+  valk_aio_loop_task_queue_destroy(&aio_loop);
+
+  VALK_PASS();
+}
+
+void test_task_queue_drop_on_shutdown(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  uv_loop_t loop;
+  uv_loop_init(&loop);
+
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
+
+  valk_aio_task_queue_init(&sys);
+
+  atomic_store(&g_task_executed, 0);
+  atomic_store(&g_task_dropped, 0);
+  ASSERT_TRUE(valk_aio_loop_enqueue_task_owned(&aio_loop, simple_task, NULL, drop_task));
+  ASSERT_TRUE(valk_aio_loop_enqueue_task_owned(&aio_loop, simple_task, NULL, NULL));
+
+  valk_aio_task_queue_shutdown(&sys);
+
+  ASSERT_EQ(atomic_load(&g_task_executed), 0);
+  ASSERT_EQ(atomic_load(&g_task_dropped), 1);
+
+  uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
+  uv_loop_close(&loop);
+  VALK_PASS();
+}
+
+void test_task_queue_enqueue_while_shutting_down(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  uv_loop_t loop;
+  uv_loop_init(&loop);
+
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
+
+  valk_aio_task_queue_init(&sys);
+  sys.shuttingDown = true;
+
+  atomic_store(&g_task_dropped, 0);
+  ASSERT_FALSE(valk_aio_loop_enqueue_task_owned(&aio_loop, simple_task, NULL, drop_task));
+  ASSERT_EQ(atomic_load(&g_task_dropped), 1);
+  ASSERT_FALSE(valk_aio_loop_enqueue_task_owned(&aio_loop, simple_task, NULL, NULL));
+  ASSERT_TRUE(valk_aio_task_queue_empty(&sys));
+
+  sys.shuttingDown = false;
+  valk_aio_task_queue_shutdown(&sys);
+  uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
+  uv_loop_close(&loop);
+  VALK_PASS();
+}
+
+void test_task_queue_enqueue_loop_without_sys(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  uv_loop_t loop;
+  uv_loop_init(&loop);
+
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
+  valk_aio_task_queue_init(&sys);
+
+  aio_loop.sys = NULL;
+  atomic_store(&g_task_executed, 0);
+  ASSERT_TRUE(valk_aio_loop_enqueue_task(&aio_loop, simple_task, NULL));
+  aio_loop.sys = &sys;
+
+  drain_loop(&loop, &sys);
+  ASSERT_EQ(atomic_load(&g_task_executed), 1);
+
+  valk_aio_task_queue_shutdown(&sys);
+  uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
+  uv_loop_close(&loop);
+  VALK_PASS();
+}
+
+void test_task_queue_batch_limit(VALK_TEST_ARGS()) {
+  VALK_TEST();
+
+  uv_loop_t loop;
+  uv_loop_init(&loop);
+
+  valk_aio_system_t sys;
+  valk_aio_loop_t aio_loop;
+  setup_sys_with_loop(&sys, &aio_loop, &loop);
+  valk_aio_task_queue_init(&sys);
+
+  atomic_store(&g_task_executed, 0);
+  const int total = 600;
+  for (int i = 0; i < total; i++) {
+    ASSERT_TRUE(valk_aio_loop_enqueue_task(&aio_loop, simple_task, NULL));
+  }
+
+  int spins = 0;
+  while (atomic_load(&g_task_executed) < total && spins < 20) {
+    drain_loop(&loop, &sys);
+    spins++;
+  }
+  ASSERT_EQ(atomic_load(&g_task_executed), total);
+
+  valk_aio_task_queue_shutdown(&sys);
+  uv_run(&loop, UV_RUN_DEFAULT);
+  valk_aio_loop_task_queue_destroy(&sys.loops[0]);
+  uv_loop_close(&loop);
+  VALK_PASS();
+}
+
 int main(void) {
   valk_mem_init_malloc();
   valk_test_suite_t *suite = valk_testsuite_empty(__FILE__);
@@ -348,6 +477,11 @@ int main(void) {
   valk_testsuite_add_test(suite, "test_task_queue_loop_enqueue_null_loop", test_task_queue_loop_enqueue_null_loop);
   valk_testsuite_add_test(suite, "test_task_queue_loop_enqueue_null_fn", test_task_queue_loop_enqueue_null_fn);
   valk_testsuite_add_test(suite, "test_task_queue_empty_null_loops", test_task_queue_empty_null_loops);
+  valk_testsuite_add_test(suite, "test_task_queue_destroy_uninitialized", test_task_queue_destroy_uninitialized);
+  valk_testsuite_add_test(suite, "test_task_queue_drop_on_shutdown", test_task_queue_drop_on_shutdown);
+  valk_testsuite_add_test(suite, "test_task_queue_enqueue_while_shutting_down", test_task_queue_enqueue_while_shutting_down);
+  valk_testsuite_add_test(suite, "test_task_queue_enqueue_loop_without_sys", test_task_queue_enqueue_loop_without_sys);
+  valk_testsuite_add_test(suite, "test_task_queue_batch_limit", test_task_queue_batch_limit);
 
   int result = valk_testsuite_run(suite);
   valk_testsuite_print(suite);

@@ -448,13 +448,6 @@ target_link_libraries(test_demo_server PRIVATE "-lc" valkyria)
 add_executable(test_large_response test/http/test_large_response.c ../testing/c/testing.c)
 target_link_libraries(test_large_response PRIVATE "-lc" valkyria)
 
-# test_networking_lisp removed - redundant tests
-
-# REMOVED: test_concurrency - no longer using futures/ARCs
-# add_executable(test_concurrency test/test_concurrency.c ../testing/c/testing.c)
-# target_link_libraries(test_concurrency PRIVATE "-lc" valkyria)
-# include_directories(test_concurrency src/)
-
 add_executable(test_memory test/gc/test_memory.c ../testing/c/testing.c)
 target_link_libraries(test_memory PRIVATE "-lc" "-lm" valkyria)
 

@@ -284,13 +284,12 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
       }
       break;
 
-    // LCOV_EXCL_START - dict promotion requires dict allocated in region; only reachable via HTTP request handlers
     case LVAL_DICT: {
       valk_dict_t *d = src->dict.data;
-      if (d) {
+      if (d) { // LCOV_EXCL_BR_LINE - dict data always set
         u64 sz = dict_block_size(d->num_buckets, d->capacity, d->strings_cap);
         valk_dict_t *nd = valk_region_alloc(target, sz);
-        if (nd) {
+        if (nd) { // LCOV_EXCL_BR_LINE - OOM
           memcpy(nd, d, sz);
           copy->dict.data = nd;
           valk_dict_cell_t *cells = dict_cells(nd);
@@ -307,7 +306,6 @@ static valk_lval_t *region_copy_lval_recursive(valk_region_t *target, valk_lval_
       }
       break;
     }
-    // LCOV_EXCL_STOP
 
     default:
       break;
