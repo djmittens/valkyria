@@ -72,9 +72,9 @@
 (printf "Build directory: %s\n\n" build-dir)
 
 ; --- Collect ---
-(= {files} (collect-coverage build-dir source-root))
-(= {runtime-files} (filter-runtime-files files source-root))
-(= {stdlib-files} (filter-stdlib-files files source-root))
+(= {files} (cov/collect-coverage build-dir source-root))
+(= {runtime-files} (cov/filter-runtime-files files source-root))
+(= {stdlib-files} (cov/filter-stdlib-files files source-root))
 
 (printf "Found %d runtime C files, %d stdlib Valk files\n\n"
   (dict/count runtime-files) (dict/count stdlib-files))
@@ -92,8 +92,8 @@
 (print "VALKYRIA RUNTIME COVERAGE GATE CHECK")
 (print "================================================================================")
 (print "")
-(printf "Runtime (src/*.c):    %s line, %s branch\n" (fmt-pct REQ_LINE) (fmt-pct REQ_BRANCH))
-(printf "Stdlib (src/*.valk):  %s expr, %s branch\n" (fmt-pct REQ_EXPR) (fmt-pct REQ_BRANCH))
+(printf "Runtime (src/*.c):    %s line, %s branch\n" (cov/fmt-pct REQ_LINE) (cov/fmt-pct REQ_BRANCH))
+(printf "Stdlib (src/*.valk):  %s expr, %s branch\n" (cov/fmt-pct REQ_EXPR) (cov/fmt-pct REQ_BRANCH))
 (print "")
 
 (= {results} (dict/new))
@@ -114,20 +114,20 @@
       (= {rel} (head keys))
       (= {fc} (dict/get runtime-files rel))
       (= {filename} (if (str/starts-with? rel "runtime/src/") {(str/slice rel 12 (len rel))} {rel}))
-      (= {line-pct} (fc/line-pct fc))
-      (= {branch-pct} (fc/branch-pct fc))
+      (= {line-pct} (cov/line-pct fc))
+      (= {branch-pct} (cov/branch-pct fc))
       (= {line-pass} (>= line-pct REQ_LINE))
       (= {branch-pass} (>= branch-pct REQ_BRANCH))
       (= {status} (if (and line-pass branch-pass) {"V"} {"X"}))
-      (= {line} (str "  " filename " " status "  " (fmt-pct line-pct) " line, " (fmt-pct branch-pct) " branch"))
+      (= {line} (str "  " filename " " status "  " (cov/fmt-pct line-pct) " line, " (cov/fmt-pct branch-pct) " branch"))
       (if (or (not line-pass) (not branch-pass))
         {do
           (= {gaps} "")
           (if (not line-pass)
-            {(= {gaps} (str gaps (fmt-pct (- REQ_LINE line-pct)) " line"))}
+            {(= {gaps} (str gaps (cov/fmt-pct (- REQ_LINE line-pct)) " line"))}
             {})
           (if (not branch-pass)
-            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
+            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (cov/fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
             {})
           (= {line} (str line "  (-" gaps ")"))
           (add-result! "failures" line)}
@@ -145,20 +145,20 @@
       (= {rel} (head keys))
       (= {fc} (dict/get stdlib-files rel))
       (= {filename} (if (str/starts-with? rel "runtime/src/") {(str/slice rel 12 (len rel))} {rel}))
-      (= {expr-pct} (fc/expr-pct fc))
-      (= {branch-pct} (fc/branch-pct fc))
+      (= {expr-pct} (cov/expr-pct fc))
+      (= {branch-pct} (cov/branch-pct fc))
       (= {expr-pass} (>= expr-pct REQ_EXPR))
       (= {branch-pass} (>= branch-pct REQ_BRANCH))
       (= {status} (if (and expr-pass branch-pass) {"V"} {"X"}))
-      (= {line} (str "  " filename " " status "  " (fmt-pct expr-pct) " expr, " (fmt-pct branch-pct) " branch"))
+      (= {line} (str "  " filename " " status "  " (cov/fmt-pct expr-pct) " expr, " (cov/fmt-pct branch-pct) " branch"))
       (if (or (not expr-pass) (not branch-pass))
         {do
           (= {gaps} "")
           (if (not expr-pass)
-            {(= {gaps} (str gaps (fmt-pct (- REQ_EXPR expr-pct)) " expr"))}
+            {(= {gaps} (str gaps (cov/fmt-pct (- REQ_EXPR expr-pct)) " expr"))}
             {})
           (if (not branch-pass)
-            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
+            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (cov/fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
             {})
           (= {line} (str line "  (-" gaps ")"))
           (= {reason} (is-blocked rel))
@@ -212,7 +212,7 @@
   {do
     (print "X COVERAGE REQUIREMENTS NOT MET")
     (print "")
-    (printf "All runtime code in src/ requires %s line, %s branch.\n" (fmt-pct REQ_LINE) (fmt-pct REQ_BRANCH))
+    (printf "All runtime code in src/ requires %s line, %s branch.\n" (cov/fmt-pct REQ_LINE) (cov/fmt-pct REQ_BRANCH))
     (print "See coverage/docs/COVERAGE_REQUIREMENTS.md for rationale.")})
 
 (print "================================================================================")

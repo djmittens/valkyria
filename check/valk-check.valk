@@ -17,11 +17,13 @@
 (load "symdb/symdb.valk")
 (load "symdb/validate.valk")
 
+(module check)
+
 (fun {eprintln s} {stderr/write (str s "\n")})
 
 ; === Find .valk files via git ===
 
-(fun {check/find-files dir} {do
+(fun {find-files dir} {do
   (= {r} (exec "git" "ls-files" "--full-name" "*.valk" "**/*.valk"))
   (if (!= r:exit-code 0)
     {do (eprintln (str "valk-check: git ls-files failed: " r:stderr))
@@ -35,7 +37,7 @@
 
 ; === Ignore list ===
 
-(fun {check/load-ignore-list} {do
+(fun {load-ignore-list} {do
   (= {text} (read-file ".valkcheckignore"))
   (if (error? text) {(dict/new)}
     {dict/from-keys
@@ -43,30 +45,30 @@
         (str/split text "\n"))})
 })
 
-(def {check/IGNORED} (check/load-ignore-list))
+(def {IGNORED} (load-ignore-list))
 
-(fun {check/ignored? path} {dict/has? check/IGNORED path})
+(fun {ignored? path} {dict/has? IGNORED path})
 
 ; === Diagnostic formatting ===
 
-(fun {check/severity-str sev} {
+(fun {severity-str sev} {
   if (== sev 1) {"error"}
   {if (== sev 2) {"warning"}
     {"info"}}
 })
 
-(fun {check/print-diag path d} {
+(fun {print-diag path d} {
   eprintln (str path ":" d:line ":" d:col ": "
-    (check/severity-str d:severity) ": " d:message)
+    (severity-str d:severity) ": " d:message)
 })
 
-(fun {check/print-diags path diags} {
+(fun {print-diags path diags} {
   if (nil? diags) {nil}
-  {do (check/print-diag path (head diags))
-      (check/print-diags path (tail diags))}
+  {do (print-diag path (head diags))
+      (print-diags path (tail diags))}
 })
 
-(fun {check/count-severity diags sev} {
+(fun {count-severity diags sev} {
   if (nil? diags) {0}
   {if (error? diags) {0}
     {do
@@ -74,12 +76,12 @@
       (= {s} (if (error? d) {-1} {d:severity}))
       (= {s} (if (error? s) {-1} {s}))
       (+ (if (== s sev) {1} {0})
-         (check/count-severity (tail diags) sev))}}
+         (count-severity (tail diags) sev))}}
 })
 
 ; === Phase 1: Sync all files into symdb (using compiler pipeline) ===
 
-(fun {check/sync-light db uri text hash ast} {do
+(fun {sync-light db uri text hash ast} {do
   (= {path} (symdb/uri->path uri))
   (sqlite/exec db
     "INSERT INTO files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
@@ -90,40 +92,40 @@
 
 ; 80 spaces — used to pad progress lines so partial \r overwrites don't leave
 ; tails of previous longer messages behind.
-(def {check/SPACES80}
+(def {SPACES80}
   "                                                                                ")
 
-(fun {check/spaces n} {
+(fun {spaces n} {
   if (<= n 0) {""}
-    {if (>= n 80) {check/SPACES80}
-      {str/slice check/SPACES80 0 n}}
+    {if (>= n 80) {SPACES80}
+      {str/slice SPACES80 0 n}}
 })
 
 ; Progress line. Pad to 80 chars so partial overwrites via \r don't leave
 ; tails of the previous longer message behind. Truncate long paths to fit.
-(fun {check/progress label i total path} {do
+(fun {progress label i total path} {do
   (= {short} (if (> (len path) 50) {str "…" (str/slice path (- (len path) 49) (len path))} {path}))
   (= {msg} (str "\r  [" i "/" total "] " label " " short))
   (= {pad} (- 80 (len msg)))
-  (stderr/write (str msg (check/spaces pad)))
+  (stderr/write (str msg (spaces pad)))
 })
 
-(fun {check/progress-clear} {do
+(fun {progress-clear} {do
   (stderr/write "\r")
-  (stderr/write check/SPACES80)
+  (stderr/write SPACES80)
   (stderr/write "\r")
 })
 
 ; Returns the stored hash for a file, or nil if not present.
 ; sqlite/query-value raises on 0 rows; swallow that to nil.
-(fun {check/stored-hash db path} {do
+(fun {stored-hash db path} {do
   (= {r} (sqlite/query-value db "SELECT hash FROM files WHERE path=?1" path))
   (if (error? r) {nil} {r})
 })
 
 ; Drop a no-longer-existing file's rows so its stale symbols don't leak
 ; into validation of the remaining workspace.
-(fun {check/remove-stale db path} {do
+(fun {remove-stale db path} {do
   (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path=?1" path))
   (if (error? fid) {nil}
     {symdb/remove-file db fid})
@@ -135,20 +137,20 @@
 ; staged) fingerprint as errors: purge them from the DB and continue —
 ; propagating the error here used to abort the walk and leave every
 ; remaining file stale, producing false diagnostics workspace-wide.
-(fun {check/sync-walk db files total idx changed} {
+(fun {sync-walk db files total idx changed} {
   if (nil? files) {changed}
   {do
     (= {path} (head files))
-    (check/progress "indexing" (+ idx 1) total path)
+    (progress "indexing" (+ idx 1) total path)
     (= {fp} (file/fingerprint path))
     (if (error? fp)
       {do
-        (check/remove-stale db path)
-        (check/sync-walk db (tail files) total (+ idx 1) changed)}
+        (remove-stale db path)
+        (sync-walk db (tail files) total (+ idx 1) changed)}
       {do
-        (= {stored} (check/stored-hash db path))
+        (= {stored} (stored-hash db path))
         (if (and (not (nil? stored)) (== stored fp))
-          {check/sync-walk db (tail files) total (+ idx 1) changed}
+          {sync-walk db (tail files) total (+ idx 1) changed}
           {do
             (= {text} (read-file path))
             (if (not (error? text))
@@ -159,40 +161,40 @@
                 (if (error? ast) {nil}
                   {do
                     (sqlite/exec db "BEGIN")
-                    (check/sync-light db (str "file://" path) text fp ast)
+                    (sync-light db (str "file://" path) text fp ast)
                     (sqlite/exec db "COMMIT")})}
               {nil})
-            (check/sync-walk db (tail files) total (+ idx 1) (+ changed 1))})})}
+            (sync-walk db (tail files) total (+ idx 1) (+ changed 1))})})}
 })
 
-(fun {check/sync-all db files} {do
-  (= {changed} (check/sync-walk db files (len files) 0 0))
-  (check/progress-clear)
+(fun {sync-all db files} {do
+  (= {changed} (sync-walk db files (len files) 0 0))
+  (progress-clear)
   changed
 })
 
 ; === Phase 2: Validate all files ===
 
-(fun {check/validate-all db files with-types} {do
+(fun {validate-all db files with-types} {do
   ; Preload db-derived caches once; reuse across all files.
   ; Without this, known-set (~26s) and arity-cache (~6s) re-query the symdb
   ; for every file — the bulk of phase-2 wall time on large workspaces.
   (= {cache} (vd/preload-caches db))
-  (= {r} (check/validate-walk db files with-types cache (len files) 0 0 0 0))
-  (check/progress-clear)
+  (= {r} (validate-walk db files with-types cache (len files) 0 0 0 0))
+  (progress-clear)
   r
 })
 
 ; Collect HM type inference errors for a single file as warnings.
 ; The HM engine stores source positions as byte offsets; convert them to
 ; line/column using the source text before reporting.
-(fun {check/hm-errors text ast} {do
+(fun {hm-errors text ast} {do
   (= {result} (type/infer-file ast))
   (= {errors} (plist/get result :errors))
-  (check/hm-errors-to-diags text errors)
+  (hm-errors-to-diags text errors)
 })
 
-(fun {check/hm-errors-to-diags text errors} {
+(fun {hm-errors-to-diags text errors} {
   if (nil? errors) {nil}
   {do
     (= {e} (head errors))
@@ -204,10 +206,10 @@
                  :line (head pos)
                  :col (head (tail pos))
                  :message (str "type: " msg))
-      (check/hm-errors-to-diags text (tail errors)))}
+      (hm-errors-to-diags text (tail errors)))}
 })
 
-(fun {check/merge-diags a b} {
+(fun {merge-diags a b} {
   if (nil? a) {b}
   {if (nil? b) {a}
     {join a b}}
@@ -223,53 +225,53 @@
 ; not hand the error VALUE back: every ordinary builtin propagates an error
 ; argument, so `(nil? err)` at the call site would return the error, poison
 ; the enclosing `if`, and abort the walk mid-run.
-(fun {check/first-parse-error forms} {
+(fun {first-parse-error forms} {
   (if (nil? forms) {""}
     {if (error? (head forms))
       {str (head forms)}
-      {(check/first-parse-error (tail forms))}})
+      {(first-parse-error (tail forms))}})
 })
 
-(fun {check/validate-walk db files with-types cache total idx total-lines total-errors total-warnings} {
+(fun {validate-walk db files with-types cache total idx total-lines total-errors total-warnings} {
   if (nil? files) {list :lines total-lines :errors total-errors
                         :warnings total-warnings}
   {do
     (= {path} (head files))
-    (check/progress "validating" (+ idx 1) total path)
-    (if (check/ignored? path)
-      {check/validate-walk db (tail files) with-types cache total (+ idx 1)
+    (progress "validating" (+ idx 1) total path)
+    (if (ignored? path)
+      {validate-walk db (tail files) with-types cache total (+ idx 1)
         total-lines total-errors total-warnings}
       {do
         (= {text} (read-file path))
         (if (error? text)
-          {check/validate-walk db (tail files) with-types cache total (+ idx 1)
+          {validate-walk db (tail files) with-types cache total (+ idx 1)
             total-lines total-errors total-warnings}
           {do
             (= {lines} (+ 1 (len (str/split text "\n"))))
             (= {ast} (parse text))
-            (= {perr} (if (error? ast) {(str ast)} {(check/first-parse-error ast)}))
+            (= {perr} (if (error? ast) {(str ast)} {(first-parse-error ast)}))
             (if (> (len perr) 0)
-              {do (check/progress-clear)
+              {do (progress-clear)
                   (eprintln (str path ":1:1: error: " perr))
-                  (check/validate-walk db (tail files) with-types cache total (+ idx 1)
+                  (validate-walk db (tail files) with-types cache total (+ idx 1)
                     (+ total-lines lines) (+ total-errors 1) total-warnings)}
               {do
                 (= {vd-diags} (vd/validate-cached db (symdb/canon-path path) ast text cache))
-                (= {hm-diags} (if with-types {check/hm-errors text ast} {nil}))
+                (= {hm-diags} (if with-types {hm-errors text ast} {nil}))
                 (= {diags} (if (error? vd-diags) {hm-diags}
-                               {check/merge-diags vd-diags hm-diags}))
+                               {merge-diags vd-diags hm-diags}))
                 (if (error? diags)
-                  {do (check/progress-clear)
+                  {do (progress-clear)
                       (eprintln (str path ": internal error: " diags))
-                      (check/validate-walk db (tail files) with-types cache total (+ idx 1)
+                      (validate-walk db (tail files) with-types cache total (+ idx 1)
                         (+ total-lines lines) (+ total-errors 1) total-warnings)}
                   {do
-                    (= {errs} (check/count-severity diags 1))
-                    (= {warns} (check/count-severity diags 2))
+                    (= {errs} (count-severity diags 1))
+                    (= {warns} (count-severity diags 2))
                     (if (> (len diags) 0)
-                      {do (check/progress-clear) (check/print-diags path diags)}
+                      {do (progress-clear) (print-diags path diags)}
                       {nil})
-                    (check/validate-walk db (tail files) with-types cache total (+ idx 1)
+                    (validate-walk db (tail files) with-types cache total (+ idx 1)
                       (+ total-lines lines) (+ total-errors errs) (+ total-warnings warns))})})})})}
 })
 
@@ -280,32 +282,32 @@
 ;            HM currently has many false positives, so this is off by default)
 ;   dir      Directory to check (defaults to ".")
 
-(fun {check/has-flag args flag} {
+(fun {has-flag args flag} {
   if (nil? args) {0}
   {if (== (head args) flag) {1}
-    {check/has-flag (tail args) flag}}
+    {has-flag (tail args) flag}}
 })
 
-(fun {check/find-dir args} {
+(fun {find-dir args} {
   if (nil? args) {"."}
   {if (== (head args) "--")
-    {check/skip-flags (tail args)}
-    {check/find-dir (tail args)}}
+    {skip-flags (tail args)}
+    {find-dir (tail args)}}
 })
 
-(fun {check/skip-flags args} {
+(fun {skip-flags args} {
   if (nil? args) {"."}
   {if (str/starts-with? (head args) "--")
-    {check/skip-flags (tail args)}
+    {skip-flags (tail args)}
     {head args}}
 })
 
 ; === Main ===
 
-(fun {check/main} {do
-  (= {dir} (check/find-dir sys/argv))
-  (= {with-types} (check/has-flag sys/argv "--types"))
-  (= {files} (check/find-files dir))
+(fun {main} {do
+  (= {dir} (find-dir sys/argv))
+  (= {with-types} (has-flag sys/argv "--types"))
+  (= {files} (find-files dir))
 
   (if (nil? files)
     {do (eprintln "valk-check: no .valk files found") (exit 0)} {nil})
@@ -317,7 +319,7 @@
   (= {db} (symdb/init db-path))
   (eprintln (str "valk-check: indexing " n " files"))
   (= {p1-start} (time-us {}))
-  (= {changed} (check/sync-all db files))
+  (= {changed} (sync-all db files))
   (= {p1-ms} (/ (- (time-us {}) p1-start) 1000))
   (eprintln (str "  phase 1: " p1-ms " ms (" changed " changed)"))
 
@@ -325,7 +327,7 @@
   (eprintln (str "valk-check: validating " n " files"
     (if with-types {" (with HM type warnings)"} {""})))
   (= {p2-start} (time-us {}))
-  (= {report} (check/validate-all db files with-types))
+  (= {report} (validate-all db files with-types))
   (= {p2-ms} (/ (- (time-us {}) p2-start) 1000))
   (eprintln (str "  phase 2: " p2-ms " ms"))
 
@@ -344,4 +346,4 @@
       (exit 1)})
 })
 
-(check/main)
+(main)

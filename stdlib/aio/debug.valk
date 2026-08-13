@@ -5,25 +5,27 @@
 (load "stdlib/aio/sse.valk")
 (load "stdlib/aio/debug-broadcaster.valk")
 
+(module aio)
+
 ; Base path for debug assets (relative to where valk is run from)
-(def {aio/debug-assets-path} "stdlib/aio/debug/")
+(def {debug-assets-path} "stdlib/aio/debug/")
 
 ; Load and cache the HTML content from external files at module load time
 ; Files are: head.html + style.css + body.html + script.js + footer.html
-(def {aio/debug-html-content}
+(def {debug-html-content}
   (str
-    (read-file (str aio/debug-assets-path "head.html"))
-    (read-file (str aio/debug-assets-path "style.css"))
-    (read-file (str aio/debug-assets-path "body.html"))
-    (read-file (str aio/debug-assets-path "script.js"))
-    (read-file (str aio/debug-assets-path "footer.html"))))
+    (read-file (str debug-assets-path "head.html"))
+    (read-file (str debug-assets-path "style.css"))
+    (read-file (str debug-assets-path "body.html"))
+    (read-file (str debug-assets-path "script.js"))
+    (read-file (str debug-assets-path "footer.html"))))
 
 ; Helper: Merge AIO metrics, modular metrics, and VM metrics into combined JSON
 ; The AIO metrics JSON is a single object, the modular metrics JSON is also an object,
 ; and the VM metrics JSON is also an object.
 ; We need to merge them into a single JSON object with three top-level keys.
 ; Note: aio_systems is now an array to support multiple AIO systems in the future.
-(fun {aio/debug-merge-metrics-json sys}
+(fun {debug-merge-metrics-json sys}
   {
     (= {aio-json} (aio/metrics-json sys))
     (= {aio-systems-json} (aio/systems-json sys))
@@ -35,7 +37,7 @@
   })
 
 ; Helper: Parse a single query param and update the config plist
-(fun {aio/debug-parse-param config param}
+(fun {debug-parse-param config param}
   {(= {kv} (str/split param "="))
    (if (== (len kv) 2)
      {do
@@ -51,7 +53,7 @@
 
 ; Helper: Handle slab bucket query for zoom visualization
 ; Query params: slab=name&start=N&end=N&buckets=N
-(fun {aio/debug-handle-slab-buckets sys query}
+(fun {debug-handle-slab-buckets sys query}
   {
     ; Parse query params (format: "slab=tcp_buffers&start=0&end=1000&buckets=100")
     (= {params} (if query (str/split query "&") {}))
@@ -60,7 +62,7 @@
     (= {defaults} {:slab "tcp_buffers" :start 0 :end 10000 :buckets 100})
 
     ; Parse params functionally
-    (= {config} (foldl aio/debug-parse-param defaults params))
+    (= {config} (foldl debug-parse-param defaults params))
 
     ; Extract parsed values
     (= {slab-name} config:slab)
@@ -76,7 +78,7 @@
 
 ; Helper: Merge AIO metrics, modular metrics, and VM metrics into combined Prometheus format
 ; All return Prometheus text format, so we can just concatenate them with separators
-(fun {aio/debug-merge-metrics-prometheus sys}
+(fun {debug-merge-metrics-prometheus sys}
   {
     (= {aio-prom} (aio/metrics-prometheus sys))
     (= {sys-prom} (aio/system-stats-prometheus sys))
@@ -88,7 +90,7 @@
 
 ; Build diagnostics state JSON for the dashboard
 ; Returns: {"metrics": {...}, "memory": {...}}
-(fun {aio/debug-diagnostics-state sys}
+(fun {debug-diagnostics-state sys}
   {
     ; Metrics are updated continuously, no explicit update needed
     (= {aio-json} (aio/metrics-json sys))
@@ -102,7 +104,7 @@
 ; Build diagnostics delta JSON for testing
 ; Uses global delta collection (not per-subscriber baseline)
 ; Returns: {"metrics": {...}, "memory": {...}}
-(fun {aio/debug-diagnostics-delta sys}
+(fun {debug-diagnostics-delta sys}
   {
     (= {delta} (metrics/collect-delta))
     (= {delta-json} (metrics/delta-json delta))
@@ -114,7 +116,7 @@
 
 ; SSE handler for /debug/diagnostics/memory
 ; Uses shared broadcaster for efficient multi-client streaming
-(fun {aio/debug-diagnostics-sse-handler sys req}
+(fun {debug-diagnostics-sse-handler sys req}
   {(if (not (ref? req))
      `{:status "200" 
        :content-type "text/event-stream; charset=utf-8" 
@@ -127,8 +129,8 @@
 
 ; Create a debug handler that routes debug requests
 ; Returns nil if the request doesn't match any debug routes
-; Usage: (aio/debug-handle-request sys req) => response map or nil
-(fun {aio/debug-handle-request sys req}
+; Usage: (debug-handle-request sys req) => response map or nil
+(fun {debug-handle-request sys req}
   {
     ; Extract request path - support both ref (runtime) and qexpr (testing)
     (= {path} (if (ref? req)
@@ -143,18 +145,18 @@
     ; Route to appropriate debug endpoint
     ; Handle both /debug and /debug/ for the dashboard
     (select
-      {(or (== path "/debug") (== path "/debug/")) `{:status "200" :content-type "text/html; charset=utf-8" :body ,aio/debug-html-content}}
-      {(== path "/debug/metrics") `{:status "200" :content-type "application/json" :body ,(aio/debug-merge-metrics-json sys)}}
-      {(== path "/debug/metrics/state") `{:status "200" :content-type "application/json" :cache-control "no-cache, no-store, must-revalidate" :body ,(aio/debug-diagnostics-state sys)}}
-      {(== path "/metrics") `{:status "200" :content-type "text/plain; version=0.0.4" :body ,(aio/debug-merge-metrics-prometheus sys)}}
-      {(== path "/debug/diagnostics/memory") (aio/debug-diagnostics-sse-handler sys req)}
-      {(== path "/debug/slab/buckets") (aio/debug-handle-slab-buckets sys query)}
+      {(or (== path "/debug") (== path "/debug/")) `{:status "200" :content-type "text/html; charset=utf-8" :body ,debug-html-content}}
+      {(== path "/debug/metrics") `{:status "200" :content-type "application/json" :body ,(debug-merge-metrics-json sys)}}
+      {(== path "/debug/metrics/state") `{:status "200" :content-type "application/json" :cache-control "no-cache, no-store, must-revalidate" :body ,(debug-diagnostics-state sys)}}
+      {(== path "/metrics") `{:status "200" :content-type "text/plain; version=0.0.4" :body ,(debug-merge-metrics-prometheus sys)}}
+      {(== path "/debug/diagnostics/memory") (debug-diagnostics-sse-handler sys req)}
+      {(== path "/debug/slab/buckets") (debug-handle-slab-buckets sys query)}
       {otherwise `{:status "200" :content-type "text/html; charset=utf-8" :body "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url=/debug/\"></head></html>"}})
   })
 
-(fun {aio/debug-handler sys}
+(fun {debug-handler sys}
   {
     (= {captured-sys} sys)
-    (\ {req} {aio/debug-handle-request captured-sys req})
+    (\ {req} {debug-handle-request captured-sys req})
   })
 

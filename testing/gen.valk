@@ -1,0 +1,17 @@
+; Random value generators for property-based testing
+
+(module gen)
+
+(fun {int lo hi} {(rand lo hi)})
+(fun {nat n} {(rand n)})
+(fun {bool} {(rand 2)})
+
+(fun {one-of lst} {
+  (nth (+ 1 (rand (len lst))) lst)
+})
+
+(fun {list-of gen-fn n} {
+  (if (<= n 0)
+    {nil}
+    {(join (list (gen-fn)) (list-of gen-fn (- n 1)))})
+})

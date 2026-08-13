@@ -1,0 +1,19 @@
+; Extra list utilities beyond the bare prelude primitives.
+
+(module list)
+
+; flat-map for lists (concatMap): applies f to each element, f returns a list, concat results
+(sig 'flat-map {-> (List A) (-> A (List B)) (List B)})
+(fun {flat-map l f} {
+  if (== l nil)
+    {nil}
+    {join (f (head l)) (flat-map (tail l) f)}
+})
+
+; Applicative for lists: apply each function in fs to each value in xs
+(sig 'ap {-> (List (-> A B)) (List A) (List B)})
+(fun {ap fs xs} {
+  if (== fs nil)
+    {nil}
+    {join (map (head fs) xs) (ap (tail fs) xs)}
+})

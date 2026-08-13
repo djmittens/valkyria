@@ -8,17 +8,19 @@
 ; Convention: Functions named `async-fn` take a value and return Async.
 ;             Functions named `async-op` are already Async values.
 
+(module async)
+
 ; === Core Monadic Operations ===
 
 ; async/pure: Wrap a pure value in an async context
 ; Type: a -> Async a
-(fun {async/pure value} {
+(fun {pure value} {
   (\ {k} {(k value)})
 })
 
 ; async/bind: Monadic bind for async (flatMap/chain)
 ; Type: Async a -> (a -> Async b) -> Async b
-(fun {async/bind async-op f} {
+(fun {bind async-op f} {
   (\ {k} {
     (async-op (\ {result} {
       do
@@ -32,7 +34,7 @@
 
 ; async/map-list: Map an async function over a list sequentially
 ; Type: (a -> Async b) -> List a -> Async (List b)
-(fun {async/map-list async-fn items} {
+(fun {map-list async-fn items} {
   (\ {k} {
     (= {process-items} (\ {remaining acc} {
       (if (== remaining ())
@@ -51,7 +53,7 @@
 
 ; async/filter-list: Filter list with async predicate
 ; Type: (a -> Async Bool) -> List a -> Async (List a)
-(fun {async/filter-list async-pred items} {
+(fun {filter-list async-pred items} {
   (\ {k} {
     (= {process-items} (\ {remaining acc} {
       (if (== remaining ())
@@ -72,7 +74,7 @@
 
 ; async/fold-list: Fold (reduce) over a list with async function
 ; Type: (b -> a -> Async b) -> b -> List a -> Async b
-(fun {async/fold-list async-fn init items} {
+(fun {fold-list async-fn init items} {
   (\ {k} {
     (= {process-items} (\ {remaining acc} {
       (if (== remaining ())
@@ -91,7 +93,7 @@
 
 ; async/collect: Execute multiple async operations and collect results
 ; Type: List (Async a) -> Async (List a)
-(fun {async/collect async-ops} {
+(fun {collect async-ops} {
   (\ {k} {
     (= {process-ops} (\ {remaining acc} {
       (if (== remaining ())
@@ -109,7 +111,7 @@
 
 ; async/sequence: Execute async operations in sequence, return last result
 ; Type: List (Async a) -> Async a
-(fun {async/sequence async-ops} {
+(fun {sequence async-ops} {
   (\ {k} {
     (= {process-ops} (\ {remaining last-result} {
       (if (== remaining ())
@@ -129,11 +131,11 @@
 
 ; async/all: Execute all async ops and return all results
 ; Type: List (Async a) -> Async (List a)
-(def {async/all} async/collect)
+(def {all} collect)
 
 ; async/race: Return the first result (simplified - just returns first op result)
 ; Type: List (Async a) -> Async a
-(fun {async/race async-ops} {
+(fun {race async-ops} {
   (\ {k} {
     (if (== async-ops ())
       {(k nil)}
@@ -147,7 +149,7 @@
 
 ; async/when: Execute async op only if condition is true
 ; Type: Bool -> Async a -> Async (Maybe a)
-(fun {async/when condition async-op} {
+(fun {when condition async-op} {
   (\ {k} {
     (if condition
       {(async-op k)}
@@ -157,7 +159,7 @@
 
 ; async/unless: Execute async op only if condition is false
 ; Type: Bool -> Async a -> Async (Maybe a)
-(fun {async/unless condition async-op} {
+(fun {unless condition async-op} {
   (\ {k} {
     (if condition
       {(k nil)}
@@ -169,7 +171,7 @@
 
 ; async/tap: Execute async op for side effects, return original value
 ; Type: a -> (a -> Async b) -> Async a
-(fun {async/tap value async-fn} {
+(fun {tap value async-fn} {
   (\ {k} {
     (= {async-op} (async-fn value))
     (async-op (\ {_} {(k value)}))
@@ -178,7 +180,7 @@
 
 ; async/const: Always return same value, ignoring async op result
 ; Type: a -> Async b -> Async a
-(fun {async/const value async-op} {
+(fun {const value async-op} {
   (\ {k} {
     (async-op (\ {_} {(k value)}))
   })
@@ -188,7 +190,7 @@
 
 ; async/pipe: Compose async operations left-to-right
 ; Type: a -> List (a -> Async a) -> Async a
-(fun {async/pipe initial-value async-fns} {
+(fun {pipe initial-value async-fns} {
   (\ {k} {
     (= {process-fns} (\ {remaining current-value} {
       (if (== remaining ())
@@ -207,7 +209,7 @@
 
 ; async/compose: Function composition for async functions (left-to-right)
 ; Type: (a -> Async b) -> (b -> Async c) -> (a -> Async c)
-(fun {async/compose f g} {
+(fun {compose f g} {
   (\ {x} {
     (\ {k} {
       (= {f-op} (f x))
@@ -223,7 +225,7 @@
 
 ; async/try: Try async operation, wrap result in Result type
 ; Type: Async a -> Async (Result a e)
-(fun {async/try async-op} {
+(fun {try async-op} {
   (\ {k} {
     (async-op (\ {result} {
       (k (Ok result))
@@ -233,7 +235,7 @@
 
 ; async/try-result: Normalize result to Result type
 ; Type: Async a -> Async (Result a e)
-(fun {async/try-result async-op} {
+(fun {try-result async-op} {
   (\ {k} {
     (async-op (\ {result} {
       (if (and (list? result) (or (ok? result) (err? result)))
@@ -245,11 +247,11 @@
 
 ; async/recover: Recover from error with fallback async operation
 ; Type: Async a -> Async a -> Async a
-(fun {async/recover async-op fallback-async} {
+(fun {recover async-op fallback-async} {
   (\ {k} {
     do
-    (= {try-result} (async/try-result async-op))
-    (try-result (\ {result} {
+    (= {normalized-op} (try-result async-op))
+    (normalized-op (\ {result} {
       match result
         {(Ok :value v) (k v)}
         {(Err :error e) (fallback-async k)}
@@ -265,7 +267,7 @@
 ; that don't involve actual I/O). For I/O operations, use aio/run which runs
 ; the event loop.
 ; Implementation: Uses identity continuation - for pure ops, the result flows back directly.
-(fun {async/run async-op} {
+(fun {run async-op} {
   (async-op (\ {x} {x}))
 })
 
@@ -273,11 +275,11 @@
 
 ; async/traverse: Map and collect in one operation
 ; Type: (a -> Async b) -> List a -> Async (List b)
-(def {async/traverse} async/map-list)
+(def {traverse} map-list)
 
 ; async/zip-with: Zip two lists with an async binary function
 ; Type: (a -> b -> Async c) -> List a -> List b -> Async (List c)
-(fun {async/zip-with async-fn list1 list2} {
+(fun {zip-with async-fn list1 list2} {
   (\ {k} {
     (= {process-pairs} (\ {rem1 rem2 acc} {
       (if (== rem1 ())
@@ -300,7 +302,7 @@
 
 ; async/replicate: Replicate an async operation n times
 ; Type: Int -> Async a -> Async (List a)
-(fun {async/replicate n async-op} {
+(fun {replicate n async-op} {
   (\ {k} {
     (= {process-n} (\ {remaining acc} {
       (if (== remaining 0)
@@ -315,7 +317,7 @@
 
 ; async/while: Execute async operation while condition returns true
 ; Type: (Int -> Bool) -> Async a -> Async (List a)
-(fun {async/while condition-fn async-op} {
+(fun {while condition-fn async-op} {
   (\ {k} {
     (= {loop} (\ {iteration acc} {
       (if (condition-fn iteration)
@@ -330,19 +332,21 @@
 
 ; async/forever: Execute async operation indefinitely (until external stop)
 ; Type: Async a -> Async (List a)  ; NOTE: Never terminates normally
-(fun {async/forever async-op} {
-  (async/while (\ {_} {true}) async-op)
+(fun {forever async-op} {
+  (while (\ {_} {true}) async-op)
 })
 
 ; async/take: Take first n results from repeated async operation
 ; Type: Int -> Async a -> Async (List a)
+; Defined with an explicit prefix: a bare `take` def would capture this
+; file's uses of the prelude `take`.
 (fun {async/take n async-op} {
-  (async/replicate n async-op)
+  (replicate n async-op)
 })
 
 ; async/partition: Partition list and process each partition with async op
 ; Type: Int -> List a -> (List a -> Async b) -> Async (List b)
-(fun {async/partition size items async-fn} {
+(fun {partition size items async-fn} {
   (\ {k} {
     do
     ; Helper to partition a list

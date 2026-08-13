@@ -1,0 +1,74 @@
+; Result utilities. The Result type itself is defined in the prelude.
+
+(module result)
+
+(sig 'unwrap-or {-> A B B})
+(fun {unwrap-or res default} {
+  match res
+    {(Ok :value v) v}
+    {(Err :error e) default}
+})
+
+(sig 'map {-> A (-> B C) A})
+(fun {map res f} {
+  match res
+    {(Ok :value v) (Ok (f v))}
+    {(Err :error e) (Err e)}
+})
+
+(sig 'map-err {-> A (-> B C) A})
+(fun {map-err res f} {
+  match res
+    {(Ok :value v) (Ok v)}
+    {(Err :error e) (Err (f e))}
+})
+
+(sig 'flat-map {-> A (-> B A) A})
+(fun {flat-map res f} {
+  match res
+    {(Ok :value v) (f v)}
+    {(Err :error e) (Err e)}
+})
+
+(sig 'ap {-> A A A})
+(fun {ap rf rv} {
+  match rf
+    {(Ok :value f) (map rv f)}
+    {(Err :error e) (Err e)}
+})
+
+; traverse: apply f (returning Result) to each element, collect into Result of list
+; If any f returns Err, the whole result is that Err
+(sig 'traverse {-> (List A) (-> A B) B})
+(fun {traverse l f} {
+  if (== l nil)
+    {(Ok nil)}
+    {do
+      (= {hd} (f (head l)))
+      (match hd
+        {(Err :error e) (Err e)}
+        {(Ok :value v)
+          (match (traverse (tail l) f)
+            {(Err :error e) (Err e)}
+            {(Ok :value rest) (Ok (join (list v) rest))})})}
+})
+
+; sequence: turn a list of Results into a Result of list
+(sig 'sequence {-> (List A) A})
+(fun {sequence l} {
+  (traverse l id)
+})
+
+(sig 'or {-> A A A})
+(fun {or a b} {
+  match a
+    {(Ok :value v) (Ok v)}
+    {(Err :error e) b}
+})
+
+(sig 'to-option {-> A A})
+(fun {to-option res} {
+  match res
+    {(Ok :value v) (Some v)}
+    {(Err :error e) (None)}
+})

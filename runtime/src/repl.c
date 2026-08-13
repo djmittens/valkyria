@@ -95,7 +95,9 @@ int main(int argc, char* argv[]) {
   valk_gc_set_root(gc_heap, env);
   valk_thread_ctx.root_env = env;
 
-  // Bootstrap: load prelude + core libs into root env (no module, no rewrite)
+  // Bootstrap: load prelude + core libs into root env. These go through the
+  // normal load pipeline; handles.valk declares (module aio), the prelude
+  // stays bare (it defines the module macro itself).
   {
     valk_lval_t *r = valk_load_file(env, "stdlib/prelude.valk");
     if (LVAL_TYPE(r) == LVAL_ERR) {

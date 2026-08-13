@@ -1,0 +1,80 @@
+; Option utilities. The Option type itself is defined in the prelude.
+
+(module option)
+
+(sig 'unwrap-or {-> A B B})
+(fun {unwrap-or opt default} {
+  match opt
+    {(Some :value v) v}
+    {(None) default}
+})
+
+(sig 'map {-> A (-> B C) A})
+(fun {map opt f} {
+  match opt
+    {(Some :value v) (Some (f v))}
+    {(None) (None)}
+})
+
+(sig 'flat-map {-> A (-> B A) A})
+(fun {flat-map opt f} {
+  match opt
+    {(Some :value v) (f v)}
+    {(None) (None)}
+})
+
+(sig 'filter {-> A (-> B Num) A})
+(fun {filter opt pred} {
+  match opt
+    {(Some :value v) (if (pred v) {(Some v)} {(None)})}
+    {(None) (None)}
+})
+
+(sig 'or {-> A A A})
+(fun {or a b} {
+  match a
+    {(Some :value v) (Some v)}
+    {(None) b}
+})
+
+(sig 'from-nullable {-> A A})
+(fun {from-nullable val} {
+  if (== val nil) {(None)} {(Some val)}
+})
+
+; traverse: apply f (returning Option) to each element, collect into Option of list
+; If any f returns None, the whole result is None
+(sig 'traverse {-> (List A) (-> A B) B})
+(fun {traverse l f} {
+  if (== l nil)
+    {(Some nil)}
+    {do
+      (= {hd} (f (head l)))
+      (match hd
+        {(None) (None)}
+        {(Some :value v)
+          (match (traverse (tail l) f)
+            {(None) (None)}
+            {(Some :value rest) (Some (join (list v) rest))})})}
+})
+
+; sequence: turn a list of Options into an Option of list
+(sig 'sequence {-> (List A) A})
+(fun {sequence l} {
+  (traverse l id)
+})
+
+; Applicative: apply a wrapped function to a wrapped value
+(sig 'ap {-> A A A})
+(fun {ap of ov} {
+  match of
+    {(Some :value f) (map ov f)}
+    {(None) (None)}
+})
+
+(sig 'to-result {-> A B A})
+(fun {to-result opt err} {
+  match opt
+    {(Some :value v) (Ok v)}
+    {(None) (Err err)}
+})

@@ -130,8 +130,6 @@
 (sig 'num? {-> A Num})
 ; Test if value is a string.
 (sig 'str? {-> A Num})
-; Test if value is an async handle.
-(sig 'handle? {-> A Num})
 ; Test if value is a function.
 (sig 'fun? {-> A Num})
 ; Test if value is a symbol.

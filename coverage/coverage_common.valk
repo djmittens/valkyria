@@ -13,6 +13,8 @@
 ;   lc-dict keys:   "hit" "exprs"
 ;     "exprs"       -> flat list (col end-col hit ...)
 
+(module cov)
+
 ; --- Integer-scaled percentage helpers ---
 
 (fun {pct-tenths hit found} {
@@ -129,11 +131,11 @@
 (fun {*finalize-all-files* keys files} {
   (if (== keys nil) {}
     {do
-      (fc/finalize! (dict/get files (head keys)))
+      (finalize! (dict/get files (head keys)))
       (*finalize-all-files* (tail keys) files)})
 })
 
-(fun {fc/finalize! fc} {
+(fun {finalize! fc} {
   (= {lines} (dict/get fc "lines"))
   (= {keys} (dict/keys lines))
   (= {lr} (*count-lines* keys lines 0 0))
@@ -149,23 +151,23 @@
 
 })
 
-(fun {fc/lines-found fc} {(dict/get fc "_lf")})
-(fun {fc/lines-hit fc} {(dict/get fc "_lh")})
-(fun {fc/branches-found fc} {(dict/get fc "_bf")})
-(fun {fc/branches-hit fc} {(dict/get fc "_bh")})
-(fun {fc/exprs-found fc} {(dict/get fc "_ef")})
-(fun {fc/exprs-hit fc} {(dict/get fc "_eh")})
+(fun {lines-found fc} {(dict/get fc "_lf")})
+(fun {lines-hit fc} {(dict/get fc "_lh")})
+(fun {branches-found fc} {(dict/get fc "_bf")})
+(fun {branches-hit fc} {(dict/get fc "_bh")})
+(fun {exprs-found fc} {(dict/get fc "_ef")})
+(fun {exprs-hit fc} {(dict/get fc "_eh")})
 
-(fun {fc/line-pct fc} {
+(fun {line-pct fc} {
   (pct-tenths (dict/get fc "_lh") (dict/get fc "_lf"))
 })
 
-(fun {fc/branch-pct fc} {
+(fun {branch-pct fc} {
   (= {found} (dict/get fc "_bf"))
   (if (== found 0) {1000} {(pct-tenths (dict/get fc "_bh") found)})
 })
 
-(fun {fc/expr-pct fc} {
+(fun {expr-pct fc} {
   (pct-tenths (dict/get fc "_eh") (dict/get fc "_ef"))
 })
 
@@ -623,7 +625,7 @@
         {(if (not (str/ends-with? rel ".c")) {}
           {(if (str/starts-with? rel "runtime/src/test") {}
             {(if (str/contains? rel "vendor") {}
-              {(if (<= (fc/lines-found fc) 0) {}
+              {(if (<= (lines-found fc) 0) {}
                 {(dict/set! result rel fc)})})})})})
       (*filter-runtime* (tail keys) files source-root result)})
 })
@@ -653,8 +655,8 @@
                          (== rel "quality/quality.valk"))))
       (if (not gated) {}
         {(if (not (str/ends-with? rel ".valk")) {}
-          {(if (> (fc/lines-found fc) 0) {(dict/set! result rel fc)}
-            {(if (> (fc/exprs-found fc) 0) {(dict/set! result rel fc)}
+          {(if (> (lines-found fc) 0) {(dict/set! result rel fc)}
+            {(if (> (exprs-found fc) 0) {(dict/set! result rel fc)}
               {})})})})
       (*filter-stdlib* (tail keys) files source-root result)})
 })

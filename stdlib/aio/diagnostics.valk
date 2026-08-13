@@ -1,0 +1,28 @@
+; stdlib/aio/diagnostics.valk
+; Diagnostics streaming responses
+; Load with: (load "stdlib/aio/diagnostics.valk")
+
+(module diagnostics)
+
+; Create a response map for /debug/diagnostics/memory SSE endpoint
+; Usage: (diagnostics/sse-response)
+; Returns: Response map that triggers SSE diagnostics streaming
+;
+; This returns the response map needed to trigger the C-level SSE
+; diagnostics streaming system, which handles the timer-based updates
+; efficiently without requiring Lisp-level interval support.
+;
+; The C-level system streams combined memory and metrics diagnostics
+; at 10Hz (100ms interval) for real-time dashboard updates.
+;
+; Example:
+;   (match path
+;     "/debug/diagnostics/memory" (diagnostics/sse-response)
+;     ...)
+(fun {sse-response}
+  {`{:status "200"
+     :content-type "text/event-stream; charset=utf-8"
+     :cache-control "no-cache"
+     :connection "keep-alive"
+     :body-type :sse-stream
+     :sse-handler :memory-diagnostics}})

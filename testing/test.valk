@@ -4,6 +4,8 @@
 ; lint:allow-globals *test-default-timeout-ms* *test-default-suite-timeout-ms* *test-json-output*
 ;   Framework configuration, written once at load and read-only after.
 
+(module test)
+
 ; Default timeouts (milliseconds)
 (def {*test-default-timeout-ms*} 5000)       ; 5 seconds per test
 (def {*test-default-suite-timeout-ms*} 60000) ; 60 seconds for entire suite
@@ -13,7 +15,7 @@
 
 
 
-(fun {test/context-new} {
+(fun {context-new} {
   (list :passed 0 :failed 0 :skipped 0 :timed-out 0
    :suite-name "Valkyria Test Suite"
    :skip-suite 0 :skip-reason ""
@@ -22,47 +24,47 @@
    :suite-timeout-ms *test-default-suite-timeout-ms*)
 })
 
-(fun {test/debug ctx enabled} {
+(fun {debug ctx enabled} {
   (plist/set ctx :debug enabled)
 })
 
-(fun {test/suite ctx name} {
+(fun {suite ctx name} {
   (plist/set ctx :suite-name name)
 })
 
-(fun {test/skip ctx reason} {
+(fun {skip ctx reason} {
   (= {ctx} (plist/set ctx :skip-suite 1))
   (plist/set ctx :skip-reason reason)
 })
 
-(fun {test/expect-exit ctx code} {
+(fun {expect-exit ctx code} {
   (plist/set ctx :expected-exit code)
 })
 
-(fun {test/timeout ctx ms} {
+(fun {timeout ctx ms} {
   (plist/set ctx :timeout-ms ms)
 })
 
-(fun {test/suite-timeout ctx ms} {
+(fun {suite-timeout ctx ms} {
   (plist/set ctx :suite-timeout-ms ms)
 })
 
-(fun {test/case name body} {
+(fun {case name body} {
   (list name body)
 })
 
-(fun {test/add tests name body} {
-  (join tests (list (test/case name body)))
+(fun {add tests name body} {
+  (join tests (list (case name body)))
 })
 
-(fun {test/assert cond msg} {
+(fun {assert cond msg} {
   if cond
     {true}
     {error msg}
 })
 
-(fun {test/assert-eq expected actual msg} {
-  (test/assert (== expected actual) msg)
+(fun {assert-eq expected actual msg} {
+  (assert (== expected actual) msg)
 })
 
 (fun {*test-print-captured* test-name captured} {
@@ -287,7 +289,7 @@
 })
 
 (fun {*test-ctx-from-config* config} {
-  (= {ctx} (test/context-new))
+  (= {ctx} (context-new))
   (if (plist/has? config :suite-name)
     {(= {ctx} (plist/set ctx :suite-name config:suite-name))}
     {true})
@@ -340,7 +342,7 @@
 })
 
 ; Main test runner - sync tests without aio (no per-test timeout, but has suite timeout awareness)
-(fun {test/run & args} {
+(fun {run & args} {
   do
     (= {parsed} (*test-parse-args* args))
     (= {tests} (head parsed))
@@ -379,7 +381,7 @@
 
 ; Sync test runner WITH timeout support (requires aio system)
 ; Usage: (test/run-with-timeout aio tests {:suite-name "My Suite" :timeout-ms 5000})
-(fun {test/run-with-timeout aio & args} {
+(fun {run-with-timeout aio & args} {
   do
     (= {parsed} (*test-parse-args* args))
     (= {tests} (head parsed))
@@ -439,12 +441,12 @@
 
 
 
-(fun {test/case-async name body} {
+(fun {case-async name body} {
   (list name body)
 })
 
-(fun {test/async-add tests name body} {
-  (join tests (list (test/case-async name body)))
+(fun {async-add tests name body} {
+  (join tests (list (case-async name body)))
 })
 
 
@@ -474,11 +476,11 @@
 
         ; Validate that test body returned a handle - fail fast if not.
         ; An error body must be forked on explicitly: under BYOL error
-        ; propagation `(handle? err)` returns the error, which would
+        ; propagation `(aio/handle? err)` returns the error, which would
         ; short-circuit the rest of this function and silently abandon
         ; every remaining test in the suite with exit 0.
         (= {is-err} (if (error? test-handle) {1} {0}))
-        (= {is-handle} (if (== is-err 1) {0} {if (handle? test-handle) {1} {0}}))
+        (= {is-handle} (if (== is-err 1) {0} {if (aio/handle? test-handle) {1} {0}}))
         (if (== is-handle 0)
           {(do
             (= {captured} (test/capture-stop cap))
@@ -580,7 +582,7 @@
     {(*test-run-async-loop* aio (*test-run-async-one* aio ctx (head remaining)) (tail remaining))})
 })
 
-(fun {test/run-async aio & args} {
+(fun {run-async aio & args} {
   do
     (= {parsed} (*test-async-parse-args* args))
     (= {tests} (head parsed))

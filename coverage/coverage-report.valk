@@ -62,7 +62,7 @@
 (printf "  Output:       %s\n" output-dir)
 
 (print "\nCollecting coverage data...")
-(= {files} (collect-coverage build-dir source-root))
+(= {files} (cov/collect-coverage build-dir source-root))
 (= {file-keys} (dict/keys files))
 (= {c-count} (len (filter (\ {k} {str/ends-with? k ".c"}) file-keys)))
 (= {valk-count} (len (filter (\ {k} {str/ends-with? k ".valk"}) file-keys)))
@@ -83,25 +83,25 @@
 
 (fun {generate-cobertura-xml files output-path source-root} {
   (= {file-keys} (dict/keys files))
-  (= {total-lf} (sum-stat files fc/lines-found))
-  (= {total-lh} (sum-stat files fc/lines-hit))
-  (= {total-bf} (sum-stat files fc/branches-found))
-  (= {total-bh} (sum-stat files fc/branches-hit))
-  (= {line-rate} (pct-tenths total-lh total-lf))
-  (= {branch-rate} (pct-tenths total-bh total-bf))
+  (= {total-lf} (cov/sum-stat files cov/lines-found))
+  (= {total-lh} (cov/sum-stat files cov/lines-hit))
+  (= {total-bf} (cov/sum-stat files cov/branches-found))
+  (= {total-bh} (cov/sum-stat files cov/branches-hit))
+  (= {line-rate} (cov/pct-tenths total-lh total-lf))
+  (= {branch-rate} (cov/pct-tenths total-bh total-bf))
 
   (= {fh} (file/open output-path "w"))
   (file/write fh (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
     "<coverage version=\"1.0\""
     " lines-valid=\"" total-lf "\""
     " lines-covered=\"" total-lh "\""
-    " line-rate=\"" (fmt-rate line-rate) "\""
+    " line-rate=\"" (cov/fmt-rate line-rate) "\""
     " branches-valid=\"" total-bf "\""
     " branches-covered=\"" total-bh "\""
-    " branch-rate=\"" (fmt-rate branch-rate) "\""
+    " branch-rate=\"" (cov/fmt-rate branch-rate) "\""
     " complexity=\"0\">\n"
     "  <sources>\n"
-    "    <source>" (xml-escape source-root) "</source>\n"
+    "    <source>" (cov/xml-escape source-root) "</source>\n"
     "  </sources>\n"
     "  <packages>\n"))
 
@@ -129,12 +129,12 @@
             {(str/slice filepath (+ (len source-root) 1) (len filepath))}
             {filepath}))
           (= {name} (last (str/split rel "/")))
-          (= {lr} (fc/line-pct fc))
-          (= {br} (fc/branch-pct fc))
-          (file/write fh (str "        <class name=\"" (xml-escape name)
-            "\" filename=\"" (xml-escape rel)
-            "\" line-rate=\"" (fmt-rate lr)
-            "\" branch-rate=\"" (fmt-rate br)
+          (= {lr} (cov/line-pct fc))
+          (= {br} (cov/branch-pct fc))
+          (file/write fh (str "        <class name=\"" (cov/xml-escape name)
+            "\" filename=\"" (cov/xml-escape rel)
+            "\" line-rate=\"" (cov/fmt-rate lr)
+            "\" branch-rate=\"" (cov/fmt-rate br)
             "\" complexity=\"0\">\n"
             "          <methods/>\n"
             "          <lines>\n"))
@@ -173,17 +173,17 @@
   (= {is-valk} (str/ends-with? filepath ".valk"))
 
   ; Coverage stats
-  (= {use-expr} (and is-valk (> (fc/exprs-found fc) 0)))
-  (= {main-pct} (if use-expr {(fc/expr-pct fc)} {(fc/line-pct fc)}))
-  (= {branch-pct} (fc/branch-pct fc))
+  (= {use-expr} (and is-valk (> (cov/exprs-found fc) 0)))
+  (= {main-pct} (if use-expr {(cov/expr-pct fc)} {(cov/line-pct fc)}))
+  (= {branch-pct} (cov/branch-pct fc))
   (= {main-label} (if use-expr {"Expression"} {"Line"}))
-  (= {main-hit} (if use-expr {(fc/exprs-hit fc)} {(fc/lines-hit fc)}))
-  (= {main-found} (if use-expr {(fc/exprs-found fc)} {(fc/lines-found fc)}))
+  (= {main-hit} (if use-expr {(cov/exprs-hit fc)} {(cov/lines-hit fc)}))
+  (= {main-found} (if use-expr {(cov/exprs-found fc)} {(cov/lines-found fc)}))
 
   (= {fh} (file/open (str output-dir "/" safe-name) "w"))
   (file/write fh (str "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
     "<meta charset=\"UTF-8\">\n"
-    "<title>Coverage: " (html-escape rel) "</title>\n"
+    "<title>Coverage: " (cov/html-escape rel) "</title>\n"
     "<style>\n"
     ":root { --bg: #1a1a2e; --bg-alt: #16213e; --text: #eee; --text-muted: #888; --border: #333; --hit-bg: rgba(76, 175, 80, 0.15); --miss-bg: rgba(244, 67, 54, 0.25); --line-border: #444; }\n"
     "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }\n"
@@ -214,12 +214,12 @@
     "</style>\n</head>\n<body>\n"
     "<div class=\"header\">\n"
     "<a href=\"index.html\">&larr; Back to Coverage Report</a>\n"
-    "<h1>" (html-escape rel) "</h1>\n"
+    "<h1>" (cov/html-escape rel) "</h1>\n"
     "<div class=\"stats\">\n"
-    "<div class=\"stat\"><div class=\"stat-value " (cov-class main-pct) "\">" (fmt-pct main-pct) "</div><div class=\"stat-label\">" main-label " Coverage</div></div>\n"
-    "<div class=\"stat\"><div class=\"stat-value " (cov-class branch-pct) "\">" (fmt-pct branch-pct) "</div><div class=\"stat-label\">Branch Coverage</div></div>\n"
+    "<div class=\"stat\"><div class=\"stat-value " (cov-class main-pct) "\">" (cov/fmt-pct main-pct) "</div><div class=\"stat-label\">" main-label " Coverage</div></div>\n"
+    "<div class=\"stat\"><div class=\"stat-value " (cov-class branch-pct) "\">" (cov/fmt-pct branch-pct) "</div><div class=\"stat-label\">Branch Coverage</div></div>\n"
     "<div class=\"stat\"><div class=\"stat-value\">" main-hit "/" main-found "</div><div class=\"stat-label\">" (if use-expr {"Expressions"} {"Lines"}) "</div></div>\n"
-    "<div class=\"stat\"><div class=\"stat-value\">" (fc/branches-hit fc) "/" (fc/branches-found fc) "</div><div class=\"stat-label\">Branches</div></div>\n"
+    "<div class=\"stat\"><div class=\"stat-value\">" (cov/branches-hit fc) "/" (cov/branches-found fc) "</div><div class=\"stat-label\">Branches</div></div>\n"
     "</div>\n"
     "<div class=\"coverage-bar\"><div class=\"coverage-fill\" style=\"width:" (/ main-pct 10) "%;background:" (cov-color main-pct) "\"></div></div>\n"
     "</div>\n"
@@ -258,7 +258,7 @@
     "<td class=\"line-no\"><a href=\"#L" line-no "\">" line-no "</a></td>"
     "<td class=\"line-count\">" count-display "</td>"
     "<td class=\"line-branch\"></td>"
-    "<td class=\"line-src\"><pre>" (html-escape source) "</pre></td>"
+    "<td class=\"line-src\"><pre>" (cov/html-escape source) "</pre></td>"
     "</tr>\n"))
 })
 
@@ -280,7 +280,7 @@
       {do
         (= {filepath} (head keys))
         (= {fc} (dict/get files filepath))
-        (if (== (fc/lines-found fc) 0)
+        (if (== (cov/lines-found fc) 0)
           {(*gen-files* (tail keys))}
           {do
             (= {rel} (if (str/starts-with? filepath source-root)
@@ -309,22 +309,22 @@
   (= {valk-files} (dict/get acc "valk"))
 
   ; Compute totals
-  (= {c-lf} (*sum-entries* c-files fc/lines-found 0))
-  (= {c-lh} (*sum-entries* c-files fc/lines-hit 0))
-  (= {c-pct} (pct-tenths c-lh c-lf))
-  (= {c-bf} (*sum-entries* c-files fc/branches-found 0))
-  (= {c-bh} (*sum-entries* c-files fc/branches-hit 0))
-  (= {c-bpct} (pct-tenths c-bh c-bf))
+  (= {c-lf} (*sum-entries* c-files cov/lines-found 0))
+  (= {c-lh} (*sum-entries* c-files cov/lines-hit 0))
+  (= {c-pct} (cov/pct-tenths c-lh c-lf))
+  (= {c-bf} (*sum-entries* c-files cov/branches-found 0))
+  (= {c-bh} (*sum-entries* c-files cov/branches-hit 0))
+  (= {c-bpct} (cov/pct-tenths c-bh c-bf))
 
-  (= {v-ef} (*sum-entries* valk-files fc/exprs-found 0))
-  (= {v-eh} (*sum-entries* valk-files fc/exprs-hit 0))
-  (= {v-pct} (pct-tenths v-eh v-ef))
-  (= {v-bf} (*sum-entries* valk-files fc/branches-found 0))
-  (= {v-bh} (*sum-entries* valk-files fc/branches-hit 0))
+  (= {v-ef} (*sum-entries* valk-files cov/exprs-found 0))
+  (= {v-eh} (*sum-entries* valk-files cov/exprs-hit 0))
+  (= {v-pct} (cov/pct-tenths v-eh v-ef))
+  (= {v-bf} (*sum-entries* valk-files cov/branches-found 0))
+  (= {v-bh} (*sum-entries* valk-files cov/branches-hit 0))
 
   (= {total-bf} (+ c-bf v-bf))
   (= {total-bh} (+ c-bh v-bh))
-  (= {total-bpct} (pct-tenths total-bh total-bf))
+  (= {total-bpct} (cov/pct-tenths total-bh total-bf))
 
   (= {c-count} (len c-files))
   (= {v-count} (len valk-files))
@@ -364,19 +364,19 @@
     "<div class=\"summary\">\n"))
 
   (file/write fh (str "<div class=\"card\"><h2>Runtime</h2>\n"
-    "<div class=\"big-stat " (cov-class c-pct) "\">" (fmt-pct c-pct) "</div>\n"
+    "<div class=\"big-stat " (cov-class c-pct) "\">" (cov/fmt-pct c-pct) "</div>\n"
     "<div class=\"stat-detail\">" c-lh " / " c-lf " lines</div>\n"
     "<div class=\"coverage-bar\"><div class=\"coverage-fill\" style=\"width:" (/ c-pct 10) "%;background:" (cov-color c-pct) "\"></div></div>\n"
     "</div>\n"))
 
   (file/write fh (str "<div class=\"card\"><h2>Stdlib</h2>\n"
-    "<div class=\"big-stat " (cov-class v-pct) "\">" (fmt-pct v-pct) "</div>\n"
+    "<div class=\"big-stat " (cov-class v-pct) "\">" (cov/fmt-pct v-pct) "</div>\n"
     "<div class=\"stat-detail\">" v-eh " / " v-ef " exprs</div>\n"
     "<div class=\"coverage-bar\"><div class=\"coverage-fill\" style=\"width:" (/ v-pct 10) "%;background:" (cov-color v-pct) "\"></div></div>\n"
     "</div>\n"))
 
   (file/write fh (str "<div class=\"card\"><h2>Branches</h2>\n"
-    "<div class=\"big-stat " (cov-class total-bpct) "\">" (fmt-pct total-bpct) "</div>\n"
+    "<div class=\"big-stat " (cov-class total-bpct) "\">" (cov/fmt-pct total-bpct) "</div>\n"
     "<div class=\"stat-detail\">" total-bh " / " total-bf " branches</div>\n"
     "<div class=\"coverage-bar\"><div class=\"coverage-fill\" style=\"width:" (/ total-bpct 10) "%;background:" (cov-color total-bpct) "\"></div></div>\n"
     "</div>\n"))
@@ -422,19 +422,19 @@
       (= {rel} (plist/get entry :rel))
       (= {fc} (plist/get entry :fc))
       (= {link} (plist/get entry :link))
-      (= {pct} (if (and (== is-valk 1) (> (fc/exprs-found fc) 0))
-        {(fc/expr-pct fc)}
-        {(fc/line-pct fc)}))
-      (= {bpct} (fc/branch-pct fc))
-      (= {count-str} (if (and (== is-valk 1) (> (fc/exprs-found fc) 0))
-        {(str (fc/exprs-hit fc) "/" (fc/exprs-found fc))}
-        {(str (fc/lines-hit fc) "/" (fc/lines-found fc))}))
+      (= {pct} (if (and (== is-valk 1) (> (cov/exprs-found fc) 0))
+        {(cov/expr-pct fc)}
+        {(cov/line-pct fc)}))
+      (= {bpct} (cov/branch-pct fc))
+      (= {count-str} (if (and (== is-valk 1) (> (cov/exprs-found fc) 0))
+        {(str (cov/exprs-hit fc) "/" (cov/exprs-found fc))}
+        {(str (cov/lines-hit fc) "/" (cov/lines-found fc))}))
       (file/write fh (str "<tr>"
-        "<td><a href=\"" link "\">" (html-escape rel) "</a></td>"
-        "<td class=\"" (cov-class pct) "\">" (fmt-pct pct) "</td>"
-        "<td class=\"" (cov-class bpct) "\">" (fmt-pct bpct) "</td>"
+        "<td><a href=\"" link "\">" (cov/html-escape rel) "</a></td>"
+        "<td class=\"" (cov-class pct) "\">" (cov/fmt-pct pct) "</td>"
+        "<td class=\"" (cov-class bpct) "\">" (cov/fmt-pct bpct) "</td>"
         "<td>" count-str "</td>"
-        "<td>" (fc/branches-hit fc) "/" (fc/branches-found fc) "</td>"
+        "<td>" (cov/branches-hit fc) "/" (cov/branches-found fc) "</td>"
         "<td><div class=\"mini-bar\"><div class=\"mini-fill " (cov-class pct) "\" style=\"width:" (/ pct 10) "%\"></div></div></td>"
         "</tr>\n"))
       (*file-table-rows* fh (tail entries) is-valk)})
@@ -476,21 +476,21 @@
 (prune-old-runs output-base MAX_COVERAGE_DIRS)
 
 ; Print summary
-(= {rt} (filter-runtime-files files source-root))
-(= {sl} (filter-stdlib-files files source-root))
-(= {rt-lf} (sum-stat rt fc/lines-found))
-(= {rt-lh} (sum-stat rt fc/lines-hit))
-(= {sl-ef} (sum-stat sl fc/exprs-found))
-(= {sl-eh} (sum-stat sl fc/exprs-hit))
-(= {all-bf} (+ (sum-stat rt fc/branches-found) (sum-stat sl fc/branches-found)))
-(= {all-bh} (+ (sum-stat rt fc/branches-hit) (sum-stat sl fc/branches-hit)))
+(= {rt} (cov/filter-runtime-files files source-root))
+(= {sl} (cov/filter-stdlib-files files source-root))
+(= {rt-lf} (cov/sum-stat rt cov/lines-found))
+(= {rt-lh} (cov/sum-stat rt cov/lines-hit))
+(= {sl-ef} (cov/sum-stat sl cov/exprs-found))
+(= {sl-eh} (cov/sum-stat sl cov/exprs-hit))
+(= {all-bf} (+ (cov/sum-stat rt cov/branches-found) (cov/sum-stat sl cov/branches-found)))
+(= {all-bh} (+ (cov/sum-stat rt cov/branches-hit) (cov/sum-stat sl cov/branches-hit)))
 
 (print "")
 (print "============================================================")
 (print "Coverage Summary:")
-(printf "  Runtime:  %s lines (%d/%d)\n" (fmt-pct (pct-tenths rt-lh rt-lf)) rt-lh rt-lf)
-(printf "  Stdlib:   %s exprs (%d/%d)\n" (fmt-pct (pct-tenths sl-eh sl-ef)) sl-eh sl-ef)
-(printf "  Branches: %s (%d/%d)\n" (fmt-pct (pct-tenths all-bh all-bf)) all-bh all-bf)
+(printf "  Runtime:  %s lines (%d/%d)\n" (cov/fmt-pct (cov/pct-tenths rt-lh rt-lf)) rt-lh rt-lf)
+(printf "  Stdlib:   %s exprs (%d/%d)\n" (cov/fmt-pct (cov/pct-tenths sl-eh sl-ef)) sl-eh sl-ef)
+(printf "  Branches: %s (%d/%d)\n" (cov/fmt-pct (cov/pct-tenths all-bh all-bf)) all-bh all-bf)
 (print "============================================================")
 (printf "\nOpen %s/latest/index.html in a browser to view the report.\n" output-base)
 
@@ -526,8 +526,8 @@
 (print "================================================================================")
 (print "COVERAGE GATE CHECK")
 (print "================================================================================")
-(printf "Runtime (src/*.c):    %s line, %s branch\n" (fmt-pct REQ_LINE) (fmt-pct REQ_BRANCH))
-(printf "Stdlib (stdlib/*.valk):  %s expr, %s branch\n" (fmt-pct REQ_EXPR) (fmt-pct REQ_BRANCH))
+(printf "Runtime (src/*.c):    %s line, %s branch\n" (cov/fmt-pct REQ_LINE) (cov/fmt-pct REQ_BRANCH))
+(printf "Stdlib (stdlib/*.valk):  %s expr, %s branch\n" (cov/fmt-pct REQ_EXPR) (cov/fmt-pct REQ_BRANCH))
 (print "")
 
 (= {gate-results} (dict/new))
@@ -545,20 +545,20 @@
       (= {rel} (head keys))
       (= {fc} (dict/get rt rel))
       (= {filename} (if (str/starts-with? rel "runtime/src/") {(str/slice rel 12 (len rel))} {rel}))
-      (= {line-pct} (fc/line-pct fc))
-      (= {branch-pct} (fc/branch-pct fc))
+      (= {line-pct} (cov/line-pct fc))
+      (= {branch-pct} (cov/branch-pct fc))
       (= {line-pass} (>= line-pct REQ_LINE))
       (= {branch-pass} (>= branch-pct REQ_BRANCH))
       (= {status} (if (and line-pass branch-pass) {"V"} {"X"}))
-      (= {line} (str "  " filename " " status "  " (fmt-pct line-pct) " line, " (fmt-pct branch-pct) " branch"))
+      (= {line} (str "  " filename " " status "  " (cov/fmt-pct line-pct) " line, " (cov/fmt-pct branch-pct) " branch"))
       (if (or (not line-pass) (not branch-pass))
         {do
           (= {gaps} "")
           (if (not line-pass)
-            {(= {gaps} (str gaps (fmt-pct (- REQ_LINE line-pct)) " line"))}
+            {(= {gaps} (str gaps (cov/fmt-pct (- REQ_LINE line-pct)) " line"))}
             {})
           (if (not branch-pass)
-            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
+            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (cov/fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
             {})
           (= {line} (str line "  (-" gaps ")"))
           (= {reason} (is-blocked rel))
@@ -578,20 +578,20 @@
       (= {rel} (head keys))
       (= {fc} (dict/get sl rel))
       (= {filename} rel)
-      (= {expr-pct} (fc/expr-pct fc))
-      (= {branch-pct} (fc/branch-pct fc))
+      (= {expr-pct} (cov/expr-pct fc))
+      (= {branch-pct} (cov/branch-pct fc))
       (= {expr-pass} (>= expr-pct REQ_EXPR))
       (= {branch-pass} (>= branch-pct REQ_BRANCH))
       (= {status} (if (and expr-pass branch-pass) {"V"} {"X"}))
-      (= {line} (str "  " filename " " status "  " (fmt-pct expr-pct) " expr, " (fmt-pct branch-pct) " branch"))
+      (= {line} (str "  " filename " " status "  " (cov/fmt-pct expr-pct) " expr, " (cov/fmt-pct branch-pct) " branch"))
       (if (or (not expr-pass) (not branch-pass))
         {do
           (= {gaps} "")
           (if (not expr-pass)
-            {(= {gaps} (str gaps (fmt-pct (- REQ_EXPR expr-pct)) " expr"))}
+            {(= {gaps} (str gaps (cov/fmt-pct (- REQ_EXPR expr-pct)) " expr"))}
             {})
           (if (not branch-pass)
-            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
+            {(= {gaps} (str gaps (if (> (len gaps) 0) {", "} {""}) (cov/fmt-pct (- REQ_BRANCH branch-pct)) " branch"))}
             {})
           (= {line} (str line "  (-" gaps ")"))
           (= {reason} (is-blocked rel))
@@ -629,7 +629,7 @@
   {(print "V ALL COVERAGE REQUIREMENTS MET")}
   {do
     (print "X COVERAGE REQUIREMENTS NOT MET")
-    (printf "\nAll runtime code in src/ requires %s line, %s branch.\n" (fmt-pct REQ_LINE) (fmt-pct REQ_BRANCH))})
+    (printf "\nAll runtime code in src/ requires %s line, %s branch.\n" (cov/fmt-pct REQ_LINE) (cov/fmt-pct REQ_BRANCH))})
 (print "================================================================================")
 
 (if (> (len gate-failures) 0) {(exit 1)} {})
