@@ -30,7 +30,7 @@ endef
 
 # Configure a build directory: $(call cmake_configure,build-dir,asan-flag,tsan-flag)
 define cmake_configure
-	$(CMAKE_BASE) -DASAN=$(2) -DTSAN=$(3) -S . -B $(1)
+	$(CMAKE_BASE) -DASAN=$(2) -DTSAN=$(3) -S runtime -B $(1)
 	$(call gen_ssl_certs,$(1))
 	touch $(1)/.cmake
 endef
@@ -48,7 +48,7 @@ endef
 # Default build (no sanitizers)
 .ONESHELL:
 .PHONY: cmake
-cmake build/.cmake: CMakeLists.txt homebrew.cmake Makefile
+cmake build/.cmake: runtime/CMakeLists.txt runtime/homebrew.cmake Makefile
 	$(call cmake_configure,build,0,0)
 
 .ONESHELL:
@@ -59,13 +59,13 @@ build: build/.cmake
 # ASAN build
 .ONESHELL:
 .PHONY: cmake-asan
-cmake-asan build-asan/.cmake: CMakeLists.txt homebrew.cmake Makefile
+cmake-asan build-asan/.cmake: runtime/CMakeLists.txt runtime/homebrew.cmake Makefile
 	$(call cmake_configure,build-asan,1,0)
 
 # TSAN build
 .ONESHELL:
 .PHONY: cmake-tsan
-cmake-tsan build-tsan/.cmake: CMakeLists.txt homebrew.cmake Makefile
+cmake-tsan build-tsan/.cmake: runtime/CMakeLists.txt runtime/homebrew.cmake Makefile
 	$(call cmake_configure,build-tsan,0,1)
 
 .ONESHELL:
@@ -81,8 +81,8 @@ build-asan: build-asan/.cmake
 # Coverage build
 .ONESHELL:
 .PHONY: cmake-coverage
-cmake-coverage build-coverage/.cmake: CMakeLists.txt homebrew.cmake Makefile
-	$(CMAKE_BASE) -DCOVERAGE=1 -DVALK_COVERAGE=1 -DASAN=0 -S . -B build-coverage
+cmake-coverage build-coverage/.cmake: runtime/CMakeLists.txt runtime/homebrew.cmake Makefile
+	$(CMAKE_BASE) -DCOVERAGE=1 -DVALK_COVERAGE=1 -DASAN=0 -S runtime -B build-coverage
 	$(call gen_ssl_certs,build-coverage)
 	touch build-coverage/.cmake
 
@@ -93,8 +93,8 @@ build-coverage: build-coverage/.cmake
 
 .PHONY: check
 check: build
-	build/valk scripts/valk-check.valk -- $(or $(DIR),.)
-	build/valk scripts/check-no-globals.valk
+	build/valk check/valk-check.valk -- $(or $(DIR),.)
+	build/valk check/check-no-globals.valk
 
 # Homebrew's llvm formula is keg-only, so run-clang-tidy is installed but
 # not linked into PATH — fall back to the formula's bin before giving up.
@@ -117,14 +117,14 @@ lint : build/.cmake
 		$(if $(CLANG_TIDY_BIN),-clang-tidy-binary=$(CLANG_TIDY_BIN),) \
 		-extra-arg=-std=c23 \
 		$(if $(filter Darwin,$(UNAME)),-extra-arg=-isysroot -extra-arg=$$(xcrun --show-sdk-path),) \
-		-source-filter='$(CURDIR)/(src|test)/.*\.c$$' \
-		-header-filter='$(CURDIR)/src/.*\.h$$'
+		-source-filter='$(CURDIR)/(runtime/src|runtime/test|testing/c|lsp/test)/.*\.c$$' \
+		-header-filter='$(CURDIR)/runtime/src/.*\.h$$'
 
 # Install editline (uses autotools)
 # On macOS: brew install autoconf automake libtool
 .PHONY: configure
 configure:
-	cd vendor/editline && \
+	cd runtime/vendor/editline && \
 	./autogen.sh && \
 	./configure && \
 	make install
@@ -135,7 +135,7 @@ clean:
 
 .PHONY: cppcheck
 cppcheck:
-	cppcheck --enable=all --inconclusive --quiet src/ test/
+	cppcheck --enable=all --inconclusive --quiet runtime/src/ runtime/test/
 
 .PHONY: infer
 infer:
@@ -159,10 +159,10 @@ endif
 asan: build-asan
 	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
 	export LSAN_OPTIONS=verbosity=1:log_threads=1
-	build-asan/valk stdlib/prelude.valk test/test_prelude.valk && echo "exit code = $$?"
+	build-asan/valk stdlib/prelude.valk runtime/test/lang/test_prelude.valk && echo "exit code = $$?"
 
 # ============================================================================
-# Unified Test Runner (scripts/run-tests.valk)
+# Unified Test Runner (testing/run-tests.valk)
 # ============================================================================
 # All test targets use the unified runner which auto-discovers tests, runs them
 # in parallel, and produces JUnit XML. No hardcoded test lists needed.
@@ -179,7 +179,7 @@ ONLY ?=
 J ?= 0
 TIMEOUT ?= 120
 
-TEST_RUN = build/valk scripts/run-tests.valk --
+TEST_RUN = build/valk testing/run-tests.valk --
 TEST_RUN_FILTER =
 ifdef F
   TEST_RUN_FILTER = --filter "$(F)"
@@ -228,19 +228,19 @@ lsp: build
 	@stale=0; \
 	if [ -n "$(FORCE)" ]; then stale=1; \
 	elif [ ! -x build/valk-lsp ]; then stale=1; \
-	elif [ -n "$$(find scripts/lsp stdlib -name '*.valk' -newer build/valk-lsp -print -quit 2>/dev/null)" ]; then stale=1; \
+	elif [ -n "$$(find lsp stdlib symdb -name '*.valk' -newer build/valk-lsp -print -quit 2>/dev/null)" ]; then stale=1; \
 	elif [ build/valk -nt build/valk-lsp ]; then stale=1; \
 	fi; \
 	if [ "$$stale" = 1 ]; then \
-		echo "[lsp] (re)building build/valk-lsp from scripts/lsp/build-main.valk"; \
-		build/valk --build scripts/lsp/build-main.valk -o build/valk-lsp; \
+		echo "[lsp] (re)building build/valk-lsp from lsp/build-main.valk"; \
+		build/valk --build lsp/build-main.valk -o build/valk-lsp; \
 	else \
 		echo "[lsp] build/valk-lsp is up to date"; \
 	fi
 
 # Neovim-driven LSP user-acceptance tests, on their own. This is just the
 # unified runner restricted to `--only uat`; `make test` already includes
-# them. Each scenario file under test/lsp/uat/scenarios/ is one suite, run
+# them. Each scenario file under lsp/test/uat/scenarios/ is one suite, run
 # in its own nvim + valk-lsp + fixture workspace. Correctness scenarios are
 # scheduled by the runner's pmap; scenarios flagged `_latency = true` are
 # marked exclusive and run alone afterwards so their budgets stay meaningful.
@@ -380,7 +380,7 @@ coverage-tests: build-coverage coverage-reset
 .PHONY: coverage-report
 coverage-report: build
 	@echo "=== Generating unified coverage reports ==="
-	VALK_HEAP_HARD_LIMIT=8589934592 build/valk scripts/coverage-report.valk -- \
+	VALK_HEAP_HARD_LIMIT=8589934592 build/valk coverage/coverage-report.valk -- \
 		--build-dir build-coverage \
 		--source-root . \
 		--output coverage-report \
@@ -395,7 +395,7 @@ coverage: build-coverage coverage-tests coverage-report
 .PHONY: coverage-check
 coverage-check: build
 	@echo "=== Checking runtime coverage requirements ==="
-	@build/valk scripts/check-coverage.valk -- --build-dir build-coverage
+	@build/valk coverage/check-coverage.valk -- --build-dir build-coverage
 
 # Stress tests
 .PHONY: test-stress

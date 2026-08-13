@@ -1,6 +1,0 @@
-(load "stdlib/test/test.valk")
-(test/run (list
-  (test/case "exit-is-defined" {(not (error? exit))})
-  (test/case "shutdown-is-defined" {(not (error? shutdown))})
-  (test/case "exit-returns-code" {(do (= {r} (exit 0)) (== r 0))})
-) {:suite-name "Exit Alias"})

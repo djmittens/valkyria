@@ -60,10 +60,10 @@ The user pointed this out — BYOL was always the answer, the scope of
 regressions is the size of the bug surface, not a reason to back off.
 
 **Scope of required migration:**
-1. Test framework (stdlib/test/test.valk) — `foldl *test-run-one-ctx*
+1. Test framework (testing/test.valk) — `foldl *test-run-one-ctx*
    ctx tests` needs to explicitly catch errors from each test case so a
    single failure doesn't abort the foldl chain. Maybe 10 LOC.
-2. LSP code (scripts/lsp/*.valk) — `lsp/get-text-pos`,
+2. LSP code (lsp/*.valk) — `lsp/get-text-pos`,
    `lsp/get-word-ctx`, and other walkers assume `parse` returns
    something list-shaped they can iterate. `parse` of invalid input
    actually returns `(Error: ...)` nested in a list. Under BYOL, as
@@ -83,7 +83,7 @@ now-fixed code path). So the original symptom is gone; the class of
 bug remains latent.
 
 **Ready-to-apply diff** (when the migration is scheduled) — just
-uncomment in `src/eval.c` `CONT_COLLECT_ARG`:
+uncomment in `runtime/src/eval.c` `CONT_COLLECT_ARG`:
 ```c
 if (LVAL_TYPE(value) == LVAL_ERR) {
   free(frame.collect_arg.args);
@@ -104,7 +104,7 @@ whatever files it loads. `valk-check.valk` over the project (168 files) takes
 ~45s — most of that is re-parsing files already seen. Test runner spawns ~123
 Valk child processes, each paying the same startup cost.
 
-**Fix:** in `src/builtins_io.c` (or wherever `valk_parse_file` lives), add an
+**Fix:** in `runtime/src/builtins_io.c` (or wherever `valk_parse_file` lives), add an
 LRU-bounded cache keyed by `realpath + st_mtime`. Store the raw parsed AST
 (before macro expansion / FQN rewrite). On retrieval, `valk_lval_copy` the
 cached AST so callers can mutate freely. Register the cache as a GC root
@@ -143,9 +143,9 @@ sqlite handle constraint.
 7× faster; full test suite still at 190 suites / 4143 tests / 0 failures.
 
 **Key pieces:**
-- `stdlib/diag/validate-walk.valk` — added `vd/validate-preloaded` taking
+- `symdb/validate-walk.valk` — added `vd/validate-preloaded` taking
   caches as args instead of looking up in DB.
-- `scripts/valk-check.valk` — added `check/validate-file-parallel` (worker),
+- `check/valk-check.valk` — added `check/validate-file-parallel` (worker),
   `check/aggregate-results` (serial reducer), `check/validate-all-parallel`
   (pmap orchestrator). Main starts aio system with 4 threads.
 
@@ -178,7 +178,7 @@ masked by the old behavior. The pattern is always one of:
 
 The last two failures were in `test_lsp_hints`:
 - `field-access-hint-from-ctor` and `field-access-from-function-return-type`
-- Root cause: two mismatched bracket sequences in `scripts/lsp/hints-fields.valk`
+- Root cause: two mismatched bracket sequences in `lsp/hints-fields.valk`
   introduced when adding field-access hint support. An extra `}` in
   `hint/vt-scan-binding` (offset 6849) and a swapped `})` vs `)}` in
   `hint/fa-try-binding` (offset 13817) caused those functions and all
@@ -190,11 +190,11 @@ The last two failures were in `test_lsp_hints`:
 **Blocks:** nothing — failures are isolated.
 
 **Original symptoms:**
-- `test/lang/test_json.valk` — 2 `Option::Some`-unwrap tests. **Fixed by
+- `runtime/test/lang/test_json.valk` — 2 `Option::Some`-unwrap tests. **Fixed by
   be41392** (type transform was over-eagerly rewriting fully-qualified
   {Type::Ctor ...} qexprs into the internal tagged form, producing a
   double-wrapped structure).
-- `test/lsp/test_lsp_helpers.valk` — 16 calls to helpers by short name.
+- `lsp/test/test_lsp_helpers.valk` — 16 calls to helpers by short name.
   **12 fixed by 1ac18f7** (added (def) aliases from short names to the
   module-prefixed bindings).
 
@@ -218,7 +218,7 @@ writing the full path. Could be done by:
   `resolve_qualified` did — but we ripped that out? actually still there)
 - Or having the rewriter consult a global symbol table.
 
-**Files:** `src/macro.c` (rewriter), `src/module.c`.
+**Files:** `runtime/src/macro.c` (rewriter), `runtime/src/module.c`.
 
 **Risk:** medium. Touches module system.
 
@@ -232,12 +232,12 @@ writing the full path. Could be done by:
 block the worker thread until the child produces output and exits. With 12
 aio workers, 12 blocked in exec means zero throughput.
 
-**Fix:** Added `aio/exec` builtin in `src/builtins_file.c` — `uv_spawn` +
+**Fix:** Added `aio/exec` builtin in `runtime/src/builtins_file.c` — `uv_spawn` +
 `uv_read_start` on loop 0. Returns an async handle immediately; subprocess
 output is accumulated by libuv read callbacks, and the handle completes when
 the process exits AND both pipes hit EOF. Five test cases (simple echo,
 non-zero exit, stderr capture, spawn failure, 10-way parallel) in
-`test/aio/test_aio_exec.valk`, all pass.
+`runtime/test/aio/test_aio_exec.valk`, all pass.
 
 **Subtle bugs squashed:**
 - `LVAL_ASSERT_TYPE` macro expands with an internal `for (u64 i = 0; ...)`
@@ -266,13 +266,13 @@ fully-qualified names (`analysis/foo`, `nav/handle-hover`, …). 190 suites,
 4141 tests green.
 
 **Shipped:**
-- Macro env unified with main env (`src/macro.c`, `src/parser.c` auto-init).
+- Macro env unified with main env (`runtime/src/macro.c`, `runtime/src/parser.c` auto-init).
   `valk_macro_env()` aliases the caller's env; macros def into the same env
-  as regular defs. `src/eval.c` macro-lookup uses `cur_env` for lexical scope.
+  as regular defs. `runtime/src/eval.c` macro-lookup uses `cur_env` for lexical scope.
 - `(module X)` macro in `stdlib/prelude.valk`, backed by `set-module-prefix!`
-  thread-local in `src/builtins_io.c`. Script-entry path (`src/repl.c`) and
+  thread-local in `runtime/src/builtins_io.c`. Script-entry path (`runtime/src/repl.c`) and
   library-load path (`eval_loaded_ast`) both honor it.
-- Migrated 17 `.valk` files (scripts/lsp, stdlib/diag, stdlib/ast) to
+- Migrated 17 `.valk` files (lsp/, symdb/, stdlib/ast) to
   explicit `(module X)` declarations.
 - Flattened `lsp/<seg>/` references in 3 LSP test files to `<seg>/`.
 - **Deleted:** filename-based auto-prefix composition
@@ -286,7 +286,7 @@ fully-qualified names (`analysis/foo`, `nav/handle-hover`, …). 190 suites,
 
 ## [~] 6-historical. Module system simplification — **prereqs done; implementation deferred**
 
-**Symptom:** `src/module.c`, `valk_module_rewrite`, pre-registration pass,
+**Symptom:** `runtime/src/module.c`, `valk_module_rewrite`, pre-registration pass,
 module cache keyed on tree — all working together to implement auto-prefixing
 of symbol names. The 2026-04-14 session's `sel/find-ranges` hang was caused
 by an interaction: cache hit skipped child-module creation but the FQN
@@ -302,19 +302,19 @@ findings:
   symbol is unbound, LSP reader callback returns `LVAL_ERR`, error is
   logged to stderr but never propagated as a JSON-RPC response. Parent's
   `MSG_TIMEOUT_MS = 5000` fires. Fix is independent of the refactor — a
-  ~5-line change in `src/builtins_pipe.c` around line 341 to emit a
+  ~5-line change in `runtime/src/builtins_pipe.c` around line 341 to emit a
   `window/logMessage` notification would make failures loud during
   development.
 
 - **Pure-macro approach hits two HIGH-risk walls:**
-  1. **Sibling resolution.** `scripts/lsp/nav.valk` calls
+  1. **Sibling resolution.** `lsp/nav.valk` calls
      `(analysis/line-col->offset …)`. Today the rewriter walks up the module
      tree from `lsp/nav` → `lsp` → finds child `analysis`. Without the tree,
      a `*module-prefix*` var alone cannot resolve siblings. Options: force
      full-qualification everywhere (breaking ~30 sites), or keep a flat
      path→prefix map at the Valk level (rebuilding half the system).
   2. **Macro scope isolation.** Macros evaluate in the global macro env
-     (`src/builtins_io.c:195-198`), *before* module rewrite. `fun` in
+     (`runtime/src/builtins_io.c:195-198`), *before* module rewrite. `fun` in
      prelude generates `def` forms without access to `*module-prefix*`.
      Threading the prefix through the macro env means either a special
      evaluator mode or a post-expansion rewrite pass — at which point the
@@ -322,7 +322,7 @@ findings:
 
 **Options from spec doc:**
 - A. Breaking change: require full-qualification at every cross-file
-  reference. Ship a codemod for `scripts/lsp/*.valk`.
+  reference. Ship a codemod for `lsp/*.valk`.
 - B. Flat path→prefix registry + macro-accessible. Reduces C code
   modestly but not trivially.
 - C. Defer the refactor; ship only the LSP error-propagation fix.
@@ -379,5 +379,5 @@ Working test baseline:
 - `make test` — 67s wall (45s valk-check + 16s test runner + other overhead)
 - 4102 tests pass, 18 fail (all pre-existing — 2 in test_json, 16 in test_lsp_helpers)
 
-Don't touch before reading: `src/module.c`, `src/macro.c` (rewriter),
-`src/builtins_io.c` (`load_eval_file`), `src/aio/aio_comb_pmap.c`.
+Don't touch before reading: `runtime/src/module.c`, `runtime/src/macro.c` (rewriter),
+`runtime/src/builtins_io.c` (`load_eval_file`), `runtime/src/aio/aio_comb_pmap.c`.

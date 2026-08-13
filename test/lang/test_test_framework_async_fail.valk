@@ -1,8 +1,0 @@
-(load "stdlib/test/test.valk")
-
-; Test that the test framework correctly handles failing tests and expected-exit.
-; NOTE: Async test framework has a bug in aio/within that causes hangs,
-; so this test uses the sync test runner instead.
-(test/run (list
-  (test/case "intentional failure" {false}))
-  {:suite-name "Test Framework Async Fail" :expected-exit 1})

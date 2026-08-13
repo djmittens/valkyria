@@ -7,7 +7,7 @@
 # prints a per-phase breakdown.
 #
 # Env overrides:
-#   VALK_LSP_FIXTURE   file to open in nvim (default scripts/lsp/workspace.valk)
+#   VALK_LSP_FIXTURE   file to open in nvim (default lsp/workspace.valk)
 #   VALK_LSP_WAIT_MS   how long to wait in nvim after open (default 4000)
 #   VALK_LSP_PROXY_LOG proxy log path (default /tmp/valk-lsp-proxy.log)
 
@@ -18,7 +18,7 @@ REPO="$PWD"
 
 PROXY="$REPO/build/lsp_proxy"
 SERVER="$REPO/build/valk-lsp"
-FIXTURE="${VALK_LSP_FIXTURE:-scripts/lsp/workspace.valk}"
+FIXTURE="${VALK_LSP_FIXTURE:-lsp/workspace.valk}"
 WAIT_MS="${VALK_LSP_WAIT_MS:-4000}"
 LOG="${VALK_LSP_PROXY_LOG:-/tmp/valk-lsp-proxy.log}"
 
@@ -27,7 +27,7 @@ if [[ ! -x "$PROXY" ]]; then
   exit 1
 fi
 if [[ ! -x "$SERVER" ]]; then
-  echo "missing $SERVER — run: ./build/valk --build scripts/lsp/build-main.valk -o $SERVER" >&2
+  echo "missing $SERVER — run: ./build/valk --build lsp/build-main.valk -o $SERVER" >&2
   exit 1
 fi
 if [[ ! -f "$FIXTURE" ]]; then

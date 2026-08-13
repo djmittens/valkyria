@@ -3,9 +3,15 @@ name: Coverage
 on:
   pull_request:
     paths:
-      - 'src/**'
-      - 'test/**'
-      - 'CMakeLists.txt'
+      - 'runtime/**'
+      - 'stdlib/**'
+      - 'testing/**'
+      - 'lsp/**'
+      - 'symdb/**'
+      - 'coverage/**'
+      - 'check/**'
+      - 'quality/**'
+      - 'Makefile'
       - '.github/workflows/coverage.yml'
   push:
     branches:
@@ -59,7 +65,7 @@ jobs:
         env:
           VALK_HEAP_HARD_LIMIT: "2147483648"
         run: |
-          build/valk scripts/run-tests.valk -- --build-dir build-coverage --junit-dir build/junit --examples
+          build/valk testing/run-tests.valk -- --build-dir build-coverage --junit-dir build/junit --examples
       
       # UAT drives the real LSP server through real neovim. It was previously
       # not run in CI at all, so user-facing LSP regressions could land freely.
@@ -92,7 +98,7 @@ jobs:
       
       - name: Check Global Mutation Lint
         run: |
-          build/valk scripts/check-no-globals.valk
+          build/valk check/check-no-globals.valk
       
       - name: Workspace Parse Check
         run: |

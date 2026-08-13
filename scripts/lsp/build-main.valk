@@ -1,9 +1,0 @@
-; Entry point for `valk --build`.
-; `--build` treats the script's last value as the entry and requires it to be
-; a lambda. We can't reuse main.valk because its last form is `(lsp/start)`,
-; which would execute the server at build time instead of at runtime.
-
-(load "scripts/lsp/lsp.valk")
-; lsp/start returns the LSP exit code (0 after `shutdown`, else 1), and
-; --build uses the entry's numeric result as the process exit status.
-(\ {argv} {lsp/start})

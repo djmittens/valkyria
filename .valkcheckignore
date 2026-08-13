@@ -1,29 +1,29 @@
 # Test fixtures with intentional errors
-test/fixtures/diag_multiple_errors.valk
-test/fixtures/diag_undefined_sym.valk
-test/fixtures/load_all_errors.valk
-test/fixtures/load_with_error.valk
-test/lsp/uat/fixtures/diagnostics_bad.valk
+runtime/test/fixtures/diag_multiple_errors.valk
+runtime/test/fixtures/diag_undefined_sym.valk
+runtime/test/fixtures/load_all_errors.valk
+runtime/test/fixtures/load_with_error.valk
+lsp/test/uat/fixtures/diagnostics_bad.valk
 
 # Coverage tests that deliberately pass wrong types/arities to test error handling
-test/aio/test_aio_retry.valk
-test/aio/test_aio_builtins_coverage.valk
-test/lang/test_env_coverage.valk
-test/aio/test_aio_combinator_coverage.valk
-test/metrics/test_metrics_builtins_comprehensive.valk
-test/parser/test_parser_builtin_coverage.valk
-test/parser/test_parser_errors.valk
-test/lang/test_dict.valk
-test/lang/test_sqlite.valk
-test/lang/test_stdio.valk
-test/lang/test_math_coverage.valk
-test/lang/test_string_builtins.valk
-test/lang/test_make_string.valk
-test/lang/test_capture_builtins.valk
-test/gc/test_gc_and_log_builtins.valk
-test/http/test_sse_builtins.valk
-test/stress/test_recursion_stress.valk
+runtime/test/aio/test_aio_retry.valk
+runtime/test/aio/test_aio_builtins_coverage.valk
+runtime/test/lang/test_env_coverage.valk
+runtime/test/aio/test_aio_combinator_coverage.valk
+runtime/test/metrics/test_metrics_builtins_comprehensive.valk
+runtime/test/parser/test_parser_builtin_coverage.valk
+runtime/test/parser/test_parser_errors.valk
+runtime/test/lang/test_dict.valk
+runtime/test/lang/test_sqlite.valk
+runtime/test/lang/test_stdio.valk
+runtime/test/lang/test_math_coverage.valk
+runtime/test/lang/test_string_builtins.valk
+runtime/test/lang/test_make_string.valk
+runtime/test/lang/test_capture_builtins.valk
+runtime/test/gc/test_gc_and_log_builtins.valk
+runtime/test/http/test_sse_builtins.valk
+runtime/test/stress/test_recursion_stress.valk
 
 # Load-graph fixtures: user-neither deliberately references a type it never
 # loads (negative fixture for the missing-dependency check)
-test/fixtures/loadgraph/user-neither.valk
+runtime/test/fixtures/loadgraph/user-neither.valk

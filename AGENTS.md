@@ -7,16 +7,17 @@
 - Before creating or significantly expanding a file, check its current line count with `wc -l`
 - If a file reaches 1000 lines, STOP and split it before adding more code
 - When splitting: identify logical boundaries (related functions, a coherent feature), extract to a new file, `(load ...)` it from the original
-- The `scripts/lsp/*.valk` files are the canonical example of the correct split pattern
+- The `lsp/*.valk` files are the canonical example of the correct split pattern
 
 Enforcement check:
 ```bash
-find src stdlib scripts -name '*.c' -o -name '*.h' -o -name '*.valk' \
+find runtime/src stdlib testing symdb lsp quality coverage check scripts \
+  -name '*.c' -o -name '*.h' -o -name '*.valk' \
   | xargs wc -l | sort -rn | awk '$1>1000 && $2!="total"'
 ```
 Any file over 1000 lines is a violation that must be fixed immediately.
 
-Known violation: `src/eval.c` (1046 lines) — split it before adding more there.
+Known violation: `runtime/src/eval.c` (1046 lines) — split it before adding more there.
 
 ## Build & Test Commands
 - `make build` - Build into `build/` (CMake+Ninja)
@@ -26,7 +27,7 @@ Known violation: `src/eval.c` (1046 lines) — split it before adding more there
 - `make test-c` / `make test-valk` - C-only or Valk-only tests
 - `make lint` - Run clang-tidy (must pass before committing)
 - `make coverage` - Generate aggregated C+Valk coverage (HTML: `coverage-report/index.html`)
-- `build/valk scripts/find-uncovered-branches.valk -- <file.c>` - Find specific uncovered branches
+- `build/valk coverage/find-uncovered-branches.valk -- <file.c>` - Find specific uncovered branches
 - ASAN tests: `make test-c-asan`, `make test-valk-asan`
 - TSAN tests: `make test-c-tsan`, `make test-valk-tsan`
 
@@ -36,7 +37,7 @@ Track whether changes degrade codebase quality using structural metrics from the
 
 ### Commands
 - `build/valk --quality-snapshot .` — Emit JSON metrics for the whole workspace to stdout
-- `build/valk scripts/quality-diff.valk -- before.json after.json` — Diff two snapshots, report regressions
+- `build/valk quality/quality-diff.valk -- before.json after.json` — Diff two snapshots, report regressions
 
 ### Workflow: Before/After Any Significant Change
 ```bash
@@ -49,7 +50,7 @@ build/valk --quality-snapshot . 2>/dev/null > /tmp/quality_before.json
 build/valk --quality-snapshot . 2>/dev/null > /tmp/quality_after.json
 
 # 4. Diff
-build/valk scripts/quality-diff.valk -- /tmp/quality_before.json /tmp/quality_after.json
+build/valk quality/quality-diff.valk -- /tmp/quality_before.json /tmp/quality_after.json
 ```
 
 ### What the Diff Reports
@@ -96,15 +97,22 @@ grep -c "ERROR: AddressSanitizer" build/asan.log 2>/dev/null || echo "0 errors"
 - Headers mirror sources: `memory.c` -> `memory.h`
 - DO NOT ADD COMMENTS to code unless explicitly asked
 
-## Project Layout
-- `src/` - C runtime; core: `parser.c`, `eval.c`, `memory.c`, `gc.c`
-- `src/aio/` - Async I/O, HTTP/2 (`aio/http2/`), TLS
-- `src/llvm/`, `src/vir/` - AOT/JIT backend
+## Project Layout (root-level projects)
+- `runtime/` - The C runtime project: `src/` (core: `parser.c`, `eval.c`,
+  `memory.c`, `gc.c`; async I/O in `src/aio/`, HTTP/2 in `src/aio/http2/`,
+  AOT/JIT in `src/llvm/` + `src/vir/`), `vendor/`, `CMakeLists.txt`, `test/`
+- `runtime/test/<area>/` - `test_*.c` (C) and `test_*.valk` (Lisp); areas:
+  `aio`, `gc`, `http`, `lang`, `metrics`, `parser`, `unit`; `stress/` for long tests
+- `runtime/test/fakes/` - Test doubles (never mocking frameworks)
 - `stdlib/` - Valk standard library (`prelude.valk` auto-loads at startup)
-- `scripts/` - Valk tooling (LSP in `scripts/lsp/`, coverage, benchmarks)
-- `test/<area>/` - `test_*.c` (C) and `test_*.valk` (Lisp); areas: `aio`, `gc`,
-  `http`, `lang`, `lsp`, `metrics`, `parser`, `unit`; `stress/` for long tests
-- `test/fakes/` - Test doubles (never mocking frameworks)
+- `testing/` - Test framework: `test.valk`, `property.valk`, the unified runner
+  `run-tests.valk`, and the C harness `c/testing.{c,h}`
+- `symdb/` - Symbol database + static validation (shared by lsp, check, quality)
+- `lsp/` - LSP server (`*.valk`) and its tests (`lsp/test/`, UAT in `lsp/test/uat/`)
+- `coverage/` - Coverage report/gate tooling
+- `quality/` - Quality snapshot (`quality.valk`) and diff (`quality-diff.valk`)
+- `check/` - Workspace diagnostics (`valk-check.valk`) and globals lint
+- `scripts/` - Misc: benchmarks, profiling and shell helpers
 - `build/` - Generated; never commit
 
 ## Error Handling
@@ -234,7 +242,7 @@ echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid
 
 # Record a single test
 VALK_TEST_NO_FORK=1 rr record build/test_networking
-VALK_TEST_NO_FORK=1 rr record build/valk test/test_http_integration.valk
+VALK_TEST_NO_FORK=1 rr record build/valk runtime/test/http/test_http_integration.valk
 
 # Record with chaos mode (exposes races)
 VALK_TEST_NO_FORK=1 rr record --chaos build/test_networking
@@ -346,7 +354,7 @@ If you can't write this out, you don't understand the code well enough to fix it
 ### Step 2: Verify the Terminal Transition Actually Happened
 
 The completion sequence is centralized in `valk_async_handle_finish()`
-(`src/aio/aio_async.c:232`):
+(`runtime/src/aio/aio_async.c:232`):
 
 ```c
 void valk_async_handle_finish(valk_async_handle_t *handle) {

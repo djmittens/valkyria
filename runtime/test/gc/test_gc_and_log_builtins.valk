@@ -1,0 +1,96 @@
+; GC and Log Builtin Coverage Tests
+; Targets uncovered branches in parser.c around lines 3806-3867
+; Run with: ./build/valk test/test_gc_and_log_builtins.valk
+
+(load "testing/test.valk")
+
+; Reset log level to warn at end of tests
+(sys/log/set-level "warn")
+
+(test/run (list
+  (test/case "gc-usage-returns-number"
+    {do
+    (= {usage} (mem/gc/usage))
+    (test/assert (>= usage 0) "gc usage should be >= 0")
+    (test/assert (<= usage 100) "gc usage should be <= 100")
+    true
+  })
+  (test/case "log-set-level-error"
+    {do
+    (= {result} (sys/log/set-level "error"))
+    (test/assert-eq result "error" "should return level string")
+    true
+  })
+  (test/case "log-set-level-warn"
+    {do
+    (= {result} (sys/log/set-level "warn"))
+    (test/assert-eq result "warn" "should return level string")
+    true
+  })
+  (test/case "log-set-level-warning"
+    {do
+    (= {result} (sys/log/set-level "warning"))
+    (test/assert-eq result "warning" "should return level string")
+    true
+  })
+  (test/case "log-set-level-info"
+    {do
+    (= {result} (sys/log/set-level "info"))
+    (test/assert-eq result "info" "should return level string")
+    true
+  })
+  (test/case "log-set-level-debug"
+    {do
+    (= {result} (sys/log/set-level "debug"))
+    (test/assert-eq result "debug" "should return level string")
+    true
+  })
+  (test/case "log-set-level-trace"
+    {do
+    (= {result} (sys/log/set-level "trace"))
+    (test/assert-eq result "trace" "should return level string")
+    true
+  })
+  (test/case "log-set-level-case-insensitive"
+    {do
+    (= {result1} (sys/log/set-level "ERROR"))
+    (test/assert-eq result1 "ERROR" "uppercase ERROR should work")
+    (= {result2} (sys/log/set-level "Warn"))
+    (test/assert-eq result2 "Warn" "mixed case Warn should work")
+    true
+  })
+  (test/case "log-set-level-invalid-defaults-to-warn"
+    {do
+    (= {result} (sys/log/set-level "invalid"))
+    (test/assert-eq result "invalid" "should return the string even if invalid")
+    true
+  })
+  (test/case "log-set-level-wrong-arg-count"
+    {do
+    (= {result} (error? (sys/log/set-level)))
+    (test/assert result "should error with no args")
+    true
+  })
+  (test/case "log-set-level-wrong-type"
+    {do
+    (= {result} (error? (sys/log/set-level 123)))
+    (test/assert result "should error with number arg")
+    true
+  })
+  (test/case "checkpoint-stats-returns-list"
+    {do
+    (= {stats} (mem/checkpoint/stats))
+    (test/assert (list? stats) "should return a list")
+    (test/assert (>= (len stats) 4) "should have at least 4 elements")
+    true
+  })
+  (test/case "checkpoint-stats-elements-are-numbers"
+    {do
+    (= {stats} (mem/checkpoint/stats))
+    (test/assert (>= (nth 1 stats) 0) "num-checkpoints should be >= 0")
+    (test/assert (>= (nth 2 stats) 0) "values-evacuated should be >= 0")
+    (test/assert (>= (nth 3 stats) 0) "bytes-evacuated should be >= 0")
+    (test/assert (>= (nth 4 stats) 0) "pointers-fixed should be >= 0")
+    true
+  }))
+  {:suite-name "GC and Log Builtin Tests"})

@@ -1,0 +1,648 @@
+(load "testing/test.valk")
+(load "symdb/symdb.valk")
+(load "lsp/analysis.valk")
+(load "lsp/refs.valk")
+(load "symdb/validate.valk")
+
+(fun {make-test-db} {do
+  (= {db} (sqlite/open ":memory:"))
+  (sqlite/exec-script db symdb/schema-sql)
+  db
+})
+
+(fun {index-and-get-refs text} {do
+  (= {db} (sqlite/open ":memory:"))
+  (sqlite/exec-script db symdb/schema-sql)
+  (= {ast} (parse text))
+  (sqlite/exec db "INSERT INTO files (path, hash) VALUES ('test', 'h')")
+  (= {fid} (sqlite/query-value db "SELECT id FROM files WHERE path='test'"))
+  (lsp/index-ast db fid ast text)
+  (= {refs} (sqlite/query db
+    "SELECT name, line, col FROM refs WHERE file_id=?1 ORDER BY line, col"
+    fid))
+  (sqlite/close db)
+  refs
+})
+
+(fun {find-ref-by-name refs name} {
+  head (filter (\{r} {== r:name name}) refs)
+})
+
+(fun {refs-with-name refs name} {
+  filter (\{r} {== r:name name}) refs
+})
+
+(fun {ref-count text} {
+  len (ref/collect-refs text)
+})
+
+(fun {ref-names text} {
+  map (\{r} {r:name}) (ref/collect-refs text)
+})
+
+(fun {ref-defs text} {
+  filter (\{r} {== r:is-def 1}) (ref/collect-refs text)
+})
+
+(fun {ref-uses text} {
+  filter (\{r} {== r:is-def 0}) (ref/collect-refs text)
+})
+
+(test/run (list
+
+  ; --- Basic reference collection ---
+
+  (test/case "empty-no-refs"
+    {do
+      (test/assert-eq 0 (ref-count "")
+        "empty input should produce 0 refs")
+      true
+    })
+
+  (test/case "single-symbol-ref"
+    {do
+      (test/assert-eq 1 (ref-count "foo")
+        "single symbol should produce 1 ref")
+      (= {refs} (ref/collect-refs "foo"))
+      (= {r} (head refs))
+      (test/assert-eq "foo" r:name "name should be foo")
+      (test/assert-eq 0 r:is-def "should be use, not def")
+      (test/assert-eq -1 r:scope-id "global scope = -1")
+      true
+    })
+
+  (test/case "keywords-excluded"
+    {do
+      (test/assert-eq 0 (ref-count ":foo")
+        "keyword :foo should not produce refs")
+      true
+    })
+
+  (test/case "numbers-excluded"
+    {do
+      (test/assert-eq 0 (ref-count "42")
+        "numbers should not produce refs")
+      true
+    })
+
+  (test/case "strings-excluded"
+    {do
+      (test/assert-eq 0 (ref-count "\"hello\"")
+        "strings should not produce refs")
+      true
+    })
+
+  ; --- Function definitions ---
+
+  (test/case "fun-records-name-as-def"
+    {do
+      (= {defs} (ref-defs "(fun {f x} {x})"))
+      (= {names} (map (\{r} {r:name}) defs))
+      (test/assert (member? "f" names) "f should be recorded as def")
+      true
+    })
+
+  (test/case "fun-params-recorded-as-defs"
+    {do
+      (= {defs} (ref-defs "(fun {f a b} {+ a b})"))
+      (= {names} (map (\{r} {r:name}) defs))
+      (test/assert (member? "a" names) "param a should be def")
+      (test/assert (member? "b" names) "param b should be def")
+      true
+    })
+
+  (test/case "fun-name-is-global-scope"
+    {do
+      (= {defs} (ref-defs "(fun {f x} {x})"))
+      (= {f-def} (head (filter (\{r} {== r:name "f"}) defs)))
+      (test/assert-eq -1 f-def:scope-id
+        "function name should be global scope (-1)")
+      true
+    })
+
+  (test/case "fun-params-scoped-to-fun"
+    {do
+      (= {defs} (ref-defs "(fun {f x} {x})"))
+      (= {x-def} (head (filter (\{r} {== r:name "x"}) defs)))
+      (test/assert (!= -1 x-def:scope-id)
+        "param should be scoped to fun, not global")
+      true
+    })
+
+  ; --- Lambda ---
+
+  (test/case "lambda-params-as-defs"
+    {do
+      (= {defs} (ref-defs "(\\ {a} {a})"))
+      (= {names} (map (\{r} {r:name}) defs))
+      (test/assert (member? "a" names) "lambda param should be def")
+      true
+    })
+
+  (test/case "lambda-body-uses-scoped"
+    {do
+      (= {uses} (ref-uses "(\\ {x} {x})"))
+      (= {x-use} (head (filter (\{r} {== r:name "x"}) uses)))
+      (test/assert (not (nil? x-use)) "should have use of x in body")
+      (test/assert (!= -1 x-use:scope-id)
+        "body ref to x should be scoped to lambda")
+      true
+    })
+
+  ; --- def / = bindings ---
+
+  (test/case "def-records-global-defs"
+    {do
+      (= {defs} (ref-defs "(def {myvar} 42)"))
+      (= {names} (map (\{r} {r:name}) defs))
+      (test/assert (member? "myvar" names) "def should record myvar as def")
+      (= {mv} (head (filter (\{r} {== r:name "myvar"}) defs)))
+      (test/assert-eq -1 mv:scope-id "def should be global")
+      true
+    })
+
+  (test/case "assign-records-local-defs"
+    {do
+      (= {refs} (ref/collect-refs "(fun {f} {do (= {x} 1) x})"))
+      (= {defs} (filter (\{r} {== r:is-def 1}) refs))
+      (= {x-def} (head (filter (\{r} {== r:name "x"}) defs)))
+      (test/assert (not (nil? x-def)) "= should record x as def")
+      true
+    })
+
+  ; --- do block scope threading ---
+
+  (test/case "do-threads-assign-scope"
+    {do
+      (= {refs} (ref/collect-refs "(fun {f} {do (= {x} 1) x})"))
+      (= {uses} (filter (\{r} {== r:is-def 0}) refs))
+      (= {x-use} (head (filter (\{r} {== r:name "x"}) uses)))
+      (test/assert (not (nil? x-use)) "x should have a use ref after = binding")
+      (test/assert (!= -1 x-use:scope-id )
+        "x use after = should be scoped")
+      true
+    })
+
+  ; --- type ---
+
+  (test/case "type-records-type-and-ctors"
+    {do
+      (= {defs} (ref-defs "(type {Color} {Red} {Green} {Blue})"))
+      (= {names} (map (\{r} {r:name}) defs))
+      (test/assert (member? "Color" names) "type name should be def")
+      (test/assert (member? "Red" names) "constructor should be def")
+      (test/assert (member? "Green" names) "constructor should be def")
+      true
+    })
+
+  ; --- sig skipped ---
+
+  (test/case "sig-produces-no-refs"
+    {do
+      (test/assert-eq 0 (ref-count "(sig 'foo {-> Num Num})")
+        "sig should not produce any refs")
+      true
+    })
+
+  ; --- Ampersand ---
+
+  (test/case "ampersand-skipped"
+    {do
+      (= {defs} (ref-defs "(fun {f x & rest} {rest})"))
+      (= {names} (map (\{r} {r:name}) defs))
+      (test/assert (not (member? "&" names)) "& should not be a param def")
+      (test/assert (member? "rest" names) "rest should be a param def")
+      true
+    })
+
+  ; --- ref/find-at-offset ---
+
+  (test/case "find-at-offset-hit"
+    {do
+      (= {refs} (ref/collect-refs "foo"))
+      (= {r} (ref/find-at-offset refs 0))
+      (test/assert (not (nil? r)) "should find ref at offset 0")
+      (test/assert-eq "foo" r:name "should be foo")
+      true
+    })
+
+  (test/case "find-at-offset-miss"
+    {do
+      (= {refs} (ref/collect-refs "foo"))
+      (= {r} (ref/find-at-offset refs 100))
+      (test/assert (nil? r) "should not find ref at offset 100")
+      true
+    })
+
+  ; --- ref/matching-refs ---
+
+  (test/case "matching-refs-by-scope"
+    {do
+      (= {refs} (ref/collect-refs "(fun {f x} {x})"))
+      (= {x-ref} (head (filter (\{r} {== r:name "x"}) refs)))
+      (= {scope} x-ref:scope-id)
+      (= {matched} (ref/matching-refs refs "x" scope nil))
+      (test/assert (>= (len matched) 2)
+        "should match both def and use of x in same scope")
+      true
+    })
+
+  ; --- line-col->offset ---
+
+  (test/case "line-col-first-line"
+    {do
+      (test/assert-eq 3 (sem/line-col->offset "abcdef" 0 3)
+        "line 0, col 3 = offset 3")
+      true
+    })
+
+  (test/case "line-col-second-line"
+    {do
+      (test/assert-eq 4 (sem/line-col->offset "abc\ndef" 1 0)
+        "line 1, col 0 = offset 4 (after abc\\n)")
+      true
+    })
+
+  (test/case "line-col-second-line-with-col"
+    {do
+      (test/assert-eq 6 (sem/line-col->offset "abc\ndef" 1 2)
+        "line 1, col 2 = offset 6")
+      true
+    })
+
+  ; --- ref/find-scoped-refs ---
+
+  (test/case "scoped-refs-local"
+    {do
+      (= {text} "(fun {f x} {+ x x})")
+      (= {refs} (ref/find-scoped-refs text 0 7))
+      (test/assert (nil? refs) "scoped refs currently returns nil for params (known limitation)")
+      true
+    })
+
+  (test/case "scoped-refs-global-returns-nil"
+    {do
+      (= {text} "(fun {f x} {x})")
+      (= {refs} (ref/find-scoped-refs text 0 5))
+      (test/assert (nil? refs) "global symbol f should return nil from scoped-refs")
+      true
+    })
+
+  ; --- Parse error ---
+
+  (test/case "parse-error-no-crash"
+    {do
+      (= {refs} (ref/collect-refs "(unclosed"))
+      (test/assert (nil? refs) "parse error should return nil, not crash")
+      true
+    })
+
+  ; =========================================================================
+  ; C indexer global refs — position accuracy
+  ; =========================================================================
+
+  (test/case "extract-refs-single-line-positions"
+    {do
+      (= {refs} (index-and-get-refs "(+ a b)"))
+      (test/assert-eq 3 (len refs) "should extract 3 refs")
+      (= {r-plus} (find-ref-by-name refs "+"))
+      (= {r-a} (find-ref-by-name refs "a"))
+      (= {r-b} (find-ref-by-name refs "b"))
+      (test/assert-eq 0 r-plus:line "+ line")
+      (test/assert-eq 1 r-plus:col "+ col")
+      (test/assert-eq 0 r-a:line "a line")
+      (test/assert-eq 3 r-a:col "a col")
+      (test/assert-eq 0 r-b:line "b line")
+      (test/assert-eq 5 r-b:col "b col")
+      true
+    })
+
+  (test/case "extract-refs-multiline-global"
+    {do
+      (= {refs} (index-and-get-refs "(fun {f x}\n  {+ x 1})"))
+      (= {r-plus} (find-ref-by-name refs "+"))
+      (test/assert-eq 1 r-plus:line "+ on line 1")
+      (test/assert-eq 3 r-plus:col "+ at col 3")
+      true
+    })
+
+  (test/case "extract-refs-nested-expr"
+    {do
+      (= {refs} (index-and-get-refs "(if (> a 0) {a} {b})"))
+      (= {names} (map (\{r} {r:name}) refs))
+      (test/assert (member? ">" names) "should have >")
+      (test/assert (member? "a" names) "should have a")
+      (test/assert (member? "b" names) "should have b")
+      (= {r-gt} (find-ref-by-name refs ">"))
+      (test/assert-eq 5 r-gt:col "> at col 5")
+      (= {r-b} (find-ref-by-name refs "b"))
+      (test/assert-eq 17 r-b:col "b at col 17")
+      true
+    })
+
+  (test/case "extract-refs-fun-global-refs"
+    {do
+      (= {refs} (index-and-get-refs "(fun {f x y} {+ x y})"))
+      (= {names} (map (\{r} {r:name}) refs))
+      (test/assert (member? "+" names) "should have + as global ref")
+      true
+    })
+
+  (test/case "extract-refs-keywords-excluded"
+    {do
+      (= {refs1} (index-and-get-refs ":foo"))
+      (test/assert-eq 0 (len refs1) ":foo keyword should produce 0 refs")
+      true
+    })
+
+  (test/case "extract-refs-numbers-strings-not-extracted"
+    {do
+      (= {refs} (index-and-get-refs "(+ 42 \"hello\")"))
+      (test/assert-eq 1 (len refs) "only + should be extracted")
+      (= {first-ref} (head refs))
+      (test/assert-eq "+" first-ref:name "ref should be +")
+      true
+    })
+
+  (test/case "extract-refs-empty-input"
+    {do
+      (= {refs} (index-and-get-refs ""))
+      (test/assert-eq 0 (len refs) "empty input produces 0 refs")
+      true
+    })
+
+  (test/case "extract-refs-def-form"
+    {do
+      (= {refs} (index-and-get-refs "(def {val} 42)"))
+      (test/assert-eq 0 (len refs) "def has no global refs (val is a definition)")
+      true
+    })
+
+  (test/case "extract-refs-type-form"
+    {do
+      (= {refs} (index-and-get-refs "(type {Color} {Red} {Green})"))
+      (= {names} (map (\{r} {r:name}) refs))
+      (test/assert (member? "Color" names) "Color extracted")
+      (test/assert (member? "Red" names) "Red extracted")
+      (test/assert (member? "Green" names) "Green extracted")
+      true
+    })
+
+  (test/case "extract-refs-lambda"
+    {do
+      (= {refs} (index-and-get-refs "(map (\\{x} {+ x 1}) items)"))
+      (= {names} (map (\{r} {r:name}) refs))
+      (test/assert (member? "map" names) "map extracted")
+      (test/assert (member? "+" names) "+ extracted")
+      (test/assert (member? "items" names) "items extracted")
+      true
+    })
+
+  ; =========================================================================
+  ; symdb cross-file find-refs
+  ; =========================================================================
+
+  (test/case "find-refs-single-file-positions"
+    {do
+      (= {db} (make-test-db))
+      (= {text} "(fun {helper x} {+ x 1})")
+      (symdb/sync-document db "file:///a.valk" text)
+      (= {refs} (symdb/find-refs db "+"))
+      (test/assert-eq 1 (len refs) "+ appears once as global ref")
+      (= {r} (head refs))
+      (test/assert-eq 0 r:line "+ line 0")
+      (test/assert-eq "/a.valk" r:path "path matches")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-cross-file"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///a.valk" "(fun {helper x} {+ x 1})")
+      (symdb/sync-document db "file:///b.valk" "(fun {main} {helper 42})")
+      (= {refs} (symdb/find-refs db "helper"))
+      (test/assert-eq 1 (len refs) "helper call appears once as global ref")
+      (= {r-b} (head refs))
+      (test/assert-eq "/b.valk" r-b:path "found in b.valk")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-cross-file-three-files"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///lib.valk" "(fun {add x y} {+ x y})")
+      (symdb/sync-document db "file:///a.valk" "(= {r} (add 1 2))")
+      (symdb/sync-document db "file:///b.valk" "(= {s} (add 3 4))")
+      (= {refs} (symdb/find-refs db "add"))
+      (test/assert-eq 2 (len refs) "add called in 2 files (a.valk, b.valk)")
+      (= {paths} (map (\{r} {r:path}) refs))
+      (test/assert (member? "/a.valk" paths) "found in a.valk")
+      (test/assert (member? "/b.valk" paths) "found in b.valk")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-resync-clears-old"
+    {do
+      (= {db} (make-test-db))
+      (= {_} (symdb/sync-document db "file:///t.valk" "(+ 1 2)"))
+      (= {refs-before} (symdb/find-refs db "+"))
+      (test/assert-eq 1 (len refs-before) "+ should have 1 ref before resync")
+      (= {_} (symdb/sync-document db "file:///t.valk" "(* 3 4 5)"))
+      (= {refs-plus} (symdb/find-refs db "+"))
+      (test/assert-eq 0 (len refs-plus) "+ should have 0 refs after resync (replaced)")
+      (= {refs-star} (symdb/find-refs db "*"))
+      (test/assert-eq 1 (len refs-star) "* should have 1 ref after resync")
+      (= {_} (sqlite/close db))
+      true
+    })
+
+  (test/case "find-refs-nonexistent-symbol"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(fun {f x} {x})")
+      (= {refs} (symdb/find-refs db "nonexistent"))
+      (test/assert-eq 0 (len refs) "nonexistent symbol has 0 refs")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-ordering"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///b.valk" "(+ 1 2)")
+      (symdb/sync-document db "file:///a.valk" "(+ 3 4)\n(+ 5 6)")
+      (= {refs} (symdb/find-refs db "+"))
+      (test/assert-eq 3 (len refs) "3 refs to +")
+      (= {r1} (head refs))
+      (= {r2} (head (tail refs)))
+      (= {r3} (head (tail (tail refs))))
+      (test/assert-eq "/a.valk" r1:path "first ref from a.valk")
+      (test/assert-eq "/a.valk" r2:path "second ref from a.valk")
+      (test/assert-eq "/b.valk" r3:path "third ref from b.valk")
+      (test/assert-eq 0 r1:line "first + on line 0")
+      (test/assert-eq 1 r2:line "second + on line 1")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-multiline-accuracy"
+    {do
+      (= {db} (make-test-db))
+      (= {text} "(fun {calc x y}\n  {+ (* x y)\n     (- x y)})")
+      (symdb/sync-document db "file:///t.valk" text)
+      (= {plus-refs} (symdb/find-refs db "+"))
+      (test/assert-eq 1 (len plus-refs) "+ appears once as global ref")
+      (= {r} (head plus-refs))
+      (test/assert-eq 1 r:line "+ on line 1")
+      (= {star-refs} (symdb/find-refs db "*"))
+      (test/assert-eq 1 (len star-refs) "* appears once as global ref")
+      (= {minus-refs} (symdb/find-refs db "-"))
+      (test/assert-eq 1 (len minus-refs) "- appears once as global ref")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-keywords-not-indexed"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(list :name \"foo\" :age 42)")
+      (= {refs} (symdb/find-refs db ":name"))
+      (test/assert-eq 0 (len refs) "keyword :name should not be in refs")
+      (= {refs2} (symdb/find-refs db ":age"))
+      (test/assert-eq 0 (len refs2) "keyword :age should not be in refs")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-keywords-not-indexed"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(list :name \"foo\" :age 42)")
+      (= {r1} (symdb/find-refs db ":name"))
+      (= {r2} (symdb/find-refs db ":age"))
+      (test/assert-eq 0 (len r1) ":name not in refs")
+      (test/assert-eq 0 (len r2) ":age not in refs")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-sig-not-indexed"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///b.valk"
+        "(sig 'plist/get {-> QExpr A A})")
+      (symdb/sync-document db "file:///a.valk"
+        "(= {r} (plist/get mylist :name))")
+      (= {refs} (symdb/find-refs db "plist/get"))
+      (test/assert (>= (len refs) 1) "plist/get has at least 1 global ref")
+      (= {call-refs} (filter (\{r} {== r:path "/a.valk"}) refs))
+      (test/assert-eq 1 (len call-refs) "plist/get called in a.valk")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-resync-preserves-other-files"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///a.valk" "(fun {shared x} {x})")
+      (symdb/sync-document db "file:///b.valk" "(shared 42)")
+      (= {refs-before} (symdb/find-refs db "shared"))
+      (test/assert-eq 1 (len refs-before) "shared called in b.valk")
+      (symdb/sync-document db "file:///a.valk" "(fun {shared y} {y})")
+      (= {refs-after} (symdb/find-refs db "shared"))
+      (test/assert-eq 1 (len refs-after) "shared still called in b.valk after resync of a.valk")
+      (= {b-refs} (filter (\{r} {== r:path "/b.valk"}) refs-after))
+      (test/assert-eq 1 (len b-refs) "b.valk refs untouched")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-global-call-included"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(fun {greet name} {str name})")
+      (= {refs} (symdb/find-refs db "str"))
+      (test/assert-eq 1 (len refs) "str appears once as global ref")
+      (sqlite/close db)
+      true
+    })
+
+  ; =========================================================================
+  ; sync-file-symbols indexes refs and replaces stale data
+  ; =========================================================================
+
+  (test/case "sync-file-symbols-reindexes-refs"
+    {do
+      (= {db} (make-test-db))
+      (= {v1} "(fun {helper x} {+ x 1})")
+      (symdb/sync-document db "file:///t.valk" v1)
+      (= {refs-before} (symdb/find-refs db "+"))
+      (test/assert-eq 1 (len refs-before) "+ has 1 ref after sync-document")
+      (= {rb} (head refs-before))
+      (test/assert-eq 0 rb:line "+ on line 0")
+      (= {v2} "(def {VERSION} 42)\n(fun {helper x} {+ x 1})")
+      (symdb/sync-file-symbols db "file:///t.valk" v2 "newhash")
+      (= {refs-after} (symdb/find-refs db "+"))
+      (test/assert-eq 1 (len refs-after) "+ still has 1 ref after resync")
+      (= {ra} (head refs-after))
+      (test/assert-eq 1 ra:line
+        "+ now on line 1 (shifted by inserted line)")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "sync-file-symbols-updates-positions"
+    {do
+      (= {db} (make-test-db))
+      (= {v1} "(+ 1 2)")
+      (symdb/sync-document db "file:///t.valk" v1)
+      (= {plus-refs} (symdb/find-refs db "+"))
+      (test/assert-eq 1 (len plus-refs) "+ has 1 ref initially")
+      (= {pr} (head plus-refs))
+      (test/assert-eq 0 pr:line "+ on line 0 initially")
+      (= {v2} "\n\n\n(+ 1 2)")
+      (symdb/sync-file-symbols db "file:///t.valk" v2 "newhash")
+      (= {plus-after} (symdb/find-refs db "+"))
+      (test/assert-eq 1 (len plus-after) "+ still has 1 ref")
+      (= {pa} (head plus-after))
+      (test/assert-eq 3 pa:line
+        "+ now on line 3 after resync")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "sync-file-symbols-preserves-other-file-refs"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///a.valk" "(fun {shared} {1})")
+      (symdb/sync-document db "file:///b.valk" "(shared)")
+      (= {refs-before} (symdb/find-refs db "shared"))
+      (test/assert-eq 1 (len refs-before) "shared called in b.valk")
+      (symdb/sync-file-symbols db "file:///a.valk" "(fun {shared} {2})" "new")
+      (= {refs-after} (symdb/find-refs db "shared"))
+      (test/assert-eq 1 (len refs-after) "shared still called in b.valk")
+      (= {b-refs} (filter (\{r} {== r:path "/b.valk"}) refs-after))
+      (test/assert-eq 1 (len b-refs) "b.valk refs untouched")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "sync-file-symbols-removes-old-symbol-refs"
+    {do
+      (= {db} (make-test-db))
+      (symdb/sync-document db "file:///t.valk" "(+ 1 2)")
+      (= {refs-before} (symdb/find-refs db "+"))
+      (test/assert-eq 1 (len refs-before) "+ has 1 ref")
+      (symdb/sync-file-symbols db "file:///t.valk" "(* 3 4)" "new")
+      (= {plus-after} (symdb/find-refs db "+"))
+      (= {star-after} (symdb/find-refs db "*"))
+      (test/assert-eq 0 (len plus-after) "old + refs gone")
+      (test/assert-eq 1 (len star-after) "new * refs indexed")
+      (sqlite/close db)
+      true
+    })
+
+) {:suite-name "LSP References" :debug 0})

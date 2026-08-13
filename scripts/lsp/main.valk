@@ -1,5 +1,0 @@
-(load "scripts/lsp/lsp.valk")
-; Script mode takes the process exit status from VALK_EXIT_CODE (repl.c),
-; so the shutdown/no-shutdown distinction survives `valk main.valk` the
-; same way it does for the AOT binary.
-(def {VALK_EXIT_CODE} (lsp/start))

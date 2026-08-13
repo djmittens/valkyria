@@ -1,0 +1,785 @@
+; LSP Validate — checks: symbol lookup, arity checking, type validation helpers
+;
+; Pure analysis functions — no AST walking or scope mutation.
+; Used by lsp-validate-walk.valk which does the actual tree traversal.
+
+(load "symdb/symdb.valk")
+
+(module vd)
+
+; ---------------------------------------------------------------------------
+; Constants
+; ---------------------------------------------------------------------------
+
+(def {DIAG_ERROR}   1)
+(def {DIAG_WARNING} 2)
+
+(def {VALIDATE_SPECIAL_FORMS}
+  (dict/from-keys {"=" "\\" "def" "fun" "macro" "module" "if" "do" "select" "case" "quote"
+   "load" "eval" "read" "let" "aio/let" "aio/do" "<-"
+   "type" "match" "sig" "ctx/with" "ctx/with-deadline" "with"}))
+
+(def {VALIDATE_CONSTANTS}
+  (dict/from-keys {"true" "false" "nil" "otherwise" "_" "sys/argv" "test"}))
+
+(def {VALIDATE_BUILTIN_TYPES}
+  (dict/from-keys {"Num" "Str" "Nil" "Bool" "Err" "QExpr" "Fun" "Sym"
+                   "Ref" "Handle" "List" "Dict" "Never" "Any"}))
+
+; ---------------------------------------------------------------------------
+; Pre-scan: collect global defs from AST (fun names, def names, type ctors)
+; ---------------------------------------------------------------------------
+
+(sig 'collect-globals {-> List List})
+(fun {collect-globals ast} {
+  collect-globals-walk ast nil
+})
+
+
+(sig 'collect-globals-walk {-> List List List})
+(fun {collect-globals-walk exprs acc} {
+  if (nil? exprs) {acc}
+  {collect-globals-walk (tail exprs)
+    (collect-globals-one (head exprs) acc)}
+})
+
+(sig 'collect-globals-one {-> Any List List})
+(fun {collect-globals-one expr acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {do
+    (= {name} (ast/head-name expr))
+    (if (== name "") {acc}
+      {collect-globals-by-form name (tail expr) acc})}}
+})
+
+(sig 'collect-globals-by-form {-> Str List List List})
+(fun {collect-globals-by-form name tl acc} {
+  if (== name "fun") {collect-fun-name tl acc}
+  {if (== name "def") {collect-def-names tl acc}
+  {if (== name "type") {collect-type-names tl acc}
+  {if (== name "sig") {collect-sig-name tl acc}
+  {acc}}}}
+})
+
+(sig 'collect-fun-name {-> List List List})
+(fun {collect-fun-name tl acc} {
+  if (nil? tl) {acc}
+  {collect-fun-formals (head tl) acc}
+})
+
+(sig 'collect-fun-formals {-> Any List List})
+(fun {collect-fun-formals formals acc} {
+  if (not (list? formals)) {acc}
+  {if (nil? formals) {acc}
+  {collect-fun-head (head formals) acc}}
+})
+
+(sig 'collect-fun-head {-> Any List List})
+(fun {collect-fun-head fname acc} {
+  if (sym? fname) {qcons (str fname) acc}
+  {acc}
+})
+
+(sig 'collect-def-names {-> List List List})
+(fun {collect-def-names tl acc} {
+  if (nil? tl) {acc}
+  {collect-binding-names (head tl) acc}
+})
+
+(sig 'collect-binding-names {-> Any List List})
+(fun {collect-binding-names binding acc} {
+  if (list? binding) {collect-binding-walk binding acc}
+  {if (sym? binding) {qcons (str binding) acc}
+  {acc}}
+})
+
+(sig 'collect-binding-walk {-> List List List})
+(fun {collect-binding-walk vars acc} {
+  if (nil? vars) {acc}
+  {collect-binding-walk (tail vars)
+    (if (sym? (head vars)) {qcons (str (head vars)) acc} {acc})}
+})
+
+(sig 'collect-type-names {-> List List List})
+(fun {collect-type-names tl acc} {
+  if (nil? tl) {acc}
+  {collect-type-name-and-ctors (head tl) (tail tl) acc}
+})
+
+(sig 'collect-type-name-and-ctors {-> Any List List List})
+(fun {collect-type-name-and-ctors type-name-q variants acc} {
+  if (not (list? type-name-q)) {collect-type-ctors variants acc}
+  {if (nil? type-name-q) {collect-type-ctors variants acc}
+  {collect-type-with-head (head type-name-q) variants acc}}
+})
+
+(sig 'collect-type-with-head {-> Any List List List})
+(fun {collect-type-with-head tname variants acc} {
+  if (not (sym? tname)) {collect-type-ctors variants acc}
+  {collect-type-with-name (str tname) variants acc}
+})
+
+(sig 'collect-type-with-name {-> Str List List List})
+(fun {collect-type-with-name tname-str variants acc} {
+  collect-type-ctors variants (qcons tname-str acc)
+})
+
+(sig 'collect-type-ctors {-> List List List})
+(fun {collect-type-ctors variants acc} {
+  if (nil? variants) {acc}
+  {collect-type-ctors (tail variants)
+    (collect-type-one-ctor (head variants) acc)}
+})
+
+(sig 'collect-type-one-ctor {-> Any List List})
+(fun {collect-type-one-ctor variant acc} {
+  if (not (list? variant)) {acc}
+  {if (nil? variant) {acc}
+  {collect-type-ctor-head (head variant) acc}}
+})
+
+(sig 'collect-type-ctor-head {-> Any List List})
+(fun {collect-type-ctor-head ctor acc} {
+  if (sym? ctor) {qcons (str ctor) acc} {acc}
+})
+
+(sig 'collect-sig-name {-> List List List})
+(fun {collect-sig-name tl acc} {
+  if (nil? tl) {acc}
+  {collect-sig-quoted (head tl) acc}
+})
+
+(sig 'collect-sig-quoted {-> Any List List})
+(fun {collect-sig-quoted name-q acc} {
+  if (list? name-q) {collect-sig-inner (head name-q) acc}
+  {if (sym? name-q) {qcons (str name-q) acc}
+  {acc}}
+})
+
+(sig 'collect-sig-inner {-> Any List List})
+(fun {collect-sig-inner s acc} {
+  if (sym? s) {qcons (str s) acc}
+  {acc}
+})
+
+; ---------------------------------------------------------------------------
+; Pre-scan: collect type declaration names for sig validation
+; ---------------------------------------------------------------------------
+
+(sig 'collect-ast-types {-> List List})
+(fun {collect-ast-types ast} {
+  collect-ast-types-walk ast nil
+})
+
+(sig 'collect-ast-types-walk {-> List List List})
+(fun {collect-ast-types-walk exprs acc} {
+  if (nil? exprs) {acc}
+  {collect-ast-types-walk (tail exprs)
+    (collect-ast-type-one (head exprs) acc)}
+})
+
+(sig 'collect-ast-type-one {-> Any List List})
+(fun {collect-ast-type-one expr acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {if (== (ast/head-name expr) "type")
+    {collect-type-decl-name (tail expr) acc}
+    {acc}}}
+})
+
+(sig 'collect-type-decl-name {-> List List List})
+(fun {collect-type-decl-name tl acc} {
+  if (nil? tl) {acc}
+  {collect-type-decl-name-q (head tl) acc}
+})
+
+(sig 'collect-type-decl-name-q {-> Any List List})
+(fun {collect-type-decl-name-q type-q acc} {
+  if (list? type-q)
+    {if (nil? type-q) {acc}
+     {if (sym? (head type-q)) {qcons (str (head type-q)) acc} {acc}}}
+  {acc}
+})
+
+; ---------------------------------------------------------------------------
+; Load all known symbol names from symdb (queried once, O(1) C-level lookup)
+; ---------------------------------------------------------------------------
+
+; Built-in / prelude names (operators like `+`, `head`, etc.) come from the
+; running environment via (penv), which walks the full scope chain. These are
+; constant for the life of the process, so we build the set ONCE and memoize
+; it — rebuilding per validation (every keystroke) was ~13ms/call and made the
+; LSP diagnostics path pathologically slow. Without this set, an arbitrary
+; project (whose workspace has no stdlib/ to index) flags every operator as
+; undefined.
+(def {BUILTIN_NAMES_CACHE} nil)
+
+(sig 'add-env-names {-> Dict List Dict})
+(fun {add-env-names d pairs} {
+  if (nil? pairs) {d}
+  {do
+    (dict/put! d (str (head (head pairs))))
+    (add-env-names d (tail pairs))}
+})
+
+(sig 'builtin-names {-> Dict})
+(fun {builtin-names} {
+  if (nil? BUILTIN_NAMES_CACHE)
+    {do
+      (= {pairs} (penv))
+      ; Nested def: names are not auto-qualified below top level, so this
+      ; must spell the qualified name to update the top-level cache slot.
+      (def {vd/BUILTIN_NAMES_CACHE}
+        (add-env-names (dict/new (len pairs)) pairs))
+      BUILTIN_NAMES_CACHE}
+    {BUILTIN_NAMES_CACHE}
+})
+
+; The UNION arm mirrors vd/strip-module-prefix in SQL: any name with a "/"
+; at index >= 1 also registers its post-slash base name. Building the dict
+; inside the C query builtin replaces a per-row Valk rebuild that cost
+; ~26ms per diagnostics run on a workspace-sized symbol table.
+(sig 'load-known-set {-> Ref Dict})
+(fun {load-known-set db} {
+  if (nil? db) {(dict/new)}
+  {sqlite/query-dict db
+    "SELECT DISTINCT name FROM symbols UNION SELECT DISTINCT substr(name, instr(name,'/')+1) AS name FROM symbols WHERE instr(name,'/') > 1"}
+})
+
+; ---------------------------------------------------------------------------
+; Build known-types set for sig validation
+; ---------------------------------------------------------------------------
+
+(sig 'load-symdb-types {-> Ref Str Dict Dict})
+(fun {load-symdb-types db path d} {
+  if (nil? db) {d}
+  {do
+    ; Types visible through the file's load closure (global fallback when
+    ; the file has no identity).
+    (= {rows} (symdb/types-in db path))
+    (add-type-rows rows d)}
+})
+
+(sig 'add-type-rows {-> List Dict Dict})
+(fun {add-type-rows rows d} {
+  if (nil? rows) {d}
+  {do
+    (= {row} (head rows))
+    (dict/put! d row:name)
+    (add-type-rows (tail rows) d)}
+})
+
+(sig 'build-types-set {-> Ref Str List Dict})
+(fun {build-types-set db path ast} {do
+  (= {d} (dict/from-keys (collect-ast-types ast)))
+  (load-symdb-types db path d)
+})
+
+; ---------------------------------------------------------------------------
+; Arity info from symdb
+; ---------------------------------------------------------------------------
+
+; Dependencies are a DAG: a file sees exactly what it loads (transitively),
+; plus the ambient files the C runtime bootstraps into every program
+; (prelude, builtins, aio/handles — seeded into the DB as ordinary file
+; rows). Shape checks resolve strictly through that closure — never against
+; the rest of the workspace. The one exception is a validation run with no
+; file identity (path = ""), which falls back to the whole workspace when
+; all definitions agree. The closure CTE itself lives with the schema
+; (symdb/closure-cte) and is shared with navigation.
+(def {ARITY_CLOSURE_SQL} (str symdb/closure-cte "
+SELECT DISTINCT arity, sig FROM symbols
+ WHERE name = ?2 AND file_id IN (SELECT fid FROM closure)
+   AND (arity >= 0 OR sig IS NOT NULL)
+ LIMIT 2"))
+
+(def {VISIBLE_SQL} (str symdb/closure-cte "
+SELECT DISTINCT name FROM symbols WHERE file_id IN (SELECT fid FROM closure)"))
+
+(def {DEFINER_SQL}
+  "SELECT f.path AS path FROM symbols s JOIN files f ON s.file_id = f.id WHERE s.name = ?1 LIMIT 1")
+
+(def {ARITY_GLOBAL_SQL}
+  "SELECT DISTINCT arity, sig FROM symbols WHERE name = ?1 AND (arity >= 0 OR sig IS NOT NULL) LIMIT 2")
+
+(sig 'lookup-arity {-> Ref Str Str Any})
+(fun {lookup-arity db path name} {
+  if (nil? db) {nil}
+  {if (or (nil? path) (== (len path) 0))
+    ; No file identity: whole-workspace fallback, only if unambiguous.
+    {do
+      (= {g} (sqlite/query db ARITY_GLOBAL_SQL name))
+      (if (== (len g) 1) {head g} {nil})}
+    {do
+      (= {rows} (sqlite/query db ARITY_CLOSURE_SQL path name))
+      ; 0 rows: not visible from this file (the missing-dependency check
+      ; reports it). 2 rows: conflicting shapes inside the closure. Either
+      ; way there is nothing sound to check against.
+      (if (== (len rows) 1) {head rows} {nil})}}
+})
+
+; All names visible from `path` through its load closure, as a dict.
+; nil when there is no db, no file identity, or the ambient files
+; (prelude/builtins) are not in the DB — without them every builtin
+; reference would read as a missing dependency, so the check disables
+; itself rather than guess.
+(sig 'load-visible-set {-> Ref Str Any})
+(fun {load-visible-set db path} {
+  if (nil? db) {nil}
+  {if (or (nil? path) (== (len path) 0)) {nil}
+    {do
+      (= {d} (dict/from-keys (map (\ {r} {plist/get r :name})
+                                  (sqlite/query db VISIBLE_SQL path))))
+      (if (dict/has? d "head") {d} {nil})}}
+})
+
+; A name that is known somewhere in the workspace but not reachable
+; through this file's loads is a missing explicit dependency.
+(sig 'check-missing-dep {-> List Any Str List List})
+(fun {check-missing-dep expr hd name ctx} {do
+  (= {visible} (plist/get ctx :visible))
+  (if (nil? visible) {ctx}
+  {if (dict/has? visible name) {ctx}
+  {do
+    (= {definer} (sqlite/query-maybe (plist/get ctx :db) DEFINER_SQL name))
+    (if (nil? definer) {ctx}
+      {add-warning ctx hd name
+        (str "'" name "' is defined in " (plist/get definer :path)
+             ", which this file never loads -- dependencies must be"
+             " explicit, add the (load ...)")})}})
+})
+
+(sig 'lookup-arity-cached {-> List Str Any})
+(fun {lookup-arity-cached ctx name} {
+  lookup-arity-cached-direct ctx name
+})
+
+(sig 'lookup-arity-cached-direct {-> List Str Any})
+(fun {lookup-arity-cached-direct ctx name} {do
+  (= {cache} (plist/get ctx :arity-cache))
+  (if (nil? cache)
+    {lookup-arity (plist/get ctx :db) (plist/get ctx :path) name}
+    {do
+      (= {cached} (dict/get cache name))
+      (if (nil? cached)
+        {lookup-arity (plist/get ctx :db) (plist/get ctx :path) name}
+        {cached})})
+})
+
+; ---------------------------------------------------------------------------
+; Diagnostic builder
+; ---------------------------------------------------------------------------
+
+(sig 'make-diag {-> Str Num Num Num Str List})
+(fun {make-diag text offset length severity message} {do
+  (= {lc} (offset->line-col text offset))
+  (= {line} (head lc))
+  (= {col} (head (tail lc)))
+  (list :line line :col col :end-col (+ col length)
+        :severity severity :message message)
+})
+
+; ---------------------------------------------------------------------------
+; Symbol checks
+; ---------------------------------------------------------------------------
+
+(sig 'is-accessor {-> Str Num})
+(fun {is-accessor name} {
+  if (< (len name) 2) {0}
+  {is-accessor-check (str/slice name 0 1) name}
+})
+
+(sig 'is-accessor-check {-> Str Str Num})
+(fun {is-accessor-check first name} {
+  if (< (ord first "A") 0) {0}
+  {if (> (ord first "Z") 0) {0}
+  {has-field-colon name}}
+})
+
+(sig 'has-field-colon {-> Str Num})
+(fun {has-field-colon name} {do
+  (= {idx} (str/index-of name ":"))
+  (if (< idx 1) {0}
+  {if (>= idx (- (len name) 1)) {0}
+  {do
+    (= {after} (str/slice name (+ idx 1) (+ idx 2)))
+    (if (== after ":") {0} {1})}})
+})
+
+(sig 'in-scope? {-> Str List Num})
+(fun {in-scope? name scope-chain} {
+  if (nil? scope-chain) {0}
+  {if (dict/has? (head scope-chain) name) {1}
+  {in-scope? name (tail scope-chain)}}
+})
+
+(sig 'strip-module-prefix {-> Str Str})
+(fun {strip-module-prefix name} {do
+  (= {idx} (str/index-of name "/"))
+  (if (< idx 1) {nil}
+    {str/slice name (+ idx 1) (len name)})
+})
+
+(sig 'is-known {-> Str List Dict Dict Num})
+(fun {is-known name scope globals-set known-set} {
+  if (dict/has? VALIDATE_CONSTANTS name) {1}
+  {if (dict/has? VALIDATE_SPECIAL_FORMS name) {1}
+  {if (in-scope? name scope) {1}
+  {if (dict/has? globals-set name) {1}
+  {if (dict/has? known-set name) {1}
+  {if (dict/has? (builtin-names) name) {1}
+  {if (is-accessor name) {1}
+  {is-known-by-basename name known-set}}}}}}}
+})
+
+(sig 'is-known-by-basename {-> Str Dict Num})
+(fun {is-known-by-basename name known-set} {do
+  (= {base} (strip-module-prefix name))
+  (if (nil? base) {0}
+    {dict/has? known-set base})
+})
+
+(sig 'add-diag {-> List Any Str Str List})
+(fun {add-diag ctx expr name message} {
+  plist/set ctx :diags
+    (qcons (make-diag ctx:text
+                         (src-pos expr) (len name)
+                         DIAG_ERROR message)
+           ctx:diags)
+})
+
+(sig 'add-warning {-> List Any Str Str List})
+(fun {add-warning ctx expr name message} {
+  plist/set ctx :diags
+    (qcons (make-diag ctx:text
+                         (src-pos expr) (len name)
+                         DIAG_WARNING message)
+           ctx:diags)
+})
+
+(def {lowercase} "abcdefghijklmnopqrstuvwxyz")
+
+(sig 'is-lowercase-char {-> Str Num})
+(fun {is-lowercase-char c} {
+  >= (str/index-of lowercase c) 0
+})
+
+(sig 'is-field-access {-> Str Num})
+(fun {is-field-access name} {do
+  (if (< (len name) 3) {0}
+  {do
+    (= {c0} (str/slice name 0 1))
+    (if (not (is-lowercase-char c0)) {0}
+    {do
+      (= {idx} (str/index-of name ":"))
+      (if (<= idx 0) {0}
+      {if (>= idx (- (len name) 1)) {0}
+      {do
+        (= {c1} (str/slice name (+ idx 1) (+ idx 2)))
+        (if (== c1 ":") {0}
+        {if (not (is-lowercase-char c1)) {0}
+          {1}})}})})})
+})
+
+(sig 'check-sym-name {-> Any Str List List})
+(fun {check-sym-name expr name ctx} {
+  if (<= (len name) 0) {ctx}
+  {if (== (str/slice name 0 1) ":") {ctx}
+  {if (is-field-access name) {ctx}
+  {if (is-known name ctx:scope
+                    ctx:globals
+                    ctx:known)
+    {if (is-accessor name)
+      {check-accessor expr expr name ctx}
+      {ctx}}
+  {if (plist/get ctx :in-qexpr)
+    ; Suppress undefined-symbol noise inside qexpr data: callers like
+    ; `(some-fn {a b c})` pass quoted symbols that don't need to
+    ; resolve to anything. Function bodies are also qexprs but they
+    ; introduce their own scope (params become known) so genuine
+    ; undefined-references there still get flagged via vd/walk-call.
+    {ctx}
+    {add-diag ctx expr name
+      (str "Symbol '" name "' is not defined")}}}}}
+})
+
+; ---------------------------------------------------------------------------
+; Arity checking — compare call-site arg count against sig/symdb
+; ---------------------------------------------------------------------------
+
+(sig 'sig-has-varargs {-> Str Num})
+(fun {sig-has-varargs sig-str} {
+  if (nil? sig-str) {0}
+  {>= (str/index-of sig-str "& ") 0}
+})
+
+(sig 'sig-min-arity {-> Str Num})
+(fun {sig-min-arity sig-str} {
+  if (nil? sig-str) {-1}
+  {do
+    (= {parts} (str/split sig-str " "))
+    (count-sig-params parts 0 0)}
+})
+
+(sig 'count-sig-params {-> List Num Num Num})
+(fun {count-sig-params parts depth count} {
+  if (nil? parts) {(if (> count 0) {- count 1} {0})}
+  {do
+    (= {p} (head parts))
+    (if (== p "->") {count-sig-params (tail parts) depth count}
+    {if (== p "&") {(if (> count 0) {- count 1} {0})}
+    {if (== p "{->") {count-sig-params (tail parts) depth count}
+    {if (== p "}") {count-sig-params (tail parts) depth count}
+    {do
+      ; Count BOTH `()` and `{}` brackets — the C indexer's
+      ; serialize_sig_expr wraps every cons list in `{...}` regardless
+      ; of how the user wrote it (`(List Num)` becomes `{List Num}`
+      ; in the stored sig), so a parser that only knew `()` would
+      ; miscount nested types as separate parameters.
+      (= {opens}  (+ (count-char p "(") (count-char p "{")))
+      (= {closes} (+ (count-char p ")") (count-char p "}")))
+      (= {new-depth} (+ (- depth closes) opens))
+      (if (== new-depth 0)
+        {count-sig-params (tail parts) 0 (+ count 1)}
+        {count-sig-params (tail parts) new-depth count})}}}})}
+})
+
+(sig 'count-char {-> Str Str Num})
+(fun {count-char s c} {
+  count-char-loop s c 0 0
+})
+
+(sig 'count-char-loop {-> Str Str Num Num Num})
+(fun {count-char-loop s c i count} {
+  if (>= i (len s)) {count}
+  {count-char-loop s c (+ i 1)
+    (if (== (str/slice s i (+ i 1)) c) {+ count 1} {count})}
+})
+
+(sig 'check-arity {-> List Any Str Num List List List})
+(fun {check-arity expr hd name argc tl ctx} {
+  if (nil? ctx:db) {ctx}
+  {do
+    (= {info} (lookup-arity-cached ctx name))
+    (if (nil? info) {ctx}
+      {do
+        (= {expected} (plist/get info :arity))
+        (= {sig-str} (plist/get info :sig))
+        (= {is-varargs} (or (sig-has-varargs sig-str) (< expected 0)))
+        (if is-varargs
+          {do
+            (= {min-arity} (sig-min-arity sig-str))
+            (if (and (> min-arity 0) (== argc 0))
+              {add-diag ctx hd name
+                (str "'" name "' expects at least " min-arity " arguments, got " argc)}
+              {ctx})}
+          {if (> argc expected)
+            {add-diag ctx hd name
+              (str "'" name "' expects " expected " arguments, got " argc)}
+            {ctx}})})}
+})
+
+; ---------------------------------------------------------------------------
+; Special form arity — hardcoded rules
+; ---------------------------------------------------------------------------
+
+(sig 'check-special-arity {-> Str List List Any List})
+(fun {check-special-arity name tl ctx hd} {
+  if (== name "if")
+    {if (< (len tl) 2) {add-diag ctx hd name (str "'if' requires 2-3 arguments, got " (len tl))}
+    {if (> (len tl) 3) {add-diag ctx hd name (str "'if' requires 2-3 arguments, got " (len tl))}
+    {ctx}}}
+  {if (== name "fun")
+    {if (< (len tl) 2) {add-diag ctx hd name "'fun' requires formals and body"} {ctx}}
+  {if (== name "\\")
+    {if (< (len tl) 2) {add-diag ctx hd name "lambda requires formals and body"} {ctx}}
+  {if (== name "def")
+    {if (< (len tl) 2) {add-diag ctx hd name "'def' requires a binding and a value"} {ctx}}
+  {if (== name "=")
+    {if (< (len tl) 2) {add-diag ctx hd name "'=' requires a binding and a value"} {ctx}}
+  {if (== name "type")
+    {if (< (len tl) 2) {add-diag ctx hd name "'type' requires a name and at least one variant"} {ctx}}
+  {if (== name "match")
+    {if (< (len tl) 2) {add-diag ctx hd name "'match' requires a value and at least one clause"} {ctx}}
+  {if (== name "sig")
+    {if (< (len tl) 2) {add-diag ctx hd name "'sig' requires a name and a type"} {ctx}}
+  {if (== name "load")
+    {if (not (== (len tl) 1)) {add-diag ctx hd name "'load' requires exactly 1 argument"} {ctx}}
+  {ctx}}}}}}}}}
+})
+
+; ---------------------------------------------------------------------------
+; Constructor arity — check field count at call site
+; ---------------------------------------------------------------------------
+
+(sig 'is-keyword-sym {-> Any Num})
+(fun {is-keyword-sym x} {
+  if (not (sym? x)) {0}
+  {do
+    (= {s} (str x))
+    (if (<= (len s) 1) {0}
+      {== (str/slice s 0 1) ":"})}
+})
+
+(sig 'check-ctor-arity {-> List Any Str Num List List List})
+(fun {check-ctor-arity expr hd name argc tl ctx} {
+  if (nil? ctx:db) {ctx}
+  {do
+    (= {info} (lookup-arity-cached ctx name))
+    (if (nil? info) {ctx}
+      {do
+        (= {expected} (plist/get info :arity))
+        (= {sig-str} (plist/get info :sig))
+        (= {is-kw} (if (nil? tl) {0}
+          {is-keyword-sym (head tl)}))
+        (if is-kw
+          {check-ctor-keyword-mode hd name argc expected sig-str tl ctx}
+          {if (not (== argc expected))
+            {add-diag ctx hd name
+              (str "Constructor '" name "' expects " expected " fields, got " argc)}
+            {ctx}})})}
+})
+
+(sig 'check-ctor-keyword-mode {-> Any Str Num Num Str List List List})
+(fun {check-ctor-keyword-mode hd name argc expected sig-str tl ctx} {
+  if (not (== argc (* expected 2)))
+    {add-diag ctx hd name
+      (str "Constructor '" name "' expects " expected " keyword-value pairs, got " argc " args")}
+    {if (nil? sig-str) {ctx}
+      {check-ctor-field-names hd name sig-str tl ctx}}
+})
+
+(sig 'check-ctor-field-names {-> Any Str Str List List List})
+(fun {check-ctor-field-names hd name sig-str tl ctx} {
+  if (nil? tl) {ctx}
+  {if (< (len tl) 2) {ctx}
+  {do
+    (= {key} (head tl))
+    (= {ctx2} (if (not (sym? key)) {ctx}
+      {do
+        (= {ks} (str key))
+        (if (< (str/index-of sig-str ks) 0)
+          {add-diag ctx key ks
+            (str "Constructor '" name "' has no field '" ks "'")}
+          {ctx})}))
+    (check-ctor-field-names hd name sig-str (tail (tail tl)) ctx2)}}
+})
+
+; ---------------------------------------------------------------------------
+; Accessor validation — check TypeName:field exists
+; ---------------------------------------------------------------------------
+
+(sig 'check-accessor {-> List Any Str List List})
+(fun {check-accessor expr hd name ctx} {
+  if (nil? ctx:db) {ctx}
+  {do
+    (= {colon} (str/index-of name ":"))
+    (if (< colon 1) {ctx}
+      {do
+        (= {type-name} (str/slice name 0 colon))
+        (= {field-name} (str ":" (str/slice name (+ colon 1) (len name))))
+        (= {ctor-row} (lookup-arity-cached ctx type-name))
+        (if (nil? ctor-row) {ctx}
+          {do
+            (= {sig-str} (plist/get ctor-row :sig))
+            (if (nil? sig-str) {ctx}
+              {if (< (str/index-of sig-str field-name) 0)
+                {add-diag ctx hd name
+                  (str "Type '" type-name "' has no field '" field-name "'")}
+                {ctx}})})})}
+})
+
+; ---------------------------------------------------------------------------
+; Match pattern validation — check constructor names and field counts
+; ---------------------------------------------------------------------------
+
+(sig 'check-match-clause {-> Any List List})
+(fun {check-match-clause clause ctx} {
+  if (not (list? clause)) {ctx}
+  {if (nil? clause) {ctx}
+  {do
+    (= {hd} (head clause))
+    (if (not (list? hd)) {ctx}
+    {if (nil? hd) {ctx}
+    {do
+      (= {pat-head} (head hd))
+      (if (not (sym? pat-head)) {ctx}
+        {check-match-ctor-name pat-head (str pat-head) (- (len hd) 1) ctx})}})}}
+})
+
+(sig 'check-match-ctor-name {-> Any Str Num List List})
+(fun {check-match-ctor-name sym name bind-count ctx} {
+  if (== name "_") {ctx}
+  {if (nil? ctx:db) {ctx}
+  {do
+    (= {info} (symdb/ctor-sig-of ctx:db (plist/get ctx :path) name))
+    (if (nil? info) {ctx}
+      {do
+        (= {expected} (plist/get info :arity))
+        (if (not (== bind-count expected))
+          {add-warning ctx sym name
+            (str "Match pattern '" name "' binds " bind-count " fields, constructor has " expected)}
+          {ctx})})}}
+})
+
+; ---------------------------------------------------------------------------
+; Division by zero warning
+; ---------------------------------------------------------------------------
+
+(sig 'check-div-zero {-> List Any Str List List List})
+(fun {check-div-zero expr hd name tl ctx} {
+  if (not (or (== name "/") (== name "mod"))) {ctx}
+  {if (< (len tl) 2) {ctx}
+  {do
+    (= {last-arg} (nth (len tl) tl))
+    (if (num? last-arg)
+      {if (== last-arg 0)
+        {add-warning ctx hd name
+          (str "Division by zero: " name " called with literal 0")}
+        {ctx}}
+      {ctx})}}
+})
+
+; ---------------------------------------------------------------------------
+; Sig type name check (used by sig walker in lsp-validate-walk.valk)
+; ---------------------------------------------------------------------------
+
+(sig 'should-validate-type {-> Str Num})
+(fun {should-validate-type name} {
+  if (<= (len name) 1) {0}
+  {if (< (ord (str/slice name 0 1) "A") 0) {0}
+  {if (> (ord (str/slice name 0 1) "Z") 0) {0}
+  {1}}}
+})
+
+(sig 'is-known-type {-> Str Dict Num})
+(fun {is-known-type name types-set} {
+  if (dict/has? VALIDATE_BUILTIN_TYPES name) {1}
+  {dict/has? types-set name}
+})
+
+(sig 'check-sig-type-name {-> Any Str List List})
+(fun {check-sig-type-name elem name ctx} {
+  if (<= (len name) 0) {ctx}
+  {if (== name "->") {ctx}
+  {if (== name "|") {ctx}
+  {if (== name "&") {ctx}
+  {if (== name "_") {ctx}
+  {if (== (str/slice name 0 1) ":") {ctx}
+  {if (not (should-validate-type name)) {ctx}
+  {if (is-known-type name ctx:types) {ctx}
+  {add-diag ctx elem name
+    (str "Type '" name "' is not defined")}}}}}}}}
+})
+
+(sig 'is-ctor-call {-> Str Num})
+(fun {is-ctor-call name} {
+  if (<= (len name) 0) {0}
+  {do
+    (= {c} (str/slice name 0 1))
+    (if (>= (str/index-of "ABCDEFGHIJKLMNOPQRSTUVWXYZ" c) 0)
+      {< (str/index-of name ":") 0}
+      {0})}
+})
+

@@ -1,0 +1,376 @@
+(load "testing/test.valk")
+(load "symdb/symdb.valk")
+(load "lsp/analysis.valk")
+(load "symdb/validate.valk")
+
+(test/run (list
+
+  ; === word-at-position ===
+
+  (test/case "word-at-simple"
+    {do
+      (= {w} (symdb/word-at-position "hello world" 0 0))
+      (test/assert-eq "hello" w "should get hello at col 0")
+      true
+    })
+
+  (test/case "word-at-middle"
+    {do
+      (= {w} (symdb/word-at-position "hello world" 0 6))
+      (test/assert-eq "world" w "should get world at col 6")
+      true
+    })
+
+  (test/case "word-at-multiline"
+    {do
+      (= {w} (symdb/word-at-position "foo\nbar\nbaz" 1 0))
+      (test/assert-eq "bar" w "should get bar on line 1")
+      true
+    })
+
+  (test/case "word-at-paren-boundary"
+    {do
+      (= {w} (symdb/word-at-position "(hello)" 0 1))
+      (test/assert-eq "hello" w "should get hello inside parens")
+      true
+    })
+
+  (test/case "word-at-col-beyond-line"
+    {do
+      (= {w} (symdb/word-at-position "hi" 0 100))
+      (test/assert (nil? w) "col beyond line length should return nil")
+      true
+    })
+
+  (test/case "word-at-line-beyond-file"
+    {do
+      (= {w} (symdb/word-at-position "hi" 100 0))
+      (test/assert (nil? w) "line beyond file should return nil")
+      true
+    })
+
+  (test/case "word-at-on-delimiter"
+    {do
+      (= {w} (symdb/word-at-position "a b" 0 1))
+      (test/assert-eq "a" w "cursor on space returns adjacent word")
+      true
+    })
+
+  (test/case "word-at-braces"
+    {do
+      (= {w} (symdb/word-at-position "{fun}" 0 1))
+      (test/assert-eq "fun" w "should get word inside braces")
+      true
+    })
+
+  ; === word-range-at-position ===
+
+  (test/case "word-range-basic"
+    {do
+      (= {r} (symdb/word-range-at-position "hello world" 0 0))
+      (test/assert (not (nil? r)) "should return range")
+      (test/assert-eq "hello" r:word "word should be hello")
+      (test/assert-eq 0 r:start "start should be 0")
+      (test/assert-eq 5 r:end "end should be 5")
+      true
+    })
+
+  (test/case "word-range-nil-on-delimiter"
+    {do
+      (= {r} (symdb/word-range-at-position "a b" 0 1))
+      (test/assert (not (nil? r)) "space returns adjacent word range")
+      (test/assert-eq "a" r:word "should return word a")
+      true
+    })
+
+  ; === is-delim ===
+
+  (test/case "delim-space"
+    {do
+      (test/assert-eq 1 (symdb/is-delim " ") "space is delimiter")
+      (test/assert-eq 1 (symdb/is-delim "(") "( is delimiter")
+      (test/assert-eq 1 (symdb/is-delim ")") ") is delimiter")
+      (test/assert-eq 1 (symdb/is-delim "{") "{ is delimiter")
+      (test/assert-eq 1 (symdb/is-delim "}") "} is delimiter")
+      (test/assert-eq 1 (symdb/is-delim ";") "; is delimiter")
+      (test/assert-eq 1 (symdb/is-delim "\n") "newline is delimiter")
+      (test/assert-eq 1 (symdb/is-delim "\"") "quote is delimiter")
+      (test/assert-eq 1 (symdb/is-delim "'") "tick is delimiter")
+      true
+    })
+
+  (test/case "delim-non-delim"
+    {do
+      (test/assert-eq 0 (symdb/is-delim "a") "a is not delimiter")
+      (test/assert-eq 0 (symdb/is-delim "1") "1 is not delimiter")
+      (test/assert-eq 0 (symdb/is-delim "-") "- is not delimiter")
+      (test/assert-eq 0 (symdb/is-delim "/") "/ is not delimiter")
+      true
+    })
+
+  ; === uri->path ===
+
+  (test/case "uri-strips-prefix"
+    {do
+      (test/assert-eq "/foo/bar.valk" (symdb/uri->path "file:///foo/bar.valk")
+        "should strip file:// prefix")
+      true
+    })
+
+  (test/case "uri-no-prefix"
+    {do
+      (test/assert-eq "/foo/bar" (symdb/uri->path "/foo/bar")
+        "non-URI string returned as-is")
+      true
+    })
+
+  (test/case "uri-short-string"
+    {do
+      (test/assert-eq "abc" (symdb/uri->path "abc")
+        "short string returned as-is")
+      true
+    })
+
+  ; files.path is the identity of a source file, so a symlinked path and
+  ; its physical target MUST map to the same string — otherwise the same
+  ; file gets two rows and re-indexing one leaves the other's symbols
+  ; resolvable forever (deleted defs never produce diagnostics).
+  (test/case "uri-resolves-symlinked-dir"
+    {do
+      (= {base} (str "/tmp/valk-canon-" (str (rand 1000000))))
+      (= {real-dir} (str base "/real"))
+      (= {link-dir} (str base "/link"))
+      (mkdir-p real-dir)
+      (write-file (str real-dir "/f.valk") "(def {x} 1)\n")
+      (symlink real-dir link-dir)
+      (= {via-real} (symdb/uri->path (str "file://" real-dir "/f.valk")))
+      (= {via-link} (symdb/uri->path (str "file://" link-dir "/f.valk")))
+      (test/assert-eq via-real via-link
+        "symlinked path must canonicalize to the same path as its target")
+      ; A file that does not exist yet (unsaved buffer) still has to
+      ; canonicalize through its parent directory.
+      (= {new-real} (symdb/uri->path (str "file://" real-dir "/new.valk")))
+      (= {new-link} (symdb/uri->path (str "file://" link-dir "/new.valk")))
+      (test/assert-eq new-real new-link
+        "nonexistent file must canonicalize via its parent dir")
+      (exec "rm" "-rf" base)
+      true
+    })
+
+  ; === str/starts-with? ===
+
+  (test/case "starts-with-true"
+    {do
+      (test/assert-eq 1 (str/starts-with? "hello world" "hello")
+        "hello world starts with hello")
+    })
+
+  (test/case "starts-with-false"
+    {do
+      (test/assert-eq 0 (str/starts-with? "hello" "world")
+        "hello does not start with world")
+    })
+
+  (test/case "starts-with-longer-prefix"
+    {do
+      (test/assert-eq 0 (str/starts-with? "hi" "hello")
+        "prefix longer than string should be false")
+    })
+
+  ; === ends-with (from lsp.valk — loaded indirectly if needed) ===
+
+  ; === str/index-of ===
+
+  (test/case "str-index-of-found"
+    {do
+      (test/assert-eq 5 (str/index-of "hello:world" ":")
+        "colon at position 5")
+      true
+    })
+
+  (test/case "str-index-of-not-found"
+    {do
+      (test/assert-eq -1 (str/index-of "hello" ":")
+        "no colon should return -1")
+      true
+    })
+
+  (test/case "str-index-of-start"
+    {do
+      (test/assert-eq 0 (str/index-of ":foo" ":")
+        "colon at start = 0")
+      true
+    })
+
+  ; === extract-doc-comment ===
+
+  (test/case "doc-comment-single-line"
+    {do
+      (= {lines} (str/split "; This is a doc\n(fun {f} {1})" "\n"))
+      (= {doc} (symdb/extract-doc-comment lines 1))
+      (test/assert-eq "This is a doc" doc "should extract single-line doc")
+      true
+    })
+
+  (test/case "doc-comment-multi-line"
+    {do
+      (= {lines} (str/split "; Line one\n; Line two\n(fun {f} {1})" "\n"))
+      (= {doc} (symdb/extract-doc-comment lines 2))
+      (test/assert-eq "Line one\nLine two" doc "should extract multi-line doc")
+      true
+    })
+
+  (test/case "doc-comment-none"
+    {do
+      (= {lines} (str/split "(fun {f} {1})" "\n"))
+      (= {doc} (symdb/extract-doc-comment lines 0))
+      (test/assert (nil? doc) "no comment above = nil")
+      true
+    })
+
+  (test/case "doc-comment-blank-line-breaks"
+    {do
+      (= {lines} (str/split "; orphan\n\n(fun {f} {1})" "\n"))
+      (= {doc} (symdb/extract-doc-comment lines 2))
+      (test/assert (nil? doc) "blank line between comment and def should break chain")
+      true
+    })
+
+  ; === vd/is-accessor ===
+
+  (test/case "accessor-valid"
+    {do
+      (test/assert-eq 1 (vd/is-accessor "Foo:bar") "Foo:bar is accessor")
+      (test/assert-eq 1 (vd/is-accessor "Point:x") "Point:x is accessor")
+      true
+    })
+
+  (test/case "accessor-invalid"
+    {do
+      (test/assert-eq 0 (vd/is-accessor "foo:bar") "lowercase = not accessor")
+      (test/assert-eq 0 (vd/is-accessor "Foo") "no colon = not accessor")
+      (test/assert-eq 0 (vd/is-accessor "F") "single char = not accessor")
+      (test/assert-eq 0 (vd/is-accessor "Foo:") "trailing colon = not accessor")
+      (test/assert-eq 0 (vd/is-accessor "Foo::bar") "double colon = not accessor")
+      true
+    })
+
+  ; === vd/collect-globals ===
+
+  (test/case "collect-globals-fun"
+    {do
+      (= {ast} (parse "(fun {f x} {x})\n(fun {g y} {y})"))
+      (= {names} (vd/collect-globals ast))
+      (test/assert (member? "f" names) "should collect f")
+      (test/assert (member? "g" names) "should collect g")
+      true
+    })
+
+  (test/case "collect-globals-def"
+    {do
+      (= {ast} (parse "(def {MY_VAR} 42)"))
+      (= {names} (vd/collect-globals ast))
+      (test/assert (member? "MY_VAR" names) "should collect MY_VAR")
+      true
+    })
+
+  (test/case "collect-globals-type"
+    {do
+      (= {ast} (parse "(type {Color} {Red} {Green})"))
+      (= {names} (vd/collect-globals ast))
+      (test/assert (member? "Color" names) "should collect Color")
+      (test/assert (member? "Red" names) "should collect Red")
+      (test/assert (member? "Green" names) "should collect Green")
+      true
+    })
+
+  (test/case "collect-globals-sig"
+    {do
+      (= {ast} (parse "(sig 'my-fn {-> Num Num})"))
+      (= {names} (vd/collect-globals ast))
+      (test/assert (member? "my-fn" names) "should collect my-fn from sig")
+      true
+    })
+
+  ; === make-lsp-diag (test the conversion) ===
+
+  (test/case "vd-make-diag-shape"
+    {do
+      (= {text} "hello world")
+      (= {d} (vd/make-diag text 6 5 1 "test error"))
+      (test/assert-eq 0 d:line "should be line 0")
+      (test/assert-eq 6 d:col "should be col 6")
+      (test/assert-eq 11 d:end-col "end-col = 6 + 5")
+      (test/assert-eq 1 d:severity "severity should be 1")
+      (test/assert-eq "test error" d:message "message should match")
+      true
+    })
+
+  (test/case "vd-make-diag-multiline"
+    {do
+      (= {text} "line1\nline2\nworld")
+      (= {d} (vd/make-diag text 12 5 2 "warn"))
+      (test/assert-eq 2 d:line "world is on line 2")
+      (test/assert-eq 0 d:col "world starts at col 0")
+      true
+    })
+
+  ; === Position encoding: utf-8 (byte) columns ===
+  ; The server advertises positionEncoding "utf-8" and refuses clients that
+  ; don't offer it, so every character index on the wire is a BYTE index.
+  ; These pin that down on multi-byte text, where a utf-16 reading would
+  ; differ: "é" is 2 bytes / 1 utf-16 unit, "—" is 3 / 1, "😀" is 4 / 2.
+
+  (test/case "offset-to-line-col-counts-bytes"
+    {do
+      ; "é" occupies bytes 0-1, so "x" starts at byte 2.
+      (= {lc} (offset->line-col "éx" 2))
+      (test/assert-eq 0 (head lc) "line 0")
+      (test/assert-eq 2 (head (tail lc)) "col is the byte index, not 1")
+      true
+    })
+
+  (test/case "offset-to-line-col-astral-plane"
+    {do
+      ; "😀" is 4 bytes in utf-8 and would be 2 code units in utf-16.
+      (= {lc} (offset->line-col "😀y" 4))
+      (test/assert-eq 4 (head (tail lc)) "col 4 in bytes (2 in utf-16)")
+      true
+    })
+
+  (test/case "lc-to-offset-is-inverse-on-multibyte"
+    {do
+      (= {text} "(= {x} \"ünïcødé — \") (f x)\nsecond")
+      (= {off} (str/index-of text "(f x)"))
+      (= {lc} (offset->line-col text off))
+      (test/assert-eq off (str/lc->offset text (head lc) (head (tail lc)))
+        "line/col -> offset must invert offset -> line/col past multi-byte text")
+      true
+    })
+
+  (test/case "lc-to-offset-multibyte-second-line"
+    {do
+      (= {text} "héllo — wörld\n(target)")
+      (= {off} (str/index-of text "(target)"))
+      (= {lc} (offset->line-col text off))
+      (test/assert-eq 1 (head lc) "target is on line 1")
+      (test/assert-eq off (str/lc->offset text 1 (head (tail lc)))
+        "a multi-byte first line must not shift line-1 offsets")
+      true
+    })
+
+  (test/case "offsets-to-line-cols-multibyte"
+    {do
+      ; Batched variant used by inlay hints: must agree with the scalar one.
+      (= {text} "wörld — 1\nsecond — 2")
+      (= {a} (str/index-of text "1"))
+      (= {b} (str/index-of text "2"))
+      (= {lcs} (offsets->line-cols text (list a b))) 
+      (= {first} (nth 1 lcs))
+      (= {second} (nth 2 lcs))
+      (test/assert-eq (offset->line-col text a) first "batched == scalar (1st)")
+      (test/assert-eq (offset->line-col text b) second "batched == scalar (2nd)")
+      true
+    })
+
+) {:suite-name "LSP Utilities" :debug 0})

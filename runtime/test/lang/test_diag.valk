@@ -1,0 +1,26 @@
+(load "testing/test.valk")
+
+(test/run (list
+
+  (test/case "load-undefined-symbol-returns-error"
+    {do
+      (= {r} (load "runtime/test/fixtures/diag_undefined_sym.valk"))
+      (test/assert (error? r) "file is a (do ...): first error aborts the load")
+      true
+    })
+
+  (test/case "load-multiple-errors-returns-error"
+    {do
+      (= {r} (load "runtime/test/fixtures/diag_multiple_errors.valk"))
+      (test/assert (error? r) "loading file with undefined symbols returns error")
+      true
+    })
+
+  (test/case "load-error-aborts"
+    {do
+      (= {r} (load "runtime/test/fixtures/load_with_error.valk"))
+      (test/assert (error? r) "runtime error in a form aborts the load")
+      true
+    })
+
+) {:suite-name "Diag Coverage"})

@@ -1,0 +1,552 @@
+; Valkyria Symbol Database — Valk library using sqlite/* builtins
+; Assumes prelude.valk is already loaded.
+
+(load "symdb/symdb-types.valk")
+
+; Query/display half of the module. Loaded pre-declaration so it stays a
+; sibling part of `symdb` (it declares (module symdb) itself) instead of
+; nesting under it.
+(load "symdb/symdb-query.valk")
+
+(module symdb)
+
+; === Symbol kind constants ===
+(def {SYMKIND_FUNCTION} 1)
+(def {SYMKIND_VARIABLE} 2)
+(def {SYMKIND_TYPE} 3)
+(def {SYMKIND_CONSTRUCTOR} 4)
+
+; === LSP SymbolKind values ===
+(def {LSP_SK_CLASS} 5)
+(def {LSP_SK_CONSTRUCTOR} 9)
+(def {LSP_SK_FUNCTION} 12)
+(def {LSP_SK_VARIABLE} 13)
+
+; === Schema ===
+(def {schema-sql} "
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+
+CREATE TABLE IF NOT EXISTS files (
+  id INTEGER PRIMARY KEY,
+  path TEXT UNIQUE NOT NULL,
+  hash TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS symbols (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  line INTEGER NOT NULL,
+  col INTEGER NOT NULL,
+  kind INTEGER NOT NULL,
+  arity INTEGER NOT NULL DEFAULT -1,
+  doc TEXT,
+  sig TEXT,
+  inferred_type TEXT,
+  exported INTEGER NOT NULL DEFAULT 1,
+  module TEXT
+);
+
+CREATE TABLE IF NOT EXISTS refs (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  line INTEGER NOT NULL,
+  col INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS loads (
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  target_path TEXT NOT NULL,
+  UNIQUE(file_id, target_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
+CREATE INDEX IF NOT EXISTS idx_refs_name ON refs(name);
+CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
+CREATE INDEX IF NOT EXISTS idx_loads_file ON loads(file_id);
+
+CREATE TABLE IF NOT EXISTS nodes (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  pos INTEGER NOT NULL,
+  end_pos INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  context TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_nodes_lookup ON nodes(file_id, pos, end_pos);
+
+CREATE TABLE IF NOT EXISTS scoped_refs (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  name TEXT NOT NULL,
+  pos INTEGER NOT NULL,
+  len INTEGER NOT NULL,
+  scope_id INTEGER NOT NULL,
+  is_def INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_scopedrefs_file ON scoped_refs(file_id, name);
+CREATE INDEX IF NOT EXISTS idx_scopedrefs_scope ON scoped_refs(file_id, scope_id);
+
+CREATE TABLE IF NOT EXISTS scopes (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  pos INTEGER NOT NULL,
+  parent_pos INTEGER NOT NULL DEFAULT -1
+);
+CREATE INDEX IF NOT EXISTS idx_scopes_file ON scopes(file_id, pos);
+
+CREATE TABLE IF NOT EXISTS diagnostics (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  line INTEGER NOT NULL,
+  col INTEGER NOT NULL,
+  end_col INTEGER NOT NULL,
+  severity INTEGER NOT NULL,
+  message TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diags_file ON diagnostics(file_id);
+")
+
+; === Live overlay ===
+;
+; The on-disk database describes the source on disk. A file the editor has
+; modified is described by `live`, an in-memory database attached to the
+; same connection and carrying the same schema, indexed from the buffer on
+; every change and dropped when the file is saved or closed.
+;
+; Reads go through temp views that union the two, live shadowing disk for
+; the paths it covers. SQLite resolves an unqualified name against the temp
+; schema first, so every existing query reads the overlay without being
+; rewritten — and every unqualified WRITE on this connection fails with
+; "cannot modify X because it is a view", which is why the indexer takes an
+; explicit schema (see lsp/index-ast).
+;
+; Live file ids are shifted past any plausible disk id so the two id spaces
+; can share one view without a live symbol joining a disk file.
+(def {SYMDB_LIVE_ID_BASE} 1000000)
+
+(def {overlay-views-sql} (str "
+CREATE TEMP VIEW files AS
+  SELECT id + " SYMDB_LIVE_ID_BASE " AS id, path, hash FROM live.files
+  UNION ALL SELECT id, path, hash FROM main.files
+    WHERE path NOT IN (SELECT path FROM live.files);
+
+CREATE TEMP VIEW symbols AS
+  SELECT id + " SYMDB_LIVE_ID_BASE " AS id, name,
+         file_id + " SYMDB_LIVE_ID_BASE " AS file_id,
+         line, col, kind, arity, doc, sig, inferred_type, module
+    FROM live.symbols
+  UNION ALL SELECT id, name, file_id, line, col, kind, arity, doc, sig,
+         inferred_type, module
+    FROM main.symbols WHERE file_id IN (SELECT id FROM main.files
+      WHERE path NOT IN (SELECT path FROM live.files));
+
+CREATE TEMP VIEW refs AS
+  SELECT id + " SYMDB_LIVE_ID_BASE " AS id, name,
+         file_id + " SYMDB_LIVE_ID_BASE " AS file_id, line, col
+    FROM live.refs
+  UNION ALL SELECT id, name, file_id, line, col
+    FROM main.refs WHERE file_id IN (SELECT id FROM main.files
+      WHERE path NOT IN (SELECT path FROM live.files));
+
+CREATE TEMP VIEW nodes AS
+  SELECT id + " SYMDB_LIVE_ID_BASE " AS id,
+         file_id + " SYMDB_LIVE_ID_BASE " AS file_id,
+         pos, end_pos, type, name, context
+    FROM live.nodes
+  UNION ALL SELECT id, file_id, pos, end_pos, type, name, context
+    FROM main.nodes WHERE file_id IN (SELECT id FROM main.files
+      WHERE path NOT IN (SELECT path FROM live.files));
+
+CREATE TEMP VIEW scoped_refs AS
+  SELECT id + " SYMDB_LIVE_ID_BASE " AS id,
+         file_id + " SYMDB_LIVE_ID_BASE " AS file_id,
+         name, pos, len, scope_id, is_def
+    FROM live.scoped_refs
+  UNION ALL SELECT id, file_id, name, pos, len, scope_id, is_def
+    FROM main.scoped_refs WHERE file_id IN (SELECT id FROM main.files
+      WHERE path NOT IN (SELECT path FROM live.files));
+
+CREATE TEMP VIEW scopes AS
+  SELECT id + " SYMDB_LIVE_ID_BASE " AS id,
+         file_id + " SYMDB_LIVE_ID_BASE " AS file_id, pos, parent_pos
+    FROM live.scopes
+  UNION ALL SELECT id, file_id, pos, parent_pos
+    FROM main.scopes WHERE file_id IN (SELECT id FROM main.files
+      WHERE path NOT IN (SELECT path FROM live.files));
+
+CREATE TEMP VIEW loads AS
+  SELECT file_id + " SYMDB_LIVE_ID_BASE " AS file_id, target_path
+    FROM live.loads
+  UNION ALL SELECT file_id, target_path
+    FROM main.loads WHERE file_id IN (SELECT id FROM main.files
+      WHERE path NOT IN (SELECT path FROM live.files));
+"))
+
+; Attach the in-memory overlay and put the views in front of the tables.
+; Must run AFTER any seeding this connection does, since the views make
+; unqualified writes an error.
+(sig 'attach-live {-> Ref Nil})
+(fun {attach-live db} {do
+  (sqlite/exec db "ATTACH DATABASE ':memory:' AS live")
+  (sqlite/exec-script db
+    (str/replace
+      (str/replace schema-sql "CREATE TABLE IF NOT EXISTS "
+                                    "CREATE TABLE IF NOT EXISTS live.")
+      "CREATE INDEX IF NOT EXISTS " "CREATE INDEX IF NOT EXISTS live."))
+  (sqlite/exec-script db overlay-views-sql)
+  nil})
+
+; Index `text` as the editor's current version of `uri`. Replaces whatever
+; the overlay held for that path; the on-disk index is untouched.
+(sig 'live-sync {-> Ref Str Str List Nil})
+(fun {live-sync db uri text ast} {
+  if (nil? db) {nil}
+  {do
+  (= {path} (uri->path uri))
+  (sqlite/exec db
+    "INSERT INTO live.files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
+    path (str "mem:" (len text)))
+  (= {file-id} (sqlite/query-value db
+    "SELECT id FROM live.files WHERE path=?1" path))
+  (if (nil? file-id) {}
+    {lsp/index-ast db file-id (strip-errors ast) text 0 "live"})
+  nil}})
+
+; Forget the editor's version of a path — on save (the on-disk index now
+; describes it) or on close (the buffer is gone).
+(sig 'live-drop {-> Ref Str Nil})
+(fun {live-drop db path} {
+  if (nil? db) {nil}
+  {do
+  (= {file-id} (sqlite/query-value db
+    "SELECT id FROM live.files WHERE path=?1" path))
+  (if (nil? file-id) {}
+    {do
+      (sqlite/exec db "DELETE FROM live.symbols WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM live.refs WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM live.nodes WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM live.scoped_refs WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM live.scopes WHERE file_id=?1" file-id)
+      (sqlite/exec db "DELETE FROM live.files WHERE id=?1" file-id)})
+  nil}})
+
+; === Lifecycle ===
+
+; v6: varargs functions store arity=-1 (indexer change in lsp_index.c)
+; v7: symbols carry the module prefix; names are stored fully qualified
+; v8: semantic_tokens and inlay_hints dropped — both describe a buffer's
+;     current text, so they are computed per request instead of stored
+; v9: loads table — the static load graph, emitted per file by the
+;     indexer; shape checks resolve names through it
+; v10: record constructors carry their field spec in sig (field-name
+;      validation against the type's definition)
+(def {SYMDB_VERSION} 10)
+
+(sig 'init {-> Str Ref})
+(fun {init path} {do
+  (= {db} (sqlite/open path))
+  (= {ver} (sqlite/query-value db "PRAGMA user_version"))
+  (if (not (== ver SYMDB_VERSION))
+    {do
+      (sqlite/exec db "DROP TABLE IF EXISTS diagnostics")
+      (sqlite/exec db "DROP TABLE IF EXISTS inlay_hints")
+      (sqlite/exec db "DROP TABLE IF EXISTS semantic_tokens")
+      (sqlite/exec db "DROP TABLE IF EXISTS loads")
+      (sqlite/exec db "DROP TABLE IF EXISTS scoped_refs")
+      (sqlite/exec db "DROP TABLE IF EXISTS scopes")
+      (sqlite/exec db "DROP TABLE IF EXISTS nodes")
+      (sqlite/exec db "DROP TABLE IF EXISTS refs")
+      (sqlite/exec db "DROP TABLE IF EXISTS symbols")
+      (sqlite/exec db "DROP TABLE IF EXISTS files")
+      (sqlite/exec db (str "PRAGMA user_version=" SYMDB_VERSION))}
+    {})
+  (sqlite/exec-script db schema-sql)
+  db})
+
+(sig 'close {-> Ref Nil})
+(fun {close db} {sqlite/close db})
+
+; === Helpers ===
+
+; `files.path` is the identity of a source file, so it MUST be a
+; physical path. Editors are inconsistent about symlinks: neovim
+; resolves them when opening a buffer but echoes root_uri verbatim, so a
+; workspace under a symlinked directory (macOS /tmp and /var, home-dir
+; symlinks, git worktrees) yields BOTH /var/x.valk and
+; /private/var/x.valk. Two rows for one file means re-indexing one row
+; leaves the other's symbols in the table forever — deleted definitions
+; stay resolvable and undefined-symbol diagnostics never fire.
+(def {canon-cache} (dict/new))
+
+(sig 'canon-path {-> Str Str})
+(fun {canon-path p} {do
+  (= {hit} (dict/get canon-cache p))
+  (if (not (nil? hit)) {hit}
+    {do
+      (= {out} (canon-resolve p))
+      (dict/set! canon-cache p out)
+      out})
+})
+
+; realpath(2) fails when the leaf doesn't exist yet (unsaved buffer), so
+; fall back to canonicalizing the parent directory and re-attaching the
+; basename. That yields the same answer the file would get once written.
+(sig 'canon-resolve {-> Str Str})
+(fun {canon-resolve p} {do
+  (= {r} (realpath p))
+  (if (not (error? r)) {r}
+    {do
+      (= {i} (str/last-index-of p "/"))
+      (if (< i 1) {p}
+        {do
+          (= {dir} (realpath (str/slice p 0 i)))
+          (if (error? dir) {p} {str dir (str/slice p i (len p))})})})
+})
+
+(sig 'uri->path {-> Str Str})
+(fun {uri->path uri} {
+  if (< (len uri) 7) {uri}
+    {if (== (str/slice uri 0 7) "file://")
+      {canon-path (str/slice uri 7 (len uri))}
+      {uri}}
+})
+
+(sig 'clean-name {-> Str Str})
+(fun {clean-name s} {
+  str/replace (str/replace (str/replace s "}" "") ")" "") "(" ""
+})
+
+; === Doc comment extraction ===
+
+(sig 'strip-leading-spaces {-> Str Str})
+(fun {strip-leading-spaces s} {
+  if (== (len s) 0) {s}
+  {if (== (str/slice s 0 1) " ")
+    {strip-leading-spaces (str/slice s 1 (len s))}
+    {s}}
+})
+
+(sig 'strip-comment-prefix {-> Str Str})
+(fun {strip-comment-prefix s} {
+  if (< (len s) 2) {""}
+  {if (== (str/slice s 0 2) "; ")
+    {str/slice s 2 (len s)}
+  {if (== (str/slice s 0 1) ";")
+    {str/slice s 1 (len s)}
+    {s}}}
+})
+
+(sig 'extract-doc-comment-walk {-> (List Str) Num (List Str) (List Str)})
+(fun {extract-doc-comment-walk lines idx acc} {
+  if (< idx 0) {acc}
+  {do
+    (= {line} (nth (+ idx 1) lines))
+    (= {stripped} (strip-leading-spaces (str/replace line "\r" "")))
+    (if (== (len stripped) 0) {acc}
+    {if (== (str/slice stripped 0 1) ";")
+      {extract-doc-comment-walk lines (- idx 1)
+        (qcons (strip-comment-prefix stripped) acc)}
+      {acc}})}
+})
+
+(sig 'extract-doc-comment {-> (List Str) Num Str})
+(fun {extract-doc-comment lines def-line} {do
+  (= {comments} (extract-doc-comment-walk lines (- def-line 1) nil))
+  (if (nil? comments) {nil}
+    {str/join comments "\n"})
+})
+
+(sig 'append-all {-> List List List})
+(fun {append-all items acc} {
+  if (nil? items) {acc}
+    {append-all (tail items) (qcons (head items) acc)}
+})
+
+
+
+; === Position utilities ===
+
+(sig 'pos-of-name {-> Str Str Num})
+(fun {pos-of-name text name} {do
+  (= {idx} (str/index-of text name))
+  (if (< idx 0) {{:line 0 :col 0}}
+    {do
+      (= {before} (str/slice text 0 idx))
+      (= {lines-before} (str/split before "\n"))
+      (= {line} (- (len lines-before) 1))
+      (= {last-line} (last lines-before))
+      (= {col} (len last-line))
+      (list :line line :col col)})
+})
+
+(sig 'is-delim {-> Str Num})
+(fun {is-delim c} {
+  if (== c " ") {1}
+  {if (== c "(") {1}
+  {if (== c ")") {1}
+  {if (== c "{") {1}
+  {if (== c "}") {1}
+  {if (== c ";") {1}
+  {if (== c "\t") {1}
+  {if (== c "\n") {1}
+  {if (== c "\r") {1}
+  {if (== c "\"") {1}
+  {if (== c "'") {1}
+  {0}}}}}}}}}}}
+})
+
+; Public helpers — qualified at def site so they bind at top level
+; (rewriter leaves names with `/` alone) and are reachable from sibling
+; modules without depending on load order.
+(sig 'scan-word-start {-> Str Num Num})
+(fun {scan-word-start s col} {
+  if (<= col 0) {0}
+    {do
+      (= {c} (str/slice s (- col 1) col))
+      (if (is-delim c) {col}
+        {scan-word-start s (- col 1)})}
+})
+
+(sig 'scan-word-end {-> Str Num Num})
+(fun {scan-word-end s col} {
+  if (>= col (len s)) {col}
+    {do
+      (= {c} (str/slice s col (+ col 1)))
+      (if (is-delim c) {col}
+        {scan-word-end s (+ col 1)})}
+})
+
+(sig 'word-at-position {-> Str Num Num Str})
+(fun {word-at-position text line col} {do
+  (= {lines} (str/split text "\n"))
+  (if (>= line (len lines)) {nil}
+    {do
+      (= {target} (nth (+ line 1) lines))
+      (if (> col (len target)) {nil}
+        {do
+          (= {start} (scan-word-start target col))
+          (= {end} (scan-word-end target col))
+          (if (>= start end) {nil}
+            {str/slice target start end})})})
+})
+
+(sig 'word-range-at-position {-> Str Num Num WordRange})
+(fun {word-range-at-position text line col} {do
+  (= {lines} (str/split text "\n"))
+  (if (>= line (len lines)) {nil}
+    {do
+      (= {target} (nth (+ line 1) lines))
+      (if (> col (len target)) {nil}
+        {do
+          (= {start} (scan-word-start target col))
+          (= {end} (scan-word-end target col))
+          (if (>= start end) {nil}
+            {(WordRange :word (str/slice target start end) :start start :end end)})})})
+})
+
+; === Database operations ===
+
+(sig 'sync-document {-> Ref Str Str Nil})
+(fun {sync-document db uri text} {do
+  (= {path} (uri->path uri))
+  (= {mem-hash} (str "mem:" (len text)))
+  (= {existing} (sqlite/query-maybe db
+    "SELECT hash FROM files WHERE path=?1" path))
+  (if (not (nil? existing))
+    {if (== (plist/get existing :hash) mem-hash) {0}
+      {do (sqlite/exec db "BEGIN")
+          (sync-file-symbols db uri text mem-hash)
+          (sqlite/exec db "COMMIT") 1}}
+    {do (sqlite/exec db "BEGIN")
+        (sync-file-symbols db uri text mem-hash)
+        (sqlite/exec db "COMMIT") 1})
+})
+
+(sig 'node-at-offset {-> Ref Str Num List})
+(fun {node-at-offset db path offset} {
+  if (nil? db) {nil}
+  {sqlite/query-maybe db
+    "SELECT n.type, n.name, n.pos, n.end_pos, n.context FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.pos<=?2 AND n.end_pos>?2 LIMIT 1"
+    path offset}
+})
+
+
+; ---------------------------------------------------------------------------
+; Precomputed data: store semantic tokens, hints, scoped refs during indexing
+; ---------------------------------------------------------------------------
+
+
+
+; === File sync ===
+
+(sig 'strip-errors {-> List List})
+(fun {strip-errors ast} {
+  if (nil? ast) {nil}
+  {do
+    (= {h} (head ast))
+    (if (error? h)
+      {strip-errors (tail ast)}
+      {qcons h (strip-errors (tail ast))})}
+})
+
+(sig 'sync-file-with-ast {-> Ref Str Str Str List Nil})
+(fun {sync-file-with-ast db uri text hash ast} {do
+  (= {path} (uri->path uri))
+  (= {clean-ast} (strip-errors ast))
+  (sqlite/exec db
+    "INSERT INTO main.files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
+    path hash)
+  (= {file-id} (sqlite/query-value db "SELECT id FROM main.files WHERE path=?1" path))
+  (if (not (nil? file-id)) {lsp/index-ast db file-id clean-ast text 0 "main"} {})
+})
+
+(sig 'sync-file-symbols {-> Ref Str Str Str Nil})
+(fun {sync-file-symbols db uri text hash} {do
+  (= {path} (uri->path uri))
+  (= {raw-ast} (parse text))
+  (= {ast} (strip-errors raw-ast))
+  (sqlite/exec db
+    "INSERT INTO main.files (path, hash) VALUES (?1, ?2) ON CONFLICT(path) DO UPDATE SET hash=?2"
+    path hash)
+  (= {file-id} (sqlite/query-value db "SELECT id FROM main.files WHERE path=?1" path))
+  (if (not (nil? file-id)) {lsp/index-ast db file-id ast text 0 "main"} {})
+  (if (and (not (nil? file-id)) (not (nil? ast)))
+    {store-inferred-types db file-id ast} {})
+})
+
+(sig 'store-inferred-types {-> Ref Num List Nil})
+(fun {store-inferred-types db file-id ast} {do
+  (= {result} (type/infer-file ast))
+  (= {types} (plist/get result :types))
+  (update-inferred-from-types db file-id types)
+})
+
+(sig 'update-inferred-from-types {-> Ref Num List Nil})
+(fun {update-inferred-from-types db file-id types} {
+  if (nil? types) {nil}
+  {do
+    (= {entry} (head types))
+    (= {name} (plist/get entry :var))
+    (= {type-str} (plist/get entry :type))
+    (if (and (not (nil? name)) (not (nil? type-str)))
+      {sqlite/exec db
+        "UPDATE main.symbols SET inferred_type=?3 WHERE file_id=?1 AND name=?2"
+        file-id name type-str}
+      {nil})
+    (update-inferred-from-types db file-id (tail types))}
+})
+
+(sig 'symkind->lsp-kind {-> Num Num})
+(fun {symkind->lsp-kind kind} {
+  if (== kind SYMKIND_FUNCTION) {LSP_SK_FUNCTION}
+  {if (== kind SYMKIND_VARIABLE) {LSP_SK_VARIABLE}
+  {if (== kind SYMKIND_TYPE) {LSP_SK_CLASS}
+  {if (== kind SYMKIND_CONSTRUCTOR) {LSP_SK_CONSTRUCTOR}
+    {LSP_SK_VARIABLE}}}}
+})
+

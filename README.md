@@ -65,12 +65,27 @@ An HTTP/2 round trip:
 (aio/run aio)
 ```
 
+## Projects
+
+The repository is a monorepo of root-level projects:
+
+| Project | What it is |
+|---------|------------|
+| [`runtime/`](runtime/README.md) | The C23 interpreter/runtime: parser, eval, GC, async I/O, HTTP/2, LLVM backend |
+| [`stdlib/`](stdlib/README.md) | Valk standard library (`prelude.valk` auto-loads) |
+| [`testing/`](testing/README.md) | Test framework (C harness + Valk framework) and the unified test runner |
+| [`symdb/`](symdb/README.md) | Symbol database + static validation (shared code-intel core) |
+| [`lsp/`](lsp/README.md) | Language server (LSP) and its test suites |
+| [`coverage/`](coverage/README.md) | Aggregated C+Valk coverage reports and CI gates |
+| [`quality/`](quality/README.md) | Structural quality snapshots and diffing |
+| [`check/`](check/README.md) | Workspace diagnostics and lints |
+
 ## Documentation
 
 - **[Documentation Index](docs/README.md)** - All docs
-- **[Language Reference](docs/LANGUAGE.md)** - Syntax, features, semantics
-- **[HTTP API](docs/HTTP_API.md)** - HTTP/2 client and server
-- **[Async I/O](docs/ASYNC_IO.md)** - Handles and combinators
+- **[Language Reference](runtime/docs/LANGUAGE.md)** - Syntax, features, semantics
+- **[HTTP API](runtime/docs/HTTP_API.md)** - HTTP/2 client and server
+- **[Async I/O](runtime/docs/ASYNC_IO.md)** - Handles and combinators
 - **[Project Roadmap](docs/ROADMAP.md)** - Development plans
 - **[Contributing](docs/CONTRIBUTING.md)** - Development setup and guidelines
 
@@ -89,7 +104,7 @@ An HTTP/2 round trip:
 | LSP server | Working |
 | Metrics / dashboard | Working |
 | LLVM AOT / JIT | Partial |
-| Type system | Not implemented ([design](docs/TYPE_SYSTEM_DESIGN.md)) |
+| Type system | Not implemented ([design](runtime/docs/TYPE_SYSTEM_DESIGN.md)) |
 | Tail call optimization | Not implemented |
 
 ## Building

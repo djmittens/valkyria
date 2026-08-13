@@ -10,7 +10,7 @@ the testing philosophy.
 ## Project Overview
 
 Valkyria is a Lisp interpreter in C23. See [docs/](docs/README.md) for full documentation:
-- [LANGUAGE.md](docs/LANGUAGE.md) - Language reference
+- [LANGUAGE.md](runtime/docs/LANGUAGE.md) - Language reference
 - [ROADMAP.md](docs/ROADMAP.md) - Project roadmap
 - [CONTRIBUTING.md](docs/CONTRIBUTING.md) - Development guide
 
@@ -28,18 +28,18 @@ make todo           # Find TODOs for current branch
 ## Key Architecture
 
 ### Core Files
-- `src/parser.{c,h}` - Parser, value types, builtins
-- `src/eval.c` - Evaluator
-- `src/memory.{c,h}` - Allocators (arena, slab)
-- `src/gc.{c,h}`, `src/gc_mark.c`, `src/gc_evacuation.c` - Parallel GC
-- `src/aio/` - Async I/O; `src/aio/aio_uv.c` is the libuv backend
-- `src/aio/http2/` - HTTP/2 client, server, sessions, TLS
-- `src/llvm/`, `src/vir/` - AOT/JIT backend
-- `src/repl.c` - Entry point and bootstrap
+- `runtime/src/parser.{c,h}` - Parser, value types, builtins
+- `runtime/src/eval.c` - Evaluator
+- `runtime/src/memory.{c,h}` - Allocators (arena, slab)
+- `runtime/src/gc.{c,h}`, `runtime/src/gc_mark.c`, `runtime/src/gc_evacuation.c` - Parallel GC
+- `runtime/src/aio/` - Async I/O; `runtime/src/aio/aio_uv.c` is the libuv backend
+- `runtime/src/aio/http2/` - HTTP/2 client, server, sessions, TLS
+- `runtime/src/llvm/`, `runtime/src/vir/` - AOT/JIT backend
+- `runtime/src/repl.c` - Entry point and bootstrap
 - `stdlib/` - Valk standard library (`prelude.valk` auto-loads)
 
 ### Value Types
-`valk_ltype_e` (`src/parser.h:91`): LVAL_UNDEFINED, LVAL_NUM, LVAL_SYM,
+`valk_ltype_e` (`runtime/src/parser.h:91`): LVAL_UNDEFINED, LVAL_NUM, LVAL_SYM,
 LVAL_STR, LVAL_FUN, LVAL_REF, LVAL_NIL, LVAL_CONS, LVAL_ERR, LVAL_HANDLE,
 LVAL_DICT.
 
@@ -54,12 +54,12 @@ LVAL_DICT.
 Use `VALK_WITH_ALLOC(allocator)` to switch allocators temporarily.
 Use `valk_evacuate_to_heap(val)` to move a scratch value to the GC heap — this
 happens at lifetime escape points. There is no `valk_intern` and no separate
-checkpoint pass. See [MEMORY_MANAGEMENT.md](docs/MEMORY_MANAGEMENT.md).
+checkpoint pass. See [MEMORY_MANAGEMENT.md](runtime/docs/MEMORY_MANAGEMENT.md).
 
 ### Testing
-- C tests: `test/<area>/test_*.c` using `test/testing.{c,h}`
-- Valk tests: `test/<area>/test_*.valk` using `stdlib/test/test.valk`
-- Areas: `aio`, `gc`, `http`, `lang`, `lsp`, `metrics`, `parser`, `unit`, `stress`
+- C tests: `runtime/test/<area>/test_*.c` using the harness in `testing/c/testing.{c,h}`
+- Valk tests: `runtime/test/<area>/test_*.valk` using `testing/test.valk`
+- Areas: `aio`, `gc`, `http`, `lang`, `metrics`, `parser`, `unit`, `stress`; LSP tests live in `lsp/test/`
 - Always run `make test`, not individual binaries
 
 ### Testing Philosophy (IMPORTANT)

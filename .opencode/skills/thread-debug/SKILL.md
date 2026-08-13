@@ -66,11 +66,11 @@ export TSAN_OPTIONS="suppressions=tsan_suppressions.txt"
 ```
 WARNING: ThreadSanitizer: data race (pid=12345)
   Write of size 8 at 0x... by thread T1:
-    #0 worker_thread src/thread.c:50
+    #0 worker_thread runtime/src/thread.c:50
     #1 pthread_start
 
   Previous read of size 8 at 0x... by main thread:
-    #0 main_loop src/main.c:100
+    #0 main_loop runtime/src/main.c:100
     #1 main
 
   Location is global 'shared_counter' of size 8 at 0x...
@@ -91,12 +91,12 @@ WARNING: ThreadSanitizer: lock-order-inversion (potential deadlock)
 
   Thread T1 acquired M1 then M2:
     #0 pthread_mutex_lock
-    #1 func_a src/sync.c:20
+    #1 func_a runtime/src/sync.c:20
     ...
 
   Thread T2 acquired M2 then M1:
     #0 pthread_mutex_lock
-    #1 func_b src/sync.c:40
+    #1 func_b runtime/src/sync.c:40
 ```
 
 ### TSAN Suppressions

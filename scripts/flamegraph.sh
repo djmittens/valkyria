@@ -19,7 +19,7 @@ shift 2>/dev/null || true
 
 if [ $# -eq 0 ]; then
     EXECUTABLE="build/valk"
-    ARGS="src/prelude.valk test/test_prelude.valk"
+    ARGS="stdlib/prelude.valk runtime/test/lang/test_prelude.valk"
 else
     EXECUTABLE="$1"
     shift
