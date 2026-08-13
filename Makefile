@@ -28,8 +28,22 @@ define gen_ssl_certs
 	fi
 endef
 
+# A CMake build dir is permanently bound to the source root it was
+# configured against (CMAKE_HOME_DIRECTORY in CMakeCache.txt). If the tree
+# is restructured, the dir cannot be migrated or reconfigured in place;
+# ninja fails on paths that no longer exist and CMake refuses a different
+# -S. Detect the mismatch and wipe so the configure path regenerates it.
+define ensure_build_root
+	if [ -f $(1)/CMakeCache.txt ] && \
+	   ! grep -q '^CMAKE_HOME_DIRECTORY:INTERNAL=$(abspath runtime)$$' $(1)/CMakeCache.txt; then \
+		echo "=== $(1): configured against a different source root; regenerating ==="; \
+		rm -rf $(1); \
+	fi
+endef
+
 # Configure a build directory: $(call cmake_configure,build-dir,asan-flag,tsan-flag)
 define cmake_configure
+	$(call ensure_build_root,$(1))
 	$(CMAKE_BASE) -DASAN=$(2) -DTSAN=$(3) -S runtime -B $(1)
 	$(call gen_ssl_certs,$(1))
 	touch $(1)/.cmake
@@ -37,6 +51,8 @@ endef
 
 # Build a directory with optional dsymutil on macOS: $(call do_build,build-dir)
 define do_build
+	$(call ensure_build_root,$(1))
+	[ -f $(1)/.cmake ] || $(MAKE) $(1)/.cmake
 	touch $(1)/.cmake
 	cmake --build $(1)
 	if [ "$(UNAME)" = "Darwin" ]; then \
@@ -82,6 +98,7 @@ build-asan: build-asan/.cmake
 .ONESHELL:
 .PHONY: cmake-coverage
 cmake-coverage build-coverage/.cmake: runtime/CMakeLists.txt runtime/homebrew.cmake Makefile
+	$(call ensure_build_root,build-coverage)
 	$(CMAKE_BASE) -DCOVERAGE=1 -DVALK_COVERAGE=1 -DASAN=0 -S runtime -B build-coverage
 	$(call gen_ssl_certs,build-coverage)
 	touch build-coverage/.cmake
@@ -546,11 +563,37 @@ ifeq ($(UNAME), Darwin)
 	echo "Most recent core: $$core"; \
 	echo "Usage: lldb -c $$core build/<binary-that-crashed>"
 else
-	@exe=$$(coredumpctl list --no-pager 2>/dev/null | grep -E "(valk|test_)" | tail -1 | awk '{print $$NF}'); \
+	@exe=$$(coredumpctl list --no-pager 2>/dev/null | grep -E "(valk|test_)" | tail -1 | awk '{print $$(NF-1)}'); \
 	if [ -z "$$exe" ]; then \
 		echo "No core dumps found"; \
 		exit 1; \
 	fi; \
 	echo "Debugging most recent crash: $$exe"; \
 	coredumpctl debug "$$exe"
+endif
+
+# One-shot batch crash report from the most recent core: signal, crash
+# frame, full backtrace, registers, every thread. Non-interactive
+# counterpart to debug-core.
+.PHONY: core-report
+core-report:
+ifeq ($(UNAME), Darwin)
+	@core=$$(ls -t /cores/core.* 2>/dev/null | head -1); \
+	if [ -z "$$core" ]; then echo "No core dumps found in /cores/"; exit 1; fi; \
+	echo "Core: $$core"; \
+	lldb --batch -o "target create build/valk --core $$core" \
+		-o "bt" -o "bt all" -o "register read" -o "quit"
+else
+	@exe=$$(coredumpctl list --no-pager 2>/dev/null | grep -E "(valk|test_)" | tail -1 | awk '{print $$(NF-1)}'); \
+	if [ -z "$$exe" ]; then echo "No core dumps found"; exit 1; fi; \
+	core=$$(mktemp); \
+	coredumpctl dump "$$exe" -o "$$core" >/dev/null 2>&1; \
+	echo "Executable: $$exe"; \
+	gdb -batch "$$exe" "$$core" \
+		-ex "echo \n=== Crash Location ===\n" -ex "frame" \
+		-ex "echo \n=== Full Backtrace ===\n" -ex "bt full" \
+		-ex "echo \n=== Registers ===\n" -ex "info registers" \
+		-ex "echo \n=== All Threads ===\n" -ex "info threads" \
+		-ex "thread apply all bt" 2>/dev/null; \
+	rm -f "$$core"
 endif
