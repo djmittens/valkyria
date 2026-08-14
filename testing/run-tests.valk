@@ -480,6 +480,9 @@
 ; Set up env vars
 (env/set "VALK_TEST_JSON" "1")
 (env/set "VALK_TEST_TIMEOUT_SECONDS" "30")
+; Post-sweep GC accounting verification (gc_verify.c): catches sweep/TLAB
+; bitmap drift at the collection where it happens instead of tests later.
+(env/set "VALK_GC_VERIFY" "1")
 
 (if (== sanitizer "asan")
   {do

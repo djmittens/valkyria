@@ -706,6 +706,11 @@ bool valk_gc_heap_request_stw_kind(valk_gc_heap_t *heap,
     }
   }
 
+  VALK_ASSERT(rank == num_threads,
+              "Participant set drift: %llu active thread slots but "
+              "threads_registered=%llu (registry and counter diverged)",
+              (unsigned long long)rank, (unsigned long long)num_threads);
+
   pthread_mutex_unlock(&valk_sys->thread_mutex);
 
   valk_system_wake_threads(valk_sys);
@@ -780,13 +785,13 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
   valk_barrier_wait(&valk_sys->barrier);
 
   u64 mark_start_ns = uv_hrtime();
-  atomic_store(&valk_sys->phase, VALK_GC_PHASE_MARKING);
+  valk_gc_phase_transition(VALK_GC_PHASE_STW_REQUESTED, VALK_GC_PHASE_MARKING);
   valk_gc_heap_parallel_mark(heap);
 
   valk_barrier_wait(&valk_sys->barrier);
 
   u64 sweep_start_ns = uv_hrtime();
-  atomic_store(&valk_sys->phase, VALK_GC_PHASE_SWEEPING);
+  valk_gc_phase_transition(VALK_GC_PHASE_MARKING, VALK_GC_PHASE_SWEEPING);
   valk_gc_heap_parallel_sweep(heap);
 
   valk_barrier_wait(&valk_sys->barrier);
@@ -803,7 +808,9 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
     }
   }
 
-  atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
+  valk_gc_verify_heap_post_sweep(heap);
+
+  valk_gc_phase_transition(VALK_GC_PHASE_SWEEPING, VALK_GC_PHASE_IDLE);
 
   valk_barrier_wait(&valk_sys->barrier);
   u64 fixup_end_ns = uv_hrtime();
@@ -814,7 +821,7 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
     reclaimed = bytes_before - bytes_after;
   }
 
-  heap->live_after_gc = bytes_after;
+  __atomic_store_n(&heap->live_after_gc, bytes_after, __ATOMIC_RELAXED);
 
   atomic_fetch_add(&heap->bytes_reclaimed_total, reclaimed);
   atomic_store(&heap->gc_in_progress, false);

@@ -1,0 +1,327 @@
+#include "gc.h"
+#include "parser.h"
+#include "eval_internal.h"
+#include "log.h"
+#include <stdlib.h>
+
+// ============================================================================
+// Post-Sweep Heap Verification
+// ============================================================================
+// Runs at the end of a collection, inside the pause window where only the
+// coordinator is active and every mutator is parked at the final barrier.
+// Checks GC-internal accounting invariants that do not require interpreting
+// object contents:
+//
+//   1. Every mark bitmap is zero (sweep consumed and cleared it).
+//   2. No alloc bit is set past slots_per_page (trailing-byte hygiene).
+//   3. popcount(alloc bitmap) == page->num_allocated.
+//   4. Sum of page->num_allocated == list->used_slots per size class.
+//   5. Reclaimed pages have num_allocated == 0.
+//   6. No surviving large object is still marked; sum of large object sizes
+//      == heap->large_object_bytes.
+//
+// Corruption in any of these means sweep, TLAB accounting, or the mark
+// bitmaps went wrong THIS cycle - at the collection after the bug, not three
+// tests later. Gated by VALK_GC_VERIFY=1 (the test runner sets it).
+
+// LCOV_EXCL_BR_START - verification failure branches never fire in healthy runs
+static bool __verify_enabled(void) {
+  static _Atomic int enabled = -1;
+  int e = atomic_load_explicit(&enabled, memory_order_relaxed);
+  if (e < 0) {
+    const char *env = getenv("VALK_GC_VERIFY");
+    e = (env && env[0] == '1') ? 1 : 0;
+    atomic_store_explicit(&enabled, e, memory_order_relaxed);
+  }
+  return e == 1;
+}
+
+// The root-marking check documents a KNOWN unfixed hole in the concurrent
+// marker (whole pages of live data found unmarked before sweep - see the
+// LSP stall investigation). It stays behind its own gate until that hole is
+// closed, so the default test run only enforces the accounting invariants.
+static bool __verify_roots_enabled(void) {
+  static _Atomic int enabled = -1;
+  int e = atomic_load_explicit(&enabled, memory_order_relaxed);
+  if (e < 0) {
+    const char *env = getenv("VALK_GC_VERIFY_ROOTS");
+    e = (env && env[0] == '1') ? 1 : 0;
+    atomic_store_explicit(&enabled, e, memory_order_relaxed);
+  }
+  return e == 1;
+}
+
+static void __verify_page(valk_gc_page_t *page, u8 size_class, sz *out_allocated) {
+  u8 *alloc_bitmap = valk_gc_page_alloc_bitmap(page);
+  u8 *mark_bitmap = valk_gc_page_mark_bitmap(page);
+  u16 bm_bytes = page->bitmap_bytes;
+  u16 slots = page->slots_per_page;
+
+  sz allocated = 0;
+  for (u16 i = 0; i < bm_bytes; i++) {
+    VALK_ASSERT(mark_bitmap[i] == 0,
+                "GC verify: class %u page %u mark bitmap byte %u is 0x%02x "
+                "after sweep (mark bits leaked)",
+                size_class, page->page_id, i, mark_bitmap[i]);
+
+    u8 alloc_byte = alloc_bitmap[i];
+    u32 first_slot = (u32)i * 8;
+    if (first_slot + 8 > slots) {
+      u8 valid = (u8)((slots > first_slot) ? ((1u << (slots - first_slot)) - 1u) : 0u);
+      VALK_ASSERT((alloc_byte & (u8)~valid) == 0,
+                  "GC verify: class %u page %u alloc bit set past "
+                  "slots_per_page=%u (byte %u = 0x%02x)",
+                  size_class, page->page_id, slots, i, alloc_byte);
+    }
+    allocated += (sz)__builtin_popcount((unsigned)alloc_byte);
+  }
+
+  u32 num_allocated = atomic_load(&page->num_allocated);
+  VALK_ASSERT(allocated == (sz)num_allocated,
+              "GC verify: class %u page %u alloc bitmap has %zu bits set but "
+              "num_allocated=%u (accounting drift)",
+              size_class, page->page_id, allocated, num_allocated);
+
+  if (page->reclaimed) {
+    VALK_ASSERT(num_allocated == 0,
+                "GC verify: class %u page %u is reclaimed but has "
+                "num_allocated=%u", size_class, page->page_id, num_allocated);
+  }
+
+  *out_allocated = allocated;
+}
+
+void valk_gc_verify_heap_post_sweep(valk_gc_heap_t *heap) {
+  if (!heap || !__verify_enabled()) return;
+
+  for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_list_t *list = &heap->classes[c];
+    sz class_allocated = 0;
+
+    for (valk_gc_page_t *page = list->all_pages; page != nullptr;
+         page = page->next) {
+      sz page_allocated = 0;
+      __verify_page(page, c, &page_allocated);
+      class_allocated += page_allocated;
+    }
+
+    sz used = atomic_load(&list->used_slots);
+    VALK_ASSERT(class_allocated == used,
+                "GC verify: class %u pages hold %zu allocated slots but "
+                "used_slots=%zu (per-class accounting drift)",
+                c, class_allocated, used);
+  }
+
+  pthread_mutex_lock(&heap->large_lock);
+  sz large_bytes = 0;
+  for (valk_gc_large_obj_t *obj = heap->large_objects; obj != nullptr;
+       obj = obj->next) {
+    VALK_ASSERT(!obj->marked,
+                "GC verify: large object %p (%zu bytes) still marked after "
+                "sweep", obj->data, obj->size);
+    large_bytes += obj->size;
+  }
+  pthread_mutex_unlock(&heap->large_lock);
+
+  sz tracked = atomic_load(&heap->large_object_bytes);
+  VALK_ASSERT(large_bytes == tracked,
+              "GC verify: large object list holds %zu bytes but "
+              "large_object_bytes=%zu", large_bytes, tracked);
+}
+
+// ============================================================================
+// Refill Provenance Ring
+// ============================================================================
+
+#define VERIFY_REFILL_RING 512
+
+typedef struct {
+  valk_gc_page_t *page;
+  u64 thread_id;
+  u32 start_slot;
+  u32 num_slots;
+  u8 size_class;
+  bool satb_on;
+} verify_refill_rec_t;
+
+static verify_refill_rec_t __refill_ring[VERIFY_REFILL_RING];
+static _Atomic u64 __refill_ring_next = 0;
+
+void valk_gc_verify_log_refill(valk_gc_page_t *page, u8 size_class,
+                               u32 start_slot, u32 num_slots, bool satb_on) {
+  if (!__verify_roots_enabled()) return;
+  u64 i = atomic_fetch_add(&__refill_ring_next, 1) % VERIFY_REFILL_RING;
+  __refill_ring[i] = (verify_refill_rec_t){
+      .page = page,
+      .thread_id = valk_thread_ctx.gc_registered ? valk_thread_ctx.gc_thread_id
+                                                 : (u64)-1,
+      .start_slot = start_slot,
+      .num_slots = num_slots,
+      .size_class = size_class,
+      .satb_on = satb_on,
+  };
+}
+
+static void __dump_refills_for_page(valk_gc_page_t *page) {
+  fprintf(stderr, "[GC-VERIFY] recent refills for page %p:\n", (void *)page);
+  u64 end = atomic_load(&__refill_ring_next);
+  u64 start = end > VERIFY_REFILL_RING ? end - VERIFY_REFILL_RING : 0;
+  for (u64 i = start; i < end; i++) {
+    verify_refill_rec_t *r = &__refill_ring[i % VERIFY_REFILL_RING];
+    if (r->page != page) continue;
+    fprintf(stderr,
+            "  seq=%llu thread=%llu class=%u slots=[%u,%u) satb_on=%d\n",
+            (unsigned long long)i, (unsigned long long)r->thread_id,
+            r->size_class, r->start_slot, r->start_slot + r->num_slots,
+            r->satb_on);
+  }
+}
+
+// ============================================================================
+// Pre-Sweep Root-Marking Verification (concurrent cycles)
+// ============================================================================
+// Runs at the CONC_FINAL pause after all marking is complete and before
+// sweep. Every env chain reachable from a counted participant's roots must
+// be marked; an unmarked one is about to be swept while live - the exact
+// corruption that produces vanished bindings and cyclic parent chains.
+
+static void __dump_env_chain(valk_gc_heap_t *heap, valk_lenv_t *env,
+                             u64 thread_idx, const char *root_kind) {
+  fprintf(stderr, "[GC-VERIFY] chain (thread %llu, root=%s):\n",
+          (unsigned long long)thread_idx, root_kind);
+  u32 hops = 0;
+  for (; env != nullptr && hops < 40; env = env->parent, hops++) {
+    valk_gc_ptr_location_t loc;
+    bool in_heap = valk_gc_ptr_to_location(heap, env, &loc);
+    fprintf(stderr,
+            "  hop %u: env=%p in_heap=%d mark=%d nsyms=%llu cmap=%d "
+            "sym_arr=%p sym_arr_mark=%d\n",
+            hops, (void *)env, in_heap,
+            in_heap ? valk_gc_page_is_marked(loc.page, loc.slot) : -1,
+            (unsigned long long)env->symbols.count, env->cmap != nullptr,
+            (void *)env->symbols.items,
+            (env->symbols.items &&
+             valk_gc_ptr_to_location(heap, env->symbols.items, &loc))
+                ? valk_gc_page_is_marked(loc.page, loc.slot)
+                : -1);
+    if (env->symbols.items &&
+        valk_gc_ptr_to_location(heap, env->symbols.items, &loc)) {
+      u8 *mb = valk_gc_page_mark_bitmap(loc.page);
+      u8 *ab = valk_gc_page_alloc_bitmap(loc.page);
+      u32 marked = 0, allocd = 0;
+      for (u16 b = 0; b < loc.page->bitmap_bytes; b++) {
+        marked += (u32)__builtin_popcount((unsigned)mb[b]);
+        allocd += (u32)__builtin_popcount((unsigned)ab[b]);
+      }
+      fprintf(stderr,
+              "    arr page=%p class=%u slot=%u alloc_bit=%d page_marked=%u "
+              "page_alloc=%u slots=%u\n",
+              (void *)loc.page, loc.size_class, loc.slot,
+              valk_gc_page_is_allocated(loc.page, loc.slot), marked, allocd,
+              loc.page->slots_per_page);
+    }
+    if (env->cmap) break;
+  }
+}
+
+static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
+                                u64 thread_idx, const char *root_kind) {
+  u32 hops = 0;
+  valk_lenv_t *env = root_env;
+  for (; env != nullptr && hops < 10000; env = env->parent, hops++) {
+    valk_gc_ptr_location_t loc;
+    if (!valk_gc_ptr_to_location(heap, env, &loc)) return;
+    if (!valk_gc_page_is_marked(loc.page, loc.slot)) {
+      __dump_env_chain(heap, root_env, thread_idx, root_kind);
+    }
+    VALK_ASSERT(valk_gc_page_is_marked(loc.page, loc.slot),
+                "GC verify: LIVE env %p (thread %llu, root=%s, hop %u, "
+                "nsyms=%llu) is UNMARKED before concurrent sweep",
+                (void *)env, (unsigned long long)thread_idx, root_kind, hops,
+                (unsigned long long)env->symbols.count);
+    if (env->symbols.items &&
+        valk_gc_ptr_to_location(heap, env->symbols.items, &loc)) {
+      if (!valk_gc_page_is_marked(loc.page, loc.slot)) {
+        __dump_env_chain(heap, root_env, thread_idx, root_kind);
+        __dump_refills_for_page(loc.page);
+      }
+      VALK_ASSERT(valk_gc_page_is_marked(loc.page, loc.slot),
+                  "GC verify: symbols array %p of live env %p (thread %llu, "
+                  "root=%s) is UNMARKED before concurrent sweep",
+                  (void *)env->symbols.items, (void *)env,
+                  (unsigned long long)thread_idx, root_kind);
+    }
+    if (env->vals.items &&
+        valk_gc_ptr_to_location(heap, env->vals.items, &loc)) {
+      VALK_ASSERT(valk_gc_page_is_marked(loc.page, loc.slot),
+                  "GC verify: vals array %p of live env %p (thread %llu, "
+                  "root=%s) is UNMARKED before concurrent sweep",
+                  (void *)env->vals.items, (void *)env,
+                  (unsigned long long)thread_idx, root_kind);
+      for (u64 i = 0; i < env->vals.count; i++) {
+        valk_lval_t *val = env->vals.items[i];
+        if (val == nullptr || (val->flags & LVAL_FLAG_IMMORTAL)) continue;
+        valk_gc_ptr_location_t vloc;
+        if (!valk_gc_ptr_to_location(heap, val, &vloc)) continue;
+        if (!valk_gc_page_is_marked(vloc.page, vloc.slot)) {
+          u8 *mb = valk_gc_page_mark_bitmap(vloc.page);
+          u32 marked = 0;
+          for (u16 b = 0; b < vloc.page->bitmap_bytes; b++)
+            marked += (u32)__builtin_popcount((unsigned)mb[b]);
+          fprintf(stderr,
+                  "[GC-VERIFY] white value %p type=%d env=%p marked=%d "
+                  "val_page=%p class=%u slot=%u page_marked=%u\n",
+                  (void *)val, (int)(val->flags & 0xFF), (void *)env,
+                  valk_gc_ptr_to_location(heap, env, &vloc)
+                      ? valk_gc_page_is_marked(vloc.page, vloc.slot)
+                      : -1,
+                  (void *)vloc.page, vloc.size_class, vloc.slot, marked);
+          valk_gc_ptr_to_location(heap, val, &vloc);
+          __dump_env_chain(heap, root_env, thread_idx, root_kind);
+          __dump_refills_for_page(vloc.page);
+        }
+        VALK_ASSERT(valk_gc_page_is_marked(vloc.page, vloc.slot),
+                    "GC verify: value %p (binding %llu '%s') of live env %p "
+                    "(thread %llu, root=%s) is UNMARKED before concurrent "
+                    "sweep",
+                    (void *)val, (unsigned long long)i,
+                    env->symbols.items ? env->symbols.items[i] : "?",
+                    (void *)env, (unsigned long long)thread_idx, root_kind);
+      }
+    }
+  }
+  VALK_ASSERT(hops < 10000,
+              "GC verify: env parent chain from thread %llu root=%s exceeds "
+              "10000 hops (cyclic chain)",
+              (unsigned long long)thread_idx, root_kind);
+}
+
+void valk_gc_verify_conc_roots_marked(valk_gc_heap_t *heap) {
+  if (!heap || !__verify_roots_enabled()) return;
+
+  u64 sys_epoch = atomic_load(&valk_sys->stw_epoch);
+  for (u64 t = 0; t < VALK_SYSTEM_MAX_THREADS; t++) {
+    if (!valk_sys->threads[t].active || valk_sys->threads[t].ctx == nullptr)
+      continue;
+    valk_thread_context_t *tc = valk_sys->threads[t].ctx;
+    if (atomic_load(&tc->stw_epoch) != sys_epoch) continue;
+
+    for (sz i = 0; i < tc->env_root_stack_count; i++) {
+      __verify_env_marked(heap, tc->env_root_stack[i], t, "env_root_stack");
+    }
+    __verify_env_marked(heap, tc->eval_env, t, "eval_env");
+    for (u32 i = 0; i < tc->eval_stack_depth; i++) {
+      __verify_env_marked(heap, tc->saved_eval_envs[i], t, "saved_eval_env");
+      valk_eval_stack_t *stack = (valk_eval_stack_t *)tc->eval_stacks[i];
+      if (!stack) continue;
+      for (u64 f = 0; f < stack->count; f++) {
+        __verify_env_marked(heap, stack->frames[f].env, t, "frame_env");
+        if (stack->frames[f].kind == CONT_BODY_NEXT) {
+          __verify_env_marked(heap, stack->frames[f].body_next.call_env, t,
+                              "frame_call_env");
+        }
+      }
+    }
+  }
+}
+// LCOV_EXCL_BR_STOP

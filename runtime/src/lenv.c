@@ -118,21 +118,30 @@ valk_lval_t* valk_lenv_get(valk_lenv_t* env, valk_lval_t* key) {
         ? valk_cmap_get_interned((valk_cmap_t*)env->cmap, kstr)
         : valk_cmap_get((valk_cmap_t*)env->cmap, kstr);
       if (v != nullptr) return v;
-    } else if (key_interned &&
-               (atomic_load_explicit(&env->flags, memory_order_relaxed) &
-                LENV_FLAG_KEYS_INTERNED)) {
-      // Both sides are canonical intern-table pointers, so equality of the
-      // strings is equality of the pointers. This is the whole point of the
-      // flag: it turns the miss scan (the common case for global/builtin
-      // names) from N strcmps into N pointer compares.
-      char* const* items = env->symbols.items;
-      for (u64 i = 0; i < env->symbols.count; i++) {
-        if (items[i] == kstr) return env->vals.items[i];
-      }
     } else {
-      for (u64 i = 0; i < env->symbols.count; i++) {
-        if (strcmp(kstr, env->symbols.items[i]) == 0) {
-          return env->vals.items[i];
+      // Acquire-ordered reads pairing with lenv_put's release publication
+      // (slot store, then count bump): count first, then the array pointers,
+      // so an observed count implies initialized slots. Workers evaluating
+      // closures read env chains that the owning thread keeps appending to.
+      u64 count = __atomic_load_n(&env->symbols.count, __ATOMIC_ACQUIRE);
+      char* const* items = __atomic_load_n(&env->symbols.items, __ATOMIC_ACQUIRE);
+      valk_lval_t* const* vitems = __atomic_load_n(&env->vals.items, __ATOMIC_ACQUIRE);
+      if (key_interned &&
+          (atomic_load_explicit(&env->flags, memory_order_relaxed) &
+           LENV_FLAG_KEYS_INTERNED)) {
+        // Both sides are canonical intern-table pointers, so equality of the
+        // strings is equality of the pointers. This is the whole point of the
+        // flag: it turns the miss scan (the common case for global/builtin
+        // names) from N strcmps into N pointer compares.
+        for (u64 i = 0; i < count; i++) {
+          if (items[i] == kstr)
+            return __atomic_load_n(&vitems[i], __ATOMIC_ACQUIRE);
+        }
+      } else {
+        for (u64 i = 0; i < count; i++) {
+          if (strcmp(kstr, items[i]) == 0) {
+            return __atomic_load_n(&vitems[i], __ATOMIC_ACQUIRE);
+          }
         }
       }
     }
@@ -195,6 +204,15 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
     }
   }
   // LCOV_EXCL_BR_STOP
+
+  // Insertion barrier for the concurrent marker: envs allocated during the
+  // mark window are born black (allocate-black) and never traced, so a value
+  // stored into one is invisible to the cycle unless it is reachable some
+  // other way. Log the STORED value - the SATB drain marks it and walks its
+  // children. Without this, an old heap value whose only remaining reference
+  // is a binding in a window-born env is swept while live (observed as
+  // hover responses with "id": null under typing load).
+  valk_gc_wb_lval(safe_val);
 
   if (env->cmap) {
     // Concurrent (shared global) env: striped-lock map handles overwrite,

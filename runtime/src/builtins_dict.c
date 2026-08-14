@@ -183,6 +183,11 @@ static void dict_set(valk_dict_t **dp, const char *key, valk_lval_t *value) {
   if (on_heap && value != nullptr && LVAL_ALLOC(value) == LVAL_ALLOC_SCRATCH)
     value = valk_evacuate_to_heap(value);
 
+  // Insertion barrier: a dict block allocated during the concurrent mark is
+  // born black and never traced, so a value stored into it must be logged
+  // for the marker (same hole as lenv_put - see the comment there).
+  if (on_heap) valk_gc_wb_lval(value);
+
   u64 h = dict_hash(key);
   u32 ci = dict_find(*dp, key, h);
   if (ci != DICT_EMPTY) {

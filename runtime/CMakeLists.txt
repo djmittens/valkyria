@@ -142,6 +142,7 @@ set(VALKYRIA_SOURCES
   src/gc_evacuation.c
   src/gc_mark.c
   src/gc_concurrent.c
+  src/gc_verify.c
   src/gc_region.c
   src/gc_stats.c
   src/debug.c

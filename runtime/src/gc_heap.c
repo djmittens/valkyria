@@ -314,12 +314,14 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
   // Allocate-black: objects born while a concurrent mark runs must survive
   // the cycle's sweep; the marker never traces into them (they are already
   // marked), which also keeps it off still-initializing memory.
-  if (atomic_load_explicit(&valk_gc_satb_active, memory_order_acquire)) {
+  bool satb_on = atomic_load_explicit(&valk_gc_satb_active, memory_order_acquire);
+  if (satb_on) {
     u8 *mark_bitmap = valk_gc_page_mark_bitmap(page);
     for (u32 i = start_slot; i < start_slot + num_slots; i++) {
       valk_gc_bitmap_try_set_atomic(mark_bitmap, i);
     }
   }
+  valk_gc_verify_log_refill(page, size_class, start_slot, num_slots, satb_on);
   atomic_fetch_add(&page->num_allocated, num_slots);
   atomic_fetch_add(&list->used_slots, num_slots);
   u64 added_bytes = num_slots * list->slot_size;

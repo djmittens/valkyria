@@ -356,6 +356,17 @@ extern valk_system_t *valk_sys;
 void valk_gc_thread_register(void);
 void valk_gc_thread_unregister(void);
 
+// Coordinator-only phase transition: asserts the state machine only ever
+// advances from the expected prior phase. Any other observed value means two
+// coordinators are running the same cycle or a stray transition fired.
+static inline void valk_gc_phase_transition(valk_gc_phase_e from,
+                                            valk_gc_phase_e to) {
+  valk_gc_phase_e prev = atomic_exchange(&valk_sys->phase, to);
+  VALK_ASSERT(prev == from,
+              "Illegal GC phase transition: expected %d -> %d but phase was %d",
+              (int)from, (int)to, (int)prev);
+}
+
 // ============================================================================
 // Safepoint Flags (CPython eval_breaker / Ruby interrupt_flag pattern)
 // ============================================================================
@@ -399,6 +410,23 @@ bool valk_gc_heap_request_stw_kind(valk_gc_heap_t *heap,
                                    valk_gc_cycle_kind_e kind);
 valk_gc_heap_t *valk_gc_current_cycle_heap(void);
 void valk_gc_owst_reset(void);
+
+// Post-sweep accounting verification (gc_verify.c). No-op unless
+// VALK_GC_VERIFY=1. Must run inside the pause window: coordinator only,
+// mutators parked at the final barrier.
+void valk_gc_verify_heap_post_sweep(valk_gc_heap_t *heap);
+
+// Pre-sweep root-marking verification for concurrent cycles (gc_verify.c).
+// Runs at the CONC_FINAL pause after marking, before sweep: every env chain
+// reachable from a counted participant's roots must be marked, or sweep is
+// about to free live data. No-op unless VALK_GC_VERIFY=1.
+void valk_gc_verify_conc_roots_marked(valk_gc_heap_t *heap);
+
+// Refill provenance ring (gc_verify.c): records TLAB refills so a verifier
+// failure can show whether a page's chunks were claimed with the SATB flag
+// observed on/off. No-op unless VALK_GC_VERIFY=1.
+void valk_gc_verify_log_refill(valk_gc_page_t *page, u8 size_class,
+                               u32 start_slot, u32 num_slots, bool satb_on);
 
 // ============================================================================
 // Concurrent Marking (SATB)

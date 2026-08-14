@@ -170,6 +170,11 @@ void valk_system_register_thread(valk_system_t *sys,
     sys->next_fresh_idx++;
   }
 
+  VALK_ASSERT(!sys->threads[idx].active,
+              "Thread slot %llu handed out while still active "
+              "(free list corruption or double registration)",
+              (unsigned long long)idx);
+
   // Fully initialize the slot and thread context BEFORE making the thread
   // visible (active=true / count increment). Stealers and the termination
   // scan may touch the mark queue of any active slot at any time, and the
@@ -228,6 +233,10 @@ void valk_system_unregister_thread(valk_system_t *sys) {
       continue;
     }
 
+    VALK_ASSERT(sys->threads[idx].active &&
+                    sys->threads[idx].ctx == &valk_thread_ctx,
+                "Unregistering thread slot %llu that does not belong to this "
+                "thread", (unsigned long long)idx);
     sys->threads[idx].active = false;
     sys->threads[idx].ctx = nullptr;
     sys->threads[idx].wake_fn = nullptr;
@@ -316,6 +325,9 @@ void valk_barrier_destroy(valk_barrier_t* b) {
 
 void valk_barrier_reset(valk_barrier_t* b, sz count) {
   pthread_mutex_lock(&b->mutex);
+  VALK_ASSERT(atomic_load(&b->waiting) == 0,
+              "Barrier reset with %zu threads still parked in the previous "
+              "rendezvous", atomic_load(&b->waiting));
   atomic_store(&b->count, count);
   atomic_store(&b->waiting, 0);
   pthread_mutex_unlock(&b->mutex);
@@ -326,6 +338,10 @@ void valk_barrier_wait(valk_barrier_t* b) {
   sz my_phase = atomic_load(&b->phase);
   sz waiting = atomic_fetch_add(&b->waiting, 1) + 1;
   sz count = atomic_load(&b->count);
+  VALK_ASSERT(waiting <= count,
+              "Barrier over-subscribed: %zu waiters for %zu counted "
+              "participants (thread joined a cycle it was not frozen into)",
+              waiting, count);
   if (waiting == count) {
     atomic_store(&b->waiting, 0);
     atomic_fetch_add(&b->phase, 1);
@@ -413,6 +429,10 @@ void valk_gc_safe_point_slow(void) {
 
       u64 my_epoch = atomic_load(&valk_thread_ctx.stw_epoch);
       u64 sys_epoch = atomic_load(&valk_sys->stw_epoch);
+      VALK_ASSERT(my_epoch <= sys_epoch,
+                  "Thread stw_epoch %llu ahead of system epoch %llu "
+                  "(epoch bookkeeping corrupted)",
+                  (unsigned long long)my_epoch, (unsigned long long)sys_epoch);
 
       if (my_epoch == sys_epoch) {
         // Counted participant: the coordinator froze us into this cycle's

@@ -43,10 +43,23 @@ typedef struct valk_satb_chunk {
 
 static pthread_mutex_t __satb_lock = PTHREAD_MUTEX_INITIALIZER;
 static valk_satb_chunk_t *__satb_chunks = nullptr;
-// Envs whose pointer fields were overwritten are rare; keep a small side set.
+// Envs logged for the marker (overwritten parents, evacuation-shared envs).
+// The fixed array gives cheap dedup for the common case; overflow spills
+// into a chunk list. The old code SILENTLY DROPPED overflow - dropping an
+// env log is unsound the same way dropping a value log is: the env (or its
+// bindings) can be reachable only through born-black objects and gets swept
+// while live.
 #define VALK_SATB_ENV_MAX 256
 static valk_lenv_t *__satb_envs[VALK_SATB_ENV_MAX];
 static u32 __satb_env_count = 0;
+
+typedef struct valk_satb_env_chunk {
+  struct valk_satb_env_chunk *next;
+  u32 count;
+  valk_lenv_t *envs[VALK_SATB_CHUNK_CAP];
+} valk_satb_env_chunk_t;
+
+static valk_satb_env_chunk_t *__satb_env_chunks = nullptr;
 
 static void __satb_push_chunk_locked(valk_lval_t **vals, u32 count) {
   valk_satb_chunk_t *chunk = malloc(sizeof(valk_satb_chunk_t));
@@ -108,8 +121,20 @@ void valk_gc_satb_log_env(valk_lenv_t *old) {
   for (u32 i = 0; i < __satb_env_count; i++) {
     if (__satb_envs[i] == old) { found = true; break; }
   }
-  if (!found && __satb_env_count < VALK_SATB_ENV_MAX) {
-    __satb_envs[__satb_env_count++] = old;
+  if (!found) {
+    if (__satb_env_count < VALK_SATB_ENV_MAX) {
+      __satb_envs[__satb_env_count++] = old;
+    } else {
+      valk_satb_env_chunk_t *chunk = __satb_env_chunks;
+      if (chunk == nullptr || chunk->count >= VALK_SATB_CHUNK_CAP) {
+        chunk = malloc(sizeof(valk_satb_env_chunk_t));
+        VALK_ASSERT(chunk != nullptr, "SATB env chunk allocation failed"); // LCOV_EXCL_BR_LINE
+        chunk->count = 0;
+        chunk->next = __satb_env_chunks;
+        __satb_env_chunks = chunk;
+      }
+      chunk->envs[chunk->count++] = old;
+    }
   }
   pthread_mutex_unlock(&__satb_lock);
 }
@@ -134,9 +159,15 @@ u64 valk_gc_satb_drain_global(valk_gc_heap_t *heap) {
     pthread_mutex_lock(&__satb_lock);
     valk_satb_chunk_t *chunk = __satb_chunks;
     if (chunk) __satb_chunks = chunk->next;
+    valk_satb_env_chunk_t *echunk = nullptr;
     valk_lenv_t *env = nullptr;
-    if (!chunk && __satb_env_count > 0) {
-      env = __satb_envs[--__satb_env_count];
+    if (!chunk) {
+      echunk = __satb_env_chunks;
+      if (echunk) {
+        __satb_env_chunks = echunk->next;
+      } else if (__satb_env_count > 0) {
+        env = __satb_envs[--__satb_env_count];
+      }
     }
     pthread_mutex_unlock(&__satb_lock);
 
@@ -146,6 +177,12 @@ u64 valk_gc_satb_drain_global(valk_gc_heap_t *heap) {
       }
       n += chunk->count;
       free(chunk);
+    } else if (echunk) {
+      for (u32 i = 0; i < echunk->count; i++) {
+        valk_gc_mark_env_local(heap, echunk->envs[i]);
+      }
+      n += echunk->count;
+      free(echunk);
     } else if (env) {
       valk_gc_mark_env_local(heap, env);
       n++;
@@ -158,7 +195,8 @@ u64 valk_gc_satb_drain_global(valk_gc_heap_t *heap) {
 
 bool valk_gc_satb_global_empty(void) {
   pthread_mutex_lock(&__satb_lock);
-  bool empty = (__satb_chunks == nullptr) && (__satb_env_count == 0);
+  bool empty = (__satb_chunks == nullptr) && (__satb_env_chunks == nullptr) &&
+               (__satb_env_count == 0);
   pthread_mutex_unlock(&__satb_lock);
   return empty;
 }
@@ -228,7 +266,8 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
 
   valk_barrier_wait(&valk_sys->barrier);
   // All participants are scanning their local roots now; do ours + globals.
-  atomic_store(&valk_sys->phase, VALK_GC_PHASE_CONC_MARK);
+  valk_gc_phase_transition(VALK_GC_PHASE_STW_REQUESTED,
+                           VALK_GC_PHASE_CONC_MARK);
   valk_gc_conc_scan_local_roots(heap);
   valk_gc_conc_scan_global_roots(heap);
   valk_gc_tlab_blacken_remainder();
@@ -263,23 +302,27 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
   }
 
   valk_barrier_wait(&valk_sys->barrier);
-  atomic_store(&valk_sys->phase, VALK_GC_PHASE_MARKING);
+  valk_gc_phase_transition(VALK_GC_PHASE_STW_REQUESTED, VALK_GC_PHASE_MARKING);
   valk_gc_satb_flush_local();
   valk_gc_satb_drain_global(heap);
   valk_barrier_wait(&valk_sys->barrier);
   valk_gc_conc_drain_owst(heap);
   valk_barrier_wait(&valk_sys->barrier);
 
+  valk_gc_verify_conc_roots_marked(heap);
+
   // Tracing is complete; stores no longer need logging. All mutators are
   // stopped, so nothing races this flip before sweep begins.
   atomic_store(&valk_gc_satb_active, false);
-  atomic_store(&valk_sys->phase, VALK_GC_PHASE_SWEEPING);
+  valk_gc_phase_transition(VALK_GC_PHASE_MARKING, VALK_GC_PHASE_SWEEPING);
   valk_gc_heap_parallel_sweep(heap);
   valk_barrier_wait(&valk_sys->barrier);
 
   heap->generation = valk_gc_heap_next_generation();
 
-  atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
+  valk_gc_verify_heap_post_sweep(heap);
+
+  valk_gc_phase_transition(VALK_GC_PHASE_SWEEPING, VALK_GC_PHASE_IDLE);
   valk_barrier_wait(&valk_sys->barrier);
 
   u64 t3 = uv_hrtime();
@@ -399,12 +442,14 @@ static void *__marker_main(void *arg) {
 // ============================================================================
 
 static bool __concurrent_enabled(void) {
-  static int enabled = -1;
-  if (enabled < 0) {
+  static _Atomic int enabled = -1;
+  int e = atomic_load_explicit(&enabled, memory_order_relaxed);
+  if (e < 0) {
     const char *env = getenv("VALK_GC_CONCURRENT");
-    enabled = (env && env[0] == '0') ? 0 : 1;
+    e = (env && env[0] == '0') ? 0 : 1;
+    atomic_store_explicit(&enabled, e, memory_order_relaxed);
   }
-  return enabled == 1;
+  return e == 1;
 }
 
 bool valk_gc_request_concurrent_collect(valk_gc_heap_t *heap) {
@@ -457,6 +502,7 @@ void valk_gc_concurrent_reset_after_fork(void) {
   pthread_cond_init(&__marker_cond, nullptr);
   pthread_mutex_init(&__satb_lock, nullptr);
   __satb_chunks = nullptr;
+  __satb_env_chunks = nullptr;
   __satb_env_count = 0;
 }
 

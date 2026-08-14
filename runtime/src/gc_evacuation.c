@@ -116,7 +116,17 @@ static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t*
   if (v == nullptr) return nullptr;
 
   if (v->flags & LVAL_FLAG_IMMORTAL) return v;
-  if (LVAL_ALLOC(v) != LVAL_ALLOC_SCRATCH) return v;
+  if (LVAL_ALLOC(v) != LVAL_ALLOC_SCRATCH) {
+    // This heap value is being wired into a freshly evacuated object. During
+    // a concurrent mark the copy is born black (allocate-black), so the
+    // marker will never trace through it - and the scratch source of this
+    // edge was invisible to the snapshot scan. Without logging, this value
+    // can be reachable ONLY through black objects and gets swept while live
+    // (observed as vanished env bindings and cyclic parent chains in the
+    // LSP server under typing load).
+    valk_gc_wb_lval(v);
+    return v;
+  }
 
   void *existing = valk_ptr_map_get(&ctx->ptr_map, v);
   if (existing != nullptr) return (valk_lval_t *)existing;
@@ -436,6 +446,9 @@ static valk_lenv_t* valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* e
 
   while (current != nullptr) {
     if (current->allocator == ctx->heap) {
+      // Same born-black edge as in valk_evacuate_value: the evacuated
+      // closure shares this heap env, but the closure copy is never traced.
+      valk_gc_wb_env(current);
       if (prev_new != nullptr) prev_new->parent = current;
       if (new_root == nullptr) new_root = current;
       break;
@@ -484,6 +497,9 @@ static inline bool fix_scratch_pointer(valk_evacuation_ctx_t* ctx, valk_lval_t**
     return true;
   }
 
+  // Heap value left in place inside an evacuated (born-black) object: log it
+  // for the concurrent marker (see valk_evacuate_value).
+  valk_gc_wb_lval(val);
   return false;
 }
 // LCOV_EXCL_STOP
