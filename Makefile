@@ -402,8 +402,6 @@ coverage-report: build
 		--source-root . \
 		--output coverage-report \
 		--xml
-	@echo ""
-	@echo "Coverage reports: coverage-report/latest/index.html"
 
 .PHONY: coverage
 coverage: build-coverage coverage-tests coverage-report

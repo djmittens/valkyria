@@ -722,6 +722,7 @@
   (list "runtime/src/lsp_index.c" "LSP indexer - remaining gaps are defensive null-arms in AST walkers not producible from parsed source")
   (list "runtime/src/lsp_index_emit.c" "LSP indexer - remaining gaps are defensive null-arms in AST walkers not producible from parsed source")
   (list "runtime/src/gc_mark.c" "parallel GC mark - 100% line; only never-taken branches are the lead-claim CAS race, which cannot be forced deterministically")
+  (list "runtime/src/aio/system/aio_mpmc.c" "lock-free MPMC queue - CAS retry/contention branches only fire under scheduler-dependent contention, cannot be forced deterministically")
   (list "runtime/src/build_shim.c" "--build shim - only exercised by test_build's produced binaries; error paths (missing __entry__, OOM) untestable there")))
 
 (fun {is-blocked rel-path} {
