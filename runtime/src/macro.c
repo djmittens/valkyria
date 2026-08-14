@@ -1,4 +1,5 @@
 #include "macro.h"
+#include "gc.h"
 
 #include "coverage.h"
 #include <stdio.h>
@@ -233,14 +234,15 @@ static void rewrite_node(valk_lval_t *cell, const rw_ctx_t *rw,
         if (repl) {
           valk_lval_t *sym = valk_lval_sym(repl);
           LVAL_SRC_POS_SET(sym, LVAL_SRC_POS(expr));
-          cell->cons.head = sym;
+          VALK_GC_WB_STORE(&cell->cons.head, sym);
           free(repl);
         }
       }
       return;
     }
     if (rw->prefix[0] && name_set_has(rw->locals, expr->str))
-      cell->cons.head = qualify_sym(rw->prefix, expr->str, LVAL_SRC_POS(expr));
+      VALK_GC_WB_STORE(&cell->cons.head,
+                       qualify_sym(rw->prefix, expr->str, LVAL_SRC_POS(expr)));
     return;
   }
 

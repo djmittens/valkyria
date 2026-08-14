@@ -98,6 +98,24 @@ void valk_gc_tlab_invalidate_heap(valk_gc_heap_t *heap) {
   }
 }
 
+// LCOV_EXCL_START - concurrent-mark pause protocol
+// Blacken this thread's unconsumed TLAB slots at the CONC_START pause:
+// objects bump-allocated from them during the concurrent mark are then
+// born marked without any per-allocation work.
+void valk_gc_tlab_blacken_remainder(void) {
+  valk_gc_tlab_t *tlab = valk_gc_local_tlab;
+  if (!tlab || !tlab->owner_heap) return;
+  for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    valk_gc_page_t *page = tlab->classes[c].page;
+    if (!page || page->reclaimed) continue;
+    u8 *mark_bitmap = valk_gc_page_mark_bitmap(page);
+    for (u32 i = tlab->classes[c].next_slot; i < tlab->classes[c].limit_slot; i++) {
+      valk_gc_bitmap_try_set_atomic(mark_bitmap, i);
+    }
+  }
+}
+// LCOV_EXCL_STOP
+
 // Release this thread's TLAB (unused slots returned to the heap, struct
 // freed). Called from valk_system_unregister_thread; without it every
 // exiting thread that touched the heap leaks its TLAB.
@@ -197,10 +215,14 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
   // plus the safepoint slow path covers every entry into the heap.
   // LCOV_EXCL_START - requires registration racing an active GC cycle
   if (valk_thread_ctx.gc_registered) {
-    while (atomic_load_explicit(&valk_sys->phase, memory_order_acquire) !=
-               VALK_GC_PHASE_IDLE &&
-           atomic_load(&valk_thread_ctx.stw_epoch) !=
-               atomic_load(&valk_sys->stw_epoch)) {
+    for (;;) {
+      valk_gc_phase_e ph = atomic_load_explicit(&valk_sys->phase,
+                                                memory_order_acquire);
+      // CONC_MARK is not a stopped phase: mutators (including late
+      // registrants) allocate freely; refilled batches are blackened below.
+      if (ph == VALK_GC_PHASE_IDLE || ph == VALK_GC_PHASE_CONC_MARK) break;
+      if (atomic_load(&valk_thread_ctx.stw_epoch) ==
+          atomic_load(&valk_sys->stw_epoch)) break;
       sched_yield();
     }
   }
@@ -289,6 +311,15 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
   for (u32 i = start_slot; i < start_slot + num_slots; i++) {
     valk_gc_bitmap_set(bitmap, i);
   }
+  // Allocate-black: objects born while a concurrent mark runs must survive
+  // the cycle's sweep; the marker never traces into them (they are already
+  // marked), which also keeps it off still-initializing memory.
+  if (atomic_load_explicit(&valk_gc_satb_active, memory_order_acquire)) {
+    u8 *mark_bitmap = valk_gc_page_mark_bitmap(page);
+    for (u32 i = start_slot; i < start_slot + num_slots; i++) {
+      valk_gc_bitmap_try_set_atomic(mark_bitmap, i);
+    }
+  }
   atomic_fetch_add(&page->num_allocated, num_slots);
   atomic_fetch_add(&list->used_slots, num_slots);
   u64 added_bytes = num_slots * list->slot_size;
@@ -324,6 +355,20 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
 }
 // LCOV_EXCL_BR_STOP
 
+// Emergency path helper: a sync collect no-ops while a concurrent cycle is
+// in flight (the phase CAS fails). Ride the cycle out — participating in
+// its pauses via the safepoint — so the collect that follows can actually
+// reclaim.
+// LCOV_EXCL_START - requires OOM racing an active concurrent cycle
+static void __wait_for_gc_idle(void) {
+  while (atomic_load_explicit(&valk_sys->phase, memory_order_acquire) !=
+         VALK_GC_PHASE_IDLE) {
+    VALK_GC_SAFE_POINT();
+    sched_yield();
+  }
+}
+// LCOV_EXCL_STOP
+
 static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
   u64 alloc_size = (bytes + 4095) & ~4095ULL;
 
@@ -331,6 +376,7 @@ static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
 
   // LCOV_EXCL_START - OOM paths: hard limit exceeded after collection
   if (current + alloc_size > heap->hard_limit) {
+    __wait_for_gc_idle();
     valk_gc_heap_collect(heap);
     current = valk_gc_heap_used_bytes(heap);
     if (current + alloc_size > heap->hard_limit) {
@@ -355,7 +401,8 @@ static void *valk_gc_heap_alloc_large(valk_gc_heap_t *heap, u64 bytes) {
   // LCOV_EXCL_STOP
   obj->data = data;
   obj->size = alloc_size;
-  obj->marked = false;
+  // Allocate-black during concurrent mark (see TLAB refill).
+  obj->marked = atomic_load_explicit(&valk_gc_satb_active, memory_order_acquire);
 
   pthread_mutex_lock(&heap->large_lock);
   obj->next = heap->large_objects;
@@ -408,6 +455,7 @@ void *valk_gc_heap_alloc(valk_gc_heap_t *heap, sz bytes) {
   }
 
   if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {
+    __wait_for_gc_idle(); // LCOV_EXCL_LINE - OOM racing a concurrent cycle
     valk_gc_heap_collect(heap);
     // LCOV_EXCL_START - double refill failure is OOM
     if (!valk_gc_tlab_refill(valk_gc_local_tlab, heap, size_class)) {

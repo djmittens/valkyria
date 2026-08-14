@@ -366,6 +366,13 @@ typedef struct {
   struct valk_lval_t *eval_expr;  // Current expression being evaluated
   struct valk_lval_t *eval_value; // Current value in evaluation
   struct valk_lenv_t *eval_env;   // Current environment in eval loop
+
+  // SATB write-barrier buffer (concurrent mark). Old pointer values
+  // overwritten while a concurrent cycle marks are logged here; full
+  // buffers are handed to the marker, partials are flushed at the
+  // CONC_FINAL pause.
+  struct valk_lval_t **satb_buf;
+  u32 satb_count;
 } valk_thread_context_t;
 
 extern __thread valk_thread_context_t valk_thread_ctx;

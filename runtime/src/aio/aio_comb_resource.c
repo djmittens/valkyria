@@ -94,7 +94,8 @@ static valk_lval_t* valk_builtin_aio_bracket(valk_lenv_t* e, valk_lval_t* a) {
         bracket_handle->parent = use_handle;
         if (!bracket_handle->sys && use_handle->sys) bracket_handle->sys = use_handle->sys; // LCOV_EXCL_BR_LINE - sys propagation
 
-        bracket_handle->on_cancel = valk_evacuate_to_heap(release_fn);
+        VALK_GC_WB_STORE(&bracket_handle->on_cancel,
+                         valk_evacuate_to_heap(release_fn));
         atomic_store_explicit(&bracket_handle->result, resource, memory_order_release);
 
         valk_async_handle_add_child(use_handle, bracket_handle);

@@ -186,7 +186,7 @@ static void dict_set(valk_dict_t **dp, const char *key, valk_lval_t *value) {
   u64 h = dict_hash(key);
   u32 ci = dict_find(*dp, key, h);
   if (ci != DICT_EMPTY) {
-    dict_cells(*dp)[ci].value = value;
+    VALK_GC_WB_STORE(&dict_cells(*dp)[ci].value, value);
     return;
   }
 
@@ -203,7 +203,9 @@ static void dict_set(valk_dict_t **dp, const char *key, valk_lval_t *value) {
   cells[slot].key_offset = dict_intern_key(d, key, len);
   cells[slot].value = value;
   cells[slot].next = dict_buckets(d)[bucket];
-  dict_buckets(d)[bucket] = slot;
+  // Release: publish the fully-initialized cell to the concurrent marker
+  // walking this bucket chain.
+  __atomic_store_n(&dict_buckets(d)[bucket], slot, __ATOMIC_RELEASE);
   d->count++;
 }
 
@@ -224,7 +226,7 @@ static bool dict_put(valk_dict_t **dp, const char *key) {
   cells[slot].key_offset = dict_intern_key(d, key, len);
   cells[slot].value = nullptr;
   cells[slot].next = dict_buckets(d)[bucket];
-  dict_buckets(d)[bucket] = slot;
+  __atomic_store_n(&dict_buckets(d)[bucket], slot, __ATOMIC_RELEASE);
   d->count++;
   return true;
 }
@@ -249,8 +251,8 @@ static bool dict_remove(valk_dict_t *d, const char *key) {
 
   while (ci != DICT_EMPTY) {
     if (cells[ci].hash == h && strcmp(dict_strings(d) + cells[ci].key_offset, key) == 0) {
-      *prev = cells[ci].next;
-      cells[ci].value = nullptr;
+      __atomic_store_n(prev, cells[ci].next, __ATOMIC_RELEASE);
+      VALK_GC_WB_STORE(&cells[ci].value, (valk_lval_t *)nullptr);
       cells[ci].next = d->free_head;
       d->free_head = ci;
       d->count--;

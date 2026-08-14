@@ -120,6 +120,7 @@ void valk_system_initiate_shutdown(valk_system_t *sys, int exit_code) {
 void valk_system_shutdown(valk_system_t *sys, u64 deadline_ms) {
   if (!sys) return;
   valk_system_initiate_shutdown(sys, sys->exit_code);
+  valk_gc_concurrent_shutdown();
 
   u64 deadline_us = deadline_ms * 1000;
   u64 start = uv_hrtime() / 1000;
@@ -250,6 +251,11 @@ void valk_system_unregister_thread(valk_system_t *sys) {
     valk_thread_ctx.env_root_stack = nullptr;
     valk_thread_ctx.env_root_stack_count = 0;
     valk_thread_ctx.env_root_stack_capacity = 0;
+  }
+  if (valk_thread_ctx.satb_buf) {
+    free(valk_thread_ctx.satb_buf);
+    valk_thread_ctx.satb_buf = nullptr;
+    valk_thread_ctx.satb_count = 0;
   }
   valk_gc_tlab_release_thread();
   valk_thread_ctx.gc_registered = false;
@@ -431,7 +437,8 @@ void valk_gc_safe_point_slow(void) {
     atomic_fetch_and(&valk_thread_ctx.safepoint_flags, ~(u32)VALK_SP_GC_COLLECT);
     valk_gc_heap_t *heap = valk_thread_ctx.heap;
     if (heap) {
-      valk_gc_heap_collect(heap);
+      if (!valk_gc_request_concurrent_collect(heap))
+        valk_gc_heap_collect(heap);
       // Do NOT clear VALK_SP_STW here. The collect above set it on this
       // thread (request_stw flags every registered thread, including the
       // coordinator); that stale self-flag is absorbed harmlessly by the
@@ -833,6 +840,9 @@ void valk_gc_reset_after_fork(void) {
 
   valk_gc_mark_reset_after_fork();
   valk_gc_heap_reset_after_fork();
+  valk_gc_concurrent_reset_after_fork();
+  valk_thread_ctx.satb_buf = nullptr;
+  valk_thread_ctx.satb_count = 0;
 
   valk_thread_ctx.heap = nullptr;
   valk_thread_ctx.system = nullptr;

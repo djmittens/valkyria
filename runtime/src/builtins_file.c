@@ -479,7 +479,12 @@ static valk_lval_t* valk_builtin_exec(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_BR_START - poll/read loop: branch edges depend on pipe timing and buffer state
   int open_fds = 2;
   while (open_fds > 0) {
-    int ret = poll(fds, 2, -1);
+    // Bounded poll + safepoint: an unbounded poll blocks this thread past
+    // any GC rendezvous for the whole subprocess runtime, stalling every
+    // other thread at the pause barrier for seconds.
+    int ret = poll(fds, 2, 5);
+    VALK_GC_SAFE_POINT();
+    if (ret == 0) continue;
     if (ret < 0) {
       if (errno == EINTR) continue;
       break; // LCOV_EXCL_LINE

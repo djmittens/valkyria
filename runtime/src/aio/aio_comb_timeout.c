@@ -200,7 +200,8 @@ static void valk_async_retry_attempt_completed(valk_async_handle_t *child) {
   }
 
   if (status == VALK_ASYNC_FAILED || status == VALK_ASYNC_CANCELLED) { // LCOV_EXCL_BR_LINE - retry cancelled path rare
-    parent->comb.retry.last_error = atomic_load_explicit(&child->error, memory_order_acquire);
+    VALK_GC_WB_STORE(&parent->comb.retry.last_error,
+                     atomic_load_explicit(&child->error, memory_order_acquire));
     parent->comb.retry.current_attempt_num++;
 
     if (parent->comb.retry.current_attempt_num >= parent->comb.retry.max_attempts) {

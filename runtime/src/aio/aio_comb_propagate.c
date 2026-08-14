@@ -77,7 +77,7 @@ static void valk_async_propagate_single(void *ctx) {
             } else if (inner_status == VALK_ASYNC_CANCELLED) { // LCOV_EXCL_BR_LINE - cancelled rare
               atomic_store_explicit(&child->status, VALK_ASYNC_CANCELLED, memory_order_release);
             } else {
-              child->on_complete = NULL;
+              VALK_GC_WB_STORE(&child->on_complete, (valk_lval_t *)NULL);
               valk_async_handle_add_child(inner, child);
               valk_async_done_fn child_on_done = atomic_load_explicit(&child->on_done, memory_order_acquire);
               valk_async_done_fn inner_on_done = atomic_load_explicit(&inner->on_done, memory_order_acquire);
@@ -86,7 +86,11 @@ static void valk_async_propagate_single(void *ctx) {
                 atomic_store_explicit(&inner->on_done, child_on_done, memory_order_release);
                 atomic_store_explicit(&inner->on_done_ctx, child_ctx, memory_order_relaxed);
                 inner->region = child->region;
-                inner->env = child->env;
+                {
+                  valk_lenv_t *old_env =
+                      __atomic_exchange_n(&inner->env, child->env, __ATOMIC_ACQ_REL);
+                  valk_gc_wb_env(old_env);
+                }
                 atomic_store_explicit(&child->on_done, NULL, memory_order_relaxed);
                 atomic_store_explicit(&child->on_done_ctx, NULL, memory_order_relaxed);
               }

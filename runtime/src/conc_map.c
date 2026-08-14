@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "gc.h"
 #include "memory.h"
 #include "parser.h"  // valk_sym_intern
 
@@ -128,7 +129,8 @@ static bool cmap_table_put(valk_cmap_table_t *t, char *key, valk_lval_t *val) {
     // resize rehashing only inserts unique keys. Kept so table_put remains
     // correct for any caller.
     if (k == key) {
-      atomic_store_explicit(&t->slots[idx].val, val, memory_order_release);
+      valk_gc_wb_lval(atomic_exchange_explicit(&t->slots[idx].val, val,
+                                               memory_order_acq_rel));
       return false;
     }
     // LCOV_EXCL_STOP
@@ -174,7 +176,8 @@ void valk_cmap_put(valk_cmap_t *m, const char *key, valk_lval_t *val) {
     char *k = atomic_load_explicit(&t->slots[idx].key, memory_order_acquire);
     if (k == nullptr) break;
     if (k == key) {
-      atomic_store_explicit(&t->slots[idx].val, val, memory_order_release);
+      valk_gc_wb_lval(atomic_exchange_explicit(&t->slots[idx].val, val,
+                                               memory_order_acq_rel));
       valk_mutex_unlock(&m->seg_locks[seg]);
       return;
     }
@@ -198,7 +201,8 @@ void valk_cmap_put(valk_cmap_t *m, const char *key, valk_lval_t *val) {
     char *k = atomic_load_explicit(&t->slots[idx].key, memory_order_acquire);
     if (k == nullptr) break;
     if (k == key) {
-      atomic_store_explicit(&t->slots[idx].val, val, memory_order_release);
+      valk_gc_wb_lval(atomic_exchange_explicit(&t->slots[idx].val, val,
+                                               memory_order_acq_rel));
       found = true;
       break;
     }

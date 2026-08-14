@@ -118,19 +118,26 @@ static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
       valk_cmap_gc_mark((valk_cmap_t *)env->cmap, mark_env_block_cb,
                         mark_env_value_cb, ctx);
     }
-    mark_ptr_only(env->symbols.items, ctx);
-    mark_ptr_only(env->vals.items, ctx);
+    // Load counts BEFORE array pointers: growth installs the new array with
+    // a release store and only then bumps the count (release), so a count
+    // observed here guarantees the subsequently loaded array covers it.
+    u64 scount = __atomic_load_n(&env->symbols.count, __ATOMIC_ACQUIRE);
+    char **sitems = __atomic_load_n(&env->symbols.items, __ATOMIC_ACQUIRE);
+    u64 vcount = __atomic_load_n(&env->vals.count, __ATOMIC_ACQUIRE);
+    valk_lval_t **vitems = __atomic_load_n(&env->vals.items, __ATOMIC_ACQUIRE);
+    mark_ptr_only(sitems, ctx);
+    mark_ptr_only(vitems, ctx);
     // Interned keys are permanent intern-table allocations, not GC objects.
     // Marking them is not just pointless: mark_ptr_only falls through to
     // valk_gc_mark_large_object, which takes heap->large_lock and walks the
     // large-object list for every key on every mark.
     if (!(atomic_load(&env->flags) & LENV_FLAG_KEYS_INTERNED)) {
-      for (u64 i = 0; i < env->symbols.count; i++) {
-        mark_ptr_only(env->symbols.items[i], ctx);
+      for (u64 i = 0; i < scount; i++) {
+        mark_ptr_only(sitems[i], ctx);
       }
     }
-    for (u64 i = 0; i < env->vals.count; i++) {
-      mark_lval(env->vals.items[i], ctx);
+    for (u64 i = 0; i < vcount; i++) {
+      mark_lval(__atomic_load_n(&vitems[i], __ATOMIC_ACQUIRE), ctx);
     }
     env = env->parent;
   }
@@ -140,8 +147,10 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
   while (obj != nullptr) {
     switch (LVAL_TYPE(obj)) {
       case LVAL_CONS:
-        mark_lval(obj->cons.head, ctx);
-        obj = obj->cons.tail;
+        // Acquire loads: cons cells are spliced in place by valk_lval_pop and
+        // the macro expanders while the concurrent marker walks the spine.
+        mark_lval(__atomic_load_n(&obj->cons.head, __ATOMIC_ACQUIRE), ctx);
+        obj = __atomic_load_n(&obj->cons.tail, __ATOMIC_ACQUIRE);
         if (obj == nullptr) return;
         {
           valk_gc_ptr_location_t loc;
@@ -169,12 +178,13 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
         return;
       case LVAL_HANDLE:
         if (obj->async.handle) {
-          mark_lval(obj->async.handle->on_complete, ctx);
-          mark_lval(obj->async.handle->on_error, ctx);
-          mark_lval(obj->async.handle->on_cancel, ctx);
+          mark_lval(__atomic_load_n(&obj->async.handle->on_complete, __ATOMIC_ACQUIRE), ctx);
+          mark_lval(__atomic_load_n(&obj->async.handle->on_error, __ATOMIC_ACQUIRE), ctx);
+          mark_lval(__atomic_load_n(&obj->async.handle->on_cancel, __ATOMIC_ACQUIRE), ctx);
           mark_lval(atomic_load_explicit(&obj->async.handle->result, memory_order_acquire), ctx);
           mark_lval(atomic_load_explicit(&obj->async.handle->error, memory_order_acquire), ctx);
-          if (obj->async.handle->env) mark_env(obj->async.handle->env, ctx);
+          valk_lenv_t *henv = __atomic_load_n(&obj->async.handle->env, __ATOMIC_ACQUIRE);
+          if (henv) mark_env(henv, ctx);
         }
         return;
       case LVAL_SYM:
@@ -188,16 +198,24 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
           obj->ref.mark(obj->ref.ptr, ctx);
         return;
       case LVAL_DICT: {
-        valk_dict_t *d = obj->dict.data;
+        // Acquire loads: the block pointer is swapped on grow, bucket heads
+        // are release-published on insert, and cell values are exchanged in
+        // place by dict/set! while the concurrent marker walks the chains.
+        valk_dict_t *d = __atomic_load_n(&obj->dict.data, __ATOMIC_ACQUIRE);
         if (d) {
           mark_ptr_only(d, ctx);
           valk_dict_cell_t *cells = dict_cells(d);
           u32 *buckets = dict_buckets(d);
           for (u32 b = 0; b < d->num_buckets; b++) {
-            u32 ci = buckets[b];
-            while (ci != DICT_EMPTY) {
-              if (cells[ci].value != nullptr)
-                mark_lval(cells[ci].value, ctx);
+            u32 ci = __atomic_load_n(&buckets[b], __ATOMIC_ACQUIRE);
+            // Step bound: concurrent remove+reinsert can, in principle,
+            // stitch a transient cycle through reused cells. Any entry the
+            // racy walk misses is covered by the SATB log of the mutation.
+            u32 steps = 0;
+            while (ci != DICT_EMPTY && ci < d->capacity && steps++ < d->capacity) {
+              valk_lval_t *cv = __atomic_load_n(&cells[ci].value, __ATOMIC_ACQUIRE);
+              if (cv != nullptr)
+                mark_lval(cv, ctx);
               ci = cells[ci].next;
             }
           }
@@ -378,6 +396,72 @@ static bool valk_gc_heap_offer_termination(void) {
 // ============================================================================
 
 // LCOV_EXCL_START - Heap2 parallel mark/sweep requires multi-threaded STW coordination
+static void __mark_local_roots(valk_gc_mark_ctx_t *ctx) {
+  valk_gc_visit_thread_roots(mark_root_visitor2, ctx);
+  mark_eval_stack_roots(ctx);
+}
+
+static void __mark_global_roots(valk_gc_mark_ctx_t *ctx) {
+  valk_gc_visit_global_roots(mark_root_visitor2, ctx);
+
+  // The macro env may be a standalone heap env referenced only by a
+  // static C global (AOT binaries point it at the runtime-built builtin
+  // registry). visit_global_roots marks its VALUES via the visitor, but
+  // the env block and its symbols/vals ARRAYS are heap allocations too —
+  // without a full mark_env walk they are swept at the first collection
+  // and every macro-expansion lookup afterwards reads recycled memory.
+  {
+    extern valk_lenv_t *valk_macro_env(void);
+    valk_lenv_t *menv = valk_macro_env();
+    if (menv) mark_env(menv, ctx);
+  }
+
+  valk_gc_visit_remembered(mark_remembered_visitor, ctx);
+
+  pthread_mutex_lock(&valk_sys->thread_mutex);
+  for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
+    if (valk_sys->threads[i].active && valk_sys->threads[i].ctx != nullptr) {
+      valk_thread_context_t *tc = valk_sys->threads[i].ctx;
+      valk_lenv_t *root_env = atomic_load(&tc->root_env);
+      if (root_env != nullptr) {
+        mark_env(root_env, ctx);
+      }
+    }
+  }
+  pthread_mutex_unlock(&valk_sys->thread_mutex);
+}
+
+static void __mark_drain_owst(valk_gc_mark_ctx_t *ctx,
+                              valk_gc_mark_queue_t *my_queue, u64 my_id) {
+  while (true) {
+    valk_lval_t *obj;
+    while ((obj = valk_gc_mark_queue_pop(my_queue)) != nullptr) {
+      mark_children(obj, ctx);
+    }
+
+    bool found_work = false;
+    u64 max_idx = atomic_load(&__gc_cycle_scan_max);
+
+    for (u64 i = 1; i < max_idx; i++) {
+      u64 victim = (my_id + i) % max_idx;
+      if (!valk_sys->threads[victim].active) continue;
+
+      obj = valk_gc_mark_queue_steal(&valk_sys->threads[victim].mark_queue);
+      if (obj != nullptr) {
+        mark_children(obj, ctx);
+        found_work = true;
+        break;
+      }
+    }
+
+    if (!found_work) {
+      if (valk_gc_heap_offer_termination()) {
+        break;
+      }
+    }
+  }
+}
+
 void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
   if (!heap) return;
   if (!valk_thread_ctx.gc_registered) return;
@@ -395,37 +479,10 @@ void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
     .solo = solo
   };
 
-  valk_gc_visit_thread_roots(mark_root_visitor2, &ctx);
-  mark_eval_stack_roots(&ctx);
+  __mark_local_roots(&ctx);
 
   if (valk_thread_ctx.gc_cycle_rank == 0) {
-    valk_gc_visit_global_roots(mark_root_visitor2, &ctx);
-
-    // The macro env may be a standalone heap env referenced only by a
-    // static C global (AOT binaries point it at the runtime-built builtin
-    // registry). visit_global_roots marks its VALUES via the visitor, but
-    // the env block and its symbols/vals ARRAYS are heap allocations too —
-    // without a full mark_env walk they are swept at the first collection
-    // and every macro-expansion lookup afterwards reads recycled memory.
-    {
-      extern valk_lenv_t *valk_macro_env(void);
-      valk_lenv_t *menv = valk_macro_env();
-      if (menv) mark_env(menv, &ctx);
-    }
-
-    valk_gc_visit_remembered(mark_remembered_visitor, &ctx);
-
-    pthread_mutex_lock(&valk_sys->thread_mutex);
-    for (u64 i = 0; i < VALK_GC_MAX_THREADS; i++) {
-      if (valk_sys->threads[i].active && valk_sys->threads[i].ctx != nullptr) {
-        valk_thread_context_t *tc = valk_sys->threads[i].ctx;
-        valk_lenv_t *root_env = atomic_load(&tc->root_env);
-        if (root_env != nullptr) {
-          mark_env(root_env, &ctx);
-        }
-      }
-    }
-    pthread_mutex_unlock(&valk_sys->thread_mutex);
+    __mark_global_roots(&ctx);
   }
 
   valk_barrier_wait(&valk_sys->barrier);
@@ -441,33 +498,105 @@ void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap) {
     return;
   }
 
-  while (true) {
+  __mark_drain_owst(&ctx, my_queue, my_id);
+}
+
+// ============================================================================
+// Concurrent-Mark Building Blocks (used by gc_concurrent.c)
+// ============================================================================
+
+static valk_gc_mark_ctx_t __own_mark_ctx(valk_gc_heap_t *heap) {
+  u64 my_id = valk_thread_ctx.gc_thread_id;
+  return (valk_gc_mark_ctx_t){
+    .heap = heap,
+    .queue = &valk_sys->threads[my_id].mark_queue,
+    .solo = false,
+  };
+}
+
+void valk_gc_conc_scan_local_roots(valk_gc_heap_t *heap) {
+  if (!heap || !valk_thread_ctx.gc_registered) return;
+  valk_gc_mark_queue_reset(&valk_sys->threads[valk_thread_ctx.gc_thread_id].mark_queue);
+  valk_gc_mark_ctx_t ctx = __own_mark_ctx(heap);
+  __mark_local_roots(&ctx);
+}
+
+void valk_gc_conc_scan_global_roots(valk_gc_heap_t *heap) {
+  if (!heap || !valk_thread_ctx.gc_registered) return;
+  valk_gc_mark_ctx_t ctx = __own_mark_ctx(heap);
+  __mark_global_roots(&ctx);
+}
+
+// Single-marker drain used during the concurrent phase: pop own queue and
+// steal from every registered thread until one full pass finds nothing.
+// No OWST: the marker is the only thread tracing while mutators run.
+u64 valk_gc_conc_drain(valk_gc_heap_t *heap) {
+  if (!heap || !valk_thread_ctx.gc_registered) return 0;
+  u64 my_id = valk_thread_ctx.gc_thread_id;
+  valk_gc_mark_queue_t *my_queue = &valk_sys->threads[my_id].mark_queue;
+  valk_gc_mark_ctx_t ctx = __own_mark_ctx(heap);
+
+  u64 processed = 0;
+  for (;;) {
+    bool did_work = false;
     valk_lval_t *obj;
     while ((obj = valk_gc_mark_queue_pop(my_queue)) != nullptr) {
       mark_children(obj, &ctx);
+      processed++;
+      did_work = true;
     }
 
-    bool found_work = false;
-    u64 max_idx = atomic_load(&__gc_cycle_scan_max);
-
-    for (u64 i = 1; i < max_idx; i++) {
-      u64 victim = (my_id + i) % max_idx;
-      if (!valk_sys->threads[victim].active) continue;
-
-      obj = valk_gc_mark_queue_steal(&valk_sys->threads[victim].mark_queue);
+    u64 max_idx = valk_sys->next_fresh_idx;
+    for (u64 i = 0; i < max_idx; i++) {
+      if (i == my_id) continue;
+      if (!valk_sys->threads[i].active) continue;
+      obj = valk_gc_mark_queue_steal(&valk_sys->threads[i].mark_queue);
       if (obj != nullptr) {
         mark_children(obj, &ctx);
-        found_work = true;
-        break;
+        processed++;
+        did_work = true;
       }
     }
 
-    if (!found_work) {
-      if (valk_gc_heap_offer_termination()) {
-        break;
-      }
-    }
+    if (!did_work) break;
   }
+  return processed;
+}
+
+// Parallel drain with OWST termination, used inside the CONC_FINAL pause
+// after every participant flushed its SATB residue into its own queue.
+void valk_gc_conc_drain_owst(valk_gc_heap_t *heap) {
+  if (!heap || !valk_thread_ctx.gc_registered) return;
+  u64 my_id = valk_thread_ctx.gc_thread_id;
+  valk_gc_mark_queue_t *my_queue = &valk_sys->threads[my_id].mark_queue;
+  valk_gc_mark_ctx_t ctx = __own_mark_ctx(heap);
+  __mark_drain_owst(&ctx, my_queue, my_id);
+}
+
+void valk_gc_mark_value_local(valk_gc_heap_t *heap, valk_lval_t *v) {
+  if (!heap || !valk_thread_ctx.gc_registered || v == nullptr) return;
+  valk_gc_mark_ctx_t ctx = __own_mark_ctx(heap);
+  mark_lval(v, &ctx);
+}
+
+void valk_gc_mark_env_local(valk_gc_heap_t *heap, valk_lenv_t *env) {
+  if (!heap || !valk_thread_ctx.gc_registered || env == nullptr) return;
+  valk_gc_mark_ctx_t ctx = __own_mark_ctx(heap);
+  mark_env(env, &ctx);
+}
+
+bool valk_gc_all_mark_queues_empty(void) {
+  u64 max_idx = valk_sys->next_fresh_idx;
+  for (u64 i = 0; i < max_idx; i++) {
+    if (!valk_sys->threads[i].active) continue;
+    if (!valk_gc_mark_queue_empty(&valk_sys->threads[i].mark_queue)) return false;
+  }
+  return true;
+}
+
+void valk_gc_owst_reset(void) {
+  atomic_store(&__gc_heap_offered, 0);
+  atomic_store(&__gc_heap_terminated, false);
 }
 
 void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap) {
@@ -518,7 +647,9 @@ void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap) {
 // STW Request
 // ============================================================================
 
-bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
+bool valk_gc_heap_request_stw_kind(valk_gc_heap_t *heap,
+                                   valk_gc_phase_e expected_phase,
+                                   valk_gc_cycle_kind_e kind) {
   if (!heap) return false;
 
   if (atomic_load(&valk_sys->shutting_down)) return false;
@@ -531,12 +662,16 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
     return false;
   }
 
-  valk_gc_phase_e expected = VALK_GC_PHASE_IDLE;
+  valk_gc_phase_e expected = expected_phase;
   if (!atomic_compare_exchange_strong(&valk_sys->phase, &expected,
                                        VALK_GC_PHASE_PREPARING)) {
     pthread_mutex_unlock(&valk_sys->thread_mutex);
     return false;
   }
+
+  // Only the CAS winner may change the cycle protocol: participants dispatch
+  // on this after joining the barrier.
+  atomic_store(&valk_sys->cycle_kind, kind);
 
   if (valk_sys->barrier_initialized) {
     valk_barrier_reset(&valk_sys->barrier, num_threads);
@@ -580,11 +715,22 @@ bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
   return true;
 }
 
+bool valk_gc_heap_request_stw(valk_gc_heap_t *heap) {
+  return valk_gc_heap_request_stw_kind(heap, VALK_GC_PHASE_IDLE,
+                                       VALK_GC_CYCLE_FULL);
+}
+
 // ============================================================================
 // Participate in Parallel GC (worker threads)
 // ============================================================================
 
 void valk_gc_participate_in_parallel_gc(void) {
+  valk_gc_cycle_kind_e kind = atomic_load(&valk_sys->cycle_kind);
+  if (kind != VALK_GC_CYCLE_FULL) {
+    valk_gc_participate_concurrent(kind);
+    return;
+  }
+
   valk_gc_heap_t *heap = atomic_load(&__gc_heap_current);
 
   valk_barrier_wait(&valk_sys->barrier);
@@ -593,6 +739,10 @@ void valk_gc_participate_in_parallel_gc(void) {
   if (heap) valk_gc_heap_parallel_sweep(heap);
   valk_barrier_wait(&valk_sys->barrier);
   valk_barrier_wait(&valk_sys->barrier);
+}
+
+valk_gc_heap_t *valk_gc_current_cycle_heap(void) {
+  return atomic_load(&__gc_heap_current);
 }
 // LCOV_EXCL_STOP
 
@@ -606,6 +756,8 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
   VALK_ASSERT(atomic_load(&valk_sys->threads_registered) > 0,
               "GC collect requires at least one registered thread");
 
+  u64 req_ns = uv_hrtime();
+
   // LCOV_EXCL_START - STW request contention: requires concurrent GC requests
   if (!valk_gc_heap_request_stw(heap)) {
     VALK_GC_SAFE_POINT();
@@ -615,6 +767,7 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
 
   u64 num_threads = atomic_load(&valk_sys->threads_registered);
   u64 start_ns = uv_hrtime();
+  u64 stw_ns = start_ns - req_ns;
 
   atomic_store(&heap->gc_in_progress, true);
   atomic_fetch_add(&heap->collections, 1);
@@ -626,16 +779,19 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
 
   valk_barrier_wait(&valk_sys->barrier);
 
+  u64 mark_start_ns = uv_hrtime();
   atomic_store(&valk_sys->phase, VALK_GC_PHASE_MARKING);
   valk_gc_heap_parallel_mark(heap);
 
   valk_barrier_wait(&valk_sys->barrier);
 
+  u64 sweep_start_ns = uv_hrtime();
   atomic_store(&valk_sys->phase, VALK_GC_PHASE_SWEEPING);
   valk_gc_heap_parallel_sweep(heap);
 
   valk_barrier_wait(&valk_sys->barrier);
 
+  u64 fixup_start_ns = uv_hrtime();
   {
     static _Atomic u64 __gc_lead_claimed = 0;
     u64 expected = 0;
@@ -650,6 +806,7 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
   atomic_store(&valk_sys->phase, VALK_GC_PHASE_IDLE);
 
   valk_barrier_wait(&valk_sys->barrier);
+  u64 fixup_end_ns = uv_hrtime();
 
   u64 bytes_after = valk_gc_heap_used_bytes(heap);
   u64 reclaimed = 0;
@@ -694,13 +851,22 @@ sz valk_gc_heap_collect(valk_gc_heap_t *heap) {
 
   if (pause_us > 50000) {
     u64 cycles = atomic_load(&heap->runtime_metrics.cycles_total);
-    fprintf(stderr, "[gc] slow cycle #%llu: %llu.%03llums (reclaimed %llu bytes, %llu -> %llu)\n",
+    fprintf(stderr, "[gc] slow cycle #%llu: %llu.%03llums (reclaimed %llu bytes, %llu -> %llu) "
+            "[stw=%llu.%01llums mark=%llu.%01llums sweep=%llu.%01llums fixup=%llu.%01llums]\n",
             (unsigned long long)cycles,
             (unsigned long long)(pause_us / 1000),
             (unsigned long long)(pause_us % 1000),
             (unsigned long long)reclaimed,
             (unsigned long long)bytes_before,
-            (unsigned long long)bytes_after);
+            (unsigned long long)bytes_after,
+            (unsigned long long)(stw_ns / 1000000),
+            (unsigned long long)(stw_ns / 100000 % 10),
+            (unsigned long long)((sweep_start_ns - mark_start_ns) / 1000000),
+            (unsigned long long)((sweep_start_ns - mark_start_ns) / 100000 % 10),
+            (unsigned long long)((fixup_start_ns - sweep_start_ns) / 1000000),
+            (unsigned long long)((fixup_start_ns - sweep_start_ns) / 100000 % 10),
+            (unsigned long long)((fixup_end_ns - fixup_start_ns) / 1000000),
+            (unsigned long long)((fixup_end_ns - fixup_start_ns) / 100000 % 10));
   }
   // LCOV_EXCL_STOP
 

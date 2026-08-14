@@ -776,11 +776,11 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, u64 i) {
     valk_lval_t* cell = lval->cons.head;
     if (lval->cons.tail != nullptr &&
         !valk_lval_list_is_empty(lval->cons.tail)) {
-      lval->cons.head = lval->cons.tail->cons.head;
-      lval->cons.tail = lval->cons.tail->cons.tail;
+      VALK_GC_WB_STORE(&lval->cons.head, lval->cons.tail->cons.head);
+      VALK_GC_WB_STORE(&lval->cons.tail, lval->cons.tail->cons.tail);
     } else {
-      lval->cons.head = nullptr;
-      lval->cons.tail = nullptr;
+      VALK_GC_WB_STORE(&lval->cons.head, (valk_lval_t*)nullptr);
+      VALK_GC_WB_STORE(&lval->cons.tail, (valk_lval_t*)nullptr);
     }
     return cell;
   }
@@ -793,7 +793,7 @@ valk_lval_t* valk_lval_pop(valk_lval_t* lval, u64 i) {
   valk_lval_t* curr = prev->cons.tail;
   valk_lval_t* cell = curr->cons.head;
 
-  prev->cons.tail = curr->cons.tail;
+  VALK_GC_WB_STORE(&prev->cons.tail, curr->cons.tail);
 
   return cell;
 }

@@ -252,7 +252,21 @@ typedef enum {
   VALK_GC_PHASE_STW_REQUESTED,
   VALK_GC_PHASE_MARKING,
   VALK_GC_PHASE_SWEEPING,
+  // Concurrent mark window: mutators run with the SATB write barrier active
+  // while the dedicated marker thread traces. Entered after the CONC_START
+  // pause, exited by the CONC_FINAL pause.
+  VALK_GC_PHASE_CONC_MARK,
 } valk_gc_phase_e;
+
+// What protocol the current STW rendezvous runs. FULL is the legacy
+// all-in-one mark+sweep pause. CONC_START snapshots roots and enables the
+// SATB barrier (short). CONC_FINAL drains SATB residue, sweeps, and
+// finishes the cycle (short).
+typedef enum {
+  VALK_GC_CYCLE_FULL = 0,
+  VALK_GC_CYCLE_CONC_START,
+  VALK_GC_CYCLE_CONC_FINAL,
+} valk_gc_cycle_kind_e;
 
 #include "aio_chase_lev.h"
 
@@ -307,6 +321,7 @@ typedef struct valk_system {
   valk_handle_table_t handle_table;
 
   _Atomic valk_gc_phase_e phase;
+  _Atomic valk_gc_cycle_kind_e cycle_kind;
   _Atomic u64 threads_registered;
   // Cycle epoch: incremented by the STW coordinator under thread_mutex when
   // it freezes the participant set. A thread whose ctx->stw_epoch matches
@@ -379,6 +394,70 @@ void valk_gc_heap_mark_raw(valk_gc_mark_ctx_t *ctx, void *ptr);
 void valk_gc_heap_parallel_mark(valk_gc_heap_t *heap);
 void valk_gc_heap_parallel_sweep(valk_gc_heap_t *heap);
 bool valk_gc_heap_request_stw(valk_gc_heap_t *heap);
+bool valk_gc_heap_request_stw_kind(valk_gc_heap_t *heap,
+                                   valk_gc_phase_e expected,
+                                   valk_gc_cycle_kind_e kind);
+valk_gc_heap_t *valk_gc_current_cycle_heap(void);
+void valk_gc_owst_reset(void);
+
+// ============================================================================
+// Concurrent Marking (SATB)
+// ============================================================================
+
+// Concurrent-mark building blocks exported by gc_mark.c for the marker
+// thread and the CONC_START/CONC_FINAL pause protocols.
+void valk_gc_conc_scan_local_roots(valk_gc_heap_t *heap);
+void valk_gc_conc_scan_global_roots(valk_gc_heap_t *heap);
+u64 valk_gc_conc_drain(valk_gc_heap_t *heap);
+void valk_gc_conc_drain_owst(valk_gc_heap_t *heap);
+void valk_gc_mark_value_local(valk_gc_heap_t *heap, valk_lval_t *v);
+void valk_gc_mark_env_local(valk_gc_heap_t *heap, valk_lenv_t *env);
+bool valk_gc_all_mark_queues_empty(void);
+
+// Marker thread / cycle API (gc_concurrent.c).
+bool valk_gc_request_concurrent_collect(valk_gc_heap_t *heap);
+void valk_gc_concurrent_shutdown(void);
+void valk_gc_concurrent_reset_after_fork(void);
+void valk_gc_participate_concurrent(valk_gc_cycle_kind_e kind);
+void valk_gc_satb_flush_local(void);
+u64 valk_gc_satb_drain_global(valk_gc_heap_t *heap);
+bool valk_gc_satb_global_empty(void);
+
+// TLAB blackening for allocate-black during concurrent mark (gc_heap.c).
+void valk_gc_tlab_blacken_remainder(void);
+
+// SATB write barrier: log the OLD value of any pointer field in a published
+// heap object before it is overwritten while a concurrent mark is running.
+extern _Atomic bool valk_gc_satb_active;
+void valk_gc_satb_log_lval(valk_lval_t *old);
+void valk_gc_satb_log_env(valk_lenv_t *old);
+
+static inline void valk_gc_wb_lval(valk_lval_t *old) {
+  if (__builtin_expect(atomic_load_explicit(&valk_gc_satb_active,
+                                            memory_order_acquire), 0) &&
+      old != nullptr) {
+    valk_gc_satb_log_lval(old);
+  }
+}
+
+static inline void valk_gc_wb_env(valk_lenv_t *old) {
+  if (__builtin_expect(atomic_load_explicit(&valk_gc_satb_active,
+                                            memory_order_acquire), 0) &&
+      old != nullptr) {
+    valk_gc_satb_log_env(old);
+  }
+}
+
+// Overwrite a pointer field in a published heap object: atomically exchange
+// (so the concurrent marker never sees a torn store) and SATB-log the old
+// value. Use for every MUTATION of an lval-pointer field outside the
+// collector itself.
+#define VALK_GC_WB_STORE(field_ptr, newval)                                  \
+  do {                                                                       \
+    __typeof__(newval) __wb_old =                                            \
+        __atomic_exchange_n((field_ptr), (newval), __ATOMIC_ACQ_REL);        \
+    valk_gc_wb_lval((valk_lval_t *)__wb_old);                                \
+  } while (0)
 
 // ============================================================================
 // Root Enumeration

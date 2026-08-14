@@ -462,9 +462,10 @@ static valk_lval_t *eval_loaded_ast(valk_lenv_t *target_env, valk_lval_t *ast,
       if (valk_macro_is_def(cur->cons.head)) {
         valk_lval_t *r = valk_lval_eval(target_env, cur->cons.head);
         if (LVAL_TYPE(r) == LVAL_ERR) { aborted = r; break; }
-        cur->cons.head = valk_lval_nil();
+        VALK_GC_WB_STORE(&cur->cons.head, valk_lval_nil());
       } else {
-        cur->cons.head = valk_macro_expand_one(target_env, cur->cons.head);
+        VALK_GC_WB_STORE(&cur->cons.head,
+                         valk_macro_expand_one(target_env, cur->cons.head));
       }
       if (pending_module_prefix) {
         if (declared) {
@@ -679,9 +680,10 @@ static valk_lval_t *compile_process_ast(valk_lval_t *ast, const char *prefix) {
       if (valk_macro_is_def(cur->cons.head)) {
         valk_lval_t *r = valk_lval_eval(menv, cur->cons.head);
         if (LVAL_TYPE(r) == LVAL_ERR) valk_lval_println(r);
-        cur->cons.head = valk_lval_nil();
+        VALK_GC_WB_STORE(&cur->cons.head, valk_lval_nil());
       } else {
-        cur->cons.head = valk_macro_expand_one(menv, cur->cons.head);
+        VALK_GC_WB_STORE(&cur->cons.head,
+                         valk_macro_expand_one(menv, cur->cons.head));
       }
       cur = cur->cons.tail;
     }

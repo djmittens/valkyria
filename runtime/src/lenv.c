@@ -211,7 +211,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
 
   for (u64 i = 0; i < env->symbols.count; i++) {
     if (env->symbols.items[i] == ikey) {
-      env->vals.items[i] = safe_val;
+      VALK_GC_WB_STORE(&env->vals.items[i], safe_val);
       return;
     }
   }
@@ -244,8 +244,10 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
       if (env->symbols.count > 0) {
         memcpy(new_items, env->symbols.items, sizeof(char*) * env->symbols.count);
       }
+      // GC-heap frees are no-ops; the old array stays valid for any
+      // concurrent marker still walking it and is reclaimed by sweep.
       if (env->symbols.items) valk_mem_free(env->symbols.items);
-      env->symbols.items = new_items;
+      __atomic_store_n(&env->symbols.items, new_items, __ATOMIC_RELEASE);
       env->symbols.capacity = new_capacity;
     }
     if (env->vals.count >= env->vals.capacity) {
@@ -263,12 +265,17 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
                sizeof(valk_lval_t*) * env->vals.count);
       }
       if (env->vals.items) valk_mem_free(env->vals.items);
-      env->vals.items = new_items;
+      __atomic_store_n(&env->vals.items, new_items, __ATOMIC_RELEASE);
       env->vals.capacity = new_capacity;
     }
 
-    env->symbols.items[env->symbols.count++] = new_symbol;
-    env->vals.items[env->vals.count++] = safe_val;
+    // Publish for the concurrent marker: slot store first, then the count
+    // bump with release, so an observed count implies an initialized slot
+    // (the marker loads count before the array pointer).
+    env->symbols.items[env->symbols.count] = new_symbol;
+    env->vals.items[env->vals.count] = safe_val;
+    __atomic_store_n(&env->symbols.count, env->symbols.count + 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&env->vals.count, env->vals.count + 1, __ATOMIC_RELEASE);
   }
 }
 
