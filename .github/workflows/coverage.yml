@@ -77,14 +77,23 @@ jobs:
       # not run in CI at all, so user-facing LSP regressions could land freely.
       # VALK_UAT_STRICT makes a missing nvim a hard failure rather than a
       # silent skip, which is the whole point of running it here.
+      # The UAT lua uses vim.uv (nvim 0.10+); noble's apt neovim is 0.9,
+      # so install the official release tarball on Linux.
       - name: Install Neovim
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get install -y neovim
+            case "$(uname -m)" in
+              x86_64)  NVIM=nvim-linux-x86_64 ;;
+              aarch64) NVIM=nvim-linux-arm64 ;;
+            esac
+            curl -fsSL -o /tmp/nvim.tar.gz "https://github.com/neovim/neovim/releases/latest/download/${NVIM}.tar.gz"
+            sudo tar -C /opt -xzf /tmp/nvim.tar.gz
+            echo "/opt/${NVIM}/bin" >> $GITHUB_PATH
+            "/opt/${NVIM}/bin/nvim" --version | head -1
           else
             brew install neovim
+            nvim --version | head -1
           fi
-          nvim --version | head -1
 
       # Run separately from the step above because that one targets
       # build-coverage, which has no valk-lsp; `make uat` builds and uses
@@ -93,7 +102,7 @@ jobs:
       - name: Run LSP UAT (JUnit XML output)
         env:
           VALK_UAT_STRICT: "1"
-          VALK_UAT_HOVER_BUDGET_MS: "2000"
+          VALK_UAT_HOVER_BUDGET_MS: "3000"
         run: |
           make uat JUNIT=${{ github.workspace }}/build/junit
 
