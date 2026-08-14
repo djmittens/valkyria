@@ -377,10 +377,13 @@ typedef struct {
 
 extern __thread valk_thread_context_t valk_thread_ctx;
 
-__attribute__((malloc)) void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, sz bytes);
+// NOT __attribute__((malloc)): arena/slab/GC allocations ARE reachable through
+// other pointers (arena heap walks, slab items). The attribute lets the
+// optimizer delete stores through the returned pointer as dead at -O2.
+void *valk_mem_allocator_alloc(valk_mem_allocator_t *self, sz bytes);
 void *valk_mem_allocator_realloc(valk_mem_allocator_t *self, void *ptr,
                                  sz new_size);
-__attribute__((malloc)) void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
+void *valk_mem_allocator_calloc(valk_mem_allocator_t *self, sz num,
                                 sz size);
 void valk_mem_allocator_free(valk_mem_allocator_t *self, void *ptr);
 

@@ -41,10 +41,11 @@ define ensure_build_root
 	fi
 endef
 
-# Configure a build directory: $(call cmake_configure,build-dir,asan-flag,tsan-flag)
+# Configure a build directory: $(call cmake_configure,build-dir,asan-flag,tsan-flag,extra-flags)
+# Later -D flags win in CMake, so $(4) can override CMAKE_BUILD_TYPE.
 define cmake_configure
 	$(call ensure_build_root,$(1))
-	$(CMAKE_BASE) -DASAN=$(2) -DTSAN=$(3) -S runtime -B $(1)
+	$(CMAKE_BASE) -DASAN=$(2) -DTSAN=$(3) $(4) -S runtime -B $(1)
 	$(call gen_ssl_certs,$(1))
 	touch $(1)/.cmake
 endef
@@ -93,6 +94,22 @@ build-tsan: build-tsan/.cmake
 .PHONY: build-asan
 build-asan: build-asan/.cmake
 	$(call do_build,build-asan)
+
+# Optimized build (-O2 by default, override with OPT=3). Uses RelWithDebInfo
+# but strips NDEBUG so assert()/VALK_ASSERT stay active. The -O0 debug build
+# hides memory-ordering and optimizer-exposed bugs (especially on arm64);
+# this build exists to catch them.
+OPT ?= 2
+
+.ONESHELL:
+.PHONY: cmake-opt
+cmake-opt build-opt/.cmake: runtime/CMakeLists.txt runtime/homebrew.cmake Makefile
+	$(call cmake_configure,build-opt,0,0,-DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O$(OPT) -g")
+
+.ONESHELL:
+.PHONY: build-opt
+build-opt: build-opt/.cmake
+	$(call do_build,build-opt)
 
 # Coverage build
 .ONESHELL:
@@ -284,29 +301,40 @@ test-valk: build
 
 # C tests with ASAN
 .PHONY: test-c-asan
-test-c-asan: build-asan
+test-c-asan: build build-asan
 	$(TEST_RUN) --build-dir build-asan --only c --no-stress \
 		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt \
 		$(TEST_RUN_ARGS)
 
 # Valk tests with ASAN
 .PHONY: test-valk-asan
-test-valk-asan: build-asan
+test-valk-asan: build build-asan
 	$(TEST_RUN) --build-dir build-asan --only valk --no-stress \
 		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt \
 		$(TEST_RUN_ARGS)
 
 # C tests with TSAN
 .PHONY: test-c-tsan
-test-c-tsan: build-tsan
+test-c-tsan: build build-tsan
 	$(TEST_RUN) --build-dir build-tsan --only c --no-stress \
 		--sanitizer tsan $(TEST_RUN_ARGS)
 
 # Valk tests with TSAN
 .PHONY: test-valk-tsan
-test-valk-tsan: build-tsan
+test-valk-tsan: build build-tsan
 	$(TEST_RUN) --build-dir build-tsan --only valk --no-stress \
 		--sanitizer tsan $(TEST_RUN_ARGS)
+
+# C tests against the optimized build (stress included - optimizer and weak
+# memory ordering bugs mostly surface under load)
+.PHONY: test-c-opt
+test-c-opt: build build-opt
+	$(TEST_RUN) --build-dir build-opt --only c $(TEST_RUN_ARGS)
+
+# Valk tests against the optimized build
+.PHONY: test-valk-opt
+test-valk-opt: build build-opt
+	$(TEST_RUN) --build-dir build-opt --only valk $(TEST_RUN_ARGS)
 
 # Example demos as tests
 .PHONY: test-examples
@@ -315,7 +343,7 @@ test-examples: build
 
 # Examples with ASAN
 .PHONY: test-examples-asan
-test-examples-asan: build-asan
+test-examples-asan: build build-asan
 	$(TEST_RUN) --build-dir build-asan --examples --filter "example/" \
 		--sanitizer asan --lsan-suppressions $(CURDIR)/lsan_suppressions.txt
 
@@ -418,35 +446,45 @@ test-stress: build
 	$(TEST_RUN) --build-dir build --stress-only $(TEST_RUN_BASE)
 
 # Stress tests with TSAN - redirects sanitizer output to file per AGENTS.md
+# Fails if any race is reported: a summary that cannot fail is not a gate.
 .ONESHELL:
+test-stress-tsan: SHELL := /bin/bash
 .PHONY: test-stress-tsan
-test-stress-tsan: build-tsan
-	set -e
+test-stress-tsan: build build-tsan
+	set -e -o pipefail
+	rm -f build/tsan-stress.log*
 	export TSAN_OPTIONS="log_path=build/tsan-stress.log:halt_on_error=0:second_deadlock_stack=1"
 	export VALK_TEST_NO_FORK=1
 	$(TEST_RUN) --build-dir build-tsan --stress-only $(TEST_RUN_BASE) 2>&1 | tee build/tsan-stress-stdout.log
-	@echo ""
-	@echo "=== TSAN Summary ==="
-	@echo "Races found: $$(grep -c 'WARNING: ThreadSanitizer' build/tsan-stress.log* 2>/dev/null || echo 0)"
-	@if [ "$$(grep -c 'WARNING: ThreadSanitizer' build/tsan-stress.log* 2>/dev/null || echo 0)" -gt 0 ]; then \
+	races=$$(cat build/tsan-stress.log* 2>/dev/null | grep -c 'WARNING: ThreadSanitizer' || true)
+	echo ""
+	echo "=== TSAN Summary ==="
+	echo "Races found: $$races"
+	if [ "$$races" -gt 0 ]; then \
 		echo "Race locations:"; \
-		grep -A2 "WARNING: ThreadSanitizer" build/tsan-stress.log* 2>/dev/null | grep "#0" | sort -u | head -5; \
+		grep -A2 "WARNING: ThreadSanitizer" build/tsan-stress.log* 2>/dev/null | grep "#0" | sort -u | head -10; \
+		exit 1; \
 	fi
 
 # Stress tests with ASAN - redirects sanitizer output to file per AGENTS.md
+# Fails if any error is reported: a summary that cannot fail is not a gate.
 .ONESHELL:
+test-stress-asan: SHELL := /bin/bash
 .PHONY: test-stress-asan
-test-stress-asan: build-asan
-	set -e
+test-stress-asan: build build-asan
+	set -e -o pipefail
+	rm -f build/asan-stress.log*
 	export ASAN_OPTIONS="log_path=build/asan-stress.log:detect_leaks=1:halt_on_error=0:abort_on_error=0"
 	export LSAN_OPTIONS="verbosity=0:log_threads=1:suppressions=$(CURDIR)/lsan_suppressions.txt"
 	$(TEST_RUN) --build-dir build-asan --stress-only $(TEST_RUN_BASE) 2>&1 | tee build/asan-stress-stdout.log
-	@echo ""
-	@echo "=== ASAN Summary ==="
-	@echo "Errors found: $$(grep -c 'ERROR: AddressSanitizer' build/asan-stress.log* 2>/dev/null || echo 0)"
-	@if [ "$$(grep -c 'ERROR: AddressSanitizer' build/asan-stress.log* 2>/dev/null || echo 0)" -gt 0 ]; then \
+	errors=$$(cat build/asan-stress.log* 2>/dev/null | grep -c 'ERROR: AddressSanitizer' || true)
+	echo ""
+	echo "=== ASAN Summary ==="
+	echo "Errors found: $$errors"
+	if [ "$$errors" -gt 0 ]; then \
 		echo "Error types:"; \
-		grep "ERROR: AddressSanitizer" build/asan-stress.log* 2>/dev/null | sort -u | head -5; \
+		grep "ERROR: AddressSanitizer" build/asan-stress.log* 2>/dev/null | sort -u | head -10; \
+		exit 1; \
 	fi
 
 # ============================================================================
