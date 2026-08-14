@@ -36,10 +36,11 @@ static bool __verify_enabled(void) {
   return e == 1;
 }
 
-// The root-marking check documents a KNOWN unfixed hole in the concurrent
-// marker (whole pages of live data found unmarked before sweep - see the
-// LSP stall investigation). It stays behind its own gate until that hole is
-// closed, so the default test run only enforces the accounting invariants.
+// Pre-sweep root-marking check for concurrent cycles. Must run while every
+// participant is parked at the pre-sweep barrier: sweep consumes and clears
+// the mark bits this reads, so verifying concurrently with sweep reports
+// phantom whole-pages-unmarked failures (the original "page-level hole" was
+// exactly this verifier/sweep race, not a collector bug).
 static bool __verify_roots_enabled(void) {
   static _Atomic int enabled = -1;
   int e = atomic_load_explicit(&enabled, memory_order_relaxed);
@@ -191,34 +192,34 @@ static void __dump_env_chain(valk_gc_heap_t *heap, valk_lenv_t *env,
           (unsigned long long)thread_idx, root_kind);
   u32 hops = 0;
   for (; env != nullptr && hops < 40; env = env->parent, hops++) {
-    valk_gc_ptr_location_t loc;
-    bool in_heap = valk_gc_ptr_to_location(heap, env, &loc);
+    valk_gc_ptr_location_t eloc, aloc;
+    bool in_heap = valk_gc_ptr_to_location(heap, env, &eloc);
+    int env_mark = in_heap ? valk_gc_page_is_marked(eloc.page, eloc.slot) : -1;
+    bool arr_in_heap =
+        env->symbols.items &&
+        valk_gc_ptr_to_location(heap, env->symbols.items, &aloc);
+    int arr_mark =
+        arr_in_heap ? valk_gc_page_is_marked(aloc.page, aloc.slot) : -1;
     fprintf(stderr,
             "  hop %u: env=%p in_heap=%d mark=%d nsyms=%llu cmap=%d "
             "sym_arr=%p sym_arr_mark=%d\n",
-            hops, (void *)env, in_heap,
-            in_heap ? valk_gc_page_is_marked(loc.page, loc.slot) : -1,
+            hops, (void *)env, in_heap, env_mark,
             (unsigned long long)env->symbols.count, env->cmap != nullptr,
-            (void *)env->symbols.items,
-            (env->symbols.items &&
-             valk_gc_ptr_to_location(heap, env->symbols.items, &loc))
-                ? valk_gc_page_is_marked(loc.page, loc.slot)
-                : -1);
-    if (env->symbols.items &&
-        valk_gc_ptr_to_location(heap, env->symbols.items, &loc)) {
-      u8 *mb = valk_gc_page_mark_bitmap(loc.page);
-      u8 *ab = valk_gc_page_alloc_bitmap(loc.page);
+            (void *)env->symbols.items, arr_mark);
+    if (arr_in_heap) {
+      u8 *mb = valk_gc_page_mark_bitmap(aloc.page);
+      u8 *ab = valk_gc_page_alloc_bitmap(aloc.page);
       u32 marked = 0, allocd = 0;
-      for (u16 b = 0; b < loc.page->bitmap_bytes; b++) {
+      for (u16 b = 0; b < aloc.page->bitmap_bytes; b++) {
         marked += (u32)__builtin_popcount((unsigned)mb[b]);
         allocd += (u32)__builtin_popcount((unsigned)ab[b]);
       }
       fprintf(stderr,
               "    arr page=%p class=%u slot=%u alloc_bit=%d page_marked=%u "
               "page_alloc=%u slots=%u\n",
-              (void *)loc.page, loc.size_class, loc.slot,
-              valk_gc_page_is_allocated(loc.page, loc.slot), marked, allocd,
-              loc.page->slots_per_page);
+              (void *)aloc.page, aloc.size_class, aloc.slot,
+              valk_gc_page_is_allocated(aloc.page, aloc.slot), marked, allocd,
+              aloc.page->slots_per_page);
     }
     if (env->cmap) break;
   }
@@ -268,15 +269,15 @@ static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
           u32 marked = 0;
           for (u16 b = 0; b < vloc.page->bitmap_bytes; b++)
             marked += (u32)__builtin_popcount((unsigned)mb[b]);
+          valk_gc_ptr_location_t eloc;
+          int env_mark = valk_gc_ptr_to_location(heap, env, &eloc)
+                             ? valk_gc_page_is_marked(eloc.page, eloc.slot)
+                             : -1;
           fprintf(stderr,
-                  "[GC-VERIFY] white value %p type=%d env=%p marked=%d "
+                  "[GC-VERIFY] white value %p type=%d env=%p env_mark=%d "
                   "val_page=%p class=%u slot=%u page_marked=%u\n",
-                  (void *)val, (int)(val->flags & 0xFF), (void *)env,
-                  valk_gc_ptr_to_location(heap, env, &vloc)
-                      ? valk_gc_page_is_marked(vloc.page, vloc.slot)
-                      : -1,
+                  (void *)val, (int)(val->flags & 0xFF), (void *)env, env_mark,
                   (void *)vloc.page, vloc.size_class, vloc.slot, marked);
-          valk_gc_ptr_to_location(heap, val, &vloc);
           __dump_env_chain(heap, root_env, thread_idx, root_kind);
           __dump_refills_for_page(vloc.page);
         }

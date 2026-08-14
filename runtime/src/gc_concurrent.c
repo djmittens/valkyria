@@ -224,6 +224,10 @@ void valk_gc_participate_concurrent(valk_gc_cycle_kind_e kind) {
   valk_barrier_wait(&valk_sys->barrier);
   if (heap) valk_gc_conc_drain_owst(heap);
   valk_barrier_wait(&valk_sys->barrier);
+  // Marking is complete but sweep must not start yet: the coordinator runs
+  // the pre-sweep root verifier in this window, and sweeping would consume
+  // the very mark bits it checks.
+  valk_barrier_wait(&valk_sys->barrier);
   if (heap) valk_gc_heap_parallel_sweep(heap);
   valk_barrier_wait(&valk_sys->barrier);
   valk_barrier_wait(&valk_sys->barrier);
@@ -309,7 +313,12 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
   valk_gc_conc_drain_owst(heap);
   valk_barrier_wait(&valk_sys->barrier);
 
+  // Participants are parked at the next barrier, NOT sweeping yet: the
+  // verifier must read mark bits before any sweeper consumes and clears
+  // them. (Verifying after that barrier raced the participants' sweep and
+  // produced phantom whole-pages-unmarked reports.)
   valk_gc_verify_conc_roots_marked(heap);
+  valk_barrier_wait(&valk_sys->barrier);
 
   // Tracing is complete; stores no longer need logging. All mutators are
   // stopped, so nothing races this flip before sweep begins.

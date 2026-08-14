@@ -483,6 +483,9 @@
 ; Post-sweep GC accounting verification (gc_verify.c): catches sweep/TLAB
 ; bitmap drift at the collection where it happens instead of tests later.
 (env/set "VALK_GC_VERIFY" "1")
+; Pre-sweep root-reachability verification for concurrent cycles: every env
+; chain reachable from a participant's roots must be marked before sweep.
+(env/set "VALK_GC_VERIFY_ROOTS" "1")
 
 (if (== sanitizer "asan")
   {do
