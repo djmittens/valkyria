@@ -671,7 +671,8 @@
       ; The shipped Valk code spans stdlib/ plus the tool projects that used
       ; to live under stdlib/ (symdb, the test framework, quality). Their
       ; test dirs are excluded elsewhere; scripts/ and lsp/ remain ungated.
-      (= {gated} (or (or (str/starts-with? rel "stdlib/")
+      (= {gated} (or (or (and (str/starts-with? rel "stdlib/")
+                              (not (str/starts-with? rel "stdlib/test/")))
                          (str/starts-with? rel "symdb/"))
                      (or (or (== rel "testing/test.valk")
                              (== rel "testing/property.valk"))
