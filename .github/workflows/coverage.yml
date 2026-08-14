@@ -47,9 +47,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev libgcc-14-dev llvm
+          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev libgcc-14-dev llvm-18 llvm-18-dev clang-18
           # libbacktrace.a lives under /usr/lib/gcc/<triple>/14/ - symlink so CMake find_library can find it
           sudo ln -sf /usr/lib/gcc/$(gcc -dumpmachine)/14/libbacktrace.a /usr/lib/libbacktrace.a
+          # Make clang-18 the default clang so CMake picks it up
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
       
       - name: System Info
         run: |
@@ -87,6 +90,7 @@ jobs:
       - name: Run LSP UAT (JUnit XML output)
         env:
           VALK_UAT_STRICT: "1"
+          VALK_UAT_HOVER_BUDGET_MS: "2000"
         run: |
           make uat JUNIT=${{ github.workspace }}/build/junit
 

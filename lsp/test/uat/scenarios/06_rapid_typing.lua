@@ -139,7 +139,9 @@ return {
     local p99 = lib.percentile(latencies, 99)
     io.stderr:write(("[uat] hover-during-typing: p50=%dms p95=%dms p99=%dms n=%d\n")
       :format(p50, p95, p99, #latencies))
-    lib.assert_lt(p99, 1000,
-      ("hover-during-typing p99 %dms exceeds 1000ms budget"):format(p99))
+    local budget = vim.env.VALK_UAT_HOVER_BUDGET_MS
+      and tonumber(vim.env.VALK_UAT_HOVER_BUDGET_MS) or 1000
+    lib.assert_lt(p99, budget,
+      ("hover-during-typing p99 %dms exceeds %dms budget"):format(p99, budget))
   end,
 }
