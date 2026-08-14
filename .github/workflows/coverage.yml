@@ -56,6 +56,8 @@ jobs:
           echo "LLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm" >> $GITHUB_ENV
           echo "CC=clang-22" >> $GITHUB_ENV
           echo "CXX=clang++-22" >> $GITHUB_ENV
+          # Unversioned llvm tools (llvm-cov etc.) for coverage collection
+          echo "/usr/lib/llvm-22/bin" >> $GITHUB_PATH
       
       - name: System Info
         run: |
