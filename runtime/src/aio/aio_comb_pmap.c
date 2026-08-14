@@ -6,7 +6,11 @@ typedef struct {
   _Atomic(bool) *result_ready;
   u64 total;
   _Atomic(u64) completed;
-  _Atomic(u64) finished;
+  // One ref per worker plus one for the handle-cleanup callback. The last
+  // release frees. A "last finisher frees" counter is not enough: another
+  // worker (or the cleanup racing a cancel) could still be between its own
+  // counter bump and its last read of ctx when the freer runs.
+  _Atomic(u64) refs;
   valk_handle_t fn_handle;
   _Atomic(bool) fn_released;
 } valk_pmap_ctx_t;
@@ -35,14 +39,19 @@ static void valk_pmap_ctx_free(valk_pmap_ctx_t *ctx) {
 }
 // LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START - last-release branch depends on worker/cleanup ordering
+static void valk_pmap_ctx_release(valk_pmap_ctx_t *ctx) {
+  if (atomic_fetch_sub_explicit(&ctx->refs, 1, memory_order_acq_rel) == 1) {
+    valk_pmap_ctx_free(ctx);
+  }
+}
+// LCOV_EXCL_BR_STOP
+
 // LCOV_EXCL_START - cleanup callback: runs non-deterministically on handle destruction
 static void valk_pmap_ctx_cleanup(void *ctx) {
   valk_pmap_ctx_t *pmap_ctx = (valk_pmap_ctx_t *)ctx;
   if (!pmap_ctx) return;
-  u64 done = atomic_load_explicit(&pmap_ctx->finished, memory_order_acquire);
-  if (done >= pmap_ctx->total) {
-    valk_pmap_ctx_free(pmap_ctx);
-  }
+  valk_pmap_ctx_release(pmap_ctx);
 }
 // LCOV_EXCL_STOP
 
@@ -56,8 +65,7 @@ static void __pmap_worker(void *arg) {
   if (valk_async_handle_is_terminal(valk_async_handle_get_status(ctx->pmap_handle))) {
     valk_handle_release(&valk_sys->handle_table, task->arg_handle);
     free(task);
-    u64 fin = atomic_fetch_add(&ctx->finished, 1) + 1;
-    if (fin >= ctx->total) valk_pmap_ctx_free(ctx);
+    valk_pmap_ctx_release(ctx);
     return;
   }
   // LCOV_EXCL_STOP
@@ -90,8 +98,7 @@ static void __pmap_worker(void *arg) {
 
     valk_async_handle_fail(ctx->pmap_handle, heap_err);
     free(task);
-    u64 fin = atomic_fetch_add(&ctx->finished, 1) + 1;
-    if (fin >= ctx->total) valk_pmap_ctx_free(ctx);
+    valk_pmap_ctx_release(ctx);
     return;
   }
   // LCOV_EXCL_BR_STOP
@@ -120,8 +127,7 @@ static void __pmap_worker(void *arg) {
   }
 
   free(task);
-  u64 fin = atomic_fetch_add(&ctx->finished, 1) + 1;
-  if (fin >= ctx->total) valk_pmap_ctx_free(ctx); // LCOV_EXCL_BR_LINE - last-worker cleanup
+  valk_pmap_ctx_release(ctx);
 } // LCOV_EXCL_BR_LINE
 
 static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
@@ -175,7 +181,7 @@ static valk_lval_t *valk_builtin_aio_pmap(valk_lenv_t *e, valk_lval_t *a) {
   }
   ctx->total = count;
   atomic_store(&ctx->completed, 0);
-  atomic_store(&ctx->finished, 0);
+  atomic_store(&ctx->refs, count + 1);
   atomic_store(&ctx->fn_released, false);
 
   valk_lval_t *heap_fn = valk_evacuate_to_heap(fn_arg);
