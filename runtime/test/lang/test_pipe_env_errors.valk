@@ -107,7 +107,7 @@
   })
   (test/case "pipe-stdin-open-non-pipe-stdin"
     {do
-    (= {self} (realpath "/proc/self/exe"))
+    (= {self} (realpath (fst sys/argv)))
     (= {script} "/tmp/valk_test_pipe_stdin_err.valk")
     (write-file script "(= {sys} (aio/await (aio/start))) (= {r} (pipe/stdin-open sys)) (if (error? r) {print \"STDIN-ERR\"} {print \"STDIN-OK\"}) (aio/stop sys)")
     (= {r} (exec "sh" "-c" (str self " " script " < /dev/null")))

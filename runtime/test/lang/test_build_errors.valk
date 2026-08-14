@@ -90,7 +90,9 @@
 
   (test/case "CC pointing at a failing compiler reports exit status"
     {do
-    (= {r} (run-sh (build-cmd "CC=/bin/false"
+    (write-script "/tmp/valk_build_err_failcc.sh" "#!/bin/sh\nexit 1\n")
+    (run-sh "chmod +x /tmp/valk_build_err_failcc.sh")
+    (= {r} (run-sh (build-cmd "CC=/tmp/valk_build_err_failcc.sh"
                               ok-script "/tmp/valk_build_err_cc.bin")))
     (and (== (plist/get r :exit-code) 1)
          (str/contains? (plist/get r :stderr) "exited with status"))

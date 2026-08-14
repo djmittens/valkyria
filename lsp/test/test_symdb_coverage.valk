@@ -13,7 +13,7 @@
 
   (test/case "init-version-mismatch-and-match"
     {do
-      (= {path} "/tmp/opencode/symdb_cov_test.db")
+      (= {path} "/tmp/valk_symdb_cov_test.db")
       (= {db0} (sqlite/open path))
       (sqlite/exec db0 "PRAGMA user_version=1")
       (sqlite/close db0)

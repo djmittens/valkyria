@@ -172,7 +172,7 @@
       (mkdir-p "/tmp/valk_cov_vp/sub")
       (write-file "/tmp/valk_cov_vp/sub/vpmod-cov.valk" "(print \"VP-OK\") 5")
       (write-file "/tmp/valk_cov_vp/main.valk" "(load \"vpmod-cov.valk\")")
-      (= {self} (realpath "/proc/self/exe"))
+      (= {self} (realpath (fst sys/argv)))
       (= {r} (exec "sh" "-c"
         (str "VALK_PATH=/tmp/valk_cov_vp/missing:/tmp/valk_cov_vp/sub " self " /tmp/valk_cov_vp/main.valk")))
       (file/delete "/tmp/valk_cov_vp/sub/vpmod-cov.valk")

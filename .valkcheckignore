@@ -9,6 +9,8 @@ lsp/test/uat/fixtures/diagnostics_bad.valk
 runtime/test/aio/test_aio_retry.valk
 runtime/test/aio/test_aio_builtins_coverage.valk
 runtime/test/lang/test_env_coverage.valk
+runtime/test/lang/test_load_coverage.valk
+runtime/test/lang/test_type_coverage.valk
 runtime/test/aio/test_aio_combinator_coverage.valk
 runtime/test/metrics/test_metrics_builtins_comprehensive.valk
 runtime/test/parser/test_parser_builtin_coverage.valk
