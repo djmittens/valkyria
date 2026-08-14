@@ -50,9 +50,10 @@ jobs:
           sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev libgcc-14-dev llvm-18 llvm-18-dev clang-18
           # libbacktrace.a lives under /usr/lib/gcc/<triple>/14/ - symlink so CMake find_library can find it
           sudo ln -sf /usr/lib/gcc/$(gcc -dumpmachine)/14/libbacktrace.a /usr/lib/libbacktrace.a
-          # Make clang-18 the default clang so CMake picks it up
-          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
-          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
+          # Point CMake at LLVM 18 explicitly (llvm-17 is pre-installed and wins find_package otherwise)
+          echo "LLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm" >> $GITHUB_ENV
+          echo "CC=clang-18" >> $GITHUB_ENV
+          echo "CXX=clang++-18" >> $GITHUB_ENV
       
       - name: System Info
         run: |
