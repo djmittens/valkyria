@@ -280,7 +280,7 @@ void valk_dict_lval_set(valk_lval_t *d, const char *key, valk_lval_t *value) {
   pthread_mutex_t *lock = dict_lock(d);
   valk_dict_t *dp = d->dict.data;
   dict_set(&dp, key, value);
-  d->dict.data = dp;
+  __atomic_store_n(&d->dict.data, dp, __ATOMIC_RELEASE);
   pthread_mutex_unlock(lock);
   if (d->flags & LVAL_FLAG_IMMORTAL) valk_gc_remember_immortal(d);
 }
@@ -327,7 +327,7 @@ static valk_lval_t *valk_builtin_dict_put(valk_lenv_t *e, valk_lval_t *a) {
   pthread_mutex_t *lock = dict_lock(d);
   valk_dict_t *dp = d->dict.data;
   dict_put(&dp, k);
-  d->dict.data = dp;
+  __atomic_store_n(&d->dict.data, dp, __ATOMIC_RELEASE);
   pthread_mutex_unlock(lock);
   // Write barrier: an image-baked (immortal) dict mutated at runtime now
   // references GC-heap data (grown block, interned strings). The marker
@@ -350,7 +350,7 @@ static valk_lval_t *valk_builtin_dict_set(valk_lenv_t *e, valk_lval_t *a) {
   pthread_mutex_t *lock = dict_lock(d);
   valk_dict_t *dp = d->dict.data;
   dict_set(&dp, k, val);
-  d->dict.data = dp;
+  __atomic_store_n(&d->dict.data, dp, __ATOMIC_RELEASE);
   pthread_mutex_unlock(lock);
   if (d->flags & LVAL_FLAG_IMMORTAL) valk_gc_remember_immortal(d);
   return d;

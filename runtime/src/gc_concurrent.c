@@ -293,7 +293,7 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
 
   u64 bytes_after = valk_gc_heap_used_bytes(heap);
   u64 reclaimed = bytes_before > bytes_after ? bytes_before - bytes_after : 0;
-  heap->live_after_gc = bytes_after;
+  __atomic_store_n(&heap->live_after_gc, bytes_after, __ATOMIC_RELAXED);
   atomic_fetch_add(&heap->bytes_reclaimed_total, reclaimed);
   atomic_store(&heap->gc_in_progress, false);
 

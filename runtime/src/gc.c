@@ -615,7 +615,7 @@ bool valk_gc_should_collect(valk_gc_heap_t* heap) {
   // Pause time and RSS stay proportional to live data regardless of the
   // configured hard limit (see VALK_GC_GROWTH_FACTOR in gc_heap.h).
   sz used = valk_gc_heap_used_bytes(heap);
-  sz trigger = heap->live_after_gc * VALK_GC_GROWTH_FACTOR;
+  sz trigger = __atomic_load_n(&heap->live_after_gc, __ATOMIC_RELAXED) * VALK_GC_GROWTH_FACTOR;
   if (trigger < VALK_GC_MIN_COLLECT_BYTES) trigger = VALK_GC_MIN_COLLECT_BYTES;
   if (used >= trigger) return true;
 
