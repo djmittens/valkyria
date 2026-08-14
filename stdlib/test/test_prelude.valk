@@ -1,5 +1,5 @@
 ; Standard Library Tests - migrated from test_std.c
-; Run with: ./build/valk test/test_prelude.valk
+; Run with: ./build/valk stdlib/test/test_prelude.valk
 
 ; Load prelude first (has all the standard functions)
 

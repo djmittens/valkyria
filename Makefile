@@ -176,7 +176,7 @@ endif
 asan: build-asan
 	export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1
 	export LSAN_OPTIONS=verbosity=1:log_threads=1
-	build-asan/valk stdlib/prelude.valk runtime/test/lang/test_prelude.valk && echo "exit code = $$?"
+	build-asan/valk stdlib/prelude.valk stdlib/test/test_prelude.valk && echo "exit code = $$?"
 
 # ============================================================================
 # Unified Test Runner (testing/run-tests.valk)

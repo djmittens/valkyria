@@ -21,5 +21,8 @@ The Valk standard library. Shipped with the runtime; `prelude.valk` and
 - Everything here ships in every binary: no global mutable state
   (enforced by `check/check-no-globals.valk`), no test-only helpers.
 - Covered by the Valk coverage gate (`coverage/check-coverage.valk`).
+- Tests live in `test/` (pure-Valk unit tests, auto-discovered by
+  `testing/run-tests.valk` with the `stdlib/` prefix). Integration tests that
+  exercise C runtime machinery stay in `runtime/test/`.
 - The test framework lives in `testing/`, the code-intel library in `symdb/` —
   they are separate projects, not part of the standard library.

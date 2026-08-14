@@ -112,6 +112,7 @@
     (join acc (discover-valk-in-dir valk (str "runtime/test/" name) name))
   }) suites subdirs))
 
+  (= {suites} (join suites (discover-valk-in-dir valk "stdlib/test" "stdlib")))
   (= {suites} (join suites (discover-valk-in-dir valk "lsp/test" "lsp")))
 
   (if (== include-stress 1)

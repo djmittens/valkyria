@@ -33,7 +33,7 @@
   (= {args} (if (and (not (nil? args)) (str/ends-with? (head args) ".svg"))
     {(tail args)} {args}))
   (= {cmd} (if (nil? args)
-    {(list "build/valk" "runtime/test/lang/test_prelude.valk")}
+    {(list "build/valk" "stdlib/test/test_prelude.valk")}
     {args}))
 
   (eprintln "=== Flame Graph Generation ===")
