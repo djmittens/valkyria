@@ -160,6 +160,7 @@ set(VALKYRIA_SOURCES
   src/aio/aio_comb_collection.c
   src/aio/aio_comb_all.c
   src/aio/aio_comb_pmap.c
+  src/aio/aio_comb_pmap_reduce.c
   src/aio/aio_comb_race.c
   src/aio/aio_comb_any.c
   src/aio/aio_comb_all_settled.c

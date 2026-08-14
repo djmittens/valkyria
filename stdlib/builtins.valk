@@ -249,6 +249,9 @@
 (sig 'aio/traverse {-> (List A) (-> A (Handle B)) (Handle (List B))})
 ; Parallel map: apply async function to each element with concurrency limit.
 (sig 'aio/pmap {-> (Ref aio) (-> A (Handle B)) (List A) (Handle (List B))})
+; Streaming parallel map-reduce: map elements in parallel with bounded
+; in-flight results, fold each result into the accumulator as it completes.
+(sig 'aio/pmap-reduce {-> (Ref aio) (-> A B) (-> C B C) C (List A) (Handle C)})
 
 ; === Async syntax ===
 

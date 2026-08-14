@@ -449,10 +449,11 @@
         {do
           (= {all-files} (foldl (\ {acc d} {(join acc (walk-dir d))}) {} gcda-dirs))
           (= {gcda-files} (filter (\ {f} {str/ends-with? f ".gcda"}) all-files))
-          (= {local-dicts} (aio/await (aio/pmap aio
+          (aio/await (aio/pmap-reduce aio
             (\ {gcda} {(*run-gcov-and-parse* gcda llvm-cov source-root)})
-            gcda-files)))
-          (*merge-file-dicts* local-dicts files)
+            *merge-into*
+            files
+            gcda-files))
           (= {build-gcovs} (filter (\ {f} {str/ends-with? f ".gcov"})
             (if (file/exists? build-dir)
               {(map (\ {e} {str build-dir "/" (plist/get e :name)}) (list-dir build-dir))}
@@ -559,16 +560,14 @@
       (*merge-branches-loop* (tail keys) src-bd dst-bd)})
 })
 
-(fun {*merge-file-dicts* local-dicts files} {
-  (if (== local-dicts nil) {}
-    {do
-      (= {local} (head local-dicts))
-      (if (!= local nil)
-        {do
-          (= {fkeys} (dict/keys local))
-          (*merge-file-keys* fkeys local files)}
-        {})
-      (*merge-file-dicts* (tail local-dicts) files)})
+; Streaming fold: merge one worker's local dict into the accumulator dict.
+; Used as the reduce fn of aio/pmap-reduce so parsed dicts are merged and
+; dropped as they complete instead of being held until all workers finish.
+(fun {*merge-into* acc local} {
+  (if (!= local nil)
+    {(*merge-file-keys* (dict/keys local) local acc)}
+    {})
+  acc
 })
 
 (fun {*merge-file-keys* keys local-files global-files} {
@@ -613,19 +612,18 @@
       {()})}
     {lcov-names}))
   (= {lcov-paths} (map (\ {e} {(str bdir "/" (plist/get e :name))}) lcov-names))
-  (= {lcov-dicts} (aio/await (aio/pmap aio
+  (aio/await (aio/pmap-reduce aio
     (\ {path} {(*parse-lcov-one* path sroot)})
-    lcov-paths)))
+    *merge-into*
+    files
+    lcov-paths))
   (aio/stop aio)
   (= {t2} (time-us))
-  (printf "  lcov phase: %dms\n" (/ (- t2 t1) 1000))
-  (*merge-file-dicts* lcov-dicts files)
-  (= {t3} (time-us))
-  (printf "  merge phase: %dms\n" (/ (- t3 t2) 1000))
+  (printf "  lcov+merge phase: %dms\n" (/ (- t2 t1) 1000))
   (*finalize-all-files* (dict/keys files) files)
-  (= {t4} (time-us))
-  (printf "  finalize phase: %dms\n" (/ (- t4 t3) 1000))
-  (printf "  total collect: %dms\n" (/ (- t4 t0) 1000))
+  (= {t3} (time-us))
+  (printf "  finalize phase: %dms\n" (/ (- t3 t2) 1000))
+  (printf "  total collect: %dms\n" (/ (- t3 t0) 1000))
   files
 })
 
