@@ -3,14 +3,18 @@
 
 struct valk_io_timer {
   uv_timer_t uv;
-  valk_io_timer_cb user_cb;
+  // _Atomic: unit tests start timers from off-loop threads, so the loop's
+  // callback read races the starter's store (TSAN-caught on arm64).
+  _Atomic(valk_io_timer_cb) user_cb;
   void *user_data;
 };
 
 // LCOV_EXCL_START - libuv internal callback, only invoked from event loop thread
 static void __timer_cb_adapter(uv_timer_t *uv_timer) {
   valk_io_timer_t *timer = (valk_io_timer_t *)uv_timer;
-  if (timer->user_cb) timer->user_cb(timer);
+  valk_io_timer_cb cb =
+      atomic_load_explicit(&timer->user_cb, memory_order_acquire);
+  if (cb) cb(timer);
 }
 // LCOV_EXCL_STOP
 
@@ -21,7 +25,7 @@ static int timer_init(valk_aio_system_t *sys, valk_io_timer_t *timer) {
 
 static int timer_start(valk_io_timer_t *timer, valk_io_timer_cb cb,
                        u64 timeout_ms, u64 repeat_ms) {
-  timer->user_cb = cb;
+  atomic_store_explicit(&timer->user_cb, cb, memory_order_release);
   return uv_timer_start(&timer->uv, __timer_cb_adapter, timeout_ms, repeat_ms);
 }
 

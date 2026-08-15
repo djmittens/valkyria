@@ -60,6 +60,12 @@ leak:intern_string
 # HTTP2 connection structures may not be freed when connection fails early
 leak:valk_aio_http2_connect_host
 
+# sqlite connections are held as REFs in GC-heap memory, which LSAN does
+# not scan as a root region - a db still open when the leak scan runs looks
+# leaked even though it is reachable and will be closed. (Seen on CI in
+# lsp/test_lsp_handlers_db; connections there are closed per test.)
+leak:sqlite3MemMalloc
+
 # SSL/OpenSSL allocations routed through our custom allocator may not be freed
 # when tests exit without proper cleanup
 leak:__ssl_malloc
