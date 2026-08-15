@@ -33,18 +33,32 @@ static valk_lval_t __valk_nil_singleton;
 static valk_lval_t __valk_num_cache[VALK_NUM_CACHE_SIZE];
 static bool __valk_singletons_initialized = false;
 
-// Symbol string intern table: open-addressing hash table with FNV-1a
+// Symbol string intern table: open-addressing hash table with FNV-1a.
 // Stores deduplicated, permanent char* strings for symbol names.
 // Each valk_lval_sym() call creates a fresh struct but shares the interned string.
+//
+// Concurrency: symbol creation is the hottest path in both the interpreter
+// and AOT code, and a single global mutex here convoys every thread under
+// CPU oversubscription (a preempted holder stalls the world). Reads are
+// lock-free against an immutable table version; the mutex serializes only
+// the miss path (insert/grow). Slots go NULL -> string exactly once per
+// version (release-published), so an acquire probe either sees a fully
+// written string or the NULL probe terminator. On grow a new version is
+// release-published and the old one is deliberately leaked: concurrent
+// readers may still be probing it, and the doubling schedule bounds the
+// total leak below one final table's size.
 #define SYM_TABLE_INITIAL_CAP 512
 
-static struct {
-  const char **strings;
-  u64 count;
+typedef struct {
   u64 capacity;
+  const char *strings[];
+} sym_table_ver_t;
+
+static struct {
+  _Atomic(sym_table_ver_t *) cur;
+  u64 count;
   pthread_mutex_t lock;
-} __sym_table = {.strings = NULL, .count = 0, .capacity = 0,
-                 .lock = PTHREAD_MUTEX_INITIALIZER};
+} __sym_table = {.cur = NULL, .count = 0, .lock = PTHREAD_MUTEX_INITIALIZER};
 
 static u64 sym_hash(const char *s) {
   u64 h = 14695981039346656037ULL;
@@ -55,19 +69,38 @@ static u64 sym_hash(const char *s) {
   return h;
 }
 
-static void sym_table_grow(void) {
-  u64 new_cap = __sym_table.capacity * 2;
-  const char **new_strings = calloc(new_cap, sizeof(const char *));
-  for (u64 i = 0; i < __sym_table.capacity; i++) {
-    if (__sym_table.strings[i] == NULL) continue;
-    u64 idx = sym_hash(__sym_table.strings[i]) & (new_cap - 1);
-    while (new_strings[idx] != NULL)
-      idx = (idx + 1) & (new_cap - 1);
-    new_strings[idx] = __sym_table.strings[i];
+static sym_table_ver_t *sym_table_alloc(u64 capacity) {
+  sym_table_ver_t *t =
+      calloc(1, sizeof(sym_table_ver_t) + capacity * sizeof(const char *));
+  if (t) t->capacity = capacity; // LCOV_EXCL_BR_LINE - OOM
+  return t;
+}
+
+static const char *sym_probe(sym_table_ver_t *t, const char *name, u64 h) {
+  u64 mask = t->capacity - 1;
+  u64 idx = h & mask;
+  const char *s;
+  while ((s = __atomic_load_n(&t->strings[idx], __ATOMIC_ACQUIRE)) != NULL) {
+    if (strcmp(s, name) == 0) return s;
+    idx = (idx + 1) & mask;
   }
-  free(__sym_table.strings);
-  __sym_table.strings = new_strings;
-  __sym_table.capacity = new_cap;
+  return NULL;
+}
+
+// Called under __sym_table.lock.
+static void sym_table_grow(sym_table_ver_t *old) {
+  sym_table_ver_t *nt = sym_table_alloc(old->capacity * 2);
+  if (!nt) return; // LCOV_EXCL_LINE - OOM: keep serving the old version
+  for (u64 i = 0; i < old->capacity; i++) {
+    const char *s = old->strings[i];
+    if (s == NULL) continue;
+    u64 idx = sym_hash(s) & (nt->capacity - 1);
+    while (nt->strings[idx] != NULL)
+      idx = (idx + 1) & (nt->capacity - 1);
+    nt->strings[idx] = s;
+  }
+  atomic_store_explicit(&__sym_table.cur, nt, memory_order_release);
+  // old is leaked on purpose; see the table comment.
 }
 
 // The table is statically initialized empty and grown on first use under its
@@ -82,41 +115,54 @@ static void sym_table_grow(void) {
 // and a nested pthread_once on the same gate traps with
 // _os_once_gate_recursive_abort.
 static const char *sym_intern_str(const char *name) {
+  u64 h = sym_hash(name);
+
+  sym_table_ver_t *t = atomic_load_explicit(&__sym_table.cur, memory_order_acquire);
+  if (t) {
+    const char *hit = sym_probe(t, name, h);
+    if (hit) return hit;
+  }
+
   pthread_mutex_lock(&__sym_table.lock);
-  if (__sym_table.capacity == 0) {
-    __sym_table.strings = calloc(SYM_TABLE_INITIAL_CAP, sizeof(const char *));
+  t = atomic_load_explicit(&__sym_table.cur, memory_order_acquire);
+  if (!t) {
+    t = sym_table_alloc(SYM_TABLE_INITIAL_CAP);
     // LCOV_EXCL_START - OOM
-    if (!__sym_table.strings) {
+    if (!t) {
       pthread_mutex_unlock(&__sym_table.lock);
       return name;
     }
     // LCOV_EXCL_STOP
-    __sym_table.capacity = SYM_TABLE_INITIAL_CAP;
+    atomic_store_explicit(&__sym_table.cur, t, memory_order_release);
   }
-  u64 mask = __sym_table.capacity - 1;
-  u64 idx = sym_hash(name) & mask;
-  while (__sym_table.strings[idx] != NULL) {
-    if (strcmp(__sym_table.strings[idx], name) == 0) {
-      const char *result = __sym_table.strings[idx];
-      pthread_mutex_unlock(&__sym_table.lock);
-      return result;
-    }
-    idx = (idx + 1) & mask;
+  // Re-probe under the lock: another writer (or a grow) may have inserted
+  // this string after the lock-free probe missed.
+  const char *hit = sym_probe(t, name, h);
+  if (hit) {
+    pthread_mutex_unlock(&__sym_table.lock);
+    return hit;
   }
   u64 slen = strlen(name);
   if (slen > 200) slen = 200;
   char *istr = malloc(slen + 1);
   memcpy(istr, name, slen);
   istr[slen] = '\0';
-  __sym_table.strings[idx] = istr;
-  __sym_table.count++;
-  if (__sym_table.count * 4 > __sym_table.capacity * 3)
-    sym_table_grow();
+  u64 mask = t->capacity - 1;
+  u64 idx = h & mask;
+  while (t->strings[idx] != NULL)
+    idx = (idx + 1) & mask;
+  __atomic_store_n(&t->strings[idx], istr, __ATOMIC_RELEASE);
+  u64 count = __sym_table.count + 1;
+  __atomic_store_n(&__sym_table.count, count, __ATOMIC_RELAXED);
+  if (count * 4 > t->capacity * 3)
+    sym_table_grow(t);
   pthread_mutex_unlock(&__sym_table.lock);
   return istr;
 }
 
-u64 valk_sym_intern_count(void) { return __sym_table.count; }
+u64 valk_sym_intern_count(void) {
+  return __atomic_load_n(&__sym_table.count, __ATOMIC_RELAXED);
+}
 
 const char *valk_sym_intern(const char *name) {
   return sym_intern_str(name);
