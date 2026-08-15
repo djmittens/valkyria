@@ -438,6 +438,13 @@ typedef struct valk_gc_mark_ctx {
   // True when this cycle has exactly one participating thread, which makes
   // every mark-bitmap RMW and every deque pop uncontended by construction.
   bool solo;
+  // Insertion-drain mode (marker thread only): walk THROUGH already-marked
+  // objects instead of dedup-stopping at them. Born-black objects are
+  // marked but never traced, so an inserted subgraph can chain through
+  // several of them before reaching white children. `walked` dedups the
+  // forced walk per cycle, bounding total insert-walk work by heap size.
+  bool force_through_marked;
+  valk_ptr_map_t *walked;
 } valk_gc_mark_ctx_t;
 
 void valk_gc_heap_mark_object(valk_gc_mark_ctx_t *ctx, void *ptr);
@@ -467,6 +474,13 @@ void valk_gc_verify_conc_roots_marked(valk_gc_heap_t *heap);
 // observed on/off. No-op unless VALK_GC_VERIFY=1.
 void valk_gc_verify_log_refill(valk_gc_page_t *page, u8 size_class,
                                u32 start_slot, u32 num_slots, bool satb_on);
+
+// Full-heap mark verification (gc_verify.c): saves the concurrent cycle's
+// mark state, re-marks the world solo, and asserts the cycle missed
+// nothing reachable. Runs in the pre-sweep pause. VALK_GC_VERIFY_FULL=1.
+void valk_gc_verify_full_mark(valk_gc_heap_t *heap);
+// Solo world re-mark used by the full verifier (gc_mark.c).
+void valk_gc_remark_world_solo(valk_gc_heap_t *heap);
 
 // ============================================================================
 // Concurrent Marking (SATB)
@@ -500,6 +514,18 @@ extern _Atomic bool valk_gc_satb_active;
 void valk_gc_satb_log_lval(valk_lval_t *old);
 void valk_gc_satb_log_env(valk_lenv_t *old);
 
+// Insertion entries are tagged with the pointer's low bit in the SATB logs.
+// The drain must FORCE a children walk for them: an inserted object may be
+// born black (marked, never traced), and plain mark_lval/mark_env dedup
+// would skip its children - leaving them white even though they are now
+// reachable only through black objects.
+#define VALK_GC_SATB_INSERT_TAG 1ULL
+void valk_gc_mark_insert_local(valk_gc_heap_t *heap, valk_lval_t *v);
+void valk_gc_mark_env_insert_local(valk_gc_heap_t *heap, valk_lenv_t *env);
+// Reset the per-cycle forced-walk dedup set; coordinator calls this at the
+// start of every concurrent cycle.
+void valk_gc_insert_walked_reset(void);
+
 static inline void valk_gc_wb_lval(valk_lval_t *old) {
   if (__builtin_expect(atomic_load_explicit(&valk_gc_satb_active,
                                             memory_order_acquire), 0) &&
@@ -516,15 +542,65 @@ static inline void valk_gc_wb_env(valk_lenv_t *old) {
   }
 }
 
+// Insertion barrier: `val` is being wired INTO a heap object (store,
+// container growth copy, or a born-black constructor sharing it). The
+// out-of-line implementation logs it tagged only when it is ALREADY marked
+// (a born-black suspect whose children the drain must force-walk);
+// unmarked values get a plain entry and a normal queued trace.
+void valk_gc_satb_log_insert(valk_lval_t *val);
+void valk_gc_satb_log_env_insert(valk_lenv_t *env);
+
+static inline void valk_gc_wb_insert(valk_lval_t *val) {
+  if (__builtin_expect(atomic_load_explicit(&valk_gc_satb_active,
+                                            memory_order_acquire), 0) &&
+      val != nullptr) {
+    valk_gc_satb_log_insert(val);
+  }
+}
+
+static inline void valk_gc_wb_env_insert(valk_lenv_t *env) {
+  if (__builtin_expect(atomic_load_explicit(&valk_gc_satb_active,
+                                            memory_order_acquire), 0) &&
+      env != nullptr) {
+    valk_gc_satb_log_env_insert(env);
+  }
+}
+
+// Raw-buffer barrier: a heap RAW allocation (string buffer, fun.name) being
+// SHARED into a born-black object during a concurrent mark. Born-black
+// owners are never traced, so a pre-window buffer would be swept while
+// referenced (caught by VALK_GC_VERIFY_FULL as white str buffers under
+// marked STR lvals). Buffers are leaves: marking the slot directly is the
+// whole barrier - there is nothing to trace. Implemented in gc_concurrent.c.
+void valk_gc_satb_mark_raw(void *ptr);
+
+static inline void valk_gc_wb_raw(void *ptr) {
+  if (__builtin_expect(atomic_load_explicit(&valk_gc_satb_active,
+                                            memory_order_acquire), 0) &&
+      ptr != nullptr) {
+    valk_gc_satb_mark_raw(ptr);
+  }
+}
+
 // Overwrite a pointer field in a published heap object: atomically exchange
-// (so the concurrent marker never sees a torn store) and SATB-log the old
-// value. Use for every MUTATION of an lval-pointer field outside the
-// collector itself.
+// (so the concurrent marker never sees a torn store) and log BOTH sides
+// while a concurrent mark runs - a hybrid deletion + insertion barrier
+// (Go's design):
+//   old value: SATB - anything reachable at the snapshot stays traceable
+//     even after this unlink.
+//   new value: the destination may already be black (traced, or born
+//     black), and the stored object's only other home may be invisible to
+//     the marker (C locals, scratch) - pure SATB is unsound for exactly
+//     this insertion, which VALK_GC_VERIFY_FULL caught as white cons cells
+//     spliced into traced spines and env slots.
+// Use for every MUTATION of an lval-pointer field outside the collector.
 #define VALK_GC_WB_STORE(field_ptr, newval)                                  \
   do {                                                                       \
+    __typeof__(newval) __wb_new = (newval);                                  \
     __typeof__(newval) __wb_old =                                            \
-        __atomic_exchange_n((field_ptr), (newval), __ATOMIC_ACQ_REL);        \
+        __atomic_exchange_n((field_ptr), __wb_new, __ATOMIC_ACQ_REL);        \
     valk_gc_wb_lval((valk_lval_t *)__wb_old);                                \
+    valk_gc_wb_insert((valk_lval_t *)__wb_new);                              \
   } while (0)
 
 // ============================================================================

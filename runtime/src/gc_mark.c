@@ -18,6 +18,7 @@
 // LCOV_EXCL_BR_START - heap mark phase null checks and type dispatch
 static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx);
 static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx);
+static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx);
 
 // LCOV_EXCL_START - Heap2 mark internals only reachable from parallel GC cycle
 static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
@@ -46,7 +47,19 @@ static void mark_lval(valk_lval_t *lval, valk_gc_mark_ctx_t *ctx) {
     // a builtin's fun.name string is a heap allocation too.
     bool first = ctx->solo ? valk_gc_page_try_mark_solo(loc.page, loc.slot)
                            : valk_gc_page_try_mark(loc.page, loc.slot);
-    if (!first) return;
+    if (!first) {
+      // Insertion-drain mode: an already-marked object may be born black
+      // (marked at allocation, never traced), so its children can still be
+      // white. Walk through it synchronously - the queue would hand it to
+      // a normal-mode drain that dedup-skips it. `walked` bounds this to
+      // once per object per cycle and breaks closure/env cycles.
+      if (!ctx->force_through_marked ||
+          valk_ptr_map_get(ctx->walked, lval) != nullptr)
+        return;
+      valk_ptr_map_put(ctx->walked, lval, lval);
+      mark_children(lval, ctx);
+      return;
+    }
     // Leaves don't need a queue round-trip. Pushing them only to pop them
     // again and fall through mark_children's switch was roughly half of all
     // queue traffic, because half of a typical live set is numbers.
@@ -82,6 +95,8 @@ static void mark_env_value_cb(valk_lval_t *val, void *ctx) {
   mark_lval(val, (valk_gc_mark_ctx_t *)ctx);
 }
 
+static void mark_env_contents(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx);
+
 static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
   while (env != nullptr) {
     valk_gc_ptr_location_t loc;
@@ -91,7 +106,14 @@ static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
       // race here means the whole subtree is already covered.
       bool first = ctx->solo ? valk_gc_page_try_mark_solo(loc.page, loc.slot)
                              : valk_gc_page_try_mark(loc.page, loc.slot);
-      if (!first) return;
+      if (!first) {
+        // Insertion-drain mode: walk through born-black envs (see the
+        // matching branch in mark_lval).
+        if (!ctx->force_through_marked ||
+            valk_ptr_map_get(ctx->walked, env) != nullptr)
+          return;
+        valk_ptr_map_put(ctx->walked, env, env);
+      }
     } else if (!(atomic_load(&env->flags) & LENV_FLAG_FROZEN)) {
       // Env block outside the GC heap and not frozen (malloc-mode tests,
       // foreign envs): stop. There is no mark bit for dedup, and walking
@@ -113,33 +135,37 @@ static void mark_env(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
     // No recursion hazard: frozen bindings are immortal lvals (skipped
     // by mark_lval) or heap lvals (deduped by their mark bits). The walk
     // is deduped by the heap ancestors through which chains reach it.
-    if (env->cmap) {
-      // Concurrent (shared global) env: mark the map's tables, keys, values.
-      valk_cmap_gc_mark((valk_cmap_t *)env->cmap, mark_env_block_cb,
-                        mark_env_value_cb, ctx);
-    }
-    // Load counts BEFORE array pointers: growth installs the new array with
-    // a release store and only then bumps the count (release), so a count
-    // observed here guarantees the subsequently loaded array covers it.
-    u64 scount = __atomic_load_n(&env->symbols.count, __ATOMIC_ACQUIRE);
-    char **sitems = __atomic_load_n(&env->symbols.items, __ATOMIC_ACQUIRE);
-    u64 vcount = __atomic_load_n(&env->vals.count, __ATOMIC_ACQUIRE);
-    valk_lval_t **vitems = __atomic_load_n(&env->vals.items, __ATOMIC_ACQUIRE);
-    mark_ptr_only(sitems, ctx);
-    mark_ptr_only(vitems, ctx);
-    // Interned keys are permanent intern-table allocations, not GC objects.
-    // Marking them is not just pointless: mark_ptr_only falls through to
-    // valk_gc_mark_large_object, which takes heap->large_lock and walks the
-    // large-object list for every key on every mark.
-    if (!(atomic_load(&env->flags) & LENV_FLAG_KEYS_INTERNED)) {
-      for (u64 i = 0; i < scount; i++) {
-        mark_ptr_only(sitems[i], ctx);
-      }
-    }
-    for (u64 i = 0; i < vcount; i++) {
-      mark_lval(__atomic_load_n(&vitems[i], __ATOMIC_ACQUIRE), ctx);
-    }
+    mark_env_contents(env, ctx);
     env = env->parent;
+  }
+}
+
+static void mark_env_contents(valk_lenv_t *env, valk_gc_mark_ctx_t *ctx) {
+  if (env->cmap) {
+    // Concurrent (shared global) env: mark the map's tables, keys, values.
+    valk_cmap_gc_mark((valk_cmap_t *)env->cmap, mark_env_block_cb,
+                      mark_env_value_cb, ctx);
+  }
+  // Load counts BEFORE array pointers: growth installs the new array with
+  // a release store and only then bumps the count (release), so a count
+  // observed here guarantees the subsequently loaded array covers it.
+  u64 scount = __atomic_load_n(&env->symbols.count, __ATOMIC_ACQUIRE);
+  char **sitems = __atomic_load_n(&env->symbols.items, __ATOMIC_ACQUIRE);
+  u64 vcount = __atomic_load_n(&env->vals.count, __ATOMIC_ACQUIRE);
+  valk_lval_t **vitems = __atomic_load_n(&env->vals.items, __ATOMIC_ACQUIRE);
+  mark_ptr_only(sitems, ctx);
+  mark_ptr_only(vitems, ctx);
+  // Interned keys are permanent intern-table allocations, not GC objects.
+  // Marking them is not just pointless: mark_ptr_only falls through to
+  // valk_gc_mark_large_object, which takes heap->large_lock and walks the
+  // large-object list for every key on every mark.
+  if (!(atomic_load(&env->flags) & LENV_FLAG_KEYS_INTERNED)) {
+    for (u64 i = 0; i < scount; i++) {
+      mark_ptr_only(sitems[i], ctx);
+    }
+  }
+  for (u64 i = 0; i < vcount; i++) {
+    mark_lval(__atomic_load_n(&vitems[i], __ATOMIC_ACQUIRE), ctx);
   }
 }
 
@@ -161,7 +187,14 @@ static void mark_children(valk_lval_t *obj, valk_gc_mark_ctx_t *ctx) {
             // Walk the spine in place rather than enqueueing every tail: a
             // list of N cells used to cost N pushes and N pops. If someone
             // else already marked the tail, the rest of the spine is theirs.
-            if (!first) return;
+            if (!first) {
+              // Insertion-drain mode: continue through born-black spine
+              // cells (see mark_lval).
+              if (!ctx->force_through_marked ||
+                  valk_ptr_map_get(ctx->walked, obj) != nullptr)
+                return;
+              valk_ptr_map_put(ctx->walked, obj, obj);
+            }
             continue;
           }
           if (valk_gc_mark_large_object(ctx->heap, obj))
@@ -273,8 +306,12 @@ static void mark_one_eval_stack(valk_eval_stack_t *stack, valk_gc_mark_ctx_t *ct
   }
 }
 
-static void mark_eval_stack_roots(valk_gc_mark_ctx_t *ctx) {
-  valk_thread_context_t *tc = &valk_thread_ctx;
+static void mark_tc_roots(valk_thread_context_t *tc, valk_gc_mark_ctx_t *ctx) {
+  if (tc->root_stack) {
+    for (u64 i = 0; i < tc->root_stack_count; i++) {
+      if (tc->root_stack[i]) mark_lval(tc->root_stack[i], ctx);
+    }
+  }
 
   mark_lval(tc->eval_expr, ctx);
   mark_lval(tc->eval_value, ctx);
@@ -288,6 +325,24 @@ static void mark_eval_stack_roots(valk_gc_mark_ctx_t *ctx) {
 
   // Call envs held only by native (AOT/JIT) frames — pushed by compiled
   // function prologues and the interpreter's call-env construction.
+  for (sz i = 0; i < tc->env_root_stack_count; i++) {
+    if (tc->env_root_stack[i]) mark_env(tc->env_root_stack[i], ctx);
+  }
+}
+
+static void mark_eval_stack_roots(valk_gc_mark_ctx_t *ctx) {
+  valk_thread_context_t *tc = &valk_thread_ctx;
+
+  mark_lval(tc->eval_expr, ctx);
+  mark_lval(tc->eval_value, ctx);
+  if (tc->eval_env) mark_env(tc->eval_env, ctx);
+
+  for (u32 i = 0; i < tc->eval_stack_depth; i++) {
+    valk_eval_stack_t *stack = (valk_eval_stack_t *)tc->eval_stacks[i];
+    if (stack) mark_one_eval_stack(stack, ctx);
+    if (tc->saved_eval_envs[i]) mark_env(tc->saved_eval_envs[i], ctx);
+  }
+
   for (sz i = 0; i < tc->env_root_stack_count; i++) {
     if (tc->env_root_stack[i]) mark_env(tc->env_root_stack[i], ctx);
   }
@@ -429,6 +484,34 @@ static void __mark_global_roots(valk_gc_mark_ctx_t *ctx) {
     }
   }
   pthread_mutex_unlock(&valk_sys->thread_mutex);
+}
+
+// Complete solo re-mark of the world from every counted participant's roots
+// plus globals. Verifier-only: runs inside the pre-sweep pause where every
+// participant is parked, so non-atomic marking and direct access to other
+// threads' contexts are safe. The caller (gc_verify.c) is responsible for
+// saving and restoring the real mark state around this.
+void valk_gc_remark_world_solo(valk_gc_heap_t *heap) {
+  u64 my_id = valk_thread_ctx.gc_thread_id;
+  valk_gc_mark_queue_t *q = &valk_sys->threads[my_id].mark_queue;
+  valk_gc_mark_queue_reset(q);
+  valk_gc_mark_ctx_t ctx = {.heap = heap, .queue = q, .solo = true};
+
+  u64 sys_epoch = atomic_load(&valk_sys->stw_epoch);
+  for (u64 t = 0; t < VALK_SYSTEM_MAX_THREADS; t++) {
+    if (!valk_sys->threads[t].active || valk_sys->threads[t].ctx == nullptr)
+      continue;
+    valk_thread_context_t *tc = valk_sys->threads[t].ctx;
+    if (atomic_load(&tc->stw_epoch) != sys_epoch) continue;
+    mark_tc_roots(tc, &ctx);
+  }
+
+  __mark_global_roots(&ctx);
+
+  valk_lval_t *obj;
+  while ((obj = valk_gc_mark_queue_pop_solo(q)) != nullptr) {
+    mark_children(obj, &ctx);
+  }
 }
 
 static void __mark_drain_owst(valk_gc_mark_ctx_t *ctx,
@@ -582,6 +665,44 @@ void valk_gc_mark_value_local(valk_gc_heap_t *heap, valk_lval_t *v) {
 void valk_gc_mark_env_local(valk_gc_heap_t *heap, valk_lenv_t *env) {
   if (!heap || !valk_thread_ctx.gc_registered || env == nullptr) return;
   valk_gc_mark_ctx_t ctx = __own_mark_ctx(heap);
+  mark_env(env, &ctx);
+}
+
+// Insertion-log drains (marker thread only): the object was wired into a
+// (possibly born-black) container and may itself head a CHAIN of born-black
+// objects whose children are still white - the plain mark paths dedup on
+// mark bits and would never reach them. Forced mode walks through marked
+// objects, deduped per cycle by __insert_walked so total forced work is
+// bounded by heap size. Synchronous (no queue): a queued object would be
+// drained in normal mode and dedup-skipped.
+static valk_ptr_map_t __insert_walked;
+static bool __insert_walked_init = false;
+
+void valk_gc_insert_walked_reset(void) {
+  if (__insert_walked_init) valk_ptr_map_free(&__insert_walked);
+  valk_ptr_map_init(&__insert_walked);
+  __insert_walked_init = true;
+}
+
+static valk_gc_mark_ctx_t __insert_mark_ctx(valk_gc_heap_t *heap) {
+  valk_gc_mark_ctx_t ctx = __own_mark_ctx(heap);
+  ctx.force_through_marked = true;
+  ctx.walked = &__insert_walked;
+  return ctx;
+}
+
+void valk_gc_mark_insert_local(valk_gc_heap_t *heap, valk_lval_t *v) {
+  if (!heap || !valk_thread_ctx.gc_registered || v == nullptr) return;
+  if (v->flags & LVAL_FLAG_IMMORTAL) return;
+  if (!__insert_walked_init) return; // LCOV_EXCL_LINE
+  valk_gc_mark_ctx_t ctx = __insert_mark_ctx(heap);
+  mark_lval(v, &ctx);
+}
+
+void valk_gc_mark_env_insert_local(valk_gc_heap_t *heap, valk_lenv_t *env) {
+  if (!heap || !valk_thread_ctx.gc_registered || env == nullptr) return;
+  if (!__insert_walked_init) return; // LCOV_EXCL_LINE
+  valk_gc_mark_ctx_t ctx = __insert_mark_ctx(heap);
   mark_env(env, &ctx);
 }
 

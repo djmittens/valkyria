@@ -85,8 +85,59 @@ static inline bool __satb_in_heap(void *p) {
          (u8 *)p < (u8 *)heap->base + heap->reserved;
 }
 
+void valk_gc_satb_log_insert(valk_lval_t *v) {
+  valk_gc_heap_t *heap = valk_gc_current_cycle_heap();
+  if (heap == nullptr) heap = valk_thread_ctx.heap; // LCOV_EXCL_BR_LINE
+  bool tagged = false;
+  if (heap) { // LCOV_EXCL_BR_LINE
+    valk_gc_ptr_location_t loc;
+    if (valk_gc_ptr_to_location(heap, v, &loc) &&
+        valk_gc_page_is_marked(loc.page, loc.slot)) {
+      // Already marked: either traced (children covered - the force walk
+      // is a cheap no-op) or born black (children pending - the force walk
+      // is the whole point). Unmarked values take the plain path and get a
+      // full queued trace when drained.
+      tagged = true;
+    }
+  }
+  valk_gc_satb_log_lval(
+      tagged ? (valk_lval_t *)((uintptr_t)v | VALK_GC_SATB_INSERT_TAG) : v);
+}
+
+void valk_gc_satb_log_env_insert(valk_lenv_t *env) {
+  valk_gc_heap_t *heap = valk_gc_current_cycle_heap();
+  if (heap == nullptr) heap = valk_thread_ctx.heap; // LCOV_EXCL_BR_LINE
+  bool tagged = false;
+  if (heap) { // LCOV_EXCL_BR_LINE
+    valk_gc_ptr_location_t loc;
+    if (valk_gc_ptr_to_location(heap, env, &loc) &&
+        valk_gc_page_is_marked(loc.page, loc.slot)) {
+      tagged = true;
+    }
+  }
+  valk_gc_satb_log_env(
+      tagged ? (valk_lenv_t *)((uintptr_t)env | VALK_GC_SATB_INSERT_TAG)
+             : env);
+}
+
+void valk_gc_satb_mark_raw(void *ptr) {
+  valk_gc_heap_t *heap = valk_gc_current_cycle_heap();
+  if (heap == nullptr) heap = valk_thread_ctx.heap; // LCOV_EXCL_BR_LINE
+  if (heap == nullptr) return;                      // LCOV_EXCL_LINE
+  valk_gc_ptr_location_t loc;
+  if (valk_gc_ptr_to_location(heap, ptr, &loc)) {
+    valk_gc_page_try_mark(loc.page, loc.slot);
+  } else {
+    valk_gc_mark_large_object(heap, ptr);
+  }
+}
+
 void valk_gc_satb_log_lval(valk_lval_t *old) {
-  if (!__satb_in_heap(old)) return;
+  // Entries may carry VALK_GC_SATB_INSERT_TAG in the low bit; strip it for
+  // the heap check but log the tagged pointer so the drain sees it.
+  if (!__satb_in_heap(
+          (void *)((uintptr_t)old & ~VALK_GC_SATB_INSERT_TAG)))
+    return;
   valk_thread_context_t *tc = &valk_thread_ctx;
 
   // Late registrants (not counted into this cycle) skip the CONC_FINAL
@@ -115,7 +166,9 @@ void valk_gc_satb_log_lval(valk_lval_t *old) {
 }
 
 void valk_gc_satb_log_env(valk_lenv_t *old) {
-  if (!__satb_in_heap(old)) return;
+  if (!__satb_in_heap(
+          (void *)((uintptr_t)old & ~VALK_GC_SATB_INSERT_TAG)))
+    return;
   pthread_mutex_lock(&__satb_lock);
   bool found = false;
   for (u32 i = 0; i < __satb_env_count; i++) {
@@ -173,18 +226,35 @@ u64 valk_gc_satb_drain_global(valk_gc_heap_t *heap) {
 
     if (chunk) {
       for (u32 i = 0; i < chunk->count; i++) {
-        valk_gc_mark_value_local(heap, chunk->vals[i]);
+        valk_lval_t *v = chunk->vals[i];
+        if ((uintptr_t)v & VALK_GC_SATB_INSERT_TAG) {
+          valk_gc_mark_insert_local(
+              heap, (valk_lval_t *)((uintptr_t)v & ~VALK_GC_SATB_INSERT_TAG));
+        } else {
+          valk_gc_mark_value_local(heap, v);
+        }
       }
       n += chunk->count;
       free(chunk);
     } else if (echunk) {
       for (u32 i = 0; i < echunk->count; i++) {
-        valk_gc_mark_env_local(heap, echunk->envs[i]);
+        valk_lenv_t *e = echunk->envs[i];
+        if ((uintptr_t)e & VALK_GC_SATB_INSERT_TAG) {
+          valk_gc_mark_env_insert_local(
+              heap, (valk_lenv_t *)((uintptr_t)e & ~VALK_GC_SATB_INSERT_TAG));
+        } else {
+          valk_gc_mark_env_local(heap, e);
+        }
       }
       n += echunk->count;
       free(echunk);
     } else if (env) {
-      valk_gc_mark_env_local(heap, env);
+      if ((uintptr_t)env & VALK_GC_SATB_INSERT_TAG) {
+        valk_gc_mark_env_insert_local(
+            heap, (valk_lenv_t *)((uintptr_t)env & ~VALK_GC_SATB_INSERT_TAG));
+      } else {
+        valk_gc_mark_env_local(heap, env);
+      }
       n++;
     } else {
       break;
@@ -276,6 +346,7 @@ static u64 __slowest_arriver(u64 t_req, u64 *out_delay_ns) {
 static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
   u64 t0 = uv_hrtime();
   u64 slow1_ns = 0, slow2_ns = 0;
+  valk_gc_insert_walked_reset();
 
   // ---- Pause 1: root snapshot ----
   atomic_store(&valk_gc_satb_active, true);
@@ -347,6 +418,7 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
   // them. (Verifying after that barrier raced the participants' sweep and
   // produced phantom whole-pages-unmarked reports.)
   valk_gc_verify_conc_roots_marked(heap);
+  valk_gc_verify_full_mark(heap);
   valk_barrier_wait(&valk_sys->barrier);
 
   // Tracing is complete; stores no longer need logging. All mutators are

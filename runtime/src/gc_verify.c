@@ -3,6 +3,7 @@
 #include "eval_internal.h"
 #include "log.h"
 #include <stdlib.h>
+#include <string.h>
 
 // ============================================================================
 // Post-Sweep Heap Verification
@@ -326,3 +327,225 @@ void valk_gc_verify_conc_roots_marked(valk_gc_heap_t *heap) {
   }
 }
 // LCOV_EXCL_BR_STOP
+
+// ============================================================================
+// Full-Heap Mark Verification (concurrent cycles)
+// ============================================================================
+// The strongest check: save the concurrent marker's result, re-mark the
+// entire world solo from every root (the world is stopped), and diff.
+// Any object the remark reaches that the concurrent cycle did NOT mark is
+// live data about to be swept - a marker hole - reported with its exact
+// address and type at the guilty collection. Objects marked by the cycle
+// but unreached by the remark are floating garbage (allocate-black,
+// SATB retention) and are fine.
+//
+// Gated by VALK_GC_VERIFY_FULL=1: a full solo mark per cycle is too slow
+// for the default test run but turns any 1-in-N corruption flake into a
+// deterministic assert with a core dump.
+
+// LCOV_EXCL_START - verifier-only, opt-in via VALK_GC_VERIFY_FULL
+static bool __verify_full_enabled(void) {
+  static _Atomic int enabled = -1;
+  int e = atomic_load_explicit(&enabled, memory_order_relaxed);
+  if (e < 0) {
+    const char *env = getenv("VALK_GC_VERIFY_FULL");
+    e = (env && env[0] == '1') ? 1 : 0;
+    atomic_store_explicit(&enabled, e, memory_order_relaxed);
+  }
+  return e == 1;
+}
+
+typedef struct {
+  valk_gc_page_t *page;
+  u8 *saved;
+} verify_saved_bitmap_t;
+
+typedef struct {
+  valk_gc_large_obj_t *obj;
+  bool saved_marked;
+} verify_saved_large_t;
+
+static void __report_missed_slot(valk_gc_page_t *page, u8 size_class,
+                                 u32 slot) {
+  void *ptr = valk_gc_page_slot_ptr(page, slot);
+  u16 slot_size = valk_gc_size_classes[size_class];
+  int type = -1;
+  int src_pos = 0;
+  if (slot_size >= sizeof(valk_lval_t)) {
+    valk_lval_t *lv = ptr;
+    type = (int)(lv->flags & 0xFF);
+    src_pos = LVAL_SRC_POS(lv);
+  }
+  fprintf(stderr,
+          "[GC-VERIFY-FULL] MISSED object %p class=%u slot=%u page=%p "
+          "type=%d src_pos=%d (reachable at pre-sweep, unmarked by "
+          "concurrent cycle)\n",
+          ptr, size_class, slot, (void *)page, type, src_pos);
+  if (type == 7) {
+    valk_lval_t *lv = ptr;
+    fprintf(stderr, "[GC-VERIFY-FULL]   cons head=%p tail=%p quoted=%d\n",
+            (void *)lv->cons.head, (void *)lv->cons.tail,
+            (lv->flags & LVAL_FLAG_QUOTED) != 0);
+  } else if (type == 2 || type == 3) {
+    valk_lval_t *lv = ptr;
+    fprintf(stderr, "[GC-VERIFY-FULL]   str=\"%.60s\" interned=%d\n",
+            lv->str ? lv->str : "(null)",
+            (lv->flags & LVAL_FLAG_INTERNED) != 0);
+  }
+}
+
+// Brute-force referencer scan: find every word in the live heap (and large
+// blocks) equal to `target` and print the containing object. Identifies the
+// guilty edge without needing rr: the referencer's type + mark state says
+// which barrier/trace path failed to cover it. depth>0 recurses one level
+// into referencers-of-referencers to expose the owning container.
+static void __report_referencers_depth(valk_gc_heap_t *heap, void *target,
+                                       int depth);
+
+static void __report_referencers(valk_gc_heap_t *heap, void *target) {
+  __report_referencers_depth(heap, target, 1);
+}
+
+static void __report_referencers_depth(valk_gc_heap_t *heap, void *target,
+                                       int depth) {
+  for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    u16 slot_size = valk_gc_size_classes[c];
+    for (valk_gc_page_t *p = heap->classes[c].all_pages; p; p = p->next) {
+      if (p->reclaimed) continue;
+      for (u32 s = 0; s < p->slots_per_page; s++) {
+        if (!valk_gc_page_is_allocated(p, s)) continue;
+        void **words = valk_gc_page_slot_ptr(p, s);
+        for (u16 w = 0; w < slot_size / sizeof(void *); w++) {
+          if (words[w] == target) {
+            int rtype = -1;
+            int rsrc = 0;
+            if (slot_size >= sizeof(valk_lval_t)) {
+              rtype = (int)(((valk_lval_t *)words)->flags & 0xFF);
+              rsrc = LVAL_SRC_POS((valk_lval_t *)words);
+            }
+            fprintf(stderr,
+                    "[GC-VERIFY-FULL]   %*sreferencer %p class=%u slot=%u "
+                    "word=%u type=%d src_pos=%d marked=%d\n",
+                    (2 - depth) * 2, "", (void *)words, c, s, w, rtype, rsrc,
+                    valk_gc_page_is_marked(p, s));
+            if (depth > 0) {
+              __report_referencers_depth(heap, words, depth - 1);
+            }
+          }
+        }
+      }
+    }
+  }
+  pthread_mutex_lock(&heap->large_lock);
+  for (valk_gc_large_obj_t *o = heap->large_objects; o; o = o->next) {
+    void **words = o->data;
+    for (sz w = 0; w < o->size / sizeof(void *); w++) {
+      if (words[w] == target) {
+        fprintf(stderr,
+                "[GC-VERIFY-FULL]   referencer large=%p (%zu bytes) word=%zu "
+                "marked=%d\n",
+                o->data, o->size, w, o->marked);
+      }
+    }
+  }
+  pthread_mutex_unlock(&heap->large_lock);
+}
+
+void valk_gc_verify_full_mark(valk_gc_heap_t *heap) {
+  if (!heap || !__verify_full_enabled()) return;
+
+  // 1. Save and clear the concurrent cycle's mark state.
+  sz n_pages = 0;
+  for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    for (valk_gc_page_t *p = heap->classes[c].all_pages; p; p = p->next)
+      n_pages++;
+  }
+  verify_saved_bitmap_t *saved = malloc(n_pages * sizeof(*saved));
+  VALK_ASSERT(saved != nullptr, "verify-full: OOM saving bitmaps");
+  sz pi = 0;
+  for (u8 c = 0; c < VALK_GC_NUM_SIZE_CLASSES; c++) {
+    for (valk_gc_page_t *p = heap->classes[c].all_pages; p; p = p->next) {
+      u8 *mb = valk_gc_page_mark_bitmap(p);
+      saved[pi].page = p;
+      saved[pi].saved = malloc(p->bitmap_bytes);
+      VALK_ASSERT(saved[pi].saved != nullptr, "verify-full: OOM");
+      memcpy(saved[pi].saved, mb, p->bitmap_bytes);
+      memset(mb, 0, p->bitmap_bytes);
+      pi++;
+    }
+  }
+
+  pthread_mutex_lock(&heap->large_lock);
+  sz n_large = 0;
+  for (valk_gc_large_obj_t *o = heap->large_objects; o; o = o->next) n_large++;
+  verify_saved_large_t *lsaved =
+      n_large ? malloc(n_large * sizeof(*lsaved)) : nullptr;
+  sz li = 0;
+  for (valk_gc_large_obj_t *o = heap->large_objects; o; o = o->next) {
+    lsaved[li].obj = o;
+    lsaved[li].saved_marked = o->marked;
+    o->marked = false;
+    li++;
+  }
+  pthread_mutex_unlock(&heap->large_lock);
+
+  // 2. Solo remark of the whole world.
+  valk_gc_remark_world_solo(heap);
+
+  // 3. Diff: remark-reachable must be a subset of concurrently-marked.
+  u64 missed = 0;
+  void *missed_ptrs[8];
+  for (sz i = 0; i < n_pages; i++) {
+    valk_gc_page_t *p = saved[i].page;
+    u8 *mb = valk_gc_page_mark_bitmap(p);
+    for (u16 b = 0; b < p->bitmap_bytes; b++) {
+      u8 hole = (u8)(mb[b] & ~saved[i].saved[b]);
+      while (hole) {
+        u32 bit = (u32)__builtin_ctz(hole);
+        __report_missed_slot(p, p->size_class, (u32)b * 8 + bit);
+        if (missed < 8)
+          missed_ptrs[missed] = valk_gc_page_slot_ptr(p, (u32)b * 8 + bit);
+        missed++;
+        hole = (u8)(hole & (hole - 1));
+      }
+    }
+  }
+  for (sz i = 0; i < n_large; i++) {
+    if (lsaved[i].obj->marked && !lsaved[i].saved_marked) {
+      fprintf(stderr,
+              "[GC-VERIFY-FULL] MISSED large object %p (%zu bytes) "
+              "(reachable at pre-sweep, unmarked by concurrent cycle)\n",
+              lsaved[i].obj->data, lsaved[i].obj->size);
+      if (missed < 8) missed_ptrs[missed] = lsaved[i].obj->data;
+      missed++;
+    }
+  }
+
+  // 4. Restore the real state (verified: remark-reachable is covered by it,
+  // so sweeping with the restored bitmaps is safe when missed == 0).
+  for (sz i = 0; i < n_pages; i++) {
+    memcpy(valk_gc_page_mark_bitmap(saved[i].page), saved[i].saved,
+           saved[i].page->bitmap_bytes);
+    free(saved[i].saved);
+  }
+  free(saved);
+  for (sz i = 0; i < n_large; i++) {
+    lsaved[i].obj->marked = lsaved[i].saved_marked;
+  }
+  free(lsaved);
+
+  // 5. With the CONCURRENT mark state restored, show who references each
+  // missed object: a marked referencer means the edge was created after the
+  // referencer was traced (missing barrier); an unmarked one extends the
+  // missed subgraph toward its root.
+  for (u64 i = 0; i < missed && i < 8; i++) {
+    fprintf(stderr, "[GC-VERIFY-FULL] referencers of %p:\n", missed_ptrs[i]);
+    __report_referencers(heap, missed_ptrs[i]);
+  }
+
+  VALK_ASSERT(missed == 0,
+              "GC verify-full: concurrent mark missed %llu live object(s) "
+              "before sweep (see [GC-VERIFY-FULL] report above)",
+              (unsigned long long)missed);
+}
+// LCOV_EXCL_STOP

@@ -644,6 +644,11 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
         res->fun.env = lval->fun.env;
         res->fun.body = lval->fun.body;
         res->fun.formals = lval->fun.formals;
+        // The copy SHARES children (see LVAL_CONS below). Copies of heap
+        // functions during a concurrent mark are covered by the store-site
+        // insertion barriers when the copy is published (lenv_put,
+        // dict_set, WB_STORE); per-construction logging here flooded the
+        // SATB log (conc phase 1ms -> 8s under valk-check).
       }
       res->fun.native_fn = lval->fun.native_fn;
       res->fun.native_name = lval->fun.native_name;

@@ -124,12 +124,18 @@ static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t*
     // can be reachable ONLY through black objects and gets swept while live
     // (observed as vanished env bindings and cyclic parent chains in the
     // LSP server under typing load).
-    valk_gc_wb_lval(v);
+    valk_gc_wb_insert(v);
     return v;
   }
 
   void *existing = valk_ptr_map_get(&ctx->ptr_map, v);
-  if (existing != nullptr) return (valk_lval_t *)existing;
+  if (existing != nullptr) {
+    // Prior copy from this evacuation being wired into another born-black
+    // parent: same insertion as above, and the copy itself may be born
+    // black with untraced children.
+    valk_gc_wb_insert((valk_lval_t *)existing);
+    return (valk_lval_t *)existing;
+  }
 
   valk_lval_t* new_val = nullptr;
   VALK_WITH_ALLOC((void*)ctx->heap) {
@@ -155,44 +161,57 @@ static valk_lval_t* valk_evacuate_value(valk_evacuation_ctx_t* ctx, valk_lval_t*
     case LVAL_SYM:
     case LVAL_STR:
     case LVAL_ERR:
-      if (new_val->str != nullptr && !(new_val->flags & LVAL_FLAG_INTERNED) &&
-          (needs_string_copy || valk_ptr_in_arena(ctx->scratch, new_val->str))) {
-        u64 len = strlen(v->str) + 1;
-        VALK_WITH_ALLOC((void*)ctx->heap) {
-          new_val->str = valk_mem_alloc(len);
-        }
-        if (new_val->str) {
-          memcpy(new_val->str, v->str, len);
-          ctx->bytes_copied += len;
+      if (new_val->str != nullptr && !(new_val->flags & LVAL_FLAG_INTERNED)) {
+        if (needs_string_copy || valk_ptr_in_arena(ctx->scratch, new_val->str)) {
+          u64 len = strlen(v->str) + 1;
+          VALK_WITH_ALLOC((void*)ctx->heap) {
+            new_val->str = valk_mem_alloc(len);
+          }
+          if (new_val->str) {
+            memcpy(new_val->str, v->str, len);
+            ctx->bytes_copied += len;
+          }
+        } else {
+          // Buffer already on the heap and SHARED into this born-black
+          // copy: the copy is never traced, so mark the buffer directly or
+          // this cycle sweeps it while referenced (VALK_GC_VERIFY_FULL
+          // caught this as white str buffers under marked STR lvals).
+          valk_gc_wb_raw(new_val->str);
         }
       }
       break;
 
     case LVAL_FUN:
-      if (new_val->fun.name != nullptr && new_val->fun.builtin == nullptr &&
-          (needs_string_copy || valk_ptr_in_arena(ctx->scratch, new_val->fun.name))) {
-        u64 len = strlen(v->fun.name) + 1;
-        VALK_WITH_ALLOC((void*)ctx->heap) {
-          new_val->fun.name = valk_mem_alloc(len);
-        }
-        if (new_val->fun.name) {
-          memcpy(new_val->fun.name, v->fun.name, len);
-          ctx->bytes_copied += len;
+      if (new_val->fun.name != nullptr && new_val->fun.builtin == nullptr) {
+        if (needs_string_copy || valk_ptr_in_arena(ctx->scratch, new_val->fun.name)) {
+          u64 len = strlen(v->fun.name) + 1;
+          VALK_WITH_ALLOC((void*)ctx->heap) {
+            new_val->fun.name = valk_mem_alloc(len);
+          }
+          if (new_val->fun.name) {
+            memcpy(new_val->fun.name, v->fun.name, len);
+            ctx->bytes_copied += len;
+          }
+        } else {
+          valk_gc_wb_raw(new_val->fun.name); // shared heap buffer, see STR case
         }
       }
       break;
 
     // LCOV_EXCL_START - REF deep evacuation: REFs use leaf path via valk_evacuate_to_heap
     case LVAL_REF:
-      if (new_val->ref.type != nullptr &&
-          (needs_string_copy || valk_ptr_in_arena(ctx->scratch, new_val->ref.type))) {
-        u64 len = strlen(v->ref.type) + 1;
-        VALK_WITH_ALLOC((void*)ctx->heap) {
-          new_val->ref.type = valk_mem_alloc(len);
-        }
-        if (new_val->ref.type) {
-          memcpy(new_val->ref.type, v->ref.type, len);
-          ctx->bytes_copied += len;
+      if (new_val->ref.type != nullptr) {
+        if (needs_string_copy || valk_ptr_in_arena(ctx->scratch, new_val->ref.type)) {
+          u64 len = strlen(v->ref.type) + 1;
+          VALK_WITH_ALLOC((void*)ctx->heap) {
+            new_val->ref.type = valk_mem_alloc(len);
+          }
+          if (new_val->ref.type) {
+            memcpy(new_val->ref.type, v->ref.type, len);
+            ctx->bytes_copied += len;
+          }
+        } else {
+          valk_gc_wb_raw(new_val->ref.type); // shared heap buffer, see STR case
         }
       }
       if (new_val->ref.evacuate)
@@ -306,15 +325,18 @@ static void valk_evacuate_children(valk_evacuation_ctx_t* ctx, valk_lval_t* v) {
     case LVAL_STR:
     case LVAL_SYM:
     case LVAL_ERR:
-      if (v->str != nullptr && !(v->flags & LVAL_FLAG_INTERNED) &&
-          (ctx->scratch == nullptr || valk_ptr_in_arena(ctx->scratch, v->str))) {
-        u64 len = strlen(v->str) + 1;
-        char* new_str = nullptr;
-        VALK_WITH_ALLOC((void*)ctx->heap) { new_str = valk_mem_alloc(len); }
-        if (new_str && new_str != v->str) {
-          memcpy(new_str, v->str, len);
-          v->str = new_str;
-          ctx->bytes_copied += len;
+      if (v->str != nullptr && !(v->flags & LVAL_FLAG_INTERNED)) {
+        if (ctx->scratch == nullptr || valk_ptr_in_arena(ctx->scratch, v->str)) {
+          u64 len = strlen(v->str) + 1;
+          char* new_str = nullptr;
+          VALK_WITH_ALLOC((void*)ctx->heap) { new_str = valk_mem_alloc(len); }
+          if (new_str && new_str != v->str) {
+            memcpy(new_str, v->str, len);
+            v->str = new_str;
+            ctx->bytes_copied += len;
+          }
+        } else {
+          valk_gc_wb_raw(v->str); // shared heap buffer, see valk_evacuate_value
         }
       }
       break;
@@ -448,7 +470,7 @@ static valk_lenv_t* valk_evacuate_env(valk_evacuation_ctx_t* ctx, valk_lenv_t* e
     if (current->allocator == ctx->heap) {
       // Same born-black edge as in valk_evacuate_value: the evacuated
       // closure shares this heap env, but the closure copy is never traced.
-      valk_gc_wb_env(current);
+      valk_gc_wb_env_insert(current);
       if (prev_new != nullptr) prev_new->parent = current;
       if (new_root == nullptr) new_root = current;
       break;
@@ -499,7 +521,7 @@ static inline bool fix_scratch_pointer(valk_evacuation_ctx_t* ctx, valk_lval_t**
 
   // Heap value left in place inside an evacuated (born-black) object: log it
   // for the concurrent marker (see valk_evacuate_value).
-  valk_gc_wb_lval(val);
+  valk_gc_wb_insert(val);
   return false;
 }
 // LCOV_EXCL_STOP

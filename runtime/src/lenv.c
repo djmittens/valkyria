@@ -212,7 +212,7 @@ void valk_lenv_put(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   // children. Without this, an old heap value whose only remaining reference
   // is a binding in a window-born env is swept while live (observed as
   // hover responses with "id": null under typing load).
-  valk_gc_wb_lval(safe_val);
+  valk_gc_wb_insert(safe_val);
 
   if (env->cmap) {
     // Concurrent (shared global) env: striped-lock map handles overwrite,
