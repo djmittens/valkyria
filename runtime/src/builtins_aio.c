@@ -84,12 +84,16 @@ static valk_lval_t* valk_builtin_aio_run(valk_lenv_t* e, valk_lval_t* a) {
   // LCOV_EXCL_START - aio/run: blocking production loop, never called in tests (tests use direct await)
   valk_aio_system_t* sys = (valk_aio_system_t*)aio_ref->ref.ptr;
 
-  // GC-interruptible wait: the STW coordinator's wake_threads signals the
-  // park immediately, so GC rendezvous is not delayed by up to a full sleep
-  // quantum (a blind uv_sleep(100) here put a ~100ms floor on every pause).
-  while (!valk_aio_is_shutting_down(sys)) {
+  // Event-driven wait, no poll quantum: GC wakes the park via wake_threads
+  // (a blind uv_sleep(100) here used to put a ~100ms floor on every pause)
+  // and valk_aio_stop wakes it via wake_parked. The sequence captured
+  // before the shutdown check closes the check-to-park race; the timeout is
+  // only a failsafe against a missed wake.
+  for (;;) {
+    u64 seq = valk_gc_park_prepare();
     VALK_GC_SAFE_POINT();
-    valk_gc_thread_park(100);
+    if (valk_aio_is_shutting_down(sys)) break;
+    valk_gc_thread_park_seq(seq, 1000);
   }
 
   for (u32 i = 0; i < sys->num_loops; i++) {

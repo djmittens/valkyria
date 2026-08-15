@@ -41,10 +41,25 @@ void valk_system_remove_subsystem(valk_system_t *sys, void *ctx);
 void valk_system_wake_threads(valk_system_t *sys);
 
 // GC-interruptible bounded sleep: parks on the caller's registry slot until
-// timeout_ms elapses or the STW coordinator wakes it. Callers must run
-// VALK_GC_SAFE_POINT() around it in their loop. Falls back to a plain sleep
-// for unregistered threads.
+// timeout_ms elapses or a wake (STW request, wake_parked) arrives. Callers
+// must run VALK_GC_SAFE_POINT() around it in their loop. Falls back to a
+// plain sleep for unregistered threads.
 void valk_gc_thread_park(u64 timeout_ms);
+
+// Eventcount variant for waits on external conditions: capture the sequence
+// FIRST, then check the condition, then park with the captured sequence.
+//   u64 seq = valk_gc_park_prepare();
+//   if (condition) break;
+//   valk_gc_thread_park_seq(seq, failsafe_ms);
+// A wake between the condition check and the park advances the sequence and
+// the park returns immediately instead of sleeping through the event.
+u64 valk_gc_park_prepare(void);
+void valk_gc_thread_park_seq(u64 seq, u64 timeout_ms);
+
+// Wake every parked thread WITHOUT invoking custom wake_fns (safe from
+// shutdown paths where uv handles may be tearing down). Anyone whose wait
+// condition may have changed re-checks and re-parks if it hasn't.
+void valk_system_wake_parked(valk_system_t *sys);
 
 void valk_gc_reset_after_fork(void);
 void valk_gc_mark_reset_after_fork(void);
@@ -306,6 +321,11 @@ typedef struct valk_gc_thread_info {
   // NOT in valk_thread_context_t, which VALK_WITH_CTX copies by value.
   pthread_mutex_t park_mutex;
   pthread_cond_t park_cond;
+  // Eventcount for the park: bumped under park_mutex by every wake. A parker
+  // that captured the sequence BEFORE checking its external wait condition
+  // (e.g. an aio shutdown flag) skips the wait if the sequence moved, so a
+  // wake landing between check and wait cannot be lost.
+  _Atomic u64 park_seq;
   // Rendezvous diagnostics: when this thread last arrived at an STW barrier.
   // Written by the owner, read by the coordinator to identify slow arrivers.
   u64 last_rdv_ns;

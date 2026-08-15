@@ -349,6 +349,10 @@ void valk_aio_stop(valk_aio_system_t *sys) {
   for (u32 i = 0; i < sys->num_loops; i++) {
     uv_async_send(&sys->loops[i].stopper);
   }
+
+  // Wake anything parked on shutdown-flag conditions (aio/run's main-thread
+  // wait); without this they would only notice at their failsafe timeout.
+  if (valk_sys) valk_system_wake_parked(valk_sys);
 }
 
 

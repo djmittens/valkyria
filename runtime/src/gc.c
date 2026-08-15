@@ -41,6 +41,7 @@ static void __system_init_coordinator(valk_system_t *sys) {
     memset(&sys->threads[i].mark_queue, 0, sizeof(sys->threads[i].mark_queue));
     pthread_mutex_init(&sys->threads[i].park_mutex, nullptr);
     pthread_cond_init(&sys->threads[i].park_cond, &park_attr);
+    atomic_store(&sys->threads[i].park_seq, 0);
   }
   pthread_condattr_destroy(&park_attr);
 
@@ -306,23 +307,43 @@ void valk_system_remove_subsystem(valk_system_t *sys, void *ctx) {
   pthread_mutex_unlock(&sys->subsystems_lock);
 }
 
+static void __park_wake_slot(valk_gc_thread_info_t *slot) {
+  // Bumping the sequence and signaling under the mutex pairs with the
+  // parker's check-then-wait, so a wake between check and wait cannot be
+  // lost; waking an unused slot is harmless.
+  pthread_mutex_lock(&slot->park_mutex);
+  atomic_fetch_add_explicit(&slot->park_seq, 1, memory_order_relaxed);
+  pthread_cond_signal(&slot->park_cond);
+  pthread_mutex_unlock(&slot->park_mutex);
+}
+
 void valk_system_wake_threads(valk_system_t *sys) {
   for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
     if (!sys->threads[i].active) continue;
     if (sys->threads[i].wake_fn) {
       sys->threads[i].wake_fn(sys->threads[i].wake_ctx);
     }
-    // Any thread may be parked in valk_gc_thread_park (e.g. the sleep
-    // builtin), including ones with a custom wake_fn. Signaling under the
-    // mutex pairs with the parker's flag-check-then-wait, so a wake between
-    // check and wait cannot be lost; signaling an unused cond is harmless.
-    pthread_mutex_lock(&sys->threads[i].park_mutex);
-    pthread_cond_signal(&sys->threads[i].park_cond);
-    pthread_mutex_unlock(&sys->threads[i].park_mutex);
+    // Any thread may be parked (e.g. the sleep builtin or aio/run),
+    // including ones with a custom wake_fn.
+    __park_wake_slot(&sys->threads[i]);
   }
 }
 
-void valk_gc_thread_park(u64 timeout_ms) {
+void valk_system_wake_parked(valk_system_t *sys) {
+  for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
+    if (!sys->threads[i].active) continue;
+    __park_wake_slot(&sys->threads[i]);
+  }
+}
+
+u64 valk_gc_park_prepare(void) {
+  if (!valk_sys || !valk_thread_ctx.gc_registered) return 0; // LCOV_EXCL_LINE
+  return atomic_load_explicit(
+      &valk_sys->threads[valk_thread_ctx.gc_thread_id].park_seq,
+      memory_order_acquire);
+}
+
+static void __thread_park(u64 seq, bool use_seq, u64 timeout_ms) {
   // LCOV_EXCL_START - unregistered fallback and wake timing are not
   // deterministically reachable in tests
   if (!valk_sys || !valk_thread_ctx.gc_registered) {
@@ -335,7 +356,9 @@ void valk_gc_thread_park(u64 timeout_ms) {
   valk_gc_thread_info_t *slot = &valk_sys->threads[valk_thread_ctx.gc_thread_id];
   pthread_mutex_lock(&slot->park_mutex);
   if (atomic_load_explicit(&valk_thread_ctx.safepoint_flags,
-                           memory_order_acquire) == 0) {
+                           memory_order_acquire) == 0 &&
+      (!use_seq ||
+       atomic_load_explicit(&slot->park_seq, memory_order_relaxed) == seq)) {
 #ifdef __APPLE__
     struct timespec rel = {.tv_sec = (time_t)(timeout_ms / 1000),
                            .tv_nsec = (long)(timeout_ms % 1000) * 1000000L};
@@ -354,6 +377,14 @@ void valk_gc_thread_park(u64 timeout_ms) {
 #endif
   }
   pthread_mutex_unlock(&slot->park_mutex);
+}
+
+void valk_gc_thread_park(u64 timeout_ms) {
+  __thread_park(0, false, timeout_ms);
+}
+
+void valk_gc_thread_park_seq(u64 seq, u64 timeout_ms) {
+  __thread_park(seq, true, timeout_ms);
 }
 // LCOV_EXCL_BR_STOP
 
