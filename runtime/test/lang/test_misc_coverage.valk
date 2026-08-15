@@ -54,6 +54,10 @@
     (= {systems} (map (\ {_} {aio/await (aio/start {:num-threads 1})})
                       (range 1 18)))
     (map (\ {s} {aio/stop s}) systems)
+    ; Join the loop threads: aio/stop only signals, and threads still alive
+    ; at process exit trip TSAN's thread-leak check. aio/run on an
+    ; already-stopping system falls through its wait and joins.
+    (map (\ {s} {aio/run s}) systems)
     (== (len systems) 17)
   })
 

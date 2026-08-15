@@ -5,8 +5,13 @@
 extern void valk_async_handle_run_resource_cleanups(valk_async_handle_t *handle);
 
 void valk_async_notify_parent(valk_async_handle_t *child) {
-  if (!child || !child->parent) return; // LCOV_EXCL_BR_LINE - null checks
-  valk_async_handle_t *parent = child->parent;
+  if (!child) return; // LCOV_EXCL_BR_LINE - null checks
+  // Acquire load pairing with add_child's release store: a worker can
+  // finish the child while the main thread is still wiring the parent
+  // (TSAN-caught race between this read and add_child's atomic store).
+  valk_async_handle_t *parent = atomic_load_explicit(
+      (_Atomic(valk_async_handle_t *)*)&child->parent, memory_order_acquire);
+  if (!parent) return; // LCOV_EXCL_BR_LINE - unparented handle
   
   valk_async_status_t status = valk_async_handle_get_status(child);
   
@@ -43,12 +48,16 @@ static void valk_async_propagate_single(void *ctx) {
   for (u32 i = 0; i < children_count; i++) {
     valk_async_handle_t *child = valk_chunked_ptrs_get(&source->children, i);
     valk_async_status_t child_status = valk_async_handle_get_status(child);
+    // Acquire pairing with add_child's release store of child->parent (the
+    // wiring thread races completion-driven propagation).
+    valk_async_handle_t *child_parent = atomic_load_explicit(
+        (_Atomic(valk_async_handle_t *)*)&child->parent, memory_order_acquire);
     VALK_DEBUG("  Child %zu: handle %llu, status=%d, parent=%llu (source=%llu), on_complete=%p",
               i, child->id, child_status,
-              child->parent ? child->parent->id : 0, source->id,
+              child_parent ? child_parent->id : 0, source->id,
               (void*)child->on_complete);
     if (child_status == VALK_ASYNC_RUNNING && // LCOV_EXCL_BR_LINE - status check
-        (child->parent == source || child->on_complete != NULL)) {
+        (child_parent == source || child->on_complete != NULL)) {
       if (source_status == VALK_ASYNC_COMPLETED) { // LCOV_EXCL_BR_LINE - status branch
         if (child->on_complete && child->env) { // LCOV_EXCL_BR_LINE - callback presence
           valk_lval_t *args;

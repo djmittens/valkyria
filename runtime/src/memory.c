@@ -509,31 +509,37 @@ bool valk_chunked_ptrs_push(valk_chunked_ptrs_t *self, void *ptr, void *alloc_ct
     if (!chunk) return false; // LCOV_EXCL_LINE - OOM
     chunk->next = nullptr;
     
+    // Release-publish new chunks: concurrent readers (async completion
+    // walking parent->children while the constructor still appends) load
+    // head/next with acquire.
     if (self->tail) {
-      self->tail->next = chunk;
+      __atomic_store_n(&self->tail->next, chunk, __ATOMIC_RELEASE);
     } else {
-      self->head = chunk;
+      __atomic_store_n(&self->head, chunk, __ATOMIC_RELEASE);
     }
     self->tail = chunk;
     self->tail_count = 0;
   }
-  
-  self->tail->items[self->tail_count++] = ptr;
-  self->count++;
+
+  // Item store first, then the count bump with release: an observed count
+  // implies the slot (and any new chunk link) is initialized.
+  self->tail->items[self->tail_count] = ptr;
+  self->tail_count++;
+  __atomic_store_n(&self->count, self->count + 1, __ATOMIC_RELEASE);
   return true;
 }
 
 void *valk_chunked_ptrs_get(valk_chunked_ptrs_t *self, u32 index) {
-  if (index >= self->count) return nullptr;
-  
+  if (index >= __atomic_load_n(&self->count, __ATOMIC_ACQUIRE)) return nullptr;
+
   u32 chunk_idx = index / VALK_CHUNK_SIZE;
   u32 item_idx = index % VALK_CHUNK_SIZE;
-  
-  valk_ptr_chunk_t *chunk = self->head;
+
+  valk_ptr_chunk_t *chunk = __atomic_load_n(&self->head, __ATOMIC_ACQUIRE);
   for (u32 i = 0; i < chunk_idx && chunk; i++) {
-    chunk = chunk->next;
+    chunk = __atomic_load_n(&chunk->next, __ATOMIC_ACQUIRE);
   }
-  
+
   return chunk ? chunk->items[item_idx] : nullptr; // LCOV_EXCL_BR_LINE - defensive null check
 }
 

@@ -44,21 +44,28 @@ static bool __valk_singletons_initialized = false;
 // the miss path (insert/grow). Slots go NULL -> string exactly once per
 // version (release-published), so an acquire probe either sees a fully
 // written string or the NULL probe terminator. On grow a new version is
-// release-published and the old one is deliberately leaked: concurrent
-// readers may still be probing it, and the doubling schedule bounds the
-// total leak below one final table's size.
+// release-published and the old one is RETIRED, not freed: concurrent
+// readers may still be probing it. Retired versions are chained on
+// retired_next so they stay reachable - the retention is intentional and
+// bounded (doubling schedule keeps the total below one final table's
+// size), and keeping them reachable stops LeakSanitizer from failing
+// every exiting process over it (which cascaded into every exit-code
+// asserting test under ASAN in CI).
 #define SYM_TABLE_INITIAL_CAP 512
 
-typedef struct {
+typedef struct sym_table_ver {
+  struct sym_table_ver *retired_next;
   u64 capacity;
   const char *strings[];
 } sym_table_ver_t;
 
 static struct {
   _Atomic(sym_table_ver_t *) cur;
+  sym_table_ver_t *retired;
   u64 count;
   pthread_mutex_t lock;
-} __sym_table = {.cur = NULL, .count = 0, .lock = PTHREAD_MUTEX_INITIALIZER};
+} __sym_table = {.cur = NULL, .retired = NULL, .count = 0,
+                 .lock = PTHREAD_MUTEX_INITIALIZER};
 
 static u64 sym_hash(const char *s) {
   u64 h = 14695981039346656037ULL;
@@ -100,7 +107,9 @@ static void sym_table_grow(sym_table_ver_t *old) {
     nt->strings[idx] = s;
   }
   atomic_store_explicit(&__sym_table.cur, nt, memory_order_release);
-  // old is leaked on purpose; see the table comment.
+  // Retire the old version (still reachable; see the table comment).
+  old->retired_next = __sym_table.retired;
+  __sym_table.retired = old;
 }
 
 // The table is statically initialized empty and grown on first use under its

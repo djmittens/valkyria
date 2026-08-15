@@ -64,7 +64,7 @@ static void __verify_page(valk_gc_page_t *page, u8 size_class, sz *out_allocated
     VALK_ASSERT(mark_bitmap[i] == 0,
                 "GC verify: class %u page %u mark bitmap byte %u is 0x%02x "
                 "after sweep (mark bits leaked)",
-                size_class, page->page_id, i, mark_bitmap[i]);
+                size_class, page->page_id, i, mark_bitmap[i]); // LCOV_EXCL_LINE - assert failure args
 
     u8 alloc_byte = alloc_bitmap[i];
     u32 first_slot = (u32)i * 8;
@@ -73,7 +73,7 @@ static void __verify_page(valk_gc_page_t *page, u8 size_class, sz *out_allocated
       VALK_ASSERT((alloc_byte & (u8)~valid) == 0,
                   "GC verify: class %u page %u alloc bit set past "
                   "slots_per_page=%u (byte %u = 0x%02x)",
-                  size_class, page->page_id, slots, i, alloc_byte);
+                  size_class, page->page_id, slots, i, alloc_byte); // LCOV_EXCL_LINE - assert failure args
     }
     allocated += (sz)__builtin_popcount((unsigned)alloc_byte);
   }
@@ -82,12 +82,12 @@ static void __verify_page(valk_gc_page_t *page, u8 size_class, sz *out_allocated
   VALK_ASSERT(allocated == (sz)num_allocated,
               "GC verify: class %u page %u alloc bitmap has %zu bits set but "
               "num_allocated=%u (accounting drift)",
-              size_class, page->page_id, allocated, num_allocated);
+              size_class, page->page_id, allocated, num_allocated); // LCOV_EXCL_LINE - assert failure args
 
   if (page->reclaimed) {
-    VALK_ASSERT(num_allocated == 0,
+    VALK_ASSERT(num_allocated == 0, // LCOV_EXCL_LINE - assert failure args
                 "GC verify: class %u page %u is reclaimed but has "
-                "num_allocated=%u", size_class, page->page_id, num_allocated);
+                "num_allocated=%u", size_class, page->page_id, num_allocated); // LCOV_EXCL_LINE - assert failure args
   }
 
   *out_allocated = allocated;
@@ -111,7 +111,7 @@ void valk_gc_verify_heap_post_sweep(valk_gc_heap_t *heap) {
     VALK_ASSERT(class_allocated == used,
                 "GC verify: class %u pages hold %zu allocated slots but "
                 "used_slots=%zu (per-class accounting drift)",
-                c, class_allocated, used);
+                c, class_allocated, used); // LCOV_EXCL_LINE - assert failure args
   }
 
   pthread_mutex_lock(&heap->large_lock);
@@ -120,7 +120,7 @@ void valk_gc_verify_heap_post_sweep(valk_gc_heap_t *heap) {
        obj = obj->next) {
     VALK_ASSERT(!obj->marked,
                 "GC verify: large object %p (%zu bytes) still marked after "
-                "sweep", obj->data, obj->size);
+                "sweep", obj->data, obj->size); // LCOV_EXCL_LINE - assert failure args
     large_bytes += obj->size;
   }
   pthread_mutex_unlock(&heap->large_lock);
@@ -128,7 +128,7 @@ void valk_gc_verify_heap_post_sweep(valk_gc_heap_t *heap) {
   sz tracked = atomic_load(&heap->large_object_bytes);
   VALK_ASSERT(large_bytes == tracked,
               "GC verify: large object list holds %zu bytes but "
-              "large_object_bytes=%zu", large_bytes, tracked);
+              "large_object_bytes=%zu", large_bytes, tracked); // LCOV_EXCL_LINE - assert failure args
 }
 
 // ============================================================================
@@ -155,6 +155,7 @@ void valk_gc_verify_log_bitmark(void *ptr, u8 site) {
   __markprov_ring[i] = (verify_markprov_rec_t){.ptr = ptr, .site = site};
 }
 
+// LCOV_EXCL_START - failure forensics: only run when a marker hole exists
 static const char *__markprov_name(u8 site) {
   switch (site) {
     case VALK_MARKPROV_REFILL: return "refill-blacken";
@@ -181,6 +182,8 @@ static void __dump_markprov(void *ptr) {
                     "(marked via a tracing path or before ring coverage)\n",
             ptr);
 }
+
+// LCOV_EXCL_STOP
 
 // ============================================================================
 // Refill Provenance Ring
@@ -215,6 +218,7 @@ void valk_gc_verify_log_refill(valk_gc_page_t *page, u8 size_class,
   };
 }
 
+// LCOV_EXCL_START - failure forensics: only run when a marker hole exists
 static void __dump_refills_for_page(valk_gc_page_t *page) {
   fprintf(stderr, "[GC-VERIFY] recent refills for page %p:\n", (void *)page);
   u64 end = atomic_load(&__refill_ring_next);
@@ -230,6 +234,8 @@ static void __dump_refills_for_page(valk_gc_page_t *page) {
   }
 }
 
+// LCOV_EXCL_STOP
+
 // ============================================================================
 // Pre-Sweep Root-Marking Verification (concurrent cycles)
 // ============================================================================
@@ -238,6 +244,7 @@ static void __dump_refills_for_page(valk_gc_page_t *page) {
 // be marked; an unmarked one is about to be swept while live - the exact
 // corruption that produces vanished bindings and cyclic parent chains.
 
+// LCOV_EXCL_START - failure forensics: only run when a marker hole exists
 static void __dump_env_chain(valk_gc_heap_t *heap, valk_lenv_t *env,
                              u64 thread_idx, const char *root_kind) {
   fprintf(stderr, "[GC-VERIFY] chain (thread %llu, root=%s):\n",
@@ -277,6 +284,8 @@ static void __dump_env_chain(valk_gc_heap_t *heap, valk_lenv_t *env,
   }
 }
 
+// LCOV_EXCL_STOP
+
 static void __report_referencers(valk_gc_heap_t *heap, void *target);
 
 static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
@@ -286,6 +295,7 @@ static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
   for (; env != nullptr && hops < 10000; env = env->parent, hops++) {
     valk_gc_ptr_location_t loc;
     if (!valk_gc_ptr_to_location(heap, env, &loc)) return;
+// LCOV_EXCL_START - failure path
     if (!valk_gc_page_is_marked(loc.page, loc.slot)) {
       __dump_env_chain(heap, root_env, thread_idx, root_kind);
     }
@@ -294,8 +304,10 @@ static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
                 "nsyms=%llu) is UNMARKED before concurrent sweep",
                 (void *)env, (unsigned long long)thread_idx, root_kind, hops,
                 (unsigned long long)env->symbols.count);
+// LCOV_EXCL_STOP
     if (env->symbols.items &&
         valk_gc_ptr_to_location(heap, env->symbols.items, &loc)) {
+// LCOV_EXCL_START - failure path
       if (!valk_gc_page_is_marked(loc.page, loc.slot)) {
         __dump_env_chain(heap, root_env, thread_idx, root_kind);
         __dump_refills_for_page(loc.page);
@@ -314,6 +326,7 @@ static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
                   (void *)env->symbols.items, (void *)env,
                   (unsigned long long)thread_idx, root_kind);
     }
+// LCOV_EXCL_STOP
     if (env->vals.items &&
         valk_gc_ptr_to_location(heap, env->vals.items, &loc)) {
       VALK_ASSERT(valk_gc_page_is_marked(loc.page, loc.slot),
@@ -326,6 +339,7 @@ static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
         if (val == nullptr || (val->flags & LVAL_FLAG_IMMORTAL)) continue;
         valk_gc_ptr_location_t vloc;
         if (!valk_gc_ptr_to_location(heap, val, &vloc)) continue;
+// LCOV_EXCL_START - failure path
         if (!valk_gc_page_is_marked(vloc.page, vloc.slot)) {
           u8 *mb = valk_gc_page_mark_bitmap(vloc.page);
           u32 marked = 0;
@@ -351,13 +365,16 @@ static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
                     env->symbols.items ? env->symbols.items[i] : "?",
                     (void *)env, (unsigned long long)thread_idx, root_kind);
       }
+// LCOV_EXCL_STOP
     }
   }
+// LCOV_EXCL_START - failure path
   VALK_ASSERT(hops < 10000,
               "GC verify: env parent chain from thread %llu root=%s exceeds "
               "10000 hops (cyclic chain)",
               (unsigned long long)thread_idx, root_kind);
 }
+// LCOV_EXCL_STOP
 
 void valk_gc_verify_conc_roots_marked(valk_gc_heap_t *heap) {
   if (!heap || !__verify_roots_enabled()) return;
@@ -434,6 +451,7 @@ typedef struct {
   bool saved_marked;
 } verify_saved_large_t;
 
+// LCOV_EXCL_START - failure forensics: only run when a marker hole exists
 static void __report_missed_slot(valk_gc_page_t *page, u8 size_class,
                                  u32 slot) {
   void *ptr = valk_gc_page_slot_ptr(page, slot);
@@ -520,6 +538,8 @@ static void __report_referencers_depth(valk_gc_heap_t *heap, void *target,
   pthread_mutex_unlock(&heap->large_lock);
 }
 
+// LCOV_EXCL_STOP
+
 void valk_gc_verify_full_mark(valk_gc_heap_t *heap) {
   if (!heap || !__verify_full_enabled()) return;
 
@@ -570,16 +590,19 @@ void valk_gc_verify_full_mark(valk_gc_heap_t *heap) {
     for (u16 b = 0; b < p->bitmap_bytes; b++) {
       u8 hole = (u8)(mb[b] & ~saved[i].saved[b]);
       while (hole) {
+// LCOV_EXCL_START - failure path
         u32 bit = (u32)__builtin_ctz(hole);
         __report_missed_slot(p, p->size_class, (u32)b * 8 + bit);
         if (missed < 8)
           missed_ptrs[missed] = valk_gc_page_slot_ptr(p, (u32)b * 8 + bit);
         missed++;
         hole = (u8)(hole & (hole - 1));
+// LCOV_EXCL_STOP
       }
     }
   }
   for (sz i = 0; i < n_large; i++) {
+// LCOV_EXCL_START - failure path
     if (lsaved[i].obj->marked && !lsaved[i].saved_marked) {
       fprintf(stderr,
               "[GC-VERIFY-FULL] MISSED large object %p (%zu bytes) "
@@ -588,6 +611,7 @@ void valk_gc_verify_full_mark(valk_gc_heap_t *heap) {
       if (missed < 8) missed_ptrs[missed] = lsaved[i].obj->data;
       missed++;
     }
+// LCOV_EXCL_STOP
   }
 
   // 4. Restore the real state (verified: remark-reachable is covered by it,
@@ -607,6 +631,7 @@ void valk_gc_verify_full_mark(valk_gc_heap_t *heap) {
   // missed object: a marked referencer means the edge was created after the
   // referencer was traced (missing barrier); an unmarked one extends the
   // missed subgraph toward its root.
+// LCOV_EXCL_START - failure path
   for (u64 i = 0; i < missed && i < 8; i++) {
     fprintf(stderr, "[GC-VERIFY-FULL] referencers of %p:\n", missed_ptrs[i]);
     __report_referencers(heap, missed_ptrs[i]);
@@ -616,5 +641,6 @@ void valk_gc_verify_full_mark(valk_gc_heap_t *heap) {
               "GC verify-full: concurrent mark missed %llu live object(s) "
               "before sweep (see [GC-VERIFY-FULL] report above)",
               (unsigned long long)missed);
+// LCOV_EXCL_STOP
 }
 // LCOV_EXCL_STOP

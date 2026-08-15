@@ -50,12 +50,22 @@ static void __test_thread_onboard(void) {
   if (valk_sys) valk_system_register_thread(valk_sys, NULL, NULL);
 }
 
-static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
+// Runtime, env, and handler are initialized ONCE per process. In no-fork
+// mode (sanitizer runs) every test used to re-create the system and a
+// fresh env - but the module loader's process-global dedup skips
+// re-evaluating already-loaded files, so the fresh env never received the
+// handler def ("Symbol `handler` is not bound" on tests 2..N). The system
+// deliberately survives across tests anyway (see cleanup_test_context).
+static valk_lenv_t *g_env = nullptr;
+static valk_lval_t *g_handler = nullptr;
+
+static bool init_runtime_once(VALK_TEST_ARGS()) {
   (void)_suite;
-  
+  if (g_env) return true;
+
   printf("[test] Initializing runtime...\n");
   fflush(stdout);
-  
+
   // Initialize system with GC heap - this registers main thread with GC
   valk_system_config_t sys_cfg = valk_system_config_default();
   sys_cfg.gc_heap_size = 1024ULL * 1024 * 1024;  // 1GB for large response tests
@@ -63,22 +73,42 @@ static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
   printf("[test] Runtime initialized, heap=%p\n", valk_thread_ctx.heap);
   fflush(stdout);
 
-  ctx->env = valk_lenv_empty();
-  valk_lenv_builtins(ctx->env);
-  valk_thread_ctx.root_env = ctx->env;
-  valk_gc_set_root(valk_thread_ctx.heap, ctx->env);
+  valk_lenv_t *env = valk_lenv_empty();
+  valk_lenv_builtins(env);
+  valk_thread_ctx.root_env = env;
+  valk_gc_set_root(valk_thread_ctx.heap, env);
 
-  valk_load_file(ctx->env, "stdlib/prelude.valk");
-  valk_load_file(ctx->env, "runtime/test/http/test_large_response_handler.valk");
-
-  ctx->handler_fn = valk_lenv_get(ctx->env, valk_lval_sym("handler"));
-  if (!ctx->handler_fn || LVAL_TYPE(ctx->handler_fn) != LVAL_FUN) {
-    VALK_FAIL("Handler is not a function, got type: %s",
-              ctx->handler_fn ? valk_ltype_name(LVAL_TYPE(ctx->handler_fn)) : "nullptr");
+  valk_lval_t *pl = valk_load_file(env, "stdlib/prelude.valk");
+  if (pl && LVAL_TYPE(pl) == LVAL_ERR) {
+    VALK_FAIL("prelude load failed: %s", pl->str);
     return false;
   }
-  printf("[test] Handler loaded (type=%s)\n", valk_ltype_name(LVAL_TYPE(ctx->handler_fn)));
+  valk_lval_t *hl = valk_load_file(
+      env, "runtime/test/http/test_large_response_handler.valk");
+  if (hl && LVAL_TYPE(hl) == LVAL_ERR) {
+    VALK_FAIL("handler load failed: %s", hl->str);
+    return false;
+  }
+
+  valk_lval_t *handler = valk_lenv_get(env, valk_lval_sym("handler"));
+  if (!handler || LVAL_TYPE(handler) != LVAL_FUN) {
+    VALK_FAIL("Handler is not a function, got type: %s (%s)",
+              handler ? valk_ltype_name(LVAL_TYPE(handler)) : "nullptr",
+              (handler && LVAL_TYPE(handler) == LVAL_ERR) ? handler->str : "");
+    return false;
+  }
+  printf("[test] Handler loaded (type=%s)\n", valk_ltype_name(LVAL_TYPE(handler)));
   fflush(stdout);
+
+  g_env = env;
+  g_handler = handler;
+  return true;
+}
+
+static bool init_test_context(test_context_t *ctx, VALK_TEST_ARGS()) {
+  if (!init_runtime_once(_suite, _result)) return false;
+  ctx->env = g_env;
+  ctx->handler_fn = g_handler;
 
   // Switch to malloc for AIO client operations
   valk_mem_init_malloc();

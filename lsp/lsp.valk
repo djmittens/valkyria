@@ -353,6 +353,12 @@
   (pipe/lsp-reader stdin-pipe (\ {body} {on-message body}))
   (aio/run lsp/sys)
   (aio/stop lsp/idx-sys)
+  ; Join idx-sys before closing its database: aio/stop only SIGNALS the
+  ; loops, and an idx worker can still be mid sqlite3_exec on lsp/idx-db
+  ; when the closes below run (TSAN-caught race: main's sqlite3_close vs
+  ; worker's sqlite3_exec). aio/run on an already-stopping system falls
+  ; straight through its wait loop and joins the loop threads.
+  (aio/run lsp/idx-sys)
   (if (and (not (nil? lsp/idx-db)) (== lsp/idx-db-own 1))
     {symdb/close lsp/idx-db} {})
   (if (not (nil? lsp/db)) {symdb/close lsp/db} {})

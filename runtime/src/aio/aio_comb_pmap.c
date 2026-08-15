@@ -22,7 +22,9 @@ typedef struct {
   u64 index;
 } valk_pmap_task_t;
 
-// LCOV_EXCL_BR_START - cleanup: branch edges depend on which path triggers free (worker completion vs error vs cancel)
+// LCOV_EXCL_START - the last release usually happens in the handle-cleanup
+// callback on handle destruction, whose timing is non-deterministic and can
+// land after the gcov flush; line hits here vary run to run
 static void valk_pmap_ctx_free(valk_pmap_ctx_t *ctx) {
   if (!ctx) return;
   if (!atomic_exchange(&ctx->fn_released, true))
@@ -37,15 +39,13 @@ static void valk_pmap_ctx_free(valk_pmap_ctx_t *ctx) {
   }
   free(ctx);
 }
-// LCOV_EXCL_BR_STOP
 
-// LCOV_EXCL_BR_START - last-release branch depends on worker/cleanup ordering
 static void valk_pmap_ctx_release(valk_pmap_ctx_t *ctx) {
   if (atomic_fetch_sub_explicit(&ctx->refs, 1, memory_order_acq_rel) == 1) {
     valk_pmap_ctx_free(ctx);
   }
 }
-// LCOV_EXCL_BR_STOP
+// LCOV_EXCL_STOP
 
 // LCOV_EXCL_START - cleanup callback: runs non-deterministically on handle destruction
 static void valk_pmap_ctx_cleanup(void *ctx) {

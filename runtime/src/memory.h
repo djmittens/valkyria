@@ -410,5 +410,7 @@ void *valk_chunked_ptrs_get(valk_chunked_ptrs_t *self, u32 index);
 void valk_chunked_ptrs_free(valk_chunked_ptrs_t *self);
 
 static inline u32 valk_chunked_ptrs_count(valk_chunked_ptrs_t *self) {
-  return self->count;
+  // Acquire pairing with push's release count bump: async completion reads
+  // parent->children while the constructing thread may still be appending.
+  return __atomic_load_n(&self->count, __ATOMIC_ACQUIRE);
 }
