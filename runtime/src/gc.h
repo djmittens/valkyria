@@ -40,6 +40,12 @@ void valk_system_add_subsystem(valk_system_t *sys,
 void valk_system_remove_subsystem(valk_system_t *sys, void *ctx);
 void valk_system_wake_threads(valk_system_t *sys);
 
+// GC-interruptible bounded sleep: parks on the caller's registry slot until
+// timeout_ms elapses or the STW coordinator wakes it. Callers must run
+// VALK_GC_SAFE_POINT() around it in their loop. Falls back to a plain sleep
+// for unregistered threads.
+void valk_gc_thread_park(u64 timeout_ms);
+
 void valk_gc_reset_after_fork(void);
 void valk_gc_mark_reset_after_fork(void);
 
@@ -294,6 +300,15 @@ typedef struct valk_gc_thread_info {
   valk_gc_mark_queue_t mark_queue;
   void (*wake_fn)(void *wake_ctx);
   void *wake_ctx;
+  // GC-interruptible parking for threads without a custom wake_fn: the
+  // thread waits here via valk_gc_thread_park and the STW coordinator's
+  // wake_threads signals it. Lives in the registry slot (stable storage),
+  // NOT in valk_thread_context_t, which VALK_WITH_CTX copies by value.
+  pthread_mutex_t park_mutex;
+  pthread_cond_t park_cond;
+  // Rendezvous diagnostics: when this thread last arrived at an STW barrier.
+  // Written by the owner, read by the coordinator to identify slow arrivers.
+  u64 last_rdv_ns;
 } valk_gc_thread_info_t;
 
 typedef struct valk_barrier {

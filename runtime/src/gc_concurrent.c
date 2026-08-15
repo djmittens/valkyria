@@ -253,8 +253,29 @@ static void __marker_wake(void *ctx) {
   pthread_mutex_unlock(&__marker_lock);
 }
 
+// Which counted participant reached the barrier last, and how long after the
+// STW request started. Coordinator-only, between request_stw returning and
+// the next cycle's request. Diagnostic for rendezvous-latency spikes.
+static u64 __slowest_arriver(u64 t_req, u64 *out_delay_ns) {
+  u64 max_ns = 0, idx = (u64)-1;
+  u64 epoch = atomic_load(&valk_sys->stw_epoch);
+  for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
+    if (!valk_sys->threads[i].active) continue;
+    valk_thread_context_t *tc = valk_sys->threads[i].ctx;
+    if (!tc || atomic_load(&tc->stw_epoch) != epoch) continue;
+    u64 at = valk_sys->threads[i].last_rdv_ns;
+    if (at > t_req && at > max_ns) {
+      max_ns = at;
+      idx = i;
+    }
+  }
+  *out_delay_ns = max_ns > t_req ? max_ns - t_req : 0;
+  return idx;
+}
+
 static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
   u64 t0 = uv_hrtime();
+  u64 slow1_ns = 0, slow2_ns = 0;
 
   // ---- Pause 1: root snapshot ----
   atomic_store(&valk_gc_satb_active, true);
@@ -263,6 +284,10 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
     atomic_store(&valk_gc_satb_active, false);
     return;
   }
+  // request_stw_kind returns once every participant reached the barrier, so
+  // this minus t0 is pure rendezvous latency; the rest of p1 is root-scan work.
+  u64 t_rdv1 = uv_hrtime();
+  u64 slow1_idx = __slowest_arriver(t0, &slow1_ns);
 
   atomic_store(&heap->gc_in_progress, true);
   atomic_fetch_add(&heap->collections, 1);
@@ -293,6 +318,7 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
   u64 t2 = uv_hrtime();
 
   // ---- Pause 2: SATB residue + sweep ----
+  u64 t_rdv2_start = uv_hrtime();
   valk_gc_owst_reset();
   if (!valk_gc_heap_request_stw_kind(heap, VALK_GC_PHASE_CONC_MARK,
                                      VALK_GC_CYCLE_CONC_FINAL)) {
@@ -304,6 +330,9 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
     atomic_store(&heap->gc_in_progress, false);
     return;
   }
+
+  u64 t_rdv2 = uv_hrtime();
+  u64 slow2_idx = __slowest_arriver(t_rdv2_start, &slow2_ns);
 
   valk_barrier_wait(&valk_sys->barrier);
   valk_gc_phase_transition(VALK_GC_PHASE_STW_REQUESTED, VALK_GC_PHASE_MARKING);
@@ -391,16 +420,24 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
   if (log_cycles || pause_us > 10000) {
     fprintf(stderr,
             "[gc] conc cycle #%llu: pause=%llu.%03llums "
-            "(p1=%llu.%03llums conc=%llums p2=%llu.%03llums, "
+            "(p1=%llu.%03llums[rdv=%llu.%03llums slow=t%lld/%llums] "
+            "conc=%llums "
+            "p2=%llu.%03llums[rdv=%llu.%03llums slow=t%lld/%llums], "
             "reclaimed %llu bytes, %llu -> %llu)\n",
             (unsigned long long)atomic_load(&heap->runtime_metrics.cycles_total),
             (unsigned long long)(pause_us / 1000),
             (unsigned long long)(pause_us % 1000),
             (unsigned long long)((t1 - t0) / 1000000),
             (unsigned long long)((t1 - t0) / 1000 % 1000),
+            (unsigned long long)((t_rdv1 - t0) / 1000000),
+            (unsigned long long)((t_rdv1 - t0) / 1000 % 1000),
+            (long long)slow1_idx, (unsigned long long)(slow1_ns / 1000000),
             (unsigned long long)((t2 - t1) / 1000000),
             (unsigned long long)((t3 - t2) / 1000000),
             (unsigned long long)((t3 - t2) / 1000 % 1000),
+            (unsigned long long)((t_rdv2 - t_rdv2_start) / 1000000),
+            (unsigned long long)((t_rdv2 - t_rdv2_start) / 1000 % 1000),
+            (long long)slow2_idx, (unsigned long long)(slow2_ns / 1000000),
             (unsigned long long)reclaimed,
             (unsigned long long)bytes_before,
             (unsigned long long)bytes_after);

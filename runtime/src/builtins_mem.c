@@ -25,11 +25,21 @@ static valk_lval_t* valk_builtin_sleep(valk_lenv_t* e, valk_lval_t* a) {
 
   long ms = arg->num;
   if (ms > 0) {
-    struct timespec ts = {
-      .tv_sec = ms / 1000,
-      .tv_nsec = (ms % 1000) * 1000000
-    };
-    nanosleep(&ts, NULL);
+    // GC-interruptible: a blind nanosleep would stall every STW rendezvous
+    // for the full sleep. The park returns early on a GC wake; the safepoint
+    // participates, then the loop sleeps out the remainder.
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    u64 deadline_ms = (u64)start.tv_sec * 1000 +
+                      (u64)start.tv_nsec / 1000000 + (u64)ms;
+    for (;;) {
+      VALK_GC_SAFE_POINT();
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      u64 now_ms = (u64)now.tv_sec * 1000 + (u64)now.tv_nsec / 1000000;
+      if (now_ms >= deadline_ms) break;
+      valk_gc_thread_park(deadline_ms - now_ms);
+    }
   }
   return valk_lval_nil();
 }

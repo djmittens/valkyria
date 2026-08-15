@@ -9,6 +9,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <sched.h>
+#include <time.h>
 #include <unistd.h>
 #include <uv.h>
 
@@ -27,13 +28,21 @@ static void __system_init_coordinator(valk_system_t *sys) {
   sys->next_fresh_idx = 0;
   sys->barrier_initialized = false;
 
+  pthread_condattr_t park_attr;
+  pthread_condattr_init(&park_attr);
+#ifndef __APPLE__
+  pthread_condattr_setclock(&park_attr, CLOCK_MONOTONIC);
+#endif
   for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
     sys->threads[i].ctx = nullptr;
     sys->threads[i].active = false;
     sys->threads[i].wake_fn = nullptr;
     sys->threads[i].wake_ctx = nullptr;
     memset(&sys->threads[i].mark_queue, 0, sizeof(sys->threads[i].mark_queue));
+    pthread_mutex_init(&sys->threads[i].park_mutex, nullptr);
+    pthread_cond_init(&sys->threads[i].park_cond, &park_attr);
   }
+  pthread_condattr_destroy(&park_attr);
 
   atomic_store(&sys->parallel_cycles, 0);
   atomic_store(&sys->parallel_pause_ns_total, 0);
@@ -299,10 +308,52 @@ void valk_system_remove_subsystem(valk_system_t *sys, void *ctx) {
 
 void valk_system_wake_threads(valk_system_t *sys) {
   for (u64 i = 0; i < VALK_SYSTEM_MAX_THREADS; i++) {
-    if (sys->threads[i].active && sys->threads[i].wake_fn) {
+    if (!sys->threads[i].active) continue;
+    if (sys->threads[i].wake_fn) {
       sys->threads[i].wake_fn(sys->threads[i].wake_ctx);
     }
+    // Any thread may be parked in valk_gc_thread_park (e.g. the sleep
+    // builtin), including ones with a custom wake_fn. Signaling under the
+    // mutex pairs with the parker's flag-check-then-wait, so a wake between
+    // check and wait cannot be lost; signaling an unused cond is harmless.
+    pthread_mutex_lock(&sys->threads[i].park_mutex);
+    pthread_cond_signal(&sys->threads[i].park_cond);
+    pthread_mutex_unlock(&sys->threads[i].park_mutex);
   }
+}
+
+void valk_gc_thread_park(u64 timeout_ms) {
+  // LCOV_EXCL_START - unregistered fallback and wake timing are not
+  // deterministically reachable in tests
+  if (!valk_sys || !valk_thread_ctx.gc_registered) {
+    struct timespec req = {.tv_sec = (time_t)(timeout_ms / 1000),
+                           .tv_nsec = (long)(timeout_ms % 1000) * 1000000L};
+    nanosleep(&req, nullptr);
+    return;
+  }
+  // LCOV_EXCL_STOP
+  valk_gc_thread_info_t *slot = &valk_sys->threads[valk_thread_ctx.gc_thread_id];
+  pthread_mutex_lock(&slot->park_mutex);
+  if (atomic_load_explicit(&valk_thread_ctx.safepoint_flags,
+                           memory_order_acquire) == 0) {
+#ifdef __APPLE__
+    struct timespec rel = {.tv_sec = (time_t)(timeout_ms / 1000),
+                           .tv_nsec = (long)(timeout_ms % 1000) * 1000000L};
+    pthread_cond_timedwait_relative_np(&slot->park_cond, &slot->park_mutex,
+                                       &rel);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    ts.tv_sec += (time_t)(timeout_ms / 1000);
+    ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) {
+      ts.tv_sec += 1;
+      ts.tv_nsec -= 1000000000L;
+    }
+    pthread_cond_timedwait(&slot->park_cond, &slot->park_mutex, &ts);
+#endif
+  }
+  pthread_mutex_unlock(&slot->park_mutex);
 }
 // LCOV_EXCL_BR_STOP
 
@@ -439,6 +490,8 @@ void valk_gc_safe_point_slow(void) {
         // barriers. PREPARING resolves to STW_REQUESTED; the coordinator
         // cannot advance past STW_REQUESTED until we join.
         if (phase == VALK_GC_PHASE_STW_REQUESTED) {
+          valk_sys->threads[valk_thread_ctx.gc_thread_id].last_rdv_ns =
+              uv_hrtime();
           valk_barrier_wait(&valk_sys->barrier);
           valk_gc_participate_in_parallel_gc();
           return;

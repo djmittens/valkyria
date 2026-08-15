@@ -516,6 +516,19 @@ LLVMValueRef valk_llvm_compile_lambda_body_fast(valk_llvm_ctx_t *ctx,
     valk_codegen_emit_root_push(ctx, formal_phis[i]);
   }
 
+  // Safepoint poll: runs on entry AND on every TCO backedge (the backedge
+  // branches to body_bb, which re-executes this). Without it a compiled
+  // self-recursive loop never rendezvouses with the GC coordinator, and
+  // every STW pause waits for the loop to finish (observed as 60-90ms
+  // rendezvous latency in valk-lsp under typing load). This point is
+  // GC-safe: the formals were just rooted and no unrooted temps exist yet.
+  {
+    LLVMTypeRef sp_ty = LLVMFunctionType(ctx->void_type, NULL, 0, 0);
+    LLVMValueRef sp_fn =
+        valk_codegen_get_runtime_fn(ctx, "valk_gc_safepoint_fn", sp_ty);
+    LLVMBuildCall2(ctx->builder, sp_ty, sp_fn, NULL, 0, "");
+  }
+
   LLVMValueRef result = valk_codegen_nil(ctx);
   valk_lval_t *eff = body;
   if (eff && LVAL_TYPE(eff) == LVAL_CONS && (eff->flags & LVAL_FLAG_QUOTED)) {
@@ -650,6 +663,18 @@ LLVMValueRef valk_llvm_compile_lambda_body(valk_llvm_ctx_t *ctx,
   // before binding and restores after the call returns. A prologue push
   // would only duplicate those and leak one entry per frame until the
   // interpreter boundary.
+
+  // Safepoint poll (see the fast path): sibcall self-recursion loops
+  // through this prologue, so without it compiled recursion never
+  // rendezvouses with the GC coordinator. Safe here: the call env is
+  // rooted by the caller and no temps exist yet.
+  {
+    LLVMTypeRef sp_ty = LLVMFunctionType(ctx->void_type, NULL, 0, 0);
+    LLVMValueRef sp_fn =
+        valk_codegen_get_runtime_fn(ctx, "valk_gc_safepoint_fn", sp_ty);
+    LLVMBuildCall2(ctx->builder, sp_ty, sp_fn, NULL, 0, "");
+  }
+
   LLVMValueRef result = valk_codegen_nil(ctx);
 
   // Mirror tree-walker body semantics (eval.c valk_eval_apply_func_iter
