@@ -336,6 +336,11 @@ void valk_system_wake_parked(valk_system_t *sys) {
   }
 }
 
+void valk_gc_wake_thread_slot(u64 gc_thread_id) {
+  if (!valk_sys || gc_thread_id >= VALK_SYSTEM_MAX_THREADS) return; // LCOV_EXCL_BR_LINE
+  __park_wake_slot(&valk_sys->threads[gc_thread_id]);
+}
+
 u64 valk_gc_park_prepare(void) {
   if (!valk_sys || !valk_thread_ctx.gc_registered) return 0; // LCOV_EXCL_LINE
   return atomic_load_explicit(

@@ -22,6 +22,13 @@ struct valk_async_handle_t {
 
   _Atomic int cancel_requested;
 
+  // GC registry slot (+1, 0 = none) of a thread blocked in await on this
+  // handle. valk_async_handle_finish wakes it directly instead of the
+  // awaiter discovering completion by polling. Last writer wins when
+  // several threads await one handle; the rest catch up at the awaiter's
+  // failsafe park timeout.
+  _Atomic u64 awaiter_slot;
+
   void *uv_handle_ptr;
   struct valk_aio_system *sys;
 

@@ -61,6 +61,11 @@ void valk_gc_thread_park_seq(u64 seq, u64 timeout_ms);
 // condition may have changed re-checks and re-parks if it hasn't.
 void valk_system_wake_parked(valk_system_t *sys);
 
+// Targeted wake of one registry slot's park (e.g. an async completion
+// waking its awaiter). Spurious wakes are harmless: every park user loops
+// on its predicate.
+void valk_gc_wake_thread_slot(u64 gc_thread_id);
+
 void valk_gc_reset_after_fork(void);
 void valk_gc_mark_reset_after_fork(void);
 

@@ -234,6 +234,12 @@ void valk_async_handle_finish(valk_async_handle_t *handle) {
   valk_async_notify_done(handle);
   valk_async_propagate_completion(handle);
   valk_async_handle_run_resource_cleanups(handle);
+
+  // Wake a thread blocked in await on this handle. Status is terminal by
+  // the time finish runs (every caller sets it first), so the awaiter's
+  // check-after-wake observes completion.
+  u64 waiter = atomic_load_explicit(&handle->awaiter_slot, memory_order_acquire);
+  if (waiter) valk_gc_wake_thread_slot(waiter - 1);
 }
 
 // LCOV_EXCL_BR_START - CAS transition fallback branches
@@ -458,19 +464,43 @@ valk_lval_t *valk_async_handle_await_timeout(valk_async_handle_t *handle, u32 ti
       clock_gettime(CLOCK_MONOTONIC, &ts);
       start = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
     }
-    
-    while (!valk_async_handle_is_terminal(valk_async_handle_get_status(handle))) {
+
+    // Event-driven wait: register this thread on the handle so completion
+    // (valk_async_handle_finish) wakes the park directly; the eventcount
+    // captured before the terminal check closes the completion-vs-park
+    // race. The failsafe timeout only matters for unregistered threads
+    // (plain sleep fallback) and the multi-awaiter edge case.
+    bool registered = valk_thread_ctx.gc_registered;
+    if (registered) {
+      atomic_store_explicit(&handle->awaiter_slot,
+                            valk_thread_ctx.gc_thread_id + 1,
+                            memory_order_release);
+    }
+
+    for (;;) {
+      u64 seq = valk_gc_park_prepare();
       VALK_GC_SAFE_POINT();
-      uv_sleep(1);
-      
+      if (valk_async_handle_is_terminal(valk_async_handle_get_status(handle)))
+        break;
+
+      u64 chunk = registered ? 100 : 1;
       if (timeout_ms > 0) {
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
         u64 now = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
         if (now - start > timeout_ms) {
+          if (registered)
+            atomic_store_explicit(&handle->awaiter_slot, 0,
+                                  memory_order_relaxed);
           return valk_lval_err("await: timeout");
         }
+        u64 remaining = timeout_ms - (now - start);
+        if (remaining < chunk) chunk = remaining;
       }
+      valk_gc_thread_park_seq(seq, chunk);
+    }
+    if (registered) {
+      atomic_store_explicit(&handle->awaiter_slot, 0, memory_order_relaxed);
     }
   // LCOV_EXCL_START - on-loop-thread await: only reachable from HTTP handler callbacks on event loop thread
   } else {
