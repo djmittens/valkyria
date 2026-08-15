@@ -26,8 +26,12 @@ static bool mark_ptr_only(void *ptr, valk_gc_mark_ctx_t *ctx) {
 
   valk_gc_ptr_location_t loc;
   if (valk_gc_ptr_to_location(ctx->heap, ptr, &loc)) {
-    return ctx->solo ? valk_gc_page_try_mark_solo(loc.page, loc.slot)
-                     : valk_gc_page_try_mark(loc.page, loc.slot);
+    bool first = ctx->solo ? valk_gc_page_try_mark_solo(loc.page, loc.slot)
+                           : valk_gc_page_try_mark(loc.page, loc.slot);
+    if (first)
+      valk_gc_verify_log_bitmark(valk_gc_page_slot_ptr(loc.page, loc.slot),
+                                 VALK_MARKPROV_PTR_ONLY);
+    return first;
   } else {
     return valk_gc_mark_large_object(ctx->heap, ptr);
   }
@@ -600,6 +604,8 @@ static valk_gc_mark_ctx_t __own_mark_ctx(valk_gc_heap_t *heap) {
 void valk_gc_conc_scan_local_roots(valk_gc_heap_t *heap) {
   if (!heap || !valk_thread_ctx.gc_registered) return;
   valk_gc_mark_queue_reset(&valk_sys->threads[valk_thread_ctx.gc_thread_id].mark_queue);
+  valk_sys->threads[valk_thread_ctx.gc_thread_id].env_roots_at_snapshot =
+      valk_thread_ctx.env_root_stack_count;
   valk_gc_mark_ctx_t ctx = __own_mark_ctx(heap);
   __mark_local_roots(&ctx);
 }

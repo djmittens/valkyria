@@ -126,7 +126,9 @@ void valk_gc_satb_mark_raw(void *ptr) {
   if (heap == nullptr) return;                      // LCOV_EXCL_LINE
   valk_gc_ptr_location_t loc;
   if (valk_gc_ptr_to_location(heap, ptr, &loc)) {
-    valk_gc_page_try_mark(loc.page, loc.slot);
+    if (valk_gc_page_try_mark(loc.page, loc.slot))
+      valk_gc_verify_log_bitmark(valk_gc_page_slot_ptr(loc.page, loc.slot),
+                                 VALK_MARKPROV_WB_RAW);
   } else {
     valk_gc_mark_large_object(heap, ptr);
   }
@@ -349,12 +351,19 @@ static void __run_concurrent_cycle(valk_gc_heap_t *heap) {
   valk_gc_insert_walked_reset();
 
   // ---- Pause 1: root snapshot ----
-  atomic_store(&valk_gc_satb_active, true);
   if (!valk_gc_heap_request_stw_kind(heap, VALK_GC_PHASE_IDLE,
                                      VALK_GC_CYCLE_CONC_START)) {
-    atomic_store(&valk_gc_satb_active, false);
     return;
   }
+  // Flip SATB on INSIDE the pause, after every participant has arrived and
+  // before any is released: the release barrier propagates the flag, so no
+  // mutator ever allocates or stores while the flag is stale. Setting it
+  // BEFORE the rendezvous created a gap - allocations between satb-on and
+  // a thread's pause arrival came from the consumed part of pre-satb TLAB
+  // batches and were born WHITE; under a born-black owner they were
+  // invisible to the cycle and swept while live (the valk-lsp env-arrays
+  // hole: white symbols/vals arrays under born-black call envs).
+  atomic_store(&valk_gc_satb_active, true);
   // request_stw_kind returns once every participant reached the barrier, so
   // this minus t0 is pure rendezvous latency; the rest of p1 is root-scan work.
   u64 t_rdv1 = uv_hrtime();

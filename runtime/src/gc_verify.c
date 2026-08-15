@@ -132,6 +132,57 @@ void valk_gc_verify_heap_post_sweep(valk_gc_heap_t *heap) {
 }
 
 // ============================================================================
+// Bit-only Mark Provenance Ring
+// ============================================================================
+// Records every mark-bit set that does NOT walk the object's contents
+// (refill blacken, pause blacken, mark_ptr_only, wb_raw). A live env or
+// lval that is marked but has white children was marked by one of these -
+// the ring names the site. Gated by VALK_GC_VERIFY_ROOTS.
+
+#define VERIFY_MARKPROV_RING (1u << 18)
+
+typedef struct {
+  void *ptr;
+  u8 site; // valk_gc_markprov_site_e
+} verify_markprov_rec_t;
+
+static verify_markprov_rec_t __markprov_ring[VERIFY_MARKPROV_RING];
+static _Atomic u64 __markprov_next = 0;
+
+void valk_gc_verify_log_bitmark(void *ptr, u8 site) {
+  if (!__verify_roots_enabled()) return;
+  u64 i = atomic_fetch_add(&__markprov_next, 1) % VERIFY_MARKPROV_RING;
+  __markprov_ring[i] = (verify_markprov_rec_t){.ptr = ptr, .site = site};
+}
+
+static const char *__markprov_name(u8 site) {
+  switch (site) {
+    case VALK_MARKPROV_REFILL: return "refill-blacken";
+    case VALK_MARKPROV_PAUSE_BLACKEN: return "pause-blacken";
+    case VALK_MARKPROV_PTR_ONLY: return "mark_ptr_only";
+    case VALK_MARKPROV_WB_RAW: return "wb_raw";
+    default: return "?";
+  }
+}
+
+static void __dump_markprov(void *ptr) {
+  u64 end = atomic_load(&__markprov_next);
+  u64 start = end > VERIFY_MARKPROV_RING ? end - VERIFY_MARKPROV_RING : 0;
+  u64 found = 0;
+  for (u64 i = start; i < end; i++) {
+    verify_markprov_rec_t *r = &__markprov_ring[i % VERIFY_MARKPROV_RING];
+    if (r->ptr != ptr) continue;
+    fprintf(stderr, "[GC-VERIFY]   bit-only mark of %p: seq=%llu site=%s\n",
+            ptr, (unsigned long long)i, __markprov_name(r->site));
+    found++;
+  }
+  if (!found)
+    fprintf(stderr, "[GC-VERIFY]   no bit-only mark of %p in ring "
+                    "(marked via a tracing path or before ring coverage)\n",
+            ptr);
+}
+
+// ============================================================================
 // Refill Provenance Ring
 // ============================================================================
 
@@ -226,6 +277,8 @@ static void __dump_env_chain(valk_gc_heap_t *heap, valk_lenv_t *env,
   }
 }
 
+static void __report_referencers(valk_gc_heap_t *heap, void *target);
+
 static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
                                 u64 thread_idx, const char *root_kind) {
   u32 hops = 0;
@@ -246,6 +299,14 @@ static void __verify_env_marked(valk_gc_heap_t *heap, valk_lenv_t *root_env,
       if (!valk_gc_page_is_marked(loc.page, loc.slot)) {
         __dump_env_chain(heap, root_env, thread_idx, root_kind);
         __dump_refills_for_page(loc.page);
+        // Who references the ENV? A marked-env-with-white-arrays means the
+        // env's contents walk never ran - if a stale lval ->str/raw pointer
+        // aliases the env's (reused) slot, tracing that owner bit-marks the
+        // env and the root scan then dedup-skips it.
+        fprintf(stderr, "[GC-VERIFY] referencers of env %p:\n", (void *)env);
+        __report_referencers(heap, env);
+        __dump_markprov(env);
+        __dump_markprov(env->symbols.items);
       }
       VALK_ASSERT(valk_gc_page_is_marked(loc.page, loc.slot),
                   "GC verify: symbols array %p of live env %p (thread %llu, "
@@ -309,7 +370,15 @@ void valk_gc_verify_conc_roots_marked(valk_gc_heap_t *heap) {
     if (atomic_load(&tc->stw_epoch) != sys_epoch) continue;
 
     for (sz i = 0; i < tc->env_root_stack_count; i++) {
-      __verify_env_marked(heap, tc->env_root_stack[i], t, "env_root_stack");
+      // Discriminator for verifier failures: entries below
+      // env_roots_at_snapshot were visible to the pause-1 scan (a miss
+      // there is a scan bug); entries at or above it were pushed
+      // mid-window (a miss there is an allocate-black failure).
+      char kind[64];
+      snprintf(kind, sizeof(kind), "env_root_stack[%zd/%zd snap=%zd]", i,
+               tc->env_root_stack_count,
+               valk_sys->threads[t].env_roots_at_snapshot);
+      __verify_env_marked(heap, tc->env_root_stack[i], t, kind);
     }
     __verify_env_marked(heap, tc->eval_env, t, "eval_env");
     for (u32 i = 0; i < tc->eval_stack_depth; i++) {

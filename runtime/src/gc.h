@@ -334,6 +334,10 @@ typedef struct valk_gc_thread_info {
   // Rendezvous diagnostics: when this thread last arrived at an STW barrier.
   // Written by the owner, read by the coordinator to identify slow arrivers.
   u64 last_rdv_ns;
+  // Verifier diagnostics: this thread's env_root_stack depth at the
+  // CONC_START root scan. Lets the pre-sweep verifier tell whether a
+  // failing entry was visible to the snapshot or pushed mid-window.
+  sz env_roots_at_snapshot;
 } valk_gc_thread_info_t;
 
 typedef struct valk_barrier {
@@ -479,6 +483,16 @@ void valk_gc_verify_log_refill(valk_gc_page_t *page, u8 size_class,
 // mark state, re-marks the world solo, and asserts the cycle missed
 // nothing reachable. Runs in the pre-sweep pause. VALK_GC_VERIFY_FULL=1.
 void valk_gc_verify_full_mark(valk_gc_heap_t *heap);
+
+// Bit-only mark provenance (gc_verify.c): which non-tracing path last set
+// an object's mark bit. Gated by VALK_GC_VERIFY_ROOTS=1.
+typedef enum {
+  VALK_MARKPROV_REFILL = 1,
+  VALK_MARKPROV_PAUSE_BLACKEN = 2,
+  VALK_MARKPROV_PTR_ONLY = 3,
+  VALK_MARKPROV_WB_RAW = 4,
+} valk_gc_markprov_site_e;
+void valk_gc_verify_log_bitmark(void *ptr, u8 site);
 // Solo world re-mark used by the full verifier (gc_mark.c).
 void valk_gc_remark_world_solo(valk_gc_heap_t *heap);
 

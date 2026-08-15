@@ -42,6 +42,7 @@ void valk_gc_tlab_init(valk_gc_tlab_t *tlab) {
     tlab->classes[c].page = nullptr;
     tlab->classes[c].next_slot = 0;
     tlab->classes[c].limit_slot = 0;
+    tlab->classes[c].start_slot = 0;
   }
 }
 
@@ -51,6 +52,7 @@ void valk_gc_tlab_abandon(valk_gc_tlab_t *tlab) {
     tlab->classes[c].page = nullptr;
     tlab->classes[c].next_slot = 0;
     tlab->classes[c].limit_slot = 0;
+    tlab->classes[c].start_slot = 0;
   }
   tlab->owner_heap = nullptr;
 }
@@ -84,6 +86,7 @@ void valk_gc_tlab_reset(valk_gc_tlab_t *tlab) {
     tlab->classes[c].page = nullptr;
     tlab->classes[c].next_slot = 0;
     tlab->classes[c].limit_slot = 0;
+    tlab->classes[c].start_slot = 0;
   }
 
   tlab->owner_heap = nullptr;
@@ -109,8 +112,15 @@ void valk_gc_tlab_blacken_remainder(void) {
     valk_gc_page_t *page = tlab->classes[c].page;
     if (!page || page->reclaimed) continue;
     u8 *mark_bitmap = valk_gc_page_mark_bitmap(page);
+    // ONLY the unconsumed remainder. Blackening consumed slots (tried once,
+    // to cover satb-gap allocations) bit-marks LIVE objects without walking
+    // their contents, which breaks mark_env/mark_lval's "marked implies
+    // walked" dedup and loses their children. The gap is closed at the
+    // source instead: satb_active flips on inside the pause.
     for (u32 i = tlab->classes[c].next_slot; i < tlab->classes[c].limit_slot; i++) {
-      valk_gc_bitmap_try_set_atomic(mark_bitmap, i);
+      if (valk_gc_bitmap_try_set_atomic(mark_bitmap, i))
+        valk_gc_verify_log_bitmark(valk_gc_page_slot_ptr(page, i),
+                                   VALK_MARKPROV_PAUSE_BLACKEN);
     }
   }
 }
@@ -318,7 +328,9 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
   if (satb_on) {
     u8 *mark_bitmap = valk_gc_page_mark_bitmap(page);
     for (u32 i = start_slot; i < start_slot + num_slots; i++) {
-      valk_gc_bitmap_try_set_atomic(mark_bitmap, i);
+      if (valk_gc_bitmap_try_set_atomic(mark_bitmap, i))
+        valk_gc_verify_log_bitmark(valk_gc_page_slot_ptr(page, i),
+                                   VALK_MARKPROV_REFILL);
     }
   }
   valk_gc_verify_log_refill(page, size_class, start_slot, num_slots, satb_on);
@@ -347,6 +359,7 @@ bool valk_gc_tlab_refill(valk_gc_tlab_t *tlab, valk_gc_heap_t *heap, u8 size_cla
   tlab->classes[size_class].page = page;
   tlab->classes[size_class].next_slot = start_slot;
   tlab->classes[size_class].limit_slot = start_slot + num_slots;
+  tlab->classes[size_class].start_slot = start_slot;
 
   if (valk_gc_should_collect(heap)) {
     atomic_fetch_or_explicit(&valk_thread_ctx.safepoint_flags, VALK_SP_GC_COLLECT,

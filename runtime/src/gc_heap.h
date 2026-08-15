@@ -232,6 +232,13 @@ typedef struct valk_gc_tlab {
     valk_gc_page_t *page;
     u32 next_slot;
     u32 limit_slot;
+    // First slot of the current batch. Blackening at the CONC_START pause
+    // must cover [start_slot, limit_slot), not just the unconsumed
+    // remainder: objects allocated between satb-on and this thread's
+    // pause arrival come from the consumed part of a pre-satb batch and
+    // were born WHITE - if their referencing structure churns around the
+    // snapshot scan they are invisible to the cycle and swept while live.
+    u32 start_slot;
   } classes[VALK_GC_NUM_SIZE_CLASSES];
 } valk_gc_tlab_t;
 
