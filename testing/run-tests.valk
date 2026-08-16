@@ -58,6 +58,19 @@
 
 ; --- Test discovery ---
 
+(fun {coverage-build? build-dir} {
+  (= {cache} (str build-dir "/CMakeCache.txt"))
+  (if (not (file/exists? cache)) {false}
+    {do
+      (= {found} (dict/new))
+      (dict/set! found "v" false)
+      (for-each-line cache (\ {line} {
+        (if (str/starts-with? line "COVERAGE:")
+          {(if (str/ends-with? line "=1") {(dict/set! found "v" true)} {true})}
+          {true})}))
+      (dict/get found "v")})
+})
+
 (fun {discover-c-tests build-dir} {
   (= {entries} (list-dir build-dir))
   (= {is-test} (\ {entry} {
@@ -500,6 +513,16 @@
   {do
     (env/set "TSAN_OPTIONS" "halt_on_error=1:second_deadlock_stack=1")
     (env/set "VALK_TEST_NO_FORK" "1")}
+  {true})
+
+; gcov counters live in process memory and are flushed by the owning process.
+; A forked child's counters only reach the .gcda if the runtime merges them
+; into the file the parent later rewrites; that merge is unreliable on Darwin,
+; so every line a forked child exercised is reported as unexecuted. Running
+; the suites in-process keeps all counters in one address space, which is the
+; only way the numbers mean the same thing on every platform.
+(if (coverage-build? build-dir)
+  {(env/set "VALK_TEST_NO_FORK" "1")}
   {true})
 
 ; Discover suites

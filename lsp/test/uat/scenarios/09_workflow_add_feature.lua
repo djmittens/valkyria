@@ -76,11 +76,18 @@ return {
     lib.sync(bufnr)
 
     -- Assertion 2: goto-def from `(mul3 2 3 5)` jumps to the (fun {mul3 ...}) line.
+    -- The probe-line deletion just above races the server's async handling
+    -- of that didChange: a one-shot request can transiently get nil while
+    -- the edit is applied and re-indexed (observed on slow macOS CI
+    -- runners). Poll until it resolves instead of asking exactly once.
     local call_line, call_col = lib.find_text(bufnr, "(mul3 2 3 5)")
-    local def_res = lib.request(bufnr, "textDocument/definition",
-      lib.tdp(lib.bufuri(bufnr), call_line, call_col + 1), 5000)
-    lib.assert_truthy(def_res,
-      "goto-def on newly-added mul3 call returned nil")
+    local def_res = lib.require_until(function()
+      local res = lib.request(bufnr, "textDocument/definition",
+        lib.tdp(lib.bufuri(bufnr), call_line, call_col + 1), 1000)
+      if not res then return nil end
+      if type(res) == "table" and not res.uri and not res[1] then return nil end
+      return res
+    end, "goto-def on newly-added mul3 call never resolved", 5000)
     local locs = type(def_res) == "table" and def_res[1] and def_res or { def_res }
     if type(def_res) == "table" and def_res.uri then locs = { def_res } end
     lib.assert_truthy(locs[1],
