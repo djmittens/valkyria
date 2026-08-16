@@ -1,0 +1,34 @@
+(load "testing/test.valk")
+
+(test/run (list
+  (test/case "capture-start with args returns error"
+    {do
+    (= {result} (test/capture-start "extra"))
+    (error? result)
+  })
+  (test/case "capture-stop with no args returns error"
+    {do
+    (= {result} (test/capture-stop))
+    (error? result)
+  })
+  (test/case "capture-stop with wrong type returns error"
+    {do
+    (= {result} (test/capture-stop 42))
+    (error? result)
+  })
+  (test/case "capture-stop with wrong ref type returns error"
+    {do
+    (= {sys} (aio/await (aio/start)))
+    (= {result} (test/capture-stop sys))
+    (aio/stop sys)
+    (error? result)
+  })
+  (test/case "capture-stop is idempotent and captures output once"
+    {do
+    (= {cap} (test/capture-start))
+    (printf "hello-capture")
+    (= {first} (test/capture-stop cap))
+    (= {second} (test/capture-stop cap))
+    (and (== first:stdout "hello-capture") (== second:stdout ""))
+  }))
+  {:suite-name "Capture Builtins Coverage"})

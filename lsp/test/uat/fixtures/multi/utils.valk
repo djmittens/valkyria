@@ -1,0 +1,13 @@
+; Helper module loaded by main.valk. Used to test cross-file
+; navigation, references, and rename.
+
+(sig 'utils/double {-> Num Num})
+(fun {utils/double x} {* x 2})
+
+(sig 'utils/triple {-> Num Num})
+(fun {utils/triple x} {* x 3})
+
+(sig 'utils/clamp {-> Num Num Num Num})
+(fun {utils/clamp x lo hi}
+  {if (< x lo) lo
+    {if (> x hi) hi {x}}})

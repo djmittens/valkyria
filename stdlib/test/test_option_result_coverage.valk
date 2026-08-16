@@ -1,0 +1,50 @@
+(load "testing/test.valk")
+
+(test/run (list
+  (test/case "option/unwrap-or returns value for Some"
+    {== (option/unwrap-or (Some 5) 0) 5})
+  (test/case "option/unwrap-or returns default for None"
+    {== (option/unwrap-or (None) 7) 7})
+  (test/case "option/filter keeps Some when predicate passes"
+    {== (option/filter (Some 4) (\ {x} {(> x 2)})) (Some 4)})
+  (test/case "option/filter drops Some when predicate fails"
+    {== (option/filter (Some 1) (\ {x} {(> x 2)})) (None)})
+  (test/case "option/filter on None stays None"
+    {== (option/filter (None) (\ {x} {(> x 2)})) (None)})
+  (test/case "option/or keeps first Some"
+    {== (option/or (Some 1) (Some 2)) (Some 1)})
+  (test/case "option/or falls back to second on None"
+    {== (option/or (None) (Some 2)) (Some 2)})
+  (test/case "option/or of two None is None"
+    {== (option/or (None) (None)) (None)})
+  (test/case "option/from-nullable wraps non-nil value"
+    {== (option/from-nullable 3) (Some 3)})
+  (test/case "option/from-nullable maps nil to None"
+    {== (option/from-nullable nil) (None)})
+  (test/case "option/traverse collects Some results"
+    {== (option/traverse (list 1 2 3) (\ {x} {(Some (* x 2))})) (Some (list 2 4 6))})
+  (test/case "option/traverse short-circuits on None"
+    {== (option/traverse (list 1 2 3) (\ {x} {(if (== x 2) {(None)} {(Some x)})})) (None)})
+  (test/case "option/traverse on empty list"
+    {== (option/traverse () (\ {x} {(Some x)})) (Some ())})
+  (test/case "result/unwrap-or returns value for Ok"
+    {== (result/unwrap-or (Ok 5) 0) 5})
+  (test/case "result/unwrap-or returns default for Err"
+    {== (result/unwrap-or (Err "bad") 9) 9})
+  (test/case "result/map-err leaves Ok untouched"
+    {== (result/map-err (Ok 5) (\ {e} {(str "wrapped-" e)})) (Ok 5)})
+  (test/case "result/map-err transforms Err"
+    {== (result/map-err (Err "bad") (\ {e} {(str "wrapped-" e)})) (Err "wrapped-bad")})
+  (test/case "result/or keeps first Ok"
+    {== (result/or (Ok 1) (Ok 2)) (Ok 1)})
+  (test/case "result/or falls back to second on Err"
+    {== (result/or (Err "bad") (Ok 2)) (Ok 2)})
+  (test/case "result/or of two Err is second"
+    {== (result/or (Err "a") (Err "b")) (Err "b")})
+  (test/case "result/traverse collects Ok results"
+    {== (result/traverse (list 1 2 3) (\ {x} {(Ok (* x 10))})) (Ok (list 10 20 30))})
+  (test/case "result/traverse short-circuits on Err"
+    {== (result/traverse (list 1 2 3) (\ {x} {(if (== x 2) {(Err "boom")} {(Ok x)})})) (Err "boom")})
+  (test/case "result/traverse on empty list"
+    {== (result/traverse () (\ {x} {(Ok x)})) (Ok ())}))
+  {:suite-name "Option/Result Coverage Tests"})

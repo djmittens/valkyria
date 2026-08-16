@@ -63,28 +63,26 @@ make todo           # Find TODOs for current branch
 
 ```
 valkyria/
-├── src/
-│   ├── parser.{c,h}      # Parser and evaluator
-│   ├── memory.{c,h}      # Memory management
-│   ├── gc.{c,h}          # Garbage collector
-│   ├── concurrency.{c,h} # Futures, promises
-│   ├── aio.h             # Async I/O interface
-│   ├── aio_uv.c          # libuv implementation
-│   ├── aio_ssl.c         # TLS support
-│   ├── repl.c            # REPL main entry point
-│   ├── prelude.valk      # Standard library
-│   ├── http_api.valk     # HTTP high-level API
-│   └── modules/          # Loadable modules
-├── test/
-│   ├── testing.{c,h}     # C test framework
-│   ├── test_*.c          # C test files
-│   ├── test_*.valk       # Lisp test files
-│   └── stress/           # Stress tests
-├── vendor/               # Third-party code
-│   ├── nghttp2/          # HTTP/2 library
-│   └── editline/         # REPL line editing
+├── runtime/              # C runtime project
+│   ├── src/              # parser, eval, memory, gc, aio/, http2, llvm/vir
+│   ├── vendor/           # third-party code (nghttp2, sqlite3, editline)
+│   ├── test/<area>/      # C + Valk tests (aio, gc, http, lang, ...)
+│   ├── CMakeLists.txt
+│   └── docs/             # runtime documentation
+├── stdlib/               # Valk standard library (prelude auto-loads)
+├── testing/              # test framework + unified runner
+│   ├── c/testing.{c,h}   # C test harness
+│   ├── test.valk         # Valk test framework
+│   ├── property.valk     # property-based testing
+│   └── run-tests.valk    # unified parallel runner (C, Valk, UAT)
+├── symdb/                # symbol database + static validation
+├── lsp/                  # LSP server (+ lsp/test/, UAT)
+├── coverage/             # coverage report + gate tooling
+├── quality/              # quality snapshot + diff
+├── check/                # workspace diagnostics + globals lint
+├── scripts/              # misc: benchmarks, profiling helpers
 ├── build/                # Build output
-└── docs/                 # Documentation
+└── docs/                 # cross-cutting documentation
 ```
 
 ## Code Style
@@ -180,20 +178,20 @@ int main(void) {
 
 ### Lisp Tests
 
-Located in `test/test_*.valk`. Use the test module:
+Located in `test/<area>/test_*.valk`. The prelude is loaded automatically at
+startup; load the test module explicitly:
 
 ```lisp
-(load "src/prelude.valk")
-(load "src/modules/test.valk")
+(load "testing/test.valk")
 
-(test/suite "My Tests")
+(test/run (list
 
-(test/define "my-test-name"
-  {do
-    (= {result} (my-function 42))
-    (== result expected-value)})
-
-(test/run {})
+  (test/case "my-test-name"
+    {do
+      (= {result} (my-function 42))
+      (test/assert-eq expected-value result "my-function of 42")
+      true})
+))
 ```
 
 ### Running Tests
@@ -317,6 +315,6 @@ valk_lenv_put_builtin(env, "my-func", valk_builtin_my_func);
 
 ## Resources
 
-- [LANGUAGE.md](LANGUAGE.md) - Language reference
+- [LANGUAGE.md](../runtime/docs/LANGUAGE.md) - Language reference
 - [ROADMAP.md](ROADMAP.md) - Project roadmap
 - `CLAUDE.md` - AI assistant instructions

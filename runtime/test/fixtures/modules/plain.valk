@@ -1,0 +1,3 @@
+; Fixture: moduleless file — defs stay bare.
+(fun {plain-fn x} {* x 2})
+(plain-fn 1)

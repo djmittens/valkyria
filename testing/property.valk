@@ -1,0 +1,7 @@
+; Property-Based Testing for Valkyria
+; Inspired by QuickCheck/ScalaCheck
+; Facade: loads the gen, prop, and laws modules.
+
+(load "testing/gen.valk")
+(load "testing/prop.valk")
+(load "testing/laws.valk")

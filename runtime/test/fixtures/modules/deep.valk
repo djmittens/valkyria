@@ -1,0 +1,4 @@
+; Fixture: module name containing a slash.
+(module lsp/io)
+
+(fun {foo x} {* x 10})

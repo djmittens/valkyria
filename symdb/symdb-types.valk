@@ -1,0 +1,11 @@
+; Valkyria Symbol Database — shared record types.
+; Loaded by both symdb.valk and symdb-query.valk (types register globally
+; and must exist before any file constructing these records is
+; type-transformed).
+
+(type {WordRange}
+  {:word Str :start Num :end Num})
+
+(type {SymInfo}
+  {:name Str :kind Num :arity Num :doc Str :sig Str
+   :path Str :line Num :col Num :formals Str})

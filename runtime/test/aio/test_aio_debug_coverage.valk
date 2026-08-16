@@ -1,0 +1,74 @@
+(load "testing/test.valk")
+(load "stdlib/aio/sse.valk")
+(load "stdlib/aio/debug-broadcaster.valk")
+(load "stdlib/aio/debug.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(def {server} (http2/server-listen aio 0 (aio/debug-handler aio)))
+(def {port} (http2/server-port server))
+
+(test/run-async aio (list
+  (test/case-async "debug-merge-metrics-json produces combined JSON" (\ {} {
+    (def {result} (aio/debug-merge-metrics-json aio))
+    (aio/pure (and (> (len result) 100)
+                   (== (str/index-of result "aio_metrics") 2)))
+  }))
+  (test/case-async "debug-merge-metrics-prometheus produces combined text" (\ {} {
+    (def {result} (aio/debug-merge-metrics-prometheus aio))
+    (aio/pure (> (len result) 100))
+  }))
+  (test/case-async "debug-diagnostics-state produces JSON" (\ {} {
+    (def {result} (aio/debug-diagnostics-state aio))
+    (aio/pure (> (len result) 50))
+  }))
+  (test/case-async "debug-diagnostics-delta produces JSON" (\ {} {
+    (def {result} (aio/debug-diagnostics-delta aio))
+    (aio/pure (> (len result) 50))
+  }))
+  (test/case-async "debug-handle-slab-buckets parses full query" (\ {} {
+    (def {resp} (aio/debug-handle-slab-buckets aio "slab=tcp_buffers&start=0&end=1000&buckets=10"))
+    (aio/pure (== (:status resp) "200"))
+  }))
+  (test/case-async "debug-handle-slab-buckets with nil query uses defaults" (\ {} {
+    (def {resp} (aio/debug-handle-slab-buckets aio nil))
+    (aio/pure (== (:status resp) "200"))
+  }))
+  (test/case-async "debug-handle-slab-buckets ignores unknown and malformed params" (\ {} {
+    (def {resp} (aio/debug-handle-slab-buckets aio "bogus=1&malformed&start=5"))
+    (aio/pure (== (:status resp) "200"))
+  }))
+  (test/case-async "debug-diagnostics-sse-handler returns headers for non-ref req" (\ {} {
+    (def {resp} (aio/debug-diagnostics-sse-handler aio {:path "/debug/diagnostics/memory"}))
+    (aio/pure (== (:body-type resp) :sse-stream))
+  }))
+  (test/case-async "debug-handle-request routes qexpr requests" (\ {} {
+    (def {r1} (aio/debug-handle-request aio {:path "/debug/"}))
+    (def {r2} (aio/debug-handle-request aio {:path "/debug/metrics"}))
+    (def {r3} (aio/debug-handle-request aio {:path "/debug/metrics/state"}))
+    (def {r4} (aio/debug-handle-request aio {:path "/metrics"}))
+    (def {r5} (aio/debug-handle-request aio {:path "/debug/slab/buckets?slab=tcp_buffers&start=0&end=100&buckets=5"}))
+    (def {r6} (aio/debug-handle-request aio {:path "/nope"}))
+    (aio/pure (and (== (:status r1) "200")
+              (and (== (:content-type r2) "application/json")
+              (and (== (:content-type r3) "application/json")
+              (and (== (:content-type r4) "text/plain; version=0.0.4")
+              (and (== (:content-type r5) "application/json")
+                   (== (:status r6) "200")))))))
+  }))
+  (test/case-async "debug-handler serves dashboard over HTTP" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/")
+      (\ {resp} {(> (len (http2/response-body resp)) 1000)}))
+  }))
+  (test/case-async "debug-handler serves prometheus metrics over HTTP" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/metrics")
+      (\ {resp} {(> (len (http2/response-body resp)) 100)}))
+  }))
+  (test/case-async "SSE diagnostics endpoint streams via broadcaster" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/debug/diagnostics/memory") (\ {_} {}))
+    (aio/then (aio/sleep aio 400) (\ {_} {true}))
+  })))
+  {:suite-name "AIO Debug Coverage Tests" :timeout-ms 5000})
+
+(http2/server-stop server)
+(aio/stop aio)

@@ -1,0 +1,590 @@
+#define _POSIX_C_SOURCE 200809L
+#include "testing.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdbool.h>
+#include <stdckdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "aio.h"
+#include "aio_ssl.h"
+#include "collections.h"
+#include "common.h"
+#include "gc.h"
+#include "memory.h"
+
+#if defined(__GNUC__) && defined(VALK_COVERAGE_BUILD)
+extern void __gcov_dump(void);
+#endif
+
+#define SEC_TO_MS(sec) ((sec) * 1000)
+#define SEC_TO_US(sec) ((sec) * 1000000)
+#define SEC_TO_NS(sec) ((sec) * 1000000000)
+
+#define NS_TO_SEC(ns) ((ns) / 1000000000)
+#define NS_TO_MS(ns) ((ns) / 1000000)
+#define NS_TO_US(ns) ((ns) / 1000)
+
+#ifndef VALK_REPORT_WIDTH
+#define VALK_REPORT_WIDTH 100
+#endif
+
+// Disable fork-based testing when running under AddressSanitizer
+// ASAN doesn't properly support fork() - shadow memory state becomes inconsistent
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+#define VALK_TEST_FORK_COMPILED 0
+#else
+#define VALK_TEST_FORK_COMPILED 1
+#endif
+
+#if VALK_TEST_FORK_COMPILED
+static bool valk_test_fork_disabled(void) {
+  return getenv("VALK_TEST_NO_FORK") != nullptr;
+}
+#endif
+
+const char *DOT_FILL =
+    ".........................................................................."
+    ".........................................................................."
+    ".........................................................................."
+    ".........................................................................."
+    "....";
+
+const char *UND_FILL =
+    "__________________________________________________________________________"
+    "__________________________________________________________________________"
+    "__________________________________________________________________________"
+    "__________________________________________________________________________"
+    "____";
+
+#define ANSI_YELLOW_BG "\033[43m"
+#define ANSI_BLACK_FG "\033[30m"
+#define ANSI_RESET "\033[0m"
+
+// Nerd Font: U+E0B8 =  , U+E0BE = 
+#define NF_SLANT ""
+
+static void __attribute__((unused)) valk_print_police_tape_line(int tiles) {
+  printf(ANSI_YELLOW_BG ANSI_BLACK_FG);
+  for (int i = 0; i < tiles; ++i) {
+    printf(NF_SLANT);
+  }
+  printf(ANSI_RESET);
+}
+
+static char* valk_str_dup(const char* str) {
+  size_t len = strlen(str) + 1;
+  char* copy = valk_mem_alloc(len);
+  memcpy(copy, str, len);
+  return copy;
+}
+
+valk_test_suite_t *valk_testsuite_empty(const char *filename) {
+  valk_test_suite_t *res = valk_mem_alloc(sizeof(valk_test_suite_t));
+  memset(res, 0, sizeof(valk_test_suite_t));
+  res->filename = valk_str_dup(filename);
+
+  da_init(&res->tests);
+  da_init(&res->fixtures);
+
+  return res;
+}
+
+void valk_testsuite_free(valk_test_suite_t *suite) {
+  for (size_t i = 0; i < suite->tests.count; i++) {
+    valk_mem_free(suite->tests.items[i].name);
+    da_free(&suite->tests.items[i].labels);
+  }
+  valk_mem_free(suite->tests.items);
+
+  for (size_t i = 0; i < suite->fixtures.count; i++) {
+    valk_mem_free(suite->fixtures.items[i].name);
+    suite->fixtures.items[i].free(suite->fixtures.items[i].value);
+  }
+
+  valk_mem_free(suite->fixtures.items);
+
+  valk_mem_free(suite->filename);
+
+  // Freed last: every test->_stdout / _stderr points into this slab, and
+  // valk_testsuite_print runs between run() and free().
+  if (suite->_io_slab != nullptr) {
+    valk_slab_free(suite->_io_slab);
+    suite->_io_slab = nullptr;
+  }
+
+  valk_mem_free(suite);
+}
+
+size_t valk_testsuite_add_test(valk_test_suite_t *suite, const char *name,
+                               valk_test_f *func) {
+  valk_test_t test = {.name = valk_str_dup(name), .func = func};
+  da_init(&test.labels);
+  // Initialize the result to UNDEFINED
+  test.result.type = VALK_TEST_UNDEFINED;
+  test.result.startTime = 0;
+  test.result.stopTime = 0;
+  test.result.timePrecision = VALK_MICROS;
+  da_add(&suite->tests, test);
+
+  return suite->tests.count;
+}
+
+static void valk_set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags == -1) {
+    perror("fcntl");
+    VALK_RAISE("could not set the forked shit non-blocking");
+  }
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static void valk_timeout_signal_handler(int sig) {
+  (void)sig;
+  valk_diag_dump_on_timeout();
+}
+
+int valk_test_fork(valk_test_t *self, valk_test_suite_t *suite,
+                   struct pollfd fds[2]) {
+  int pout[2], perr[2];
+  pipe(pout);
+  pipe(perr);
+  pid_t pid = fork();
+  if (pid == 0) {
+    // child
+    dup2(pout[1], STDOUT_FILENO);
+    dup2(perr[1], STDERR_FILENO);
+
+    // route all the stuff
+    // close(pout[1]);
+    // close(perr[1]);
+    close(pout[0]);
+    close(perr[0]);
+    
+    // Install SIGUSR1 handler for timeout diagnostics
+    signal(SIGUSR1, valk_timeout_signal_handler);
+
+    // Reset all global state after fork - critical for test isolation
+    // This reinitializes pthread primitives which are undefined after fork
+    valk_gc_reset_after_fork();
+    
+    // Reinitialize thread-local allocator after fork
+    valk_mem_init_malloc();
+    
+    // Reset SSL/allocator state inherited from parent process
+    valk_aio_ssl_fork_reset();
+
+    // Call suite-specific fork handler if set
+    if (suite->fork_child_handler) {
+      suite->fork_child_handler();
+    }
+
+    printf("🏃 Running: %s\n", self->name);
+    fflush(stdout);
+    self->func(suite, &self->result);
+
+    fflush(stdout);
+    fflush(stderr);
+
+    u8 *p = (void *)&self->result;
+    size_t size = sizeof(self->result);
+
+    while (size) {
+      ssize_t n = write(STDERR_FILENO, p, size);
+      if (n <= 0) break;
+      p += n;
+      size -= (size_t)n;
+    }
+
+#if defined(__GNUC__) && defined(VALK_COVERAGE_BUILD)
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) {
+      dup2(devnull, STDERR_FILENO);
+      close(devnull);
+    }
+    __gcov_dump();
+#endif
+    _exit(0);
+  }
+
+  // parent
+  // we only read
+  close(pout[1]);
+  close(perr[1]);
+
+  fds[0].fd = pout[0];
+  valk_set_nonblocking(fds[0].fd);
+  fds[0].events = POLLIN;
+  fds[1].fd = perr[0];
+  valk_set_nonblocking(fds[1].fd);
+  fds[1].events = POLLIN;
+  return pid;
+}
+
+void valk_test_fork_await(valk_test_t *test, int pid, struct pollfd fds[2]) {
+  int timeoutSeconds = 180;
+  const char *env_timeout = getenv("VALK_TEST_TIMEOUT_SECONDS");
+  if (env_timeout) {
+    int val = atoi(env_timeout);
+    if (val > 0) timeoutSeconds = val;
+  }
+
+  const int pollTimeoutMs = 100;  // Poll every 100ms to check timeout
+  int elapsedMs = 0;
+  bool timedOut = false;
+
+  while (!timedOut) {
+    int r = poll(fds, 2, pollTimeoutMs);
+
+    if (r < 0) {
+      if (errno == EINTR) continue;
+      perror("poll");
+      break;
+    }
+
+    if (r == 0) {
+      // Poll timeout - check if we've exceeded total timeout
+      elapsedMs += pollTimeoutMs;
+      if (elapsedMs >= SEC_TO_MS(timeoutSeconds)) {
+        timedOut = true;
+        break;
+      }
+      continue;
+    }
+
+    u8 buf[256];
+
+    if (fds[0].revents & POLLIN) {
+      ssize_t n = read(fds[0].fd, buf, sizeof buf);
+      if (n > 0) {
+        valk_ring_write(test->_stdout, buf, (size_t)n);
+      } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        // No data available, continue
+      } else if (n == 0) {
+        // EOF on stdout
+        fds[0].fd = -1;
+      } else {
+        perror("read stdout");
+        break;
+      }
+    }
+    if (fds[1].revents & POLLIN) {
+      ssize_t n = read(fds[1].fd, buf, sizeof buf);
+      if (n > 0) {
+        valk_ring_write(test->_stderr, buf, (size_t)n);
+      } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        // No data available, continue
+      } else if (n == 0) {
+        // EOF on stderr
+        fds[1].fd = -1;
+      } else {
+        perror("read stderr");
+        break;
+      }
+    }
+    // On POLLHUP without POLLIN, mark FD as done (no more data coming)
+    if ((fds[0].revents & POLLHUP) && !(fds[0].revents & POLLIN)) {
+      fds[0].fd = -1;
+    }
+    if ((fds[1].revents & POLLHUP) && !(fds[1].revents & POLLIN)) {
+      fds[1].fd = -1;
+    }
+    // Exit when both FDs are closed/invalid
+    if (fds[0].fd < 0 && fds[1].fd < 0) {
+      break;
+    }
+  }
+
+  if (timedOut) {
+    kill(pid, SIGUSR1);
+
+    int wait_ms = 500;
+    while (wait_ms > 0) {
+      int r = poll(fds, 2, 50);
+      if (r > 0) {
+        u8 buf[1024];
+        if (fds[0].revents & POLLIN) {
+          ssize_t n = read(fds[0].fd, buf, sizeof buf);
+          if (n > 0) valk_ring_write(test->_stdout, buf, (size_t)n);
+        }
+        if (fds[1].revents & POLLIN) {
+          ssize_t n = read(fds[1].fd, buf, sizeof buf);
+          if (n > 0) valk_ring_write(test->_stderr, buf, (size_t)n);
+        }
+      }
+      wait_ms -= 50;
+    }
+
+    if (fds[0].fd >= 0) close(fds[0].fd);
+    if (fds[1].fd >= 0) close(fds[1].fd);
+
+    kill(pid, SIGKILL);
+
+    test->result.type = VALK_TEST_CRSH;
+    size_t len = snprintf(nullptr, 0, "Test timed out after %d seconds\n",
+                          timeoutSeconds);
+    char buf[++len];
+
+    snprintf(buf, len, "Test timed out after %d seconds\n", timeoutSeconds);
+    valk_ring_write(test->_stderr, (void *)buf, len);
+    waitpid(pid, nullptr, 0);
+    return;
+  }
+
+  if (fds[0].fd >= 0) close(fds[0].fd);
+  if (fds[1].fd >= 0) close(fds[1].fd);
+
+  int wstatus;
+  waitpid(pid, &wstatus, 0);
+  if (WIFEXITED(wstatus)) {
+    valk_ring_rewind(test->_stderr, sizeof(test->result));
+    valk_ring_read(test->_stderr, sizeof(test->result), &test->result);
+  } else if (WIFSIGNALED(wstatus)) {
+    test->result.type = VALK_TEST_CRSH;
+
+    int sig = WTERMSIG(wstatus);
+    const char *name = strsignal(sig);
+
+    size_t len = snprintf(nullptr, 0, "Child died because of signal %d (%s)\n",
+                          sig, name);
+    char buf[++len];
+
+    snprintf(buf, len, "Child died because of signal %d (%s)\n", sig, name);
+
+    valk_ring_write(test->_stderr, (void *)buf, len);
+  }
+}
+
+int valk_testsuite_run(valk_test_suite_t *suite) {
+  const size_t ring_size = 16384;
+
+  // Two rings per test, sized to this suite so acquisition can never fail.
+  // The previous fixed 1024-item slab silently returned nullptr past 512
+  // tests, and the caller dereferenced it unchecked.
+  if (suite->_io_slab == nullptr) {
+    size_t needed = suite->tests.count * 2;
+    if (needed == 0) needed = 2;
+    suite->_io_slab = valk_slab_new(sizeof(valk_ring_t) + ring_size, needed);
+    if (suite->_io_slab == nullptr) {
+      fprintf(stderr, "failed to allocate IO capture slab for %zu tests\n",
+              suite->tests.count);
+      return 1;
+    }
+  }
+
+  bool result = 0;
+
+  for (size_t i = 0; i < suite->tests.count; i++) {
+    valk_test_t *test = &suite->tests.items[i];
+
+    valk_slab_item_t *out_item = valk_slab_aquire(suite->_io_slab);
+    valk_slab_item_t *err_item = valk_slab_aquire(suite->_io_slab);
+    if (out_item == nullptr || err_item == nullptr) {
+      fprintf(stderr, "IO capture slab exhausted at test %zu (%s)\n", i,
+              test->name);
+      return 1;
+    }
+    test->_stdout = (void *)out_item->data;
+    valk_ring_init(test->_stdout, ring_size);
+    test->_stderr = (void *)err_item->data;
+    valk_ring_init(test->_stderr, ring_size);
+
+#if VALK_TEST_FORK_COMPILED
+    if (!valk_test_fork_disabled()) {
+      struct pollfd fds[2];
+      int pid = valk_test_fork(test, suite, fds);
+      valk_test_fork_await(test, pid, fds);
+    } else {
+      fprintf(stderr, "Running: %s (no fork)\n", test->name);
+      test->func(suite, &test->result);
+    }
+#else
+    fprintf(stderr, "Running: %s\n", test->name);
+    test->func(suite, &test->result);
+#endif
+    result |= !(test->result.type == VALK_TEST_PASS ||
+                test->result.type == VALK_TEST_SKIP);
+  }
+
+  // The slab is NOT freed here: valk_testsuite_print reads every test's
+  // captured rings out of it. Ownership belongs to valk_testsuite_free.
+  return result;
+}
+
+static void valk_print_io(valk_test_t *test) {
+  printf("\n<<<CAPTURED name=%s\n", test->name);
+
+  printf("<<<STDOUT\n");
+  valk_ring_fread(test->_stdout, test->_stdout->capacity + 1, stdout);
+  printf("\n>>>STDOUT\n");
+
+  printf("<<<STDERR\n");
+  if (test->result.type == VALK_TEST_CRSH) {
+    valk_ring_fread(test->_stderr, test->_stderr->capacity, stdout);
+  } else {
+    valk_ring_fread(test->_stderr,
+                    test->_stderr->capacity - sizeof(test->result), stdout);
+  }
+  printf("\n>>>STDERR\n");
+
+  printf(">>>CAPTURED\n");
+}
+
+static void valk_json_escape(const char *s, FILE *out) {
+  for (; *s; s++) {
+    switch (*s) {
+      case '"':  fputs("\\\"", out); break;
+      case '\\': fputs("\\\\", out); break;
+      case '\n': fputs("\\n", out); break;
+      case '\r': fputs("\\r", out); break;
+      case '\t': fputs("\\t", out); break;
+      default:
+        if ((unsigned char)*s < 0x20)
+          fprintf(out, "\\u%04x", (unsigned char)*s);
+        else
+          fputc(*s, out);
+    }
+  }
+}
+
+static void valk_testsuite_print_json(valk_test_suite_t *suite) {
+  for (size_t i = 0; i < suite->tests.count; i++) {
+    valk_test_t *test = &suite->tests.items[i];
+    valk_test_result_t *result = &test->result;
+
+    const char *status;
+    switch (result->type) {
+      case VALK_TEST_PASS: status = "pass"; break;
+      case VALK_TEST_FAIL: status = "fail"; break;
+      case VALK_TEST_CRSH: status = "crash"; break;
+      case VALK_TEST_SKIP: status = "skip"; break;
+      default: status = "undefined"; break;
+    }
+
+    unsigned long long elapsed_us = result->stopTime - result->startTime;
+    if (result->timePrecision == VALK_MILLIS) elapsed_us *= 1000;
+    else if (result->timePrecision == VALK_NANOS) elapsed_us /= 1000;
+
+    printf("{\"test\":\"");
+    valk_json_escape(test->name, stdout);
+    printf("\",\"status\":\"%s\",\"us\":%llu,\"suite\":\"", status, elapsed_us);
+    valk_json_escape(suite->filename, stdout);
+    printf("\"}\n");
+  }
+  fflush(stdout);
+}
+
+void valk_testsuite_print(valk_test_suite_t *suite) {
+  if (getenv("VALK_TEST_JSON")) {
+    valk_testsuite_print_json(suite);
+    return;
+  }
+
+  printf("[%zu/%zu] %s Suite Results: \n", suite->tests.count,
+         suite->tests.count, suite->filename);
+  for (size_t i = 0; i < suite->tests.count; i++) {
+    valk_test_t *test = &suite->tests.items[i];
+    valk_test_result_t *result = &test->result;
+    char *precision;
+    switch (result->timePrecision) {
+      case VALK_MILLIS:
+        precision = "ms";
+        break;
+      case VALK_MICROS:
+        precision = "µs";
+        break;
+      case VALK_NANOS:
+        precision = "ns";
+        break;
+    }
+
+    // Base padding calculation (for lines without emoji)
+    int len = VALK_REPORT_WIDTH - strlen(test->name);
+
+    switch (result->type) {
+      case VALK_TEST_UNDEFINED: {
+        printf("%s%.*s  UNDEFINED\n", test->name, len, DOT_FILL);
+        break;
+      }
+      case VALK_TEST_PASS:
+        // Emoji ✅ + space = 3 display columns
+        printf("✅ %s%.*s  PASS : in %llu(%s)\n", test->name, len - 3,
+               DOT_FILL, (unsigned long long)(result->stopTime - result->startTime), precision);
+        break;
+      case VALK_TEST_SKIP:
+        // Emoji ⏭️ + space = 3 display columns
+        printf("⏭️  %s%.*s  SKIP : in %llu(%s)\n", test->name, len - 3,
+               DOT_FILL, (unsigned long long)(result->stopTime - result->startTime), precision);
+        break;
+      case VALK_TEST_FAIL:
+        // Emoji 🐞 + space = 3 display columns
+        printf("🐞 %s%.*s  FAIL : in %llu(%s)\n", test->name, len - 3,
+               DOT_FILL, (unsigned long long)(result->stopTime - result->startTime), precision);
+        valk_print_io(test);
+        break;
+      case VALK_TEST_CRSH:
+        // Emoji 🌀 + space = 3 display columns
+        printf("🌀 %s%.*s  CRSH : in %llu(%s)\n", test->name, len - 3,
+               DOT_FILL, (unsigned long long)(result->stopTime - result->startTime), precision);
+        valk_print_io(test);
+        break;
+      default:
+        printf("❓ %s%.*s  UNKNOWN(type=%d)\n", test->name, len - 3, DOT_FILL, result->type);
+        break;
+    }
+  }
+}
+
+void valk_testsuite_fixture_add(valk_test_suite_t *suite, const char *name,
+                                void *value, _fixture_copy_f *copyFunc,
+                                _fixture_free_f *freeFunc) {
+  valk_test_fixture_t res = {
+      .value = value, .copy = copyFunc, .free = freeFunc, .name = valk_str_dup(name)};
+  da_add(&suite->fixtures, res);
+}
+
+void *valk_testsuite_fixture_get(valk_test_suite_t *suite, const char *name) {
+  for (size_t i = 0; i < suite->fixtures.count; i++) {
+    if (strcmp(suite->fixtures.items[i].name, name) == 0) {
+      return suite->fixtures.items[i].copy(suite->fixtures.items[i].value);
+    }
+  }
+  return nullptr;
+}
+
+long valk_get_nanos(void) {
+  struct timespec ts;
+  timespec_get(&ts, TIME_UTC);
+  return SEC_TO_NS(ts.tv_sec) + ts.tv_nsec;
+}
+
+long valk_get_millis(void) {
+  struct timespec ts;
+  timespec_get(&ts, TIME_UTC);
+  return SEC_TO_MS(ts.tv_sec) + NS_TO_MS(ts.tv_nsec);
+}
+
+long valk_get_micros(void) {
+  struct timespec ts;
+  timespec_get(&ts, TIME_UTC);
+  return SEC_TO_US(ts.tv_sec) + NS_TO_US(ts.tv_nsec);
+}
+
+long valk_get_time(valk_time_precision_e p) {
+  switch (p) {
+    case VALK_MILLIS:
+      return valk_get_millis();
+    case VALK_MICROS:
+      return valk_get_micros();
+    case VALK_NANOS:
+      return valk_get_nanos();
+  }
+}

@@ -1,0 +1,21 @@
+; Property checking - run a property function n times
+
+(module prop)
+
+(fun {check name n prop-fn} {
+  (check-impl name n 0 prop-fn)
+})
+
+(fun {check-impl name remaining failures prop-fn} {
+  (if (<= remaining 0)
+    {(if (> failures 0)
+      {(error (str "property '" name "' failed " failures " times"))}
+      {true})}
+    {do
+      (= {result} (prop-fn))
+      (if (error? result)
+        {(error (str "property '" name "' FAILED: " result))}
+        {(if result
+          {(check-impl name (- remaining 1) failures prop-fn)}
+          {(error (str "property '" name "' FAILED on iteration " (- remaining 1)))})})})
+})

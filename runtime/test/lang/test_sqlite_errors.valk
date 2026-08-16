@@ -1,0 +1,206 @@
+(load "testing/test.valk")
+
+(test/run (list
+  (test/case "sqlite-open-bad-path"
+    {do
+    (= {r} (sqlite/open "/nonexistent-dir-valk-test/foo.db"))
+    (test/assert (error? r) "open in nonexistent dir errors")
+    true
+  })
+  (test/case "sqlite-query-prepare-bad-sql"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {r} (sqlite/query db "SELECT FROM WHERE"))
+    (test/assert (error? r) "query with bad SQL errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-family-unsupported-bind"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {r1} (sqlite/query db "SELECT * FROM t WHERE id = ?" (list 1)))
+    (test/assert (error? r1) "query with list bind errors")
+    (= {r2} (sqlite/query-dict db "SELECT id FROM t WHERE id = ?" (list 1)))
+    (test/assert (error? r2) "query-dict with list bind errors")
+    (= {r3} (sqlite/query-row db "SELECT id FROM t WHERE id = ?" {1}))
+    (test/assert (error? r3) "query-row with qexpr bind errors")
+    (= {r4} (sqlite/query-maybe db "SELECT id FROM t WHERE id = ?" {1}))
+    (test/assert (error? r4) "query-maybe with qexpr bind errors")
+    (= {r5} (sqlite/query-value db "SELECT id FROM t WHERE id = ?" {1}))
+    (test/assert (error? r5) "query-value with qexpr bind errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-exec-error-paths"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {r1} (sqlite/exec db "NOT VALID SQL AT ALL"))
+    (test/assert (error? r1) "exec bad SQL errors")
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {r2} (sqlite/exec db "INSERT INTO t VALUES (?)" (list 1)))
+    (test/assert (error? r2) "exec unsupported bind errors")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (= {r3} (sqlite/exec db "INSERT INTO t VALUES (1)"))
+    (test/assert (error? r3) "exec constraint violation errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-many-rows-grows-buffer"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (map (\ {i} {sqlite/exec db "INSERT INTO t (id) VALUES (?)" i}) (range 1 80))
+    (= {rows} (sqlite/query db "SELECT id FROM t ORDER BY id"))
+    (test/assert-eq 79 (len rows) "79 rows returned past 64-row capacity")
+    (= {r1} (nth 1 rows))
+    (test/assert-eq 1 r1:id "first row")
+    (= {r79} (nth 79 rows))
+    (test/assert-eq 79 r79:id "last row")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-step-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {r} (sqlite/query db "SELECT abs(-9223372036854775808)"))
+    (test/assert (error? r) "query step overflow errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-dict-zero-columns"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {r} (sqlite/query-dict db "CREATE TABLE zz (a)"))
+    (test/assert (error? r) "query-dict on DDL (0 columns) errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-dict-step-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {r} (sqlite/query-dict db "SELECT abs(-9223372036854775808)"))
+    (test/assert (error? r) "query-dict step overflow errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-row-zero-rows"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {r} (sqlite/query-row db "SELECT * FROM t"))
+    (test/assert (error? r) "query-row with 0 rows errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-row-multiple-rows"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (sqlite/exec db "INSERT INTO t VALUES (2)")
+    (= {r} (sqlite/query-row db "SELECT * FROM t"))
+    (test/assert (error? r) "query-row with 2 rows errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-maybe-step-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {r} (sqlite/query-maybe db "SELECT abs(-9223372036854775808)"))
+    (test/assert (error? r) "query-maybe step overflow errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-maybe-multiple-rows"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (sqlite/exec db "INSERT INTO t VALUES (2)")
+    (= {r} (sqlite/query-maybe db "SELECT * FROM t"))
+    (test/assert (error? r) "query-maybe with 2 rows errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-value-column-count-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (a INTEGER, b INTEGER)")
+    (sqlite/exec db "INSERT INTO t VALUES (1, 2)")
+    (= {r} (sqlite/query-value db "SELECT a, b FROM t"))
+    (test/assert (error? r) "query-value with 2 columns errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-value-zero-rows"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {r} (sqlite/query-value db "SELECT id FROM t"))
+    (test/assert (error? r) "query-value with 0 rows errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-query-value-multiple-rows"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (sqlite/exec db "INSERT INTO t VALUES (2)")
+    (= {r} (sqlite/query-value db "SELECT id FROM t"))
+    (test/assert (error? r) "query-value with 2 rows errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-prepare-bad-sql-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {r} (sqlite/prepare db "SELECT FROM WHERE"))
+    (test/assert (error? r) "prepare with bad SQL errors")
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-bind-unsupported-type-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (= {stmt} (sqlite/prepare db "INSERT INTO t VALUES (?)"))
+    (= {r} (sqlite/bind stmt {1 2}))
+    (test/assert (error? r) "bind with qexpr errors")
+    (sqlite/finalize stmt)
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-step-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {stmt} (sqlite/prepare db "SELECT abs(-9223372036854775808)"))
+    (= {r} (sqlite/step stmt))
+    (test/assert (error? r) "step overflow errors")
+    (sqlite/finalize stmt)
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-step-constraint-error"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (sqlite/exec db "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+    (sqlite/exec db "INSERT INTO t VALUES (1)")
+    (= {stmt} (sqlite/prepare db "INSERT INTO t VALUES (1)"))
+    (= {r} (sqlite/step stmt))
+    (test/assert (error? r) "step constraint violation errors")
+    (sqlite/finalize stmt)
+    (sqlite/close db)
+    true
+  })
+  (test/case "sqlite-stmt-ref-collected-without-finalize"
+    {do
+    (= {db} (sqlite/open ":memory:"))
+    (= {stmt} (sqlite/prepare db "SELECT 1"))
+    (= {stmt} nil)
+    (mem/gc/collect)
+    (sqlite/close db)
+    true
+  })
+) (test/context-new))

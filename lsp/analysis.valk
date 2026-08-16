@@ -1,0 +1,597 @@
+; LSP Analysis — semantic tokens, AST walking
+;
+; IMPORTANT: AST nodes (parsed S-expressions) must NEVER be stored via = or def
+; because those builtins call valk_resolve_symbol which resolves symbol values.
+; Instead, pass AST nodes through function arguments (lambda binding is safe).
+;
+; Provides: sem/tokenize text -> flat integer list (LSP delta-encoded)
+
+(module sem)
+
+; ---------------------------------------------------------------------------
+; Token type indices (must match legend in lsp.valk capabilities)
+; ---------------------------------------------------------------------------
+(def {SEM_KEYWORD}   0)
+(def {SEM_FUNCTION}  1)
+(def {SEM_PARAMETER} 2)
+(def {SEM_VARIABLE}  3)
+(def {SEM_NUMBER}    4)
+(def {SEM_STRING}    5)
+(def {SEM_TYPE}      6)
+(def {SEM_OPERATOR}  7)
+(def {SEM_PROPERTY}  8)
+
+(def {MOD_NONE}        0)
+(def {MOD_DECLARATION} 1)
+
+; ---------------------------------------------------------------------------
+; Classification helpers
+; ---------------------------------------------------------------------------
+
+(def {SEM_KEYWORD_SET}
+  (dict/from-keys {"fun" "\\" "def" "=" "if" "match" "select" "case"
+   "do" "let" "type" "sig" "load" "and" "or" "not"
+   "quote" "quasiquote" "unquote" "unquote-splicing"}))
+
+(def {SEM_OPERATOR_SET}
+  (dict/from-keys {"+" "-" "*" "/" ">" "<" ">=" "<=" "==" "!=" "%" "ord"}))
+
+; ---------------------------------------------------------------------------
+; Token accumulation — flat list built with qcons (reversed)
+; Each token: 4 values (offset, length, type, modifiers)
+; ---------------------------------------------------------------------------
+
+(sig 'emit {-> Num Num Num Num List List})
+(fun {emit offset length tok-type mods acc} {
+  qcons mods (qcons tok-type (qcons length (qcons offset acc)))
+})
+
+; ---------------------------------------------------------------------------
+; Walk a list of expressions as code
+; ---------------------------------------------------------------------------
+
+; A parse error is kept in the top-level list as an LVAL_ERR element, and
+; under BYOL an error argument short-circuits the call it is passed to, so
+; the guard has to sit at the call site: without it one broken form makes
+; the whole walk return that error and the document loses every token.
+(sig 'walk-each {-> List List List List})
+(fun {walk-each exprs scope acc} {
+  if (nil? exprs) {acc}
+  {do
+    (= {e} (head exprs))
+    (walk-each (tail exprs) scope
+      (if (error? e) {acc} {walk-code e scope acc}))}
+})
+
+; ---------------------------------------------------------------------------
+; Core walker — walks an expression as code
+; Dispatches on type. For lists, delegates to sem/walk-list.
+; AST nodes are passed as function args to avoid = resolution.
+; ---------------------------------------------------------------------------
+
+(sig 'walk-code {-> Any List List List})
+(fun {walk-code expr scope acc} {
+  if (nil? expr) {acc}
+  {if (num? expr)
+    {emit (src-pos expr) (len (str expr)) SEM_NUMBER MOD_NONE acc}
+  {if (str? expr)
+    {acc}
+  {if (sym? expr)
+    {classify-sym expr scope acc}
+  {if (list? expr)
+    {walk-list expr scope acc}
+  {acc}}}}}
+})
+
+; Classify a standalone symbol
+(sig 'classify-sym {-> Any List List List})
+(fun {classify-sym expr scope acc} {
+  classify-sym-str expr (str expr) scope acc
+})
+
+(sig 'classify-sym-str {-> Any Str List List List})
+(fun {classify-sym-str expr name scope acc} {
+  if (<= (len name) 0) {acc}
+  {if (== (str/slice name 0 1) ":")
+    {emit (src-pos expr) (len name) SEM_PROPERTY MOD_NONE acc}
+  {if (member? name scope)
+    {emit (src-pos expr) (len name) SEM_PARAMETER MOD_NONE acc}
+  {emit (src-pos expr) (len name) SEM_VARIABLE MOD_NONE acc}}}
+})
+
+; ---------------------------------------------------------------------------
+; List dispatch — uses ast/head-name to avoid resolving head symbol
+; ---------------------------------------------------------------------------
+
+(sig 'walk-list {-> List List List List})
+(fun {walk-list expr scope acc} {
+  if (nil? (tail expr))
+    {walk-code (head expr) scope acc}
+  {do
+    (= {name} (ast/head-name expr))
+    (if (== name "")
+      {walk-each expr scope acc}
+      {dispatch-sym-head (head expr) name (tail expr) scope acc})}
+})
+
+(sig 'source-len {-> Str Num})
+(fun {source-len name} {
+  if (== name "quote") {1}
+  {if (== name "quasiquote") {1}
+  {if (== name "unquote") {1}
+  {if (== name "unquote-splicing") {2}
+  {len name}}}}
+})
+
+(sig 'dispatch-sym-head {-> Any Str List List List List})
+(fun {dispatch-sym-head hd name tl scope acc} {
+  if (dict/has? SEM_KEYWORD_SET name)
+    {walk-keyword name hd tl scope acc}
+  {if (dict/has? SEM_OPERATOR_SET name)
+    {do
+      (walk-each tl scope
+        (emit (src-pos hd) (source-len name) SEM_OPERATOR MOD_NONE acc))}
+  {do
+    (walk-each tl scope
+      (emit (src-pos hd) (source-len name) SEM_FUNCTION MOD_NONE acc))}}
+})
+
+; ---------------------------------------------------------------------------
+; Keyword dispatch
+; ---------------------------------------------------------------------------
+
+(sig 'walk-keyword {-> Str Any List List List List})
+(fun {walk-keyword name hd tl scope acc} {
+  if (== name "fun")  {walk-fun hd tl scope acc}
+  {if (== name "\\") {walk-lambda hd tl scope acc}
+  {if (== name "def") {walk-binding hd tl scope acc}
+  {if (== name "=")   {walk-binding hd tl scope acc}
+  {if (== name "type") {walk-type hd tl scope acc}
+  {do
+    (walk-each tl scope
+      (emit (src-pos hd) (source-len name) SEM_KEYWORD MOD_NONE acc))}}}}}
+})
+
+; ---------------------------------------------------------------------------
+; (fun {name params...} {body})
+; ---------------------------------------------------------------------------
+
+(sig 'walk-fun {-> Any List List List List})
+(fun {walk-fun kw args scope acc} {do
+  (walk-fun-with-kw kw args scope
+    (emit (src-pos kw) 3 SEM_KEYWORD MOD_NONE acc))
+})
+
+(sig 'walk-fun-with-kw {-> Any List List List List})
+(fun {walk-fun-with-kw kw args scope acc} {
+  if (< (len args) 2) {walk-each args scope acc}
+  {walk-fun-formals (head args) (head (tail args)) scope acc}
+})
+
+(sig 'walk-fun-formals {-> Any Any List List List})
+(fun {walk-fun-formals formals body scope acc} {
+  if (nil? formals) {walk-code body scope acc}
+  {walk-fun-name (head formals) (tail formals) body scope acc}
+})
+
+; Emit function name, then params, then walk body with new scope
+(sig 'walk-fun-name {-> Any List List List List List})
+(fun {walk-fun-name fname params body scope acc} {
+  if (sym? fname)
+    {walk-fun-params params body scope
+      (collect-param-names params)
+      (emit (src-pos fname) (len (str fname)) SEM_FUNCTION MOD_DECLARATION acc)}
+    {walk-fun-params params body scope
+      (collect-param-names params) acc}
+})
+
+(sig 'walk-fun-params {-> List List List List List List})
+(fun {walk-fun-params params body scope param-names acc} {
+  walk-code body (join scope param-names)
+    (emit-param-decls params acc)
+})
+
+; ---------------------------------------------------------------------------
+; (\ {params...} {body})
+; ---------------------------------------------------------------------------
+
+(sig 'walk-lambda {-> Any List List List List})
+(fun {walk-lambda kw args scope acc} {do
+  (walk-lambda-inner args scope
+    (emit (src-pos kw) 1 SEM_KEYWORD MOD_NONE acc))
+})
+
+(sig 'walk-lambda-inner {-> List List List List})
+(fun {walk-lambda-inner args scope acc} {
+  if (< (len args) 2) {walk-each args scope acc}
+  {walk-lambda-body (head args) (head (tail args)) scope acc}
+})
+
+(sig 'walk-lambda-body {-> List List List List List})
+(fun {walk-lambda-body formals body scope acc} {
+  walk-code body (join scope (collect-param-names formals))
+    (emit-param-decls formals acc)
+})
+
+; ---------------------------------------------------------------------------
+; (def {vars...} vals...) and (= {vars...} vals...)
+; ---------------------------------------------------------------------------
+
+(sig 'walk-binding {-> Any List List List List})
+(fun {walk-binding kw args scope acc} {
+  if (nil? args) {emit (src-pos kw) (len (str kw)) SEM_KEYWORD MOD_NONE acc}
+  {walk-binding-inner (head args) (tail args) scope
+    (emit (src-pos kw) (len (str kw)) SEM_KEYWORD MOD_NONE acc)}
+})
+
+(sig 'walk-binding-inner {-> List List List List List})
+(fun {walk-binding-inner vars vals scope acc} {
+  walk-each vals scope
+    (emit-var-decls vars acc)
+})
+
+; ---------------------------------------------------------------------------
+; (type (TypeName (Ctor :field Type) ...))
+; ---------------------------------------------------------------------------
+
+(sig 'walk-type {-> Any List List List List})
+(fun {walk-type kw args scope acc} {
+  walk-type-variants args
+    (emit (src-pos kw) 4 SEM_KEYWORD MOD_NONE acc)
+})
+
+(sig 'walk-type-variants {-> List List List})
+(fun {walk-type-variants variants acc} {
+  if (nil? variants) {acc}
+  {walk-type-variants (tail variants)
+    (walk-type-one (head variants) acc)}
+})
+
+(sig 'walk-type-one {-> Any List List})
+(fun {walk-type-one variant acc} {
+  if (list? variant)
+    {walk-type-inner variant acc}
+  {if (sym? variant)
+    {emit (src-pos variant) (len (str variant)) SEM_TYPE MOD_DECLARATION acc}
+  {acc}}
+})
+
+(sig 'walk-type-inner {-> List List List})
+(fun {walk-type-inner variant acc} {
+  if (nil? variant) {acc}
+  {walk-type-head variant (tail variant) acc}
+})
+
+(sig 'walk-type-head {-> List List List List})
+(fun {walk-type-head variant rest acc} {do
+  (= {hname} (ast/head-name variant))
+  (if (== hname "")
+    {walk-type-fields rest acc}
+    {walk-type-fields rest
+      (emit (src-pos (head variant)) (len hname) SEM_TYPE MOD_DECLARATION acc)})
+})
+
+(sig 'walk-type-fields {-> List List List})
+(fun {walk-type-fields fields acc} {
+  if (nil? fields) {acc}
+  {walk-type-fields (tail fields)
+    (walk-type-field (head fields) acc)}
+})
+
+(sig 'walk-type-field {-> Any List List})
+(fun {walk-type-field f acc} {
+  if (sym? f)
+    {walk-type-field-sym f (str f) acc}
+  {if (list? f)
+    {walk-type-inner f acc}
+    {acc}}
+})
+
+(sig 'walk-type-field-sym {-> Any Str List List})
+(fun {walk-type-field-sym f name acc} {
+  if (== (str/slice name 0 1) ":")
+    {emit (src-pos f) (len name) SEM_PROPERTY MOD_NONE acc}
+    {emit (src-pos f) (len name) SEM_TYPE MOD_NONE acc}
+})
+
+; ---------------------------------------------------------------------------
+; Param/var emission helpers — walk formals lists
+; ---------------------------------------------------------------------------
+
+(sig 'emit-param-decls {-> List List List})
+(fun {emit-param-decls params acc} {
+  if (nil? params) {acc}
+  {emit-param-decls (tail params)
+    (emit-one-param (head params) acc)}
+})
+
+(sig 'emit-one-param {-> Any List List})
+(fun {emit-one-param p acc} {
+  if (sym? p)
+    {emit-one-param-str p (str p) acc}
+    {acc}
+})
+
+(sig 'emit-one-param-str {-> Any Str List List})
+(fun {emit-one-param-str p name acc} {
+  if (== name "&") {acc}
+  {emit (src-pos p) (len name) SEM_PARAMETER MOD_DECLARATION acc}
+})
+
+(sig 'collect-param-names {-> List List})
+(fun {collect-param-names params} {
+  if (nil? params) {nil}
+  {collect-one-param (head params) (tail params)}
+})
+
+(sig 'collect-one-param {-> Any List List})
+(fun {collect-one-param p rest} {
+  if (sym? p)
+    {collect-one-param-str (str p) rest}
+    {collect-param-names rest}
+})
+
+(sig 'collect-one-param-str {-> Str List List})
+(fun {collect-one-param-str name rest} {
+  if (== name "&") {collect-param-names rest}
+  {qcons name (collect-param-names rest)}
+})
+
+(sig 'emit-var-decls {-> List List List})
+(fun {emit-var-decls vars acc} {
+  if (nil? vars) {acc}
+  {if (list? vars)
+    {emit-var-decls-inner vars acc}
+    {acc}}
+})
+
+(sig 'emit-var-decls-inner {-> List List List})
+(fun {emit-var-decls-inner vars acc} {
+  if (nil? vars) {acc}
+  {emit-var-decls-inner (tail vars)
+    (emit-one-var (head vars) acc)}
+})
+
+(sig 'emit-one-var {-> Any List List})
+(fun {emit-one-var v acc} {
+  if (sym? v)
+    {emit (src-pos v) (len (str v)) SEM_VARIABLE MOD_DECLARATION acc}
+    {acc}
+})
+
+; ---------------------------------------------------------------------------
+; Delta encoding — provided by C builtin sem/encode-deltas
+; Takes (text tokens) where tokens is list of 4-tuples (offset len type mods)
+; Returns flat list of 5-tuples (deltaLine deltaCol len type mods)
+; ---------------------------------------------------------------------------
+
+; ---------------------------------------------------------------------------
+; Public API
+; ---------------------------------------------------------------------------
+
+(sig 'tokenize {-> Str List})
+(fun {tokenize text} {do
+  (tokenize-ast (parse text) text)
+})
+
+; Tokens always describe `text`, never an older snapshot of it. The reader
+; recovers from a broken form by ending it where the next top-level form
+; starts, so a mid-edit document still yields real forms either side of the
+; damage: walk those, and lex the one span that has no AST. Serving a cached
+; token array from the last clean parse instead — as this used to — renders
+; every token at the offsets of a document the client no longer has, which
+; is what makes identifiers highlight half-way through mid-edit.
+(sig 'tokenize-ast {-> List Str List})
+(fun {tokenize-ast ast text} {do
+  (sem/encode-deltas text
+    (list/group 4 (reverse (walk-top ast text nil))))
+})
+
+(sig 'walk-top {-> List Str List List})
+(fun {walk-top exprs text acc} {
+  if (nil? exprs) {acc}
+  {do
+    (= {e} (head exprs))
+    (walk-top (tail exprs) text
+      (if (error? e)
+        {lex-gap (acc-end acc)
+                     (next-form-offset (tail exprs) (len text)) text acc}
+        {walk-code e nil acc}))}
+})
+
+; The unparseable span runs from where AST coverage stopped to where it
+; resumes. Derived from the tokens, not from the error's own offset: that
+; offset is the start of the broken form for "Missing `)`" but end-of-file
+; for "Unexpected end of input", and the second kind would lex nothing.
+(sig 'acc-end {-> List Num})
+(fun {acc-end acc} {
+  if (nil? acc) {0}
+  {if (< (len acc) 4) {0}
+  {do
+    (= {e} (+ (nth 4 acc) (nth 3 acc)))
+    (if (< e 0) {0} {e})}}
+})
+
+(sig 'lex-gap {-> Num Num Str List List})
+(fun {lex-gap start end text acc} {
+  if (>= start end) {acc} {lex-walk text start end acc}
+})
+
+(sig 'next-form-offset {-> List Num Num})
+(fun {next-form-offset rest fallback} {
+  if (nil? rest) {fallback}
+  {do
+    (= {e} (head rest))
+    (if (error? e) {next-form-offset (tail rest) fallback}
+      {do
+        (= {p} (src-pos e))
+        (if (< p 0) {next-form-offset (tail rest) fallback} {p})})}
+})
+
+
+; ---------------------------------------------------------------------------
+; Lexer-based fallback for semantic tokens.
+;
+; When the parser can't produce an AST (broken file mid-edit and no
+; last-known-good cache), walk the text character-by-character and emit
+; tokens for things we can identify lexically: comments, strings, numbers,
+; keywords, properties (:foo), and other symbols.
+;
+; This loses scope/binding awareness but preserves syntax-level highlighting,
+; which is much better UX than the editor falling back to orange-text default.
+; ---------------------------------------------------------------------------
+
+(sig 'lex-tokenize {-> Str List})
+(fun {lex-tokenize text} {do
+  (sem/encode-deltas text
+    (list/group 4 (reverse (lex-walk text 0 (len text) nil))))
+})
+
+(fun {lex-is-ws ch} {
+  or (== ch " ") (or (== ch "\t") (or (== ch "\n") (== ch "\r")))
+})
+
+(fun {lex-is-paren ch} {
+  or (== ch "(") (or (== ch ")") (or (== ch "{") (== ch "}")))
+})
+
+(fun {lex-is-digit ch} {
+  if (== (len ch) 0) {0}
+  {>= (str/index-of "0123456789" ch) 0}
+})
+
+(fun {lex-is-sym-char ch} {
+  if (== (len ch) 0) {0}
+  {if (lex-is-ws ch) {0}
+  {if (lex-is-paren ch) {0}
+  {if (== ch ";") {0}
+  {if (== ch "\"") {0} {1}}}}}
+})
+
+(fun {lex-walk text pos end acc} {
+  if (>= pos end) {acc}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (lex-is-ws ch)    {lex-walk text (+ pos 1) end acc}
+    {if (lex-is-paren ch) {lex-walk text (+ pos 1) end acc}
+    {if (== ch ";")           {lex-eat-comment text pos end acc}
+    {if (== ch "\"")          {lex-eat-string text pos end acc}
+    {if (lex-is-digit ch) {lex-eat-number text pos end acc}
+    {lex-eat-symbol text pos end acc}}}}})}
+})
+
+; Comment: from `;` to end of line
+(fun {lex-eat-comment text pos end acc} {do
+  (= {endpos} (lex-find-newline text pos end))
+  (lex-walk text endpos end
+    (emit pos (- endpos pos) SEM_KEYWORD MOD_NONE acc))
+})
+
+(fun {lex-find-newline text pos end} {
+  if (>= pos end) {pos}
+  {if (== (str/slice text pos (+ pos 1)) "\n") {pos}
+    {lex-find-newline text (+ pos 1) end}}
+})
+
+; String: from `"` to matching `"`, with `\"` escapes
+(fun {lex-eat-string text pos end acc} {do
+  (= {endpos} (lex-find-string-end text (+ pos 1) end))
+  (lex-walk text endpos end
+    (emit pos (- endpos pos) SEM_STRING MOD_NONE acc))
+})
+
+(fun {lex-find-string-end text pos end} {
+  if (>= pos end) {pos}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (== ch "\"") {+ pos 1}
+    {if (== ch "\\")
+      {if (>= (+ pos 1) end) {+ pos 1}
+        {lex-find-string-end text (+ pos 2) end}}
+      {lex-find-string-end text (+ pos 1) end}})}
+})
+
+; Number: digits, optional `.` and trailing digits
+(fun {lex-eat-number text pos end acc} {do
+  (= {endpos} (lex-find-num-end text pos end))
+  (lex-walk text endpos end
+    (emit pos (- endpos pos) SEM_NUMBER MOD_NONE acc))
+})
+
+(fun {lex-find-num-end text pos end} {
+  if (>= pos end) {pos}
+  {do
+    (= {ch} (str/slice text pos (+ pos 1)))
+    (if (or (lex-is-digit ch) (== ch ".")) {lex-find-num-end text (+ pos 1) end}
+      {pos})}
+})
+
+; Symbol: any non-whitespace, non-paren, non-quote, non-semicolon run
+(fun {lex-eat-symbol text pos end acc} {do
+  (= {endpos} (lex-find-sym-end text pos end))
+  (= {name} (str/slice text pos endpos))
+  (= {ttype} (lex-classify name))
+  (lex-walk text endpos end
+    (emit pos (- endpos pos) ttype MOD_NONE acc))
+})
+
+(fun {lex-find-sym-end text pos end} {
+  if (>= pos end) {pos}
+  {if (lex-is-sym-char (str/slice text pos (+ pos 1)))
+    {lex-find-sym-end text (+ pos 1) end}
+    {pos}}
+})
+
+(fun {lex-classify name} {
+  if (== (len name) 0) {SEM_VARIABLE}
+  {if (== (str/slice name 0 1) ":") {SEM_PROPERTY}
+  {if (dict/has? SEM_KEYWORD_SET name) {SEM_KEYWORD}
+  {if (dict/has? SEM_OPERATOR_SET name) {SEM_OPERATOR}
+  {SEM_VARIABLE}}}}
+})
+
+; ---------------------------------------------------------------------------
+; Typed semantic token representation
+; ---------------------------------------------------------------------------
+; The C builtin sem/encode-deltas returns a flat integer list for the LSP wire
+; format. These helpers convert between that flat encoding and typed records.
+
+(type {SemToken}
+  {:dl Num :dc Num :len Num :ttype Num :mods Num})
+
+(sig 'parse-flat {-> List List})
+(fun {parse-flat tokens} {
+  if (nil? tokens) {nil}
+  {if (< (len tokens) 5) {nil}
+  {qcons (SemToken :dl    (nth 1 tokens)
+                   :dc    (nth 2 tokens)
+                   :len   (nth 3 tokens)
+                   :ttype (nth 4 tokens)
+                   :mods  (nth 5 tokens))
+         (parse-flat (drop 5 tokens))}}
+})
+
+(sig 'flatten {-> List List})
+(fun {flatten tokens} {
+  if (nil? tokens) {nil}
+   {do
+    (= {t} (head tokens))
+    (qcons (SemToken:dl t)
+    (qcons (SemToken:dc t)
+    (qcons (SemToken:len t)
+    (qcons (SemToken:ttype t)
+    (qcons (SemToken:mods t) (flatten (tail tokens)))))))}
+})
+
+; ---------------------------------------------------------------------------
+; Line/column to byte offset conversion
+; ---------------------------------------------------------------------------
+
+; Delegates to the C scan. The old Valk implementation split the entire
+; document into a line list on every positional request (hover, definition,
+; references, completion, signature help, highlight, selection).
+(sig 'line-col->offset {-> Str Num Num Num})
+(fun {line-col->offset text line col} {
+  str/lc->offset text line col
+})
+

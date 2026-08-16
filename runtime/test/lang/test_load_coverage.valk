@@ -1,0 +1,186 @@
+(load "testing/test.valk")
+
+(test/run (list
+
+  (test/case "set-module-prefix-rejects-bad-args"
+    {do
+      (test/assert (error? (set-module-prefix! 5)) "non-sym non-str rejected")
+      (test/assert (error? (set-module-prefix! "")) "empty string rejected")
+      true})
+
+  (test/case "load-arity-and-type-errors"
+    {do
+      (test/assert (error? (load)) "load with no args errors")
+      (test/assert (error? (load 5)) "load with non-str errors")
+      true})
+
+  (test/case "override-must-be-list"
+    {do
+      (def {file://cov-ov-bad.valk} 42)
+      (= {r} (load "cov-ov-bad.valk"))
+      (test/assert (error? r) "non-list override errors")
+      true})
+
+  (test/case "override-multiple-module-decls"
+    {do
+      (def {file://cov-ov-mm.valk} {(module cov-ovm-a) (module cov-ovm-b) 1})
+      (= {r} (load "cov-ov-mm.valk"))
+      (test/assert (error? r) "two module declarations abort the load")
+      true})
+
+  (test/case "override-nil-and-pre-module-forms"
+    {do
+      (def {file://cov-ov-nil.valk} {})
+      (= {r} (load "cov-ov-nil.valk"))
+      (test/assert (list? r) "nil override loads as empty file")
+      (def {file://cov-ov-pre.valk} {1 (module covpre) (def {cov-pre-f} 2) 3})
+      (= {r2} (load "cov-ov-pre.valk"))
+      (test/assert-eq 3 r2 "forms before module declaration stay flat")
+      true})
+
+  (test/case "override-bad-macro-def-aborts"
+    {do
+      (def {file://cov-ov-badmac.valk} {(macro)})
+      (= {r} (load "cov-ov-badmac.valk"))
+      (test/assert (error? r) "macro def eval error aborts the load")
+      true})
+
+  (test/case "set-module-prefix-valid-then-flush"
+    {do
+      (set-module-prefix! "cov-sp1")
+      (set-module-prefix! (head {cov-sp2}))
+      (= {r} (compile/process "(def {cov-spf} 1)"))
+      (test/assert (list? r) "pending prefix consumed by compile/process")
+      true})
+
+  (test/case "exe-dir-relative-resolution"
+    {do
+      (= {r} (parse-file "cmake_install.cmake"))
+      (test/assert (list? r) "file next to the executable resolves")
+      true})
+
+  (test/case "circular-load-detected"
+    {do
+      (write-file "/tmp/valk_cov_circ_a.valk" "(load \"/tmp/valk_cov_circ_b.valk\") 1")
+      (write-file "/tmp/valk_cov_circ_b.valk" "(load \"/tmp/valk_cov_circ_a.valk\") 2")
+      (= {r} (load "/tmp/valk_cov_circ_a.valk"))
+      (file/delete "/tmp/valk_cov_circ_a.valk")
+      (file/delete "/tmp/valk_cov_circ_b.valk")
+      (test/assert (error? r) "circular load returns error")
+      true})
+
+  (test/case "load-empty-file-errors"
+    {do
+      (write-file "/tmp/valk_cov_empty.valk" "")
+      (= {r} (load "/tmp/valk_cov_empty.valk"))
+      (file/delete "/tmp/valk_cov_empty.valk")
+      (test/assert (error? r) "empty file returns error")
+      true})
+
+  (test/case "alias-registration-and-replacement"
+    {do
+      (write-file "/tmp/valk_cov_alias_kid.valk"
+        "(module aliaskid) (fun {akf x} {+ x 1}) 7")
+      (write-file "/tmp/valk_cov_alias_kid2.valk"
+        "(module aliaskid2) (fun {akf2 x} {+ x 2}) 8")
+      (write-file "/tmp/valk_cov_alias_par.valk"
+        "(module aliaspar) (load \"/tmp/valk_cov_alias_kid.valk\") (load \"/tmp/valk_cov_alias_kid2.valk\") (load \"/tmp/valk_cov_alias_kid.valk\") {(aliaskidzz/foo 1) (nomatch/x 2)} 9")
+      (= {r} (load "/tmp/valk_cov_alias_par.valk"))
+      (file/delete "/tmp/valk_cov_alias_kid.valk")
+      (file/delete "/tmp/valk_cov_alias_kid2.valk")
+      (file/delete "/tmp/valk_cov_alias_par.valk")
+      (test/assert-eq 9 r "parent load returns last value")
+      (test/assert-eq 2 (aliaspar/aliaskid/akf 1) "child nests under parent prefix")
+      (test/assert-eq 3 (aliaspar/aliaskid2/akf2 1) "second child nests too")
+      true})
+
+  (test/case "parse-file-basic-and-errors"
+    {do
+      (= {ast} (parse-file "runtime/test/fixtures/modules/ret42.valk"))
+      (test/assert (list? ast) "parse-file returns list of forms")
+      (test/assert (error? (parse-file "/no/such/valk_cov_file.valk")) "unresolvable path errors")
+      (test/assert (error? (parse-file)) "no args errors")
+      (test/assert (error? (parse-file 5)) "non-str errors")
+      true})
+
+  (test/case "parse-file-stale-mtime-reparse"
+    {do
+      (= {p} "/tmp/valk_cov_stale.valk")
+      (write-file p "11")
+      (= {a1} (parse-file p))
+      (test/assert (list? a1) "first parse succeeds")
+      (exec "touch" "-d" "2020-01-01 00:00:00" p)
+      (= {a2} (parse-file p))
+      (test/assert (list? a2) "stale entry reparses")
+      (= {a3} (parse-file p))
+      (test/assert (list? a3) "reparsed entry hits cache")
+      (file/delete p)
+      true})
+
+  (test/case "parse-cache-lru-eviction"
+    {do
+      (mkdir-p "/tmp/valk_cov_lru")
+      (map (\ {i}
+        {do
+          (= {p} (str "/tmp/valk_cov_lru/f" i ".valk"))
+          (write-file p "1")
+          (parse-file p)
+          (file/delete p)
+          1})
+        (range 0 260))
+      (rmdir "/tmp/valk_cov_lru")
+      true})
+
+  (test/case "compile-process-variants"
+    {do
+      (= {r1} (compile/process "(def {cov-cp-a} 1) (cov-cp-a)"))
+      (test/assert (list? r1) "no prefix")
+      (= {r2} (compile/process "(def {cov-cp-b} 1) (cov-cp-b)" "cpb"))
+      (test/assert (list? r2) "explicit prefix")
+      (= {r3} (compile/process "(def {cov-cp-c} 1)" ""))
+      (test/assert (list? r3) "empty prefix means none")
+      (test/assert (error? (compile/process)) "no args errors")
+      (test/assert (error? (compile/process 5)) "non-str text errors")
+      (test/assert (error? (compile/process "(x)" 5)) "non-str prefix errors")
+      (test/assert (error? (compile/process "a" "b" "c")) "3 args errors")
+      (= {r4} (compile/process ""))
+      (test/assert (list? r4) "empty text yields empty form list")
+      true})
+
+  (test/case "compile-process-file-variants"
+    {do
+      (write-file "/tmp/valk_cov_cpf.valk" "(def {cov-cpf-a} 1) (cov-cpf-a)")
+      (= {r1} (compile/process-file "/tmp/valk_cov_cpf.valk"))
+      (test/assert (list? r1) "path without prefix")
+      (= {r2} (compile/process-file "/tmp/valk_cov_cpf.valk" "cpfp"))
+      (test/assert (list? r2) "path with prefix")
+      (= {r3} (compile/process-file "/tmp/valk_cov_cpf.valk" ""))
+      (test/assert (list? r3) "path with empty prefix")
+      (file/delete "/tmp/valk_cov_cpf.valk")
+      (test/assert (error? (compile/process-file "/no/such/valk_cov_cpf.valk")) "unresolvable path errors")
+      (test/assert (error? (compile/process-file)) "no args errors")
+      (test/assert (error? (compile/process-file 5)) "non-str path errors")
+      (test/assert (error? (compile/process-file "a" "b" "c")) "3 args errors")
+      (write-file "/tmp/valk_cov_cpf_empty.valk" "")
+      (= {r4} (compile/process-file "/tmp/valk_cov_cpf_empty.valk"))
+      (file/delete "/tmp/valk_cov_cpf_empty.valk")
+      (test/assert (error? r4) "empty file errors through the parse cache")
+      true})
+
+  (test/case "valk-path-resolution-in-subprocess"
+    {do
+      (mkdir-p "/tmp/valk_cov_vp/sub")
+      (write-file "/tmp/valk_cov_vp/sub/vpmod-cov.valk" "(print \"VP-OK\") 5")
+      (write-file "/tmp/valk_cov_vp/main.valk" "(load \"vpmod-cov.valk\")")
+      (= {self} (realpath (fst sys/argv)))
+      (= {r} (exec "sh" "-c"
+        (str "VALK_PATH=/tmp/valk_cov_vp/missing:/tmp/valk_cov_vp/sub " self " /tmp/valk_cov_vp/main.valk")))
+      (file/delete "/tmp/valk_cov_vp/sub/vpmod-cov.valk")
+      (file/delete "/tmp/valk_cov_vp/main.valk")
+      (rmdir "/tmp/valk_cov_vp/sub")
+      (rmdir "/tmp/valk_cov_vp")
+      (test/assert-eq 0 r:exit-code "subprocess exits cleanly")
+      (test/assert (str/contains? r:stdout "VP-OK") "module resolved via VALK_PATH")
+      true})
+
+) {:suite-name "Load Coverage"})

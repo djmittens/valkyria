@@ -1,0 +1,18 @@
+; Pair utilities. The Pair type and bare `pair` constructor are in the prelude.
+
+(module pair)
+
+(sig 'map-fst {-> A (-> B C) A})
+(fun {map-fst p f} {
+  (Pair :fst (f (Pair:fst p)) :snd (Pair:snd p))
+})
+
+(sig 'map-snd {-> A (-> B C) A})
+(fun {map-snd p f} {
+  (Pair :fst (Pair:fst p) :snd (f (Pair:snd p)))
+})
+
+(sig 'bimap {-> A (-> B C) (-> D E) A})
+(fun {bimap p f g} {
+  (Pair :fst (f (Pair:fst p)) :snd (g (Pair:snd p)))
+})

@@ -1,0 +1,75 @@
+; SSE Builtins Error Handling Tests
+; Tests error conditions for SSE functions with invalid inputs
+
+(load "testing/test.valk")
+(load "stdlib/aio/sse.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+; Handler to test stream/closed future completion
+(def {test-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (select
+      {(== path "/test-stream-closed")
+       (do
+         (= {stream} (sse/open req))
+         (= {closed-future} (stream/closed stream))
+         (aio/then closed-future (\ {result} {result}))
+         (stream/write stream "data: test\n\n")
+         (stream/close stream))}
+      {true {:status "404" :body "Not found"}})}))
+
+(def {server} (http2/server-listen aio 0 test-handler))
+(def {port} (http2/server-port server))
+
+(test/run-async aio (list
+  ; stream/closed tests - requires server interaction
+  (test/case-async "stream/closed future completes with :closed" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/test-stream-closed")
+      (\ {_} {
+        (aio/then (aio/sleep aio 100) (\ {_} {true}))}))}))
+
+  ; Error handling tests for invalid inputs (sync, but wrapped in aio/pure)
+  (test/case-async "sse/open outside handler fails" (\ {} {
+    (aio/pure (error? (sse/open "not-a-request")))}))
+
+  (test/case-async "sse/send with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/send "not-a-stream" "data")))}))
+
+  (test/case-async "sse/close with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/close "not-a-stream")))}))
+
+  (test/case-async "sse/writable? with wrong type returns 0" (\ {} {
+    (aio/pure (== (sse/writable? "not-a-stream") 0))}))
+
+  (test/case-async "sse/on-drain with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/on-drain "not-a-stream" (\ {} {}))))}))
+
+  (test/case-async "sse/on-drain with wrong callback type fails" (\ {} {
+    (aio/pure (error? (sse/on-drain "stream" "not-a-function")))}))
+
+  (test/case-async "sse/cancel with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/cancel "not-a-stream")))}))
+
+  (test/case-async "sse/event with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/event "not-a-stream" "type" "data")))}))
+
+  (test/case-async "sse/id with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/id "not-a-stream" "id" "data")))}))
+
+  (test/case-async "sse/retry with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/retry "not-a-stream" 1000)))}))
+
+  (test/case-async "sse/comment with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/comment "not-a-stream" "comment")))}))
+
+  (test/case-async "sse/heartbeat with wrong stream type fails" (\ {} {
+    (aio/pure (error? (sse/heartbeat "not-a-stream")))}))
+
+  (test/case-async "stream/closed with no args fails" (\ {} {
+    (aio/pure (error? (stream/closed)))}))
+
+  (test/case-async "stream/closed with wrong type fails" (\ {} {
+    (aio/pure (error? (stream/closed "not-a-stream")))}))
+) {:suite-name "SSE Builtins Error Handling" :timeout-ms 5000})

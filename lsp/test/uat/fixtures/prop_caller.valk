@@ -1,0 +1,12 @@
+; Caller half of 14_multifile_edit_propagation. Lives at the workspace
+; root (not under multi/) because lsp/ensure-loads-indexed resolves
+; (load ...) targets relative to the workspace root, not to the including
+; file's directory.
+
+(load "prop_dep.valk")
+
+(def {a} (prop/double 21))
+(def {b} (prop/triple 14))
+(def {c} (prop/zorble 50 0 100))
+
+(def {sum} (+ a (+ b c)))

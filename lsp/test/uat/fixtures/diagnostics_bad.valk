@@ -1,0 +1,5 @@
+; Fixture with intentional errors. Used to verify the LSP reports
+; diagnostics for known bad code.
+
+(def {x} (/ 1 0))                 ; division by zero
+(def {y} (undefined-fn 5))         ; undefined function

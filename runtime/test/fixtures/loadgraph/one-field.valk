@@ -1,0 +1,3 @@
+; Fixture: 1-field variant of LGThing (conflicts with two-field.valk on
+; purpose — load-graph resolution must pick per consumer).
+(type {LGThing} {:x Num})

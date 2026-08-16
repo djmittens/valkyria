@@ -1,0 +1,85 @@
+; profile/flamegraph.valk - CPU flame graphs from perf, no external
+; FlameGraph tooling required: stack folding and SVG rendering are Valk
+; (profile/flame.valk). perf is the only external dependency.
+;
+; Usage:
+;   build/valk profile/flamegraph.valk                          # default workload
+;   build/valk profile/flamegraph.valk -- out.svg               # custom output
+;   build/valk profile/flamegraph.valk -- gc.svg build/valk runtime/test/gc/test_gc_stress.valk
+;
+; Everything after `--` is: [output.svg] [command args...]
+
+(load "profile/flame.valk")
+
+(module fg)
+
+(fun {eprintln s} {stderr/write (str s "\n")})
+
+(fun {shell-quote s} {
+  (str "'" (str/replace s "'" "'\\''") "'")
+})
+
+; Args after `--`: nil when the marker is absent.
+(fun {args-after-dashdash args} {
+  (if (nil? args) {nil}
+    {(if (== (head args) "--") {(tail args)}
+      {(args-after-dashdash (tail args))})})
+})
+
+(fun {main} {do
+  (= {args} (args-after-dashdash sys/argv))
+  (= {output} (if (and (not (nil? args)) (str/ends-with? (head args) ".svg"))
+    {(head args)} {"cpu.svg"}))
+  (= {args} (if (and (not (nil? args)) (str/ends-with? (head args) ".svg"))
+    {(tail args)} {args}))
+  (= {cmd} (if (nil? args)
+    {(list "build/valk" "stdlib/test/test_prelude.valk")}
+    {args}))
+
+  (eprintln "=== Flame Graph Generation ===")
+  (eprintln (str "Output:  " output))
+  (eprintln (str "Command: " (str/join cmd " ")))
+
+  (= {tmpdir} (str/trim (plist/get (exec "mktemp" "-d") :stdout)))
+  (= {data} (str tmpdir "/perf.data"))
+  (= {stacks-txt} (str tmpdir "/stacks.txt"))
+
+  (eprintln "Recording with perf (99 Hz)...")
+  (= {rec} (unpack exec (join
+    (list "perf" "record" "-F" "99" "-g" "--call-graph" "dwarf" "-o" data "--")
+    cmd)))
+  (if (!= (plist/get rec :exit-code) 0)
+    {do
+      (eprintln (str "perf record failed:\n" (plist/get rec :stderr)))
+      (exec "rm" "-rf" tmpdir)
+      (exit 1)}
+    {})
+
+  (eprintln "Processing stacks...")
+  (= {scr} (exec "sh" "-c"
+    (str "perf script -i " (shell-quote data) " > " (shell-quote stacks-txt))))
+  (if (!= (plist/get scr :exit-code) 0)
+    {do
+      (eprintln (str "perf script failed:\n" (plist/get scr :stderr)))
+      (exec "rm" "-rf" tmpdir)
+      (exit 1)}
+    {})
+
+  (= {st} (flame/fold-file stacks-txt))
+  (= {samples} (dict/get st "samples"))
+  (exec "rm" "-rf" tmpdir)
+  (if (== samples 0)
+    {do
+      (eprintln "No samples captured (workload too short, or missing perf permissions;")
+      (eprintln "check /proc/sys/kernel/perf_event_paranoid).")
+      (exit 1)}
+    {})
+
+  (eprintln (str samples " samples, rendering..."))
+  (= {tree} (flame/build-tree (dict/get st "stacks")))
+  (= {svg} (flame/render tree samples "Valkyria CPU Profile" (str/join cmd " ")))
+  (write-file output svg)
+  (eprintln (str "Generated: " output))
+})
+
+(main)

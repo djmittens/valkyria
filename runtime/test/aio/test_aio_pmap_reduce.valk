@@ -1,0 +1,87 @@
+; Test aio/pmap-reduce - streaming parallel map-reduce with bounded in-flight results
+
+(load "testing/test.valk")
+
+(def {aio} (aio/await (aio/start {:num-threads 4})))
+
+(test/run (list
+
+  (test/case "aio/pmap-reduce with empty list returns init"
+    {do
+    (= {h} (aio/pmap-reduce aio (\ {x} {(+ x 1)}) (\ {acc x} {(+ acc x)}) 42 ()))
+    (= {result} (aio/await h))
+    (== result 42)
+  })
+
+  (test/case "aio/pmap-reduce with single element"
+    {do
+    (= {h} (aio/pmap-reduce aio (\ {x} {(* x 2)}) (\ {acc x} {(+ acc x)}) 0 (list 5)))
+    (= {result} (aio/await h))
+    (== result 10)
+  })
+
+  (test/case "aio/pmap-reduce sums mapped values"
+    {do
+    (= {h} (aio/pmap-reduce aio (\ {x} {(* x x)}) (\ {acc x} {(+ acc x)}) 0 (list 1 2 3 4 5)))
+    (= {result} (aio/await h))
+    (== result 55)
+  })
+
+  (test/case "aio/pmap-reduce with larger list than in-flight window"
+    {do
+    (= {items} (range 1 101))
+    (= {h} (aio/pmap-reduce aio (\ {x} {(* x 2)}) (\ {acc x} {(+ acc x)}) 0 items))
+    (= {result} (aio/await h))
+    (== result (foldl (\ {acc x} {(+ acc (* x 2))}) 0 items))
+  })
+
+  (test/case "aio/pmap-reduce with mutable dict accumulator"
+    {do
+    (= {h} (aio/pmap-reduce aio
+      (\ {x} {(list (str x) (* x x))})
+      (\ {acc pair} {do (dict/set! acc (nth 1 pair) (nth 2 pair)) acc})
+      (dict/new)
+      (list 1 2 3 4)))
+    (= {result} (aio/await h))
+    (and (== (dict/get result "1") 1)
+         (== (dict/get result "2") 4)
+         (== (dict/get result "3") 9)
+         (== (dict/get result "4") 16)
+         (== (len (dict/keys result)) 4))
+  })
+
+  (test/case "aio/pmap-reduce propagates error from map fn"
+    {do
+    (= {h} (aio/pmap-reduce aio
+      (\ {x} {(if (== x 3) (error "bad value") (* x x))})
+      (\ {acc x} {(+ acc x)})
+      0
+      (list 1 2 3 4 5)))
+    (= {result} (aio/await h))
+    (error? result)
+  })
+
+  (test/case "aio/pmap-reduce propagates error from reduce fn"
+    {do
+    (= {h} (aio/pmap-reduce aio
+      (\ {x} {(* x 2)})
+      (\ {acc x} {(if (> x 4) (error "acc overflow") (+ acc x))})
+      0
+      (list 1 2 3 4 5)))
+    (= {result} (aio/await h))
+    (error? result)
+  })
+
+  (test/case "aio/pmap-reduce composes with aio/all"
+    {do
+    (= {h1} (aio/pmap-reduce aio (\ {x} {(+ x 1)}) (\ {acc x} {(+ acc x)}) 0 (list 1 2 3)))
+    (= {h2} (aio/pmap-reduce aio (\ {x} {(* x 2)}) (\ {acc x} {(+ acc x)}) 0 (list 10 20 30)))
+    (= {all-h} (aio/all (list h1 h2)))
+    (= {results} (aio/await all-h))
+    (and (== (nth 1 results) 9)
+         (== (nth 2 results) 120))
+  })
+
+) {:suite-name "aio/pmap-reduce Tests"})
+
+(aio/stop aio)

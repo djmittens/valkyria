@@ -1,0 +1,229 @@
+(load "testing/test.valk")
+(load "symdb/symdb.valk")
+(load "lsp/analysis.valk")
+(load "symdb/validate.valk")
+
+(= {BUILTIN_KNOWN} (dict/new 400))
+(= {_seed_loop} (\ {pairs} {
+  if (nil? pairs) {BUILTIN_KNOWN}
+  {do
+    (= {pair} (head pairs))
+    (= {name} (str (head pair)))
+    (= {_} (dict/put! BUILTIN_KNOWN name))
+    (_seed_loop (tail pairs))
+  }
+}))
+(= {_} (_seed_loop (penv)))
+
+(fun {diag-count text} {do
+  (= {ast} (parse text))
+  (len (vd/validate-with-known nil "" ast text BUILTIN_KNOWN))
+})
+
+(fun {mk-ctx} {
+  list :scope (list (dict/new)) :globals (dict/new) :known BUILTIN_KNOWN
+       :types (dict/new) :db nil :path "" :visible nil :arity-cache nil
+       :text "xxxxxxxxxxxxxxxx" :diags nil
+})
+
+(test/run (list
+
+  (test/case "quasiquote-walker"
+    {do
+      (test/assert-eq 0 (diag-count "(quasiquote (a b (unquote (+ 1 2)) c))")
+        "template symbols skipped, unquote walked")
+      (test/assert-eq 1 (diag-count "(quasiquote (a (unquote qq-undefined-var)))")
+        "unquoted expression checked")
+      (test/assert-eq 0 (diag-count "(quasiquote (a (unquote-splicing (list 1)) b))")
+        "unquote-splicing walked")
+      (test/assert-eq 0 (diag-count "(quasiquote 5)") "non-list template")
+      (test/assert-eq 0 (diag-count "(quasiquote)") "empty quasiquote")
+      (test/assert-eq 0 (diag-count "(quasiquote (a (b c) 5 \"s\"))")
+        "nested template lists skipped")
+      true
+    })
+
+  (test/case "walk-expr-leaf-types"
+    {do
+      (test/assert-eq 0 (diag-count "42") "number")
+      (test/assert-eq 0 (diag-count "\"hi\"") "string")
+      (test/assert-eq 1 (diag-count "walk-undefined-sym") "sym checked")
+      (= {ctx} (mk-ctx))
+      (test/assert (not (nil? (vd/walk-expr (dict/new) ctx))) "non-ast value passthrough")
+      true
+    })
+
+  (test/case "walk-list-branches"
+    {do
+      (test/assert-eq 0 (diag-count "((+ 1 2) 3)") "empty head name walks tail")
+      (test/assert-eq 0 (diag-count "'{mystery stuff}") "quoted unknown head is data")
+      (test/assert-eq 0 (diag-count "'{1 2}") "quoted number head is data")
+      (test/assert-eq 0 (diag-count "(list {+ 1 iq-undefined})")
+        "qexpr call args suppressed")
+      (test/assert-eq 0 (diag-count "(list {+ 1 {+ 2 iq-undefined2}})")
+        "nested qexpr keeps suppression")
+      (test/assert-eq 1 (diag-count "(do (list {+ 1 2}) after-undefined)")
+        "suppression restored for siblings")
+      (test/assert-eq 0 (diag-count "'{:kw 1}") "keyword head quoted data")
+      true
+    })
+
+  (test/case "walk-implicit-do-direct"
+    {do
+      (= {ctx} (mk-ctx))
+      (= {r} (vd/walk-implicit-do (parse "(= {impv} 1) impv") ctx))
+      (test/assert (nil? (plist/get r :diags)) "binding threads into scope")
+      (= {r2} (vd/walk-implicit-do (parse "(+ 1 2) 5") (mk-ctx)))
+      (test/assert (nil? (plist/get r2 :diags)) "non-binding exprs pass")
+      (= {r3} (vd/walk-implicit-do (parse "(= impx 1)") (mk-ctx)))
+      (test/assert (not (nil? r3)) "non-list binding tolerated")
+      (= {r4} (vd/walk-implicit-do (parse "(=)") (mk-ctx)))
+      (test/assert (not (nil? r4)) "empty = tolerated")
+      (test/assert (not (nil? (vd/walk-implicit-do nil (mk-ctx)))) "nil exprs")
+      true
+    })
+
+  (test/case "walk-sig-branches"
+    {do
+      (test/assert-eq 0 (diag-count "(sig 'f 5)") "non-list sig type")
+      (test/assert-eq 0 (diag-count "(sig 'f {-> (List Num) Num})") "nested sig list")
+      (test/assert-eq 0 (diag-count "(sig 'f {-> 5 Num})") "non-sym sig elem")
+      true
+    })
+
+  (test/case "dispatch-call-branches"
+    {do
+      (test/assert-eq 0 (diag-count "(:kw 1 2)") "keyword head walks args")
+      (test/assert-eq 0 (diag-count "(macro {mname x} {x})") "macro like fun")
+      (test/assert-eq 0 (diag-count "(quote anything-here)") "quote skipped")
+      (test/assert-eq 0 (diag-count "(module anymod)") "module skipped")
+      (test/assert-eq 0 (diag-count "(let {x} 1)") "generic special form")
+      true
+    })
+
+  (test/case "walk-call-branches"
+    {do
+      (test/assert-eq 0 (diag-count "(fun {shf len} {len 5})")
+        "local shadow skips arity check")
+      (test/assert-eq 1 (diag-count "(totally-undefined-fn 1)")
+        "unknown call flagged")
+      (test/assert-eq 0 (diag-count "(list {unknown-in-q 1})")
+        "unknown call in quoted data suppressed")
+      (test/assert-eq 0 (diag-count "(list {+ 1 (unknown-nested 2)})")
+        "unknown nested call inside qexpr suppressed")
+      (test/assert-eq 0 (diag-count "(str/join (list \"a\") \",\")")
+        "qualified known call without db")
+      true
+    })
+
+  (test/case "walk-fun-branches"
+    {do
+      (test/assert-eq 0 (diag-count "(fun wf-bare {1})") "non-list formals")
+      (test/assert-eq 0 (diag-count "(fun {} {1})") "empty formals")
+      (test/assert-eq 0 (diag-count "(fun {5 x} {list x})") "non-sym fname")
+      (test/assert-eq 0 (diag-count "(fun {wf2 a b} {+ a b})") "params scoped")
+      (test/assert-eq 1 (diag-count "(do (fun {wf3 c} {c}) c)") "params leave scope")
+      true
+    })
+
+  (test/case "walk-lambda-branches"
+    {do
+      (test/assert-eq 0 (diag-count "(\\ wl-bare {1})") "non-list lambda formals")
+      (test/assert-eq 0 (diag-count "(\\ {a} {a})") "lambda param scoped")
+      true
+    })
+
+  (test/case "walk-binding-branches"
+    {do
+      (test/assert-eq 0 (diag-count "(do (def wbx 1) (list wbx))") "sym def binding")
+      (test/assert-eq 0 (diag-count "(def 5 6)") "non-sym binding tolerated")
+      (test/assert-eq 0 (diag-count "(do (= {wba wbb} 1 2) (+ wba wbb))")
+        "multi = binding")
+      (test/assert-eq 0 (diag-count "(= {wbc 5 wbd} 1)") "non-sym element skipped")
+      true
+    })
+
+  (test/case "walk-type-and-match-nil"
+    {do
+      (test/assert-eq 1 (diag-count "(type)") "bare type flagged by arity only")
+      (test/assert-eq 1 (diag-count "(match)") "bare match flagged by arity only")
+      (test/assert-eq 0 (diag-count "(do (type {WT} {WC :a}) (WC 1))")
+        "type names enter globals")
+      true
+    })
+
+  (test/case "match-pattern-scope"
+    {do
+      (test/assert-eq 0 (diag-count "(match 1 {(J v) (list v)} {_ 0})")
+        "pattern binds name")
+      (test/assert-eq 0 (diag-count "(match 1 {(J :tag v) (list v)})")
+        "keyword in pattern skipped")
+      (test/assert-eq 0 (diag-count "(match 1 {((K a) b) (list b)})")
+        "nested pattern binds outer args")
+      (test/assert-eq 1 (diag-count "(match 1 {((K a) b) (list a)})")
+        "nested pattern head args not bound")
+      (test/assert-eq 1 (diag-count "(do (match 1 {(J v) v}) v)")
+        "pattern scope restored")
+      true
+    })
+
+  (test/case "aio-do-branches"
+    {do
+      (test/assert-eq 0 (diag-count "(aio/do {(x <- (+ 1 2)) (list x)})")
+        "arrow-second binding")
+      (test/assert-eq 0 (diag-count "(aio/do {(<- y (+ 1 2)) (list y)})")
+        "arrow-first binding")
+      (test/assert-eq 0 (diag-count "(aio/do {(_ <- (+ 1 2)) 5})")
+        "underscore not bound")
+      (test/assert-eq 0 (diag-count "(aio/do {((+ 1) 2 3)})") "non-sym first")
+      (test/assert-eq 0 (diag-count "(aio/do {(+ 1 2)})") "non-sym second")
+      (test/assert-eq 0 (diag-count "(aio/do {(+ 1)})") "short stmt")
+      (test/assert-eq 0 (diag-count "(aio/do {5})") "non-list stmt")
+      (test/assert-eq 0 (diag-count "(aio/do 5)") "non-list body")
+      (test/assert-eq 0 (diag-count "(aio/do)") "empty aio/do")
+      (test/assert-eq 1 (diag-count "(do (aio/do {(x <- (+ 1 2)) x}) x)")
+        "aio/do scope restored")
+      true
+    })
+
+  (test/case "aio-let-branches"
+    {do
+      (test/assert-eq 0 (diag-count "(aio/let {(x (+ 1 2)) (y (+ x 1))} (+ x y))")
+        "pair bindings")
+      (test/assert-eq 0 (diag-count "(aio/let {((a 1) (b 2))} (+ a b))")
+        "grouped pairs")
+      (test/assert-eq 0 (diag-count "(aio/let {:opt 1 (x 2)} (list x))")
+        "keyword and scalar items")
+      (test/assert-eq 0 (diag-count "(aio/let {plainsym (x 2)} (list x))")
+        "plain sym item ignored")
+      (test/assert-eq 0 (diag-count "(aio/let {(5 1) (x 2)} (list x))")
+        "non-sym var")
+      (test/assert-eq 0 (diag-count "(aio/let wl-bindings 5)") "non-list bindings")
+      (test/assert-eq 0 (diag-count "(aio/let)") "empty aio/let")
+      (test/assert-eq 1 (diag-count "(do (aio/let {(x 1)} x) x)")
+        "aio/let scope restored")
+      true
+    })
+
+  (test/case "param-collection-branches"
+    {do
+      (test/assert-eq 0 (diag-count "(fun {pc1 a & rest} {list a rest})") "varargs")
+      (test/assert-eq 0 (diag-count "(fun {pc2 a :: Num b} {+ a b})") "type annotation")
+      (test/assert-eq 0 (diag-count "(fun {pc3 a :: Num -> Num} {a})") "return annotation")
+      (test/assert-eq 0 (diag-count "(fun {pc4 a ::} {a})") "trailing annotation")
+      (test/assert-eq 0 (diag-count "(fun {pc5 5 a} {a})") "non-sym param skipped")
+      true
+    })
+
+  (test/case "validate-entry-points"
+    {do
+      (= {text} "vf-missing-top-sym")
+      (= {d1} (vd/validate nil "" (parse text) text))
+      (test/assert-eq 1 (len d1) "validate without db")
+      (= {cache} (vd/preload-caches nil))
+      (= {d2} (vd/validate-cached nil "" (parse text) text cache))
+      (test/assert-eq 1 (len d2) "validate-cached without db")
+      true
+    })
+
+) {:suite-name "Validate Walk Coverage" :debug 0})

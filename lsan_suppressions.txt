@@ -19,6 +19,11 @@ leak:valk_builtin_aio_race
 leak:valk_builtin_aio_then
 leak:valk_builtin_aio_catch
 leak:valk_builtin_aio_any
+# pmap ctx: the last ref is released by the handle-cleanup callback, and
+# handles alive at exit are never destroyed (same class as the handle
+# suppressions above)
+leak:valk_builtin_aio_pmap
+leak:valk_builtin_aio_pmap_reduce
 
 # Slabs allocated by aio system may not be freed on test exit
 leak:valk_slab_init
@@ -55,6 +60,12 @@ leak:intern_string
 # HTTP2 connection structures may not be freed when connection fails early
 leak:valk_aio_http2_connect_host
 
+# sqlite connections are held as REFs in GC-heap memory, which LSAN does
+# not scan as a root region - a db still open when the leak scan runs looks
+# leaked even though it is reachable and will be closed. (Seen on CI in
+# lsp/test_lsp_handlers_db; connections there are closed per test.)
+leak:sqlite3MemMalloc
+
 # SSL/OpenSSL allocations routed through our custom allocator may not be freed
 # when tests exit without proper cleanup
 leak:__ssl_malloc
@@ -76,3 +87,30 @@ leak:test_tcp_write_bufs
 
 # HTTP2 overload response may not be freed in unit tests
 leak:valk_http2_send_overload_response
+
+# LLVM keeps global target/context state alive until process exit; LSAN sees
+# it as reachable-at-exit inside libLLVM during --build tests. Third-party.
+leak:libLLVM
+
+# valk --build is a run-once tool: AOT candidate names (native_name strdups,
+# entry tables) are needed until the image dump and freed by process exit.
+leak:valk_build_emit_aot
+
+# A loaded image's buffer IS the backing store for every lval and env in it:
+# img_finalize_root keeps ld->buf on success and only frees it on the failure
+# paths (img_loaded_free_all). Freeing it after a successful load would leave
+# the whole returned env dangling. AOT binaries load an embedded image at
+# startup and hold it for the process lifetime, so LSan sees one bounded
+# allocation per process.
+leak:img_read_bytes
+leak:img_read_all
+
+# Pipes and LSP readers have no teardown API by design: the uv handle owns
+# the lifetime and freeing on pipe/close would leave the Lisp REF dangling
+# (use-after-free on double close). One bounded allocation per pipe for the
+# process lifetime.
+leak:valk_builtin_pipe_stdin_open
+leak:valk_builtin_pipe_stdout_open
+leak:valk_builtin_pipe_lsp_reader
+leak:__lsp_reader_alloc_cb
+leak:__pipe_alloc_cb

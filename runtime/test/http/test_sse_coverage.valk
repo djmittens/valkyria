@@ -1,0 +1,80 @@
+(load "testing/test.valk")
+(load "stdlib/aio/sse.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(def {test-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (= {stream} (sse/open req))
+    (select
+      {(== path "/send") (sse/send stream "line1\nline2")}
+      {(== path "/event") (sse/event stream "update" "payload")}
+      {(== path "/id") (sse/id stream "id-7" "with id")}
+      {(== path "/full") (sse/full stream "update" "id-8" "full data")}
+      {(== path "/retry") (sse/retry stream 2500)}
+      {(== path "/comment") (sse/comment stream "keep-alive")}
+      {true (sse/send stream "unknown")})
+    (sse/close stream)
+  }))
+
+(def {wrapped-handler}
+  (sse/handler (\ {stream req} {
+    (sse/send stream "wrapped")
+    (sse/close stream)
+  })))
+
+(def {combined-handler}
+  (\ {req} {
+    (= {path} (req/path req))
+    (if (== path "/wrapped")
+      {(wrapped-handler req)}
+      {(test-handler req)})
+  }))
+
+(def {server} (http2/server-listen aio 0 combined-handler))
+(def {port} (http2/server-port server))
+
+(fun {check-body resp expected} {
+  (if (error? resp)
+    {(do (print "Error:" resp) false)}
+    {(do
+      (= {body} (http2/response-body resp))
+      (if (== body expected)
+        {true}
+        {(do (print "Expected:" expected) (print "Got:" body) false)}))})
+})
+
+(test/run-async aio (list
+  (test/case-async "sse/open + sse/send formats multiline data" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/send")
+      (\ {resp} {(check-body resp "data: line1\ndata: line2\n\n")}))
+  }))
+  (test/case-async "sse/event emits typed event" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/event")
+      (\ {resp} {(check-body resp "event: update\ndata: payload\n\n")}))
+  }))
+  (test/case-async "sse/id emits id line" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/id")
+      (\ {resp} {(check-body resp "id: id-7\ndata: with id\n\n")}))
+  }))
+  (test/case-async "sse/full emits id, event and data" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/full")
+      (\ {resp} {(check-body resp "id: id-8\nevent: update\ndata: full data\n\n")}))
+  }))
+  (test/case-async "sse/retry emits retry directive" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/retry")
+      (\ {resp} {(check-body resp "retry: 2500\n\n")}))
+  }))
+  (test/case-async "sse/comment emits comment line" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/comment")
+      (\ {resp} {(check-body resp ": keep-alive\n")}))
+  }))
+  (test/case-async "sse/handler wrapper serves stream" (\ {} {
+    (aio/then (http2/client-request aio "127.0.0.1" port "/wrapped")
+      (\ {resp} {(check-body resp "data: wrapped\n\n")}))
+  })))
+  {:suite-name "SSE Coverage Tests" :timeout-ms 5000})
+
+(http2/server-stop server)
+(aio/stop aio)

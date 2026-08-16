@@ -1,0 +1,2 @@
+; Fixture: 2-field variant of LGThing.
+(type {LGThing} {:x Num :y Num})

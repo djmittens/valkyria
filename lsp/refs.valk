@@ -1,0 +1,442 @@
+; LSP Analysis — scope-aware reference collection
+;
+; Each reference entry: {:name N :offset O :len L :scope-id S :is-def D}
+; scope-id = -1 for global, or byte offset of enclosing fun/lambda for local
+; Scope chain: list of {:id OFFSET :names {n1 n2 ...}}
+
+(load "lsp/analysis.valk")
+
+(module ref)
+
+(def {REF_KEYWORD_SET}
+  (dict/from-keys {"fun" "\\" "def" "=" "if" "match" "select" "case"
+   "do" "let" "and" "or" "not" "load" "sig" "type"
+   "quote" "quasiquote" "unquote" "unquote-splicing"}))
+
+(sig 'resolve-scope {-> Str List Any})
+(fun {resolve-scope name scopes} {
+  if (nil? scopes) {-1}
+  {do
+    (= {s} (head scopes))
+    (if (member? name s:names)
+      {s:id}
+      {resolve-scope name (tail scopes)})}
+})
+
+(sig 'current-scope-id {-> List Num})
+(fun {current-scope-id scopes} {
+  if (nil? scopes) {-1}
+  {do (= {s} (head scopes)) s:id}
+})
+
+; --- Core walker ---
+
+(sig 'walk-exprs {-> List List List List})
+(fun {walk-exprs exprs scopes acc} {
+  if (nil? exprs) {acc}
+  {walk-exprs (tail exprs) scopes
+    (walk-code (head exprs) scopes acc)}
+})
+
+(sig 'walk-code {-> Any List List List})
+(fun {walk-code expr scopes acc} {
+  if (nil? expr) {acc}
+  {if (num? expr) {acc}
+  {if (str? expr) {acc}
+  {if (sym? expr) {record-sym expr scopes acc}
+  {if (list? expr) {walk-list expr scopes acc}
+  {acc}}}}}
+})
+
+(sig 'record-sym {-> Any List List List})
+(fun {record-sym expr scopes acc} {
+  record-sym-name expr (str expr) scopes acc
+})
+
+(sig 'record-sym-name {-> Any Str List List List})
+(fun {record-sym-name expr name scopes acc} {
+  if (<= (len name) 0) {acc}
+  {if (== (str/slice name 0 1) ":") {acc}
+  {qcons (list :name name :offset (src-pos expr) :len (len name)
+               :scope-id (resolve-scope name scopes) :is-def 0) acc}}
+})
+
+(sig 'walk-list {-> List List List List})
+(fun {walk-list expr scopes acc} {
+  if (nil? expr) {acc}
+  {do
+    (= {name} (ast/head-name expr))
+    (if (== name "")
+      {walk-exprs expr scopes acc}
+      {dispatch-form expr (head expr) name (tail expr) scopes acc})}
+})
+
+(sig 'dispatch-form {-> List Any Str List List List List})
+(fun {dispatch-form expr hd name tl scopes acc} {
+  if (== name "fun") {walk-fun expr tl scopes acc}
+  {if (== name "\\") {walk-lambda expr tl scopes acc}
+  {if (== name "def") {walk-def tl scopes acc}
+  {if (== name "=") {walk-assign tl scopes acc}
+  {if (== name "do") {walk-do tl scopes acc}
+  {if (== name "type") {walk-type tl acc}
+  {if (== name "sig") {acc}
+   {if (dict/has? REF_KEYWORD_SET name)
+    {walk-exprs tl scopes acc}
+    {walk-exprs tl scopes
+      (record-sym-name hd name scopes acc)}}}}}}}}
+})
+
+; --- fun ---
+
+(sig 'walk-fun {-> List List List List List})
+(fun {walk-fun expr tl scopes acc} {
+  if (< (len tl) 2) {walk-exprs tl scopes acc}
+  {walk-fun-binding expr (head tl) (head (tail tl)) scopes acc}
+})
+
+(sig 'walk-fun-binding {-> List Any Any List List List})
+(fun {walk-fun-binding expr formals body scopes acc} {
+  if (nil? formals) {walk-code body scopes acc}
+  {walk-fun-parts expr (head formals) (tail formals) body scopes acc}
+})
+
+(sig 'walk-fun-parts {-> List Any List List List List List})
+(fun {walk-fun-parts expr fname params body scopes acc} {do
+  (= {scope-id} (src-pos expr))
+  (= {param-names} (collect-param-names params))
+  (= {new-scopes} (qcons (list :id scope-id :names param-names) scopes))
+  (= {acc2} (if (sym? fname)
+    {qcons (list :name (str fname) :offset (src-pos fname)
+                 :len (len (str fname)) :scope-id -1 :is-def 1) acc}
+    {acc}))
+  (= {acc3} (record-param-defs params scope-id acc2))
+  (walk-code body new-scopes acc3)
+})
+
+; --- lambda ---
+
+(sig 'walk-lambda {-> List List List List List})
+(fun {walk-lambda expr tl scopes acc} {
+  if (< (len tl) 2) {walk-exprs tl scopes acc}
+  {walk-lambda-inner expr (head tl) (head (tail tl)) scopes acc}
+})
+
+(sig 'walk-lambda-inner {-> List List List List List List})
+(fun {walk-lambda-inner expr formals body scopes acc} {do
+  (= {scope-id} (src-pos expr))
+  (= {param-names} (collect-param-names formals))
+  (= {new-scopes} (qcons (list :id scope-id :names param-names) scopes))
+  (= {acc2} (record-param-defs formals scope-id acc))
+  (walk-code body new-scopes acc2)
+})
+
+; --- def (global) ---
+
+(sig 'walk-def {-> List List List List})
+(fun {walk-def tl scopes acc} {
+  if (nil? tl) {acc}
+  {walk-def-inner (head tl) (tail tl) scopes acc}
+})
+
+(sig 'walk-def-inner {-> Any List List List List})
+(fun {walk-def-inner binding vals scopes acc} {
+  walk-exprs vals scopes
+    (record-binding-defs binding -1 acc)
+})
+
+; --- = (local) ---
+
+(sig 'walk-assign {-> List List List List})
+(fun {walk-assign tl scopes acc} {
+  if (nil? tl) {acc}
+  {walk-assign-inner (head tl) (tail tl) scopes acc}
+})
+
+(sig 'walk-assign-inner {-> Any List List List List})
+(fun {walk-assign-inner binding vals scopes acc} {
+  walk-exprs vals scopes
+    (record-binding-defs binding (current-scope-id scopes) acc)
+})
+
+; --- do (thread scope for = bindings) ---
+
+(sig 'walk-do {-> List List List List})
+(fun {walk-do tl scopes acc} {
+  walk-do-children tl scopes acc
+})
+
+(sig 'walk-do-children {-> List List List List})
+(fun {walk-do-children exprs scopes acc} {
+  if (nil? exprs) {acc}
+  {walk-do-one (head exprs) (tail exprs) scopes acc}
+})
+
+(sig 'walk-do-one {-> Any List List List List})
+(fun {walk-do-one expr rest scopes acc} {do
+  (= {acc2} (walk-code expr scopes acc))
+  (= {new-scopes} (maybe-add-assign-names expr scopes))
+  (walk-do-children rest new-scopes acc2)
+})
+
+; --- type ---
+
+(sig 'walk-type {-> List List List})
+(fun {walk-type tl acc} {
+  walk-type-variants tl acc
+})
+
+(sig 'walk-type-variants {-> List List List})
+(fun {walk-type-variants tl acc} {
+  if (nil? tl) {acc}
+  {walk-type-variants (tail tl)
+    (walk-type-one (head tl) acc)}
+})
+
+(sig 'walk-type-one {-> Any List List})
+(fun {walk-type-one variant acc} {
+  if (list? variant)
+    {walk-type-list variant acc}
+  {if (sym? variant)
+    {qcons (list :name (str variant) :offset (src-pos variant)
+                 :len (len (str variant)) :scope-id -1 :is-def 1) acc}
+    {acc}}
+})
+
+(sig 'walk-type-list {-> List List List})
+(fun {walk-type-list variant acc} {
+  if (nil? variant) {acc}
+  {walk-type-head (head variant) acc}
+})
+
+(sig 'walk-type-head {-> Any List List})
+(fun {walk-type-head hd acc} {
+  if (sym? hd)
+    {qcons (list :name (str hd) :offset (src-pos hd)
+                 :len (len (str hd)) :scope-id -1 :is-def 1) acc}
+    {acc}
+})
+
+; --- Parameter helpers ---
+
+(sig 'collect-param-names {-> List List})
+(fun {collect-param-names params} {
+  if (nil? params) {nil}
+  {collect-one-param (head params) (tail params)}
+})
+
+(sig 'collect-one-param {-> Any List List})
+(fun {collect-one-param p rest} {
+  if (sym? p)
+    {collect-param-str (str p) rest}
+    {collect-param-names rest}
+})
+
+(sig 'collect-param-str {-> Str List List})
+(fun {collect-param-str name rest} {
+  if (== name "&") {collect-param-names rest}
+  {qcons name (collect-param-names rest)}
+})
+
+(sig 'record-param-defs {-> List Num List List})
+(fun {record-param-defs params scope-id acc} {
+  if (nil? params) {acc}
+  {record-param-defs (tail params) scope-id
+    (record-one-param (head params) scope-id acc)}
+})
+
+(sig 'record-one-param {-> Any Num List List})
+(fun {record-one-param p scope-id acc} {
+  if (sym? p)
+    {record-param-str p (str p) scope-id acc}
+    {acc}
+})
+
+(sig 'record-param-str {-> Any Str Num List List})
+(fun {record-param-str p name scope-id acc} {
+  if (== name "&") {acc}
+  {qcons (list :name name :offset (src-pos p) :len (len name)
+               :scope-id scope-id :is-def 1) acc}
+})
+
+; --- Binding helpers ---
+
+(sig 'record-binding-defs {-> Any Num List List})
+(fun {record-binding-defs binding scope-id acc} {
+  if (not (list? binding)) {acc}
+  {record-binding-walk binding scope-id acc}
+})
+
+(sig 'record-binding-walk {-> List Num List List})
+(fun {record-binding-walk vars scope-id acc} {
+  if (nil? vars) {acc}
+  {record-binding-walk (tail vars) scope-id
+    (record-one-binding (head vars) scope-id acc)}
+})
+
+(sig 'record-one-binding {-> Any Num List List})
+(fun {record-one-binding v scope-id acc} {
+  if (sym? v)
+    {qcons (list :name (str v) :offset (src-pos v) :len (len (str v))
+                 :scope-id scope-id :is-def 1) acc}
+    {acc}
+})
+
+; --- do block scope threading ---
+
+(sig 'maybe-add-assign-names {-> Any List List})
+(fun {maybe-add-assign-names expr scopes} {
+  if (not (list? expr)) {scopes}
+  {if (nil? expr) {scopes}
+  {if (== (ast/head-name expr) "=")
+    {add-assign-names expr scopes}
+    {scopes}}}
+})
+
+(sig 'add-assign-names {-> List List List})
+(fun {add-assign-names expr scopes} {
+  if (< (len (tail expr)) 1) {scopes}
+  {add-binding-to-scope (head (tail expr)) scopes}
+})
+
+(sig 'add-binding-to-scope {-> Any List List})
+(fun {add-binding-to-scope binding scopes} {
+  if (not (list? binding)) {scopes}
+  {add-names-from-binding binding scopes}
+})
+
+(sig 'add-names-from-binding {-> List List List})
+(fun {add-names-from-binding binding scopes} {
+  if (nil? binding) {scopes}
+  {add-names-from-binding (tail binding)
+    (if (sym? (head binding))
+      {add-name-to-scope (str (head binding)) scopes}
+      {scopes})}
+})
+
+(sig 'add-name-to-scope {-> Str List List})
+(fun {add-name-to-scope name scopes} {
+  if (nil? scopes) {scopes}
+  {do
+    (= {s} (head scopes))
+    (= {names} s:names)
+    (qcons (plist/set s :names (qcons name names)) (tail scopes))}
+})
+
+; --- Public API ---
+
+(sig 'collect-refs {-> Str List})
+(fun {collect-refs text} {do
+  (= {ast} (parse text))
+  (if (error? ast) {nil}
+    {do
+      (= {r} (walk-exprs ast nil nil))
+      (if (error? r) {nil} {r})})
+})
+
+(sig 'collect-refs-from-ast {-> List List})
+(fun {collect-refs-from-ast ast} {do
+  (if (error? ast) {nil}
+    {do
+      (= {r} (walk-exprs ast nil nil))
+      (if (error? r) {nil} {r})})
+})
+
+(sig 'collect-scopes-from-ast {-> List List})
+(fun {collect-scopes-from-ast ast} {
+  if (error? ast) {nil}
+  {scope-walk ast nil nil}
+})
+
+(sig 'scope-walk {-> List List List List})
+(fun {scope-walk exprs scopes acc} {
+  if (nil? exprs) {acc}
+  {scope-walk (tail exprs) scopes
+    (scope-one (head exprs) scopes acc)}
+})
+
+(sig 'scope-one {-> Any List List List})
+(fun {scope-one expr scopes acc} {
+  if (not (list? expr)) {acc}
+  {if (nil? expr) {acc}
+  {do
+    (= {name} (ast/head-name expr))
+    (if (== name "") {scope-walk expr scopes acc}
+    {if (== name "fun") {scope-fun expr (tail expr) scopes acc}
+    {if (== name "\\") {scope-lambda expr (tail expr) scopes acc}
+    {if (== name "do") {scope-walk (tail expr) scopes acc}
+    {scope-walk (tail expr) scopes acc}}}})}}
+})
+
+(sig 'scope-fun {-> List List List List List})
+(fun {scope-fun expr tl scopes acc} {
+  if (< (len tl) 2) {acc}
+  {do
+    (= {scope-id} (src-pos expr))
+    (= {parent-id} (if (nil? scopes) {-1} {(plist/get (head scopes) :pos)}))
+    (= {new-scope} (list :pos scope-id :parent parent-id))
+    (= {new-scopes} (qcons new-scope scopes))
+    (scope-walk (tail tl) new-scopes (qcons new-scope acc))}
+})
+
+(sig 'scope-lambda {-> List List List List List})
+(fun {scope-lambda expr tl scopes acc} {
+  if (< (len tl) 2) {acc}
+  {do
+    (= {scope-id} (src-pos expr))
+    (= {parent-id} (if (nil? scopes) {-1} {(plist/get (head scopes) :pos)}))
+    (= {new-scope} (list :pos scope-id :parent parent-id))
+    (= {new-scopes} (qcons new-scope scopes))
+    (scope-walk (tail tl) new-scopes (qcons new-scope acc))}
+})
+
+
+(sig 'find-at-offset {-> List Num Any})
+(fun {find-at-offset refs offset} {
+  if (nil? refs) {nil}
+  {do
+    (= {r} (head refs))
+    (= {roff} r:offset)
+    (= {rlen} r:len)
+    (if (and (>= offset roff) (< offset (+ roff rlen)))
+      {r}
+      {find-at-offset (tail refs) offset})}
+})
+
+(sig 'matching-refs {-> List Str Num List List})
+(fun {matching-refs refs target-name target-scope acc} {
+  if (nil? refs) {reverse acc}
+  {do
+    (= {r} (head refs))
+    (if (and (== r:name target-name)
+             (== r:scope-id target-scope))
+      {matching-refs (tail refs) target-name target-scope (qcons r acc)}
+      {matching-refs (tail refs) target-name target-scope acc})}
+})
+
+(sig 'find-scoped-refs {-> Str Num Num List})
+(fun {find-scoped-refs text line col} {do
+  (= {refs} (collect-refs text))
+  (if (nil? refs) {nil}
+    {do
+      (= {offset} (sem/line-col->offset text line col))
+      (= {target} (find-at-offset refs offset))
+      (if (nil? target) {nil}
+        {do
+          (= {scope-id} target:scope-id)
+          (if (== scope-id -1) {nil}
+            {matching-refs refs target:name scope-id nil})})})
+})
+
+(sig 'find-scoped-refs-from-ast {-> List Str Num Num List})
+(fun {find-scoped-refs-from-ast ast text line col} {do
+  (= {refs} (collect-refs-from-ast ast))
+  (if (nil? refs) {nil}
+    {do
+      (= {offset} (sem/line-col->offset text line col))
+      (= {target} (find-at-offset refs offset))
+      (if (nil? target) {nil}
+        {do
+          (= {scope-id} target:scope-id)
+          (if (== scope-id -1) {nil}
+            {matching-refs refs target:name scope-id nil})})})
+})

@@ -1,9 +1,9 @@
 [submodule "vendor/editline"]
-	path = vendor/editline
+	path = runtime/vendor/editline
 	url = https://github.com/troglobit/editline.git
 [submodule "vendor/mpc"]
-	path = vendor/mpc
+	path = runtime/vendor/mpc
 	url = https://github.com/orangeduck/mpc.git
 [submodule "vendor/nghttp2"]
-	path = vendor/nghttp2
+	path = runtime/vendor/nghttp2
 	url = https://github.com/nghttp2/nghttp2.git

@@ -262,6 +262,6 @@ Run `make todo` to see current TODOs for your branch.
 ## Documentation
 
 - **[features/](features/)** - Implemented feature documentation
-- **[LANGUAGE.md](LANGUAGE.md)** - Language reference
+- **[LANGUAGE.md](../runtime/docs/LANGUAGE.md)** - Language reference
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development guide
 - **[implementation_board/](implementation_board/)** - Detailed task breakdown by layer

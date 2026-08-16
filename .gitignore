@@ -6,6 +6,7 @@ build/
 build-asan/
 build-tsan/
 build-coverage/
+build-opt/
 coverage-report/
 .venv/
 .mcp.json

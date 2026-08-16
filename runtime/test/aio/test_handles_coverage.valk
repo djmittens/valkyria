@@ -1,0 +1,101 @@
+(load "testing/test.valk")
+(load "stdlib/aio/handles.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(def {rb-calls} 0)
+
+(test/run-async aio (list
+  (test/case-async "handle? true for handle and false for value" (\ {} {
+    (aio/pure (and (== (aio/handle? (aio/pure 1)) true)
+                   (== (aio/handle? 42) false)))
+  }))
+  (test/case-async "delay runs continuation after sleep" (\ {} {
+    (aio/then (aio/delay aio 5 (\ {} {42}))
+      (\ {r} {(== r 42)}))
+  }))
+  (test/case-async "as-handle wraps plain value" (\ {} {
+    (aio/then (aio/as-handle 7) (\ {r} {(== r 7)}))
+  }))
+  (test/case-async "with-timeout returns result when handle wins" (\ {} {
+    (aio/then (aio/with-timeout aio 1000 (aio/pure :fast))
+      (\ {r} {(== r :fast)}))
+  }))
+  (test/case-async "with-timeout fails with :timeout when timer wins" (\ {} {
+    (aio/catch
+      (aio/then (aio/with-timeout aio 10 (aio/sleep aio 10000))
+        (\ {r} {false}))
+      (\ {err} {(== err :timeout)}))
+  }))
+  (test/case-async "retry-backoff n=0 runs once" (\ {} {
+    (aio/then (aio/retry-backoff aio 0 1 (\ {} {(aio/pure :ok)}))
+      (\ {r} {(== r :ok)}))
+  }))
+  (test/case-async "retry-backoff retries after failure then succeeds" (\ {} {
+    (aio/then (aio/sleep aio 1) (\ {_} {
+      (aio/then
+        (aio/retry-backoff aio 2 1 (\ {} {
+          (def {rb-calls} (+ rb-calls 1))
+          (if (== rb-calls 1)
+            {(aio/fail :transient)}
+            {(aio/pure :recovered)})
+        }))
+        (\ {r} {(and (== r :recovered) (>= rb-calls 2))}))
+    }))
+  }))
+  (test/case-async "retry-backoff exhausts retries and fails" (\ {} {
+    (aio/then (aio/sleep aio 1) (\ {_} {
+      (aio/catch
+        (aio/then (aio/retry-backoff aio 1 1 (\ {} {(aio/fail :always)}))
+          (\ {r} {false}))
+        (\ {err} {(== err :always)}))
+    }))
+  }))
+  (test/case-async "graceful-shutdown completes when handles finish" (\ {} {
+    (aio/then (aio/graceful-shutdown aio (list (aio/pure 1) (aio/pure 2)) 1000)
+      (\ {r} {(!= r :timeout)}))
+  }))
+  (test/case-async "graceful-shutdown force-cancels on timeout" (\ {} {
+    (def {victim} (aio/sleep aio 10000))
+    (aio/graceful-shutdown aio (list victim) 10)
+    (aio/then (aio/sleep aio 50)
+      (\ {_} {(== (aio/status victim) :cancelled)}))
+  }))
+  (test/case-async "chain threads results through fns" (\ {} {
+    (aio/then
+      (aio/chain (aio/pure 1) (list
+        (\ {x} {(aio/pure (+ x 1))})
+        (\ {x} {(aio/pure (* x 10))})))
+      (\ {r} {(== r 20)}))
+  }))
+  (test/case-async "aio/try wraps success in Ok" (\ {} {
+    (aio/then (aio/try (aio/pure 4))
+      (\ {r} {(== r (Ok 4))}))
+  }))
+  (test/case-async "aio/try wraps failure in Err" (\ {} {
+    (aio/then (aio/try (aio/fail "bad"))
+      (\ {r} {(== r (Err "bad"))}))
+  }))
+  (test/case-async "delay-value resolves to value" (\ {} {
+    (aio/then (aio/delay-value aio 5 :later)
+      (\ {r} {(== r :later)}))
+  }))
+  (test/case-async "aio/map transforms result" (\ {} {
+    (aio/then (aio/map (aio/pure 10) (\ {x} {(* x 3)}))
+      (\ {r} {(== r 30)}))
+  }))
+  (test/case-async "parallel-map maps over items" (\ {} {
+    (aio/then (aio/parallel-map (\ {x} {(aio/pure (* x 2))}) (list 1 2 3))
+      (\ {r} {(== r (list 2 4 6))}))
+  }))
+  (test/case-async "sequential-map maps in order" (\ {} {
+    (aio/then (aio/sequential-map (\ {x} {(aio/pure (+ x 1))}) (list 1 2 3))
+      (\ {r} {(== r (list 2 3 4))}))
+  }))
+  (test/case-async "sequential-map on empty list" (\ {} {
+    (aio/then (aio/sequential-map (\ {x} {(aio/pure x)}) ())
+      (\ {r} {(== r ())}))
+  })))
+  {:suite-name "Async Handles Coverage Tests" :timeout-ms 5000})
+
+(aio/stop aio)

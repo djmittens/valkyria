@@ -1,0 +1,163 @@
+; Error-path tests for valk --build (runtime/src/build.c), driven by running
+; the sibling interpreter binary as a subprocess with bad inputs.
+
+(load "testing/test.valk")
+
+(def {aio} (aio/await (aio/start {:num-threads 1})))
+(def {valk-bin} (fst sys/argv))
+
+(fun {write-script path content} {do
+  (= {fh} (file/open path "w"))
+  (file/write fh content)
+  (file/close fh)
+})
+
+(fun {run-sh cmd} {aio/await (aio/exec aio "sh" "-c" cmd)})
+
+(fun {build-cmd prefix script out} {
+  str/join (list prefix valk-bin "--build" script "-o" out) " "
+})
+
+(def {ok-script} "/tmp/valk_build_err_ok.valk")
+(write-script ok-script "(\\ {argv} {+ 1 2})")
+
+(test/run (list
+
+  (test/case "script eval error fails the build"
+    {do
+    (= {src} "/tmp/valk_build_err_eval.valk")
+    (write-script src "(this-symbol-does-not-exist-xyz)")
+    (= {r} (run-sh (build-cmd "" src "/tmp/valk_build_err_eval.bin")))
+    (== (plist/get r :exit-code) 1)
+  })
+
+  (test/case "entry that is not a lambda or qexpr fails"
+    {do
+    (= {src} "/tmp/valk_build_err_num.valk")
+    (write-script src "42")
+    (= {r} (run-sh (build-cmd "" src "/tmp/valk_build_err_num.bin")))
+    (and (== (plist/get r :exit-code) 1)
+         (str/contains? (plist/get r :stderr) "entry must be a lambda"))
+  })
+
+  (test/case "env containing an unsupported value fails image dump"
+    {do
+    (= {src} "/tmp/valk_build_err_handle.valk")
+    (write-script src "(def {leaked-handle} (aio/pure 1))\n(\\ {argv} {0})")
+    (= {r} (run-sh (build-cmd "" src "/tmp/valk_build_err_handle.bin")))
+    (and (== (plist/get r :exit-code) 1)
+         (str/contains? (plist/get r :stderr) "image dump failed"))
+  })
+
+  (test/case "nonexistent TMPDIR fails temp file creation"
+    {do
+    (= {r} (run-sh (build-cmd "TMPDIR=/nonexistent-valk-tmp-xyz"
+                              ok-script "/tmp/valk_build_err_tmp.bin")))
+    (== (plist/get r :exit-code) 1)
+  })
+
+  (test/case "TMPDIR with unsafe character is rejected"
+    {do
+    (run-sh "mkdir -p '/tmp/valk_bad\"dir'")
+    (= {r} (run-sh (build-cmd "TMPDIR='/tmp/valk_bad\"dir'"
+                              ok-script "/tmp/valk_build_err_unsafe.bin")))
+    (and (== (plist/get r :exit-code) 1)
+         (str/contains? (plist/get r :stderr) "unsafe character"))
+  })
+
+  (test/case "TMPDIR with backslash is rejected"
+    {do
+    (run-sh "mkdir -p '/tmp/valk_bad\\dir'")
+    (= {r} (run-sh (build-cmd "TMPDIR='/tmp/valk_bad\\dir'"
+                              ok-script "/tmp/valk_build_err_bs.bin")))
+    (and (== (plist/get r :exit-code) 1)
+         (str/contains? (plist/get r :stderr) "unsafe character"))
+  })
+
+  (test/case "empty TMPDIR falls back to /tmp and builds"
+    {do
+    (= {r} (run-sh (build-cmd "TMPDIR="
+                              ok-script "/tmp/valk_build_err_emptytmp.bin")))
+    (== (plist/get r :exit-code) 0)
+  })
+
+  (test/case "empty CC falls back to the configured compiler"
+    {do
+    (= {r} (run-sh (build-cmd "CC="
+                              ok-script "/tmp/valk_build_err_emptycc.bin")))
+    (== (plist/get r :exit-code) 0)
+  })
+
+  (test/case "CC pointing at a failing compiler reports exit status"
+    {do
+    (write-script "/tmp/valk_build_err_failcc.sh" "#!/bin/sh\nexit 1\n")
+    (run-sh "chmod +x /tmp/valk_build_err_failcc.sh")
+    (= {r} (run-sh (build-cmd "CC=/tmp/valk_build_err_failcc.sh"
+                              ok-script "/tmp/valk_build_err_cc.bin")))
+    (and (== (plist/get r :exit-code) 1)
+         (str/contains? (plist/get r :stderr) "exited with status"))
+  })
+
+  (test/case "CC pointing at a missing binary reports spawn failure"
+    {do
+    (= {r} (run-sh (build-cmd "CC=/nonexistent-valk-cc-xyz"
+                              ok-script "/tmp/valk_build_err_nocc.bin")))
+    (and (== (plist/get r :exit-code) 1)
+         (str/contains? (plist/get r :stderr) "posix_spawnp"))
+  })
+
+  (test/case "CC killed by a signal is reported"
+    {do
+    (write-script "/tmp/valk_build_err_killcc.sh" "#!/bin/sh\nkill -9 $$\n")
+    (run-sh "chmod +x /tmp/valk_build_err_killcc.sh")
+    (= {r} (run-sh (build-cmd "CC=/tmp/valk_build_err_killcc.sh"
+                              ok-script "/tmp/valk_build_err_killcc.bin")))
+    (and (== (plist/get r :exit-code) 1)
+         (str/contains? (plist/get r :stderr) "killed by signal"))
+  })
+
+  (test/case "valk binary without valk-shim.o next to it fails"
+    {do
+    (run-sh (str/join (list "mkdir -p /tmp/valk_noshim && cp" valk-bin
+                            "/tmp/valk_noshim/valk") " "))
+    (= {r} (run-sh (str/join (list "/tmp/valk_noshim/valk --build" ok-script
+                                   "-o /tmp/valk_build_err_noshim.bin") " ")))
+    (and (== (plist/get r :exit-code) 1)
+         (str/contains? (plist/get r :stderr) "valk-shim.o"))
+  })
+
+  (test/case "build succeeds and produced binary runs a tail-recursive loop"
+    {do
+    (= {src} "/tmp/valk_build_err_loop.valk")
+    (write-script src
+      (str/join (list
+        "(def {spin} (\\ {n} {if (== n 0) 42 (spin (- n 1))}))"
+        "(\\ {argv} {spin 50000})") "\n"))
+    (= {out} "/tmp/valk_build_err_loop.bin")
+    (= {r} (run-sh (build-cmd "" src out)))
+    (= {run} (run-sh out))
+    (and (== (plist/get r :exit-code) 0)
+         (== (plist/get run :exit-code) 42))
+  })
+
+  (test/case "deep slow-variant recursion in produced binary grows env roots"
+    {do
+    (= {src} "/tmp/valk_build_err_deep.valk")
+    (write-script src
+      (str/join (list
+        "(def {slow} (\\ {n} {do"
+        "  (= {f} (\\ {x} {+ x 0}))"
+        "  (if (== n 0) {0} {+ (f 1) (slow (- n 1)) -1})}))"
+        "(\\ {argv} {do (slow 400) 42})") "\n"))
+    (= {out} "/tmp/valk_build_err_deep.bin")
+    (= {r} (run-sh (build-cmd "" src out)))
+    (= {run} (run-sh out))
+    (and (== (plist/get r :exit-code) 0)
+         (== (plist/get run :exit-code) 42))
+  })
+
+) {:suite-name "valk --build error paths"})
+
+(run-sh "rm -rf /tmp/valk_build_err_* '/tmp/valk_bad\"dir' /tmp/valk_noshim")
+
+(aio/stop aio)

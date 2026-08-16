@@ -1,0 +1,64 @@
+; Coverage gap tests for gc.c (env root stack growth, subsystem registry
+; limits) and coverage.c (match-form mark/unmark cycles).
+
+(load "testing/test.valk")
+
+(def {match-helper-path} "/tmp/valk_misc_cov_match_helper.valk")
+
+(fun {write-file path content} {do
+  (= {fh} (file/open path "w"))
+  (file/write fh content)
+  (file/close fh)
+})
+
+(write-file match-helper-path
+  (str/join (list
+    "(fun {misc-cov-classify o} {"
+    "  match o"
+    "    {(Some :value v) v}"
+    "    {(None) 0}"
+    "})"
+    "(misc-cov-classify (Some 7))") "\n"))
+
+(test/run (list
+
+  (test/case "deep non-tail recursion grows the env root stack"
+    {do
+    (= {deep} (\ {n} {if (== n 0) 0 (+ 1 (deep (- n 1)))}))
+    (== (deep 400) 400)
+  })
+
+  (test/case "gc collect and stats work after deep recursion"
+    {do
+    (mem/gc/collect)
+    (mem/gc/stats)
+    (>= (mem/gc/usage) 0)
+  })
+
+  (test/case "match forms mark and unmark coverage expressions"
+    {do
+    (= {r1} (match (Some 5) {(Some :value v) (* v 2)} {(None) 0}))
+    (= {r2} (match (None) {(Some :value v) v} {(None) 99}))
+    (and (== r1 10) (== r2 99))
+  })
+
+  (test/case "loading a match-bearing file twice re-marks and unmarks"
+    {do
+    (= {a} (load match-helper-path))
+    (= {b} (load match-helper-path))
+    (and (== a 7) (== b 7))
+  })
+
+  (test/case "subsystem registry overflows past the 16-slot limit"
+    {do
+    (= {systems} (map (\ {_} {aio/await (aio/start {:num-threads 1})})
+                      (range 1 18)))
+    (map (\ {s} {aio/stop s}) systems)
+    ; Join the loop threads: aio/stop only signals, and threads still alive
+    ; at process exit trip TSAN's thread-leak check. aio/run on an
+    ; already-stopping system falls through its wait and joins.
+    (map (\ {s} {aio/run s}) systems)
+    (== (len systems) 17)
+  })
+
+) {:suite-name "misc coverage (gc, coverage)"})

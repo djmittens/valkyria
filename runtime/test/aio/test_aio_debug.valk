@@ -1,0 +1,439 @@
+; AIO Debug Server Tests
+; Run with: ./build/valk test/test_aio_debug.valk
+;
+; Tests the debug dashboard module including:
+; - Route handling (/debug/, /debug/metrics, /metrics)
+; - Response structure (status codes, content types)
+; - HTML dashboard content
+; - JSON metrics format
+; - Prometheus metrics format
+
+; Load prelude first (has all the standard functions)
+
+; Load test framework
+(load "testing/test.valk")
+
+; Load the debug module
+(load "stdlib/aio/sse.valk")
+(load "stdlib/aio/debug-broadcaster.valk")
+(load "stdlib/aio/debug.valk")
+
+; Set the test suite name
+
+; ============================================================================
+; Module Loading Tests
+; ============================================================================
+
+; Test: debug module loads and defines expected symbols
+
+; Test: debug assets path is configured
+
+; Test: HTML content is loaded and non-empty
+
+; ============================================================================
+; Route Matching Tests
+; ============================================================================
+
+; Create a mock AIO system for testing
+(def {mock-sys} (aio/await (aio/start)))
+
+; Test: /debug/ route returns dashboard HTML
+
+; Test: /debug/metrics route returns JSON
+
+; Test: /metrics route returns Prometheus format
+
+; Test: non-debug routes return nil
+
+; Test: /debug (no trailing slash) also works
+
+; Test: /debug/diagnostics/memory returns SSE stream response
+
+; ============================================================================
+; Handler Factory Tests
+; ============================================================================
+
+; Test: debug-handler creates working handler with bound sys
+
+; ============================================================================
+; Response Structure Tests
+; ============================================================================
+
+; Test: all responses have required fields
+
+; ============================================================================
+; HTML Dashboard Content Tests
+; ============================================================================
+
+; Test: HTML content has reasonable length
+
+; Test: dashboard body is the cached HTML content
+
+; ============================================================================
+; Direct Function Tests (for coverage)
+; ============================================================================
+
+; Test: aio/debug-merge-metrics-json function directly
+
+; Test: aio/debug-merge-metrics-prometheus function directly
+
+; Test: aio/debug-diagnostics-state function directly
+
+; Test: aio/debug-diagnostics-delta function directly  
+
+; Test: /debug/slab/buckets route returns JSON
+
+; Test: aio/debug-handle-slab-buckets with nil query
+
+; Test: aio/debug-handle-slab-buckets with query params
+
+; Test: aio/debug-handle-slab-buckets with partial query params
+
+; Test: aio/debug-handle-slab-buckets with invalid query format (no equals)
+
+; Test: aio/debug-handle-slab-buckets with unknown query param key (hits otherwise branch)
+
+; Test: /debug/metrics/state route returns diagnostics state JSON
+
+; ============================================================================
+; JSON Metrics Tests
+; ============================================================================
+
+; Test: JSON metrics body is non-empty
+
+; Test: JSON metrics is consistent with aio/metrics-json
+
+; ============================================================================
+; Prometheus Metrics Tests
+; ============================================================================
+
+; Test: Prometheus metrics body is non-empty
+
+; Test: Prometheus metrics is consistent with aio/metrics-prometheus
+
+; ============================================================================
+; Edge Cases
+; ============================================================================
+
+; Test: empty path returns redirect (falls through to otherwise)
+
+; Test: path with query string (should still work based on path)
+; Note: This test documents current behavior - may need adjustment
+
+; Test: case sensitivity
+
+; Test: multiple consecutive requests work
+
+; Run all tests
+(test/run (list
+  (test/case "debug-module-loads"
+    {do
+    ; Check that the handler can be called (it's a function)
+    ; We verify by calling it and checking we get a response
+    (= {sys} (aio/await (aio/start)))
+    (= {resp} (aio/debug-handle-request sys {:path "/debug/"}))
+    (test/assert (!= resp nil) "aio/debug-handle-request should work")
+    true
+  })
+  (test/case "debug-assets-path-configured"
+    {test/assert (== aio/debug-assets-path "stdlib/aio/debug/")
+    "assets path should be stdlib/aio/debug/"})
+  (test/case "debug-html-content-loaded"
+    {do
+    (test/assert (> (len aio/debug-html-content) 0)
+      "HTML content should not be empty")
+    (test/assert (> (len aio/debug-html-content) 1000)
+      "HTML content should be substantial (>1000 chars)")
+    true
+  })
+  (test/case "route-debug-slash-returns-html"
+    {do
+    (= {req} {:path "/debug/"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    (test/assert-eq "text/html; charset=utf-8" (:content-type resp)
+      "content-type should be text/html")
+    true
+  })
+  (test/case "route-debug-metrics-returns-json"
+    {do
+    (= {req} {:path "/debug/metrics"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    (test/assert-eq "application/json" (:content-type resp)
+      "content-type should be application/json")
+    true
+  })
+  (test/case "route-metrics-returns-prometheus"
+    {do
+    (= {req} {:path "/metrics"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    (test/assert-eq "text/plain; version=0.0.4" (:content-type resp)
+      "content-type should be prometheus format")
+    true
+  })
+  (test/case "route-non-debug-returns-nil"
+    {do
+    (= {r1} (aio/debug-handle-request mock-sys {:path "/"}))
+    (test/assert (!= r1 nil) "/ returns redirect response (otherwise branch)")
+    (test/assert-eq "200" (:status r1) "redirect has status 200")
+    (= {r2} (aio/debug-handle-request mock-sys {:path "/api/data"}))
+    (test/assert (!= r2 nil) "/api/data returns redirect response")
+    (= {r3} (aio/debug-handle-request mock-sys {:path "/debug/unknown"}))
+    (test/assert (!= r3 nil) "/debug/unknown returns redirect response")
+    true
+  })
+  (test/case "route-debug-no-slash-returns-html"
+    {do
+    (= {req} {:path "/debug"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    (test/assert-eq "text/html; charset=utf-8" (:content-type resp)
+      "content-type should be text/html")
+    true
+  })
+  (test/case "route-diagnostics-memory-returns-sse"
+    {do
+    (= {req} {:path "/debug/diagnostics/memory"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil for /debug/diagnostics/memory")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    (test/assert-eq "text/event-stream; charset=utf-8" (:content-type resp)
+      "content-type should be text/event-stream")
+    ; body-type should be the keyword :sse-stream
+    (= {body-type} (:body-type resp))
+    (test/assert (!= body-type nil) "body-type should be present")
+    true
+  })
+  (test/case "debug-handler-factory"
+    {do
+    (= {handler} (aio/debug-handler mock-sys))
+    ; Handler should work like debug-handle-request
+    (= {resp} (handler {:path "/debug/"}))
+    (test/assert (!= resp nil) "handler should return response for /debug/")
+    (test/assert-eq "200" (:status resp)
+      "handler response should have status 200")
+    true
+  })
+  (test/case "response-has-required-fields"
+    {do
+    (= {resp} (aio/debug-handle-request mock-sys {:path "/debug/"}))
+
+    ; Check that required fields exist
+    (= {status} (:status resp))
+    (= {content-type} (:content-type resp))
+    (= {body} (:body resp))
+
+    (test/assert (!= status nil) "response should have status")
+    (test/assert (!= content-type nil) "response should have content-type")
+    (test/assert (!= body nil) "response should have body")
+    true
+  })
+  (test/case "html-content-has-reasonable-length"
+    {do
+    (= {html} aio/debug-html-content)
+    (test/assert (> (len html) 2000)
+      "HTML should be at least 2000 chars")
+    (test/assert (< (len html) 500000)
+      "HTML should be less than 500KB")
+    true
+  })
+  (test/case "dashboard-returns-cached-html"
+    {do
+    (= {req} {:path "/debug/"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (= {body} (:body resp))
+
+    ; Body should match the cached content
+    (test/assert-eq aio/debug-html-content body
+      "response body should be cached HTML content")
+    true
+  })
+  (test/case "merge-metrics-json-function"
+    {do
+    (= {result} (aio/debug-merge-metrics-json mock-sys))
+    (test/assert (> (len result) 0) "merged JSON should not be empty")
+    (test/assert (> (len result) 100) "merged JSON should have substantial content")
+    true
+  })
+  (test/case "merge-metrics-prometheus-function"
+    {do
+    (= {result} (aio/debug-merge-metrics-prometheus mock-sys))
+    (test/assert (> (len result) 0) "merged Prometheus should not be empty")
+    (test/assert (> (len result) 100) "merged Prometheus should have substantial content")
+    true
+  })
+  (test/case "diagnostics-state-function"
+    {do
+    (= {result} (aio/debug-diagnostics-state mock-sys))
+    (test/assert (> (len result) 0) "diagnostics state should not be empty")
+    (test/assert (> (len result) 50) "diagnostics state should have substantial content")
+    true
+  })
+  (test/case "diagnostics-delta-function"
+    {do
+    (= {result} (aio/debug-diagnostics-delta mock-sys))
+    (test/assert (> (len result) 0) "diagnostics delta should not be empty")
+    (test/assert (> (len result) 50) "diagnostics delta should have substantial content")
+    true
+  })
+  (test/case "route-slab-buckets-returns-json"
+    {do
+    (= {req} {:path "/debug/slab/buckets"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    (test/assert-eq "application/json" (:content-type resp)
+      "content-type should be application/json")
+    true
+  })
+  (test/case "slab-buckets-nil-query"
+    {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys nil))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    true
+  })
+  (test/case "slab-buckets-with-query"
+    {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys "slab=tcp_buffers&start=0&end=1000&buckets=50"))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    true
+  })
+  (test/case "slab-buckets-partial-query"
+    {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys "start=100&end=500"))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    true
+  })
+  (test/case "slab-buckets-invalid-query-format"
+    {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys "invalidparam"))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    true
+  })
+  (test/case "slab-buckets-unknown-param-key"
+    {do
+    (= {resp} (aio/debug-handle-slab-buckets mock-sys "unknown=value&start=100"))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    true
+  })
+  (test/case "route-debug-metrics-state-returns-json"
+    {do
+    (= {req} {:path "/debug/metrics/state"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (test/assert (!= resp nil) "response should not be nil")
+    (test/assert-eq "200" (:status resp)
+      "status should be 200")
+    (test/assert-eq "application/json" (:content-type resp)
+      "content-type should be application/json")
+    true
+  })
+  (test/case "json-metrics-body-non-empty"
+    {do
+    (= {req} {:path "/debug/metrics"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (= {body} (:body resp))
+
+    (test/assert (> (len body) 0)
+      "JSON metrics body should not be empty")
+    (test/assert (> (len body) 50)
+      "JSON metrics body should have substantial content")
+    true
+  })
+  (test/case "json-metrics-matches-aio-metrics-json"
+    {do
+    (= {req} {:path "/debug/metrics"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (= {body} (:body resp))
+    (= {direct} (aio/metrics-json mock-sys))
+
+    ; Both should be strings of similar length (uptime may differ slightly)
+    (test/assert (> (len body) 0) "route body should exist")
+    (test/assert (> (len direct) 0) "direct call should exist")
+    true
+  })
+  (test/case "prometheus-metrics-body-non-empty"
+    {do
+    (= {req} {:path "/metrics"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (= {body} (:body resp))
+
+    (test/assert (> (len body) 0)
+      "Prometheus metrics body should not be empty")
+    (test/assert (> (len body) 100)
+      "Prometheus metrics body should have substantial content")
+    true
+  })
+  (test/case "prometheus-metrics-matches-aio-metrics-prometheus"
+    {do
+    (= {req} {:path "/metrics"})
+    (= {resp} (aio/debug-handle-request mock-sys req))
+    (= {body} (:body resp))
+    (= {direct} (aio/debug-merge-metrics-prometheus mock-sys))
+
+    (test/assert (> (len body) 0) "route body should exist")
+    (test/assert (> (len direct) 0) "direct merge call should exist")
+    true
+  })
+  (test/case "edge-case-empty-path"
+    {do
+    (= {resp} (aio/debug-handle-request mock-sys {:path ""}))
+    (test/assert (!= resp nil) "empty path should return redirect response")
+    (test/assert-eq "200" (:status resp)
+      "empty path should have status 200")
+    true
+  })
+  (test/case "edge-case-path-only-matching"
+    {do
+    (= {resp} (aio/debug-handle-request mock-sys {:path "/debug/?foo=bar"}))
+    (test/assert (!= resp nil) "path with query string returns dashboard (query stripped)")
+    (test/assert-eq "200" (:status resp) "status should be 200")
+    (test/assert-eq "text/html; charset=utf-8" (:content-type resp)
+      "should return HTML dashboard after query stripping")
+    true
+  })
+  (test/case "edge-case-case-sensitivity"
+    {do
+    (= {r1} (aio/debug-handle-request mock-sys {:path "/DEBUG/"}))
+    (test/assert (!= r1 nil) "/DEBUG/ returns redirect (case-sensitive, hits otherwise)")
+    (= {r2} (aio/debug-handle-request mock-sys {:path "/Debug/"}))
+    (test/assert (!= r2 nil) "/Debug/ returns redirect (case-sensitive, hits otherwise)")
+    true
+  })
+  (test/case "multiple-requests-work"
+    {do
+    (= {handler} (aio/debug-handler mock-sys))
+
+    (= {r1} (handler {:path "/debug/"}))
+    (= {r2} (handler {:path "/debug/metrics"}))
+    (= {r3} (handler {:path "/metrics"}))
+    (= {r4} (handler {:path "/unknown"}))
+
+    (test/assert (!= r1 nil) "first request should succeed")
+    (test/assert (!= r2 nil) "second request should succeed")
+    (test/assert (!= r3 nil) "third request should succeed")
+    (test/assert (!= r4 nil) "unknown path returns redirect (otherwise branch)")
+    true
+  }))
+  {:suite-name "AIO Debug Server Tests"})

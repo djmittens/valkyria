@@ -1,0 +1,25 @@
+; Test aio/traverse combinator
+; Traverses a list applying an async function to each element
+
+(load "testing/test.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+(test/run-async aio (list
+  (test/case-async "aio/traverse returns handle" (\ {} {
+    (= {result} (aio/traverse (list 1 2 3) (\ {x} {(aio/pure x)})))
+    (aio/then result (\ {r} {(== r (list 1 2 3))}))
+  }))
+
+  (test/case-async "aio/traverse with transformation" (\ {} {
+    (= {result} (aio/traverse (list 1 2 3) (\ {x} {(aio/pure (+ x 1))})))
+    (aio/then result (\ {r} {(== r (list 2 3 4))}))
+  }))
+
+  (test/case-async "aio/traverse with empty list" (\ {} {
+    (= {result} (aio/traverse () (\ {x} {(aio/pure x)})))
+    (aio/pure (not (== result ())))
+  })))
+  {:suite-name "aio/traverse Tests" :timeout-ms 1000})
+
+(aio/stop aio)

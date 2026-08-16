@@ -1,0 +1,366 @@
+(load "testing/test.valk")
+(load "symdb/symdb.valk")
+(load "lsp/analysis.valk")
+
+(fun {make-raw-db} {do
+  (= {db} (sqlite/open ":memory:"))
+  (sqlite/exec-script db symdb/schema-sql)
+  db
+})
+
+(fun {file-id-of db path} {
+  sqlite/query-value db "SELECT id FROM files WHERE path=?1" path
+})
+
+(fun {add-file db path} {do
+  (sqlite/exec db "INSERT INTO files (path, hash) VALUES (?1, 'h')" path)
+  (file-id-of db path)
+})
+
+(fun {add-sym db fid name line kind arity sig} {
+  sqlite/exec db
+    "INSERT INTO symbols (name, file_id, line, col, kind, arity, sig) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6)"
+    name fid line kind arity sig
+})
+
+(fun {add-load db fid target} {
+  sqlite/exec db "INSERT INTO loads (file_id, target_path) VALUES (?1, ?2)" fid target
+})
+
+(fun {add-ref db fid name line} {
+  sqlite/exec db "INSERT INTO refs (name, file_id, line, col) VALUES (?1, ?2, ?3, 0)" name fid line
+})
+
+(fun {make-field-db} {do
+  (= {db} (make-raw-db))
+  (= {fid} (add-file db "/f/t.valk"))
+  (add-sym db fid "Rec" 0 4 3 ":fx Num :fy Num :fz Num")
+  (add-sym db fid "myvar" 1 2 -1 nil)
+  (sqlite/exec db "UPDATE symbols SET inferred_type='Rec' WHERE name='myvar'")
+  (add-sym db fid "fnx" 2 1 1 "{-> Rec Num}")
+  (add-sym db fid "fnx" 2 1 1 "(fun {fnx loc} ...)")
+  (add-sym db fid "onlysig" 3 1 -1 "{-> Num Num}")
+  (sqlite/exec db "INSERT INTO nodes (file_id, pos, end_pos, type, name, context) VALUES (?1, 10, 13, 'sym', 'Rec', NULL)" fid)
+  (sqlite/exec db "INSERT INTO nodes (file_id, pos, end_pos, type, name, context) VALUES (?1, 20, 23, 'sym', ':fx', NULL)" fid)
+  (sqlite/exec db "INSERT INTO nodes (file_id, pos, end_pos, type, name, context) VALUES (?1, 30, 33, 'sym', ':fy', NULL)" fid)
+  (sqlite/exec db "INSERT INTO scoped_refs (file_id, name, pos, len, scope_id, is_def) VALUES (?1, 'loc', 105, 3, 100, 1)" fid)
+  (sqlite/exec db "INSERT INTO scoped_refs (file_id, name, pos, len, scope_id, is_def) VALUES (?1, 'fnx', 101, 3, -1, 1)" fid)
+  (sqlite/exec db "INSERT INTO scoped_refs (file_id, name, pos, len, scope_id, is_def) VALUES (?1, 'lonely', 505, 6, 500, 1)" fid)
+  (sqlite/exec db "INSERT INTO scoped_refs (file_id, name, pos, len, scope_id, is_def) VALUES (?1, 'chainvar', 40, 8, 200, 1)" fid)
+  (sqlite/exec db "INSERT INTO scopes (file_id, pos, parent_pos) VALUES (?1, 300, 200)" fid)
+  (sqlite/exec db "INSERT INTO scopes (file_id, pos, parent_pos) VALUES (?1, 200, -1)" fid)
+  db
+})
+
+(fun {make-graph-db} {do
+  (= {db} (make-raw-db))
+  (= {amb} (add-file db "/amb/stdlib/builtins.valk"))
+  (add-sym db amb "head" 0 1 1 nil)
+  (= {lib} (add-file db "/w/lib.valk"))
+  (add-sym db lib "w/util" 0 1 1 "{-> Num Num}")
+  (add-sym db lib "WThing" 1 4 1 ":x Num")
+  (add-sym db lib "WKind" 2 3 -1 nil)
+  (= {main} (add-file db "/w/main.valk"))
+  (add-load db main "/w/lib.valk")
+  (= {lib2} (add-file db "/w/lib2.valk"))
+  (add-sym db lib2 "w/util" 0 1 2 "{-> Num Num Num}")
+  (= {main2} (add-file db "/w/main2.valk"))
+  (add-load db main2 "/w/lib2.valk")
+  (= {other2} (add-file db "/w/other2.valk"))
+  (add-sym db other2 "w/util" 0 1 1 nil)
+  (= {stray} (add-file db "/w/stray.valk"))
+  (add-ref db lib "w/util" 1)
+  (add-ref db main "w/util" 1)
+  (add-ref db main2 "w/util" 1)
+  (add-ref db other2 "w/util" 1)
+  (add-ref db stray "w/util" 1)
+  db
+})
+
+(test/run (list
+
+  (test/case "nil-db-query-fns-return-nil"
+    {do
+      (test/assert (nil? (symdb/get-scoped-refs nil "p" "n" 0)) "get-scoped-refs")
+      (test/assert (nil? (symdb/get-ref-at-offset nil "p" 0)) "get-ref-at-offset")
+      (test/assert (nil? (symdb/get-all-file-refs nil "p" "n")) "get-all-file-refs")
+      (test/assert (nil? (symdb/find-scoped-def nil "p" "n" 0)) "find-scoped-def")
+      (test/assert (nil? (symdb/find-def-in-scope-chain nil "p" "n" 0)) "find-def-in-scope-chain")
+      (test/assert (nil? (symdb/find-field-definition nil ":x" nil nil)) "find-field-definition")
+      (test/assert (nil? (symdb/resolve-var-type nil "c" "p")) "resolve-var-type")
+      (test/assert (nil? (symdb/resolve-param-type nil "f" "p" "d")) "resolve-param-type")
+      true
+    })
+
+  (test/case "scoped-refs-queries"
+    {do
+      (= {db} (symdb/init ":memory:"))
+      (symdb/sync-document db "file:///q.valk" "(fun {qf x y} {+ x y})\n(qf 1 2)\n")
+      (= {refs} (symdb/get-scoped-refs db "/q.valk" "x" -1))
+      (= {all-refs} (symdb/get-all-file-refs db "/q.valk" "x"))
+      (test/assert (>= (len all-refs) 1) "x has scoped refs in file")
+      (= {at} (symdb/get-ref-at-offset db "/q.valk" 11))
+      (test/assert (not (nil? at)) "ref at offset of x param")
+      (= {missing} (symdb/get-ref-at-offset db "/q.valk" 9999))
+      (test/assert (nil? missing) "no ref past end")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-scoped-def-and-chain"
+    {do
+      (= {db} (make-field-db))
+      (= {d} (symdb/find-scoped-def db "/f/t.valk" "chainvar" 200))
+      (test/assert (not (nil? d)) "def found in its scope")
+      (test/assert (nil? (symdb/find-scoped-def db "/f/t.valk" "chainvar" 999))
+        "no def in unrelated scope")
+      (test/assert (nil? (symdb/find-def-in-scope-chain db "/f/t.valk" "x" -1))
+        "negative scope-pos")
+      (= {direct} (symdb/find-def-in-scope-chain db "/f/t.valk" "chainvar" 200))
+      (test/assert (not (nil? direct)) "found directly in scope")
+      (= {chained} (symdb/find-def-in-scope-chain db "/f/t.valk" "chainvar" 300))
+      (test/assert (not (nil? chained)) "found through parent scope")
+      (test/assert (nil? (symdb/find-def-in-scope-chain db "/f/t.valk" "chainvar" 999))
+        "unknown scope has no parent")
+      (test/assert (nil? (symdb/find-def-in-scope-chain db "/f/t.valk" "ghost" 300))
+        "chain exhausted without def")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-field-definition-paths"
+    {do
+      (= {db} (make-field-db))
+      (= {r} (symdb/find-field-definition db ":fx" nil nil))
+      (test/assert (not (nil? r)) "global no-context lookup")
+      (test/assert-eq 20 (plist/get r :pos) "field node pos")
+      (test/assert-eq 3 (plist/get r :len) "field node len")
+      (= {r2} (symdb/find-field-definition db ":fx" nil "/f/t.valk"))
+      (test/assert (not (nil? r2)) "closure no-context lookup")
+      (= {r3} (symdb/find-field-definition db ":fy" "Rec" nil))
+      (test/assert (not (nil? r3)) "global ctor-context lookup")
+      (= {r4} (symdb/find-field-definition db ":fy" "Rec" "/f/t.valk"))
+      (test/assert (not (nil? r4)) "closure ctor-context lookup")
+      (test/assert (nil? (symdb/find-field-definition db ":fz" "Rec" nil))
+        "field in sig but no node")
+      (test/assert (nil? (symdb/find-field-definition db ":nope" nil nil))
+        "no ctor matches field")
+      (= {r5} (symdb/find-field-definition db ":fx" "myvar" nil))
+      (test/assert (not (nil? r5)) "context resolved via inferred type")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "resolve-var-type-paths"
+    {do
+      (= {db} (make-field-db))
+      (test/assert (nil? (symdb/resolve-var-type db nil "/f/t.valk")) "nil context")
+      (test/assert-eq "Rec" (symdb/resolve-var-type db "Rec" nil) "direct ctor name")
+      (test/assert-eq "Rec" (symdb/resolve-var-type db "myvar" nil) "inferred type")
+      (test/assert-eq "Rec" (symdb/resolve-var-type db "loc" nil) "param type no doc-path")
+      (test/assert-eq "Rec" (symdb/resolve-var-type db "loc" "/f/t.valk") "param type with doc-path")
+      (test/assert (nil? (symdb/resolve-var-type db "nodefs" nil)) "no def ref")
+      (test/assert (nil? (symdb/resolve-var-type db "lonely" nil)) "def without enclosing fn")
+      (test/assert (nil? (symdb/resolve-var-type db "lonely" "/f/t.valk")) "def without fn with doc-path")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "resolve-param-type-paths"
+    {do
+      (= {db} (make-field-db))
+      (test/assert-eq "Rec" (symdb/resolve-param-type db "fnx" "loc" nil) "resolves param type")
+      (test/assert (nil? (symdb/resolve-param-type db "nosuchfn" "x" nil)) "no sig row")
+      (test/assert (nil? (symdb/resolve-param-type db "onlysig" "x" nil)) "no formals row")
+      (test/assert (nil? (symdb/resolve-param-type db "fnx" "zz" nil)) "param not in formals")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-param-index-branches"
+    {do
+      (test/assert-eq -1 (symdb/find-param-index nil "x") "nil formals")
+      (test/assert-eq -1 (symdb/find-param-index "no braces here" "x") "no braces")
+      (test/assert-eq 0 (symdb/find-param-index "(fun {f a b} ...)" "a") "first param")
+      (test/assert-eq 1 (symdb/find-param-index "(fun {f a b} ...)" "b") "second param")
+      (test/assert-eq -1 (symdb/find-param-index "(fun {f a b} ...)" "z") "absent param")
+      true
+    })
+
+  (test/case "get-sig-type-at-branches"
+    {do
+      (test/assert (nil? (symdb/get-sig-type-at nil 0)) "nil sig")
+      (test/assert (nil? (symdb/get-sig-type-at "{}" 0)) "too short")
+      (test/assert-eq "Num" (symdb/get-sig-type-at "{-> Num Str Nil}" 0) "first type")
+      (test/assert-eq "Str" (symdb/get-sig-type-at "{-> Num Str Nil}" 1) "second type")
+      (test/assert (nil? (symdb/get-sig-type-at "{-> Num Str}" 5)) "index past end")
+      (test/assert-eq "Num" (symdb/get-sig-type-at "{-> & Num Num}" 0) "amp filtered")
+      true
+    })
+
+  (test/case "find-definition-in-branches"
+    {do
+      (= {db} (make-graph-db))
+      (= {local} (symdb/find-definition-in db "w/util" "/w/lib.valk"))
+      (test/assert (not (nil? local)) "local definition found")
+      (test/assert-eq "/w/lib.valk" (plist/get local :path) "local path wins")
+      (= {fb} (symdb/find-definition-in db "w/util" "/w/stray.valk"))
+      (test/assert (not (nil? fb)) "fallback finds global def")
+      (= {nop} (symdb/find-definition db "w/util"))
+      (test/assert (not (nil? nop)) "nil-path find-definition")
+      (test/assert (nil? (symdb/find-definition db "ghost")) "missing name nil")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-definition-sites-branches"
+    {do
+      (= {db} (make-graph-db))
+      (= {local} (symdb/find-definition-sites db "w/util" "/w/lib.valk"))
+      (test/assert-eq 1 (len local) "same-file definition wins outright")
+      (= {vis} (symdb/find-definition-sites db "w/util" "/w/main.valk"))
+      (test/assert-eq 1 (len vis) "closure-visible definition")
+      (test/assert-eq "/w/lib.valk" (plist/get (head vis) :path) "resolves through loads")
+      (= {glob} (symdb/find-definition-sites db "w/util" "/w/stray.valk"))
+      (test/assert (>= (len glob) 3) "global fallback lists all sites")
+      (= {nop} (symdb/find-definition-sites db "w/util" nil))
+      (test/assert (>= (len nop) 3) "nil path goes global")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "listing-queries"
+    {do
+      (= {db} (make-graph-db))
+      (test/assert (>= (len (symdb/file-symbols db "/w/lib.valk")) 3) "file-symbols")
+      (test/assert (>= (len (symdb/search-symbols db "util")) 1) "search-symbols")
+      (test/assert (>= (len (symdb/all-symbol-names db)) 3) "all-symbol-names")
+      (test/assert (>= (len (symdb/completion-all db)) 3) "completion-all")
+      (test/assert (>= (len (symdb/completion-all-in db nil)) 3) "completion-all-in nil path")
+      (= {vis} (symdb/completion-all-in db "/w/main.valk"))
+      (= {vis-names} (map (\ {r} {plist/get r :name}) vis))
+      (test/assert (member? "w/util" vis-names) "closure completion sees loaded names")
+      (test/assert (>= (len (symdb/completion-symbols db "util")) 1) "completion-symbols")
+      (test/assert (>= (len (symdb/completion-symbols-in db nil "util")) 1) "completion-symbols-in nil path")
+      (test/assert (>= (len (symdb/completion-symbols-in db "/w/main.valk" "util")) 1)
+        "completion-symbols-in closure")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "sig-lookups-closure-and-global"
+    {do
+      (= {db} (make-graph-db))
+      (test/assert (not (nil? (symdb/sig-of db nil "w/util"))) "sig-of global")
+      (test/assert (not (nil? (symdb/sig-of db "/w/main.valk" "w/util"))) "sig-of closure")
+      (test/assert (not (nil? (symdb/sig-of db "/w/stray.valk" "w/util"))) "sig-of fallback")
+      (test/assert (nil? (symdb/fun-sig-of db nil "w/util")) "fun-sig-of none")
+      (test/assert (nil? (symdb/fun-sig-of db "/w/main.valk" "w/util")) "fun-sig-of closure none")
+      (test/assert (not (nil? (symdb/ctor-sig-of db nil "WThing"))) "ctor-sig-of global")
+      (test/assert (not (nil? (symdb/ctor-sig-of db "/w/main.valk" "WThing"))) "ctor-sig-of closure")
+      (test/assert (not (nil? (symdb/ctor-sig-with-field db nil "%:x %"))) "ctor-sig-with-field global")
+      (test/assert (not (nil? (symdb/ctor-sig-with-field db "/w/main.valk" "%:x %")))
+        "ctor-sig-with-field closure")
+      (test/assert (nil? (symdb/ctor-sig-with-field db "/w/main.valk" "%:zz %"))
+        "ctor-sig-with-field missing")
+      (test/assert (nil? (symdb/inferred-type-of db nil "w/util")) "inferred-type-of none")
+      (test/assert (nil? (symdb/inferred-type-of db "/w/main.valk" "w/util"))
+        "inferred-type-of closure none")
+      (test/assert (>= (len (symdb/ctor-sigs-in db nil)) 1) "ctor-sigs-in global")
+      (test/assert (>= (len (symdb/ctor-sigs-in db "/w/main.valk")) 1) "ctor-sigs-in closure")
+      (test/assert (>= (len (symdb/types-in db nil)) 1) "types-in nil path")
+      (test/assert (>= (len (symdb/types-in db "")) 1) "types-in empty path")
+      (test/assert (>= (len (symdb/types-in db "/w/main.valk")) 1) "types-in closure")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "load-graph-primitives"
+    {do
+      (= {db} (make-graph-db))
+      (test/assert-eq 1 (symdb/in-closure? db "/w/main.valk" "/w/lib.valk") "main reaches lib")
+      (test/assert-eq 0 (symdb/in-closure? db "/w/lib.valk" "/w/main.valk") "lib does not reach main")
+      (test/assert-eq 1 (symdb/defines? db "/w/lib.valk" "w/util") "lib defines")
+      (test/assert-eq 0 (symdb/defines? db "/w/main.valk" "w/util") "main does not define")
+      (test/assert-eq 1 (symdb/sees-definition? db "/w/main.valk" "w/util") "main sees via loads")
+      (test/assert-eq 0 (symdb/sees-definition? db "/w/stray.valk" "w/util") "stray sees nothing")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "files-resolving-to-branches"
+    {do
+      (= {db} (make-graph-db))
+      (= {consumers} (symdb/files-resolving-to db "w/util" "/w/lib.valk"))
+      (test/assert (member? "/w/lib.valk" consumers) "definer itself included")
+      (test/assert (member? "/w/main.valk" consumers) "closure consumer included")
+      (test/assert (member? "/w/stray.valk" consumers) "orphan consumer included")
+      (test/assert (not (member? "/w/other2.valk" consumers)) "self-definer excluded")
+      (test/assert (not (member? "/w/main2.valk" consumers)) "other closure excluded")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "find-refs-resolved-and-counts"
+    {do
+      (= {db} (make-graph-db))
+      (test/assert (>= (len (symdb/find-refs db "w/util")) 5) "find-refs all")
+      (test/assert (>= (len (symdb/find-refs-resolved db "w/util" nil)) 5)
+        "nil def-path returns all refs")
+      (= {scoped} (symdb/find-refs-resolved db "w/util" "/w/lib.valk"))
+      (test/assert (< (len scoped) 5) "resolved refs filtered")
+      (test/assert (>= (len scoped) 2) "resolved refs nonempty")
+      (test/assert-eq 5 (symdb/ref-count-resolved db "w/util" nil) "nil def-path count")
+      (test/assert-eq (len scoped) (symdb/ref-count-resolved db "w/util" "/w/lib.valk")
+        "resolved count matches filter")
+      (test/assert-eq 5 (symdb/ref-count db "w/util") "raw ref-count")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "symbol-hover-branches"
+    {do
+      (= {db} (make-graph-db))
+      (= {h1} (symdb/symbol-hover db "w/util"))
+      (test/assert (not (nil? h1)) "nil-path hover")
+      (= {h2} (symdb/symbol-hover-in db "w/util" "/w/lib.valk"))
+      (test/assert (not (nil? h2)) "local hover")
+      (test/assert-eq "/w/lib.valk" h2:path "local hover path")
+      (= {h3} (symdb/symbol-hover-in db "w/util" "/w/main.valk"))
+      (test/assert (not (nil? h3)) "closure hover")
+      (test/assert-eq "/w/lib.valk" h3:path "closure hover resolves to lib")
+      (= {h4} (symdb/symbol-hover-in db "w/util" "/w/stray.valk"))
+      (test/assert (not (nil? h4)) "global fallback hover")
+      (test/assert (nil? (symdb/symbol-hover-in db "ghost" "/w/lib.valk")) "missing symbol nil")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "symbol-hover-sig-only-fallback"
+    {do
+      (= {db} (make-raw-db))
+      (= {fid} (add-file db "/s/t.valk"))
+      (add-sym db fid "hovsig" -1 1 -1 "{-> Num Num}")
+      (= {h} (symdb/symbol-hover-in db "hovsig" nil))
+      (test/assert (not (nil? h)) "sig-only symbol still hovers")
+      (test/assert-eq "hovsig" h:name "fallback name")
+      (test/assert-eq "{-> Num Num}" h:sig "fallback carries type sig")
+      (sqlite/close db)
+      true
+    })
+
+  (test/case "indexed-paths-and-remove-file"
+    {do
+      (= {db} (make-graph-db))
+      (= {paths} (symdb/all-indexed-paths db))
+      (test/assert (>= (len paths) 6) "all indexed paths listed")
+      (= {lib-id} (file-id-of db "/w/lib.valk"))
+      (symdb/remove-file db lib-id)
+      (test/assert (nil? (sqlite/query-maybe db "SELECT id FROM files WHERE path='/w/lib.valk'"))
+        "file row removed")
+      (test/assert-eq 0 (symdb/defines? db "/w/lib.valk" "w/util") "symbols removed")
+      (sqlite/close db)
+      true
+    })
+
+) {:suite-name "SymDB Query Coverage" :debug 0})

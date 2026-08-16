@@ -1,0 +1,317 @@
+; Valkyria LSP Server — I/O, types, state, position utilities
+;
+; JSON <-> Q-expression mapping:
+;   JSON object  -> plist:  {"a":1} -> {:a 1}
+;   JSON array   -> list:   [1,2]   -> {1 2}
+;   true/false   -> 1/0    (use :true/:false for encoding)
+;   null         -> (None) (Option type from prelude)
+;   nil          -> []     (nil = empty list, always)
+
+(load "symdb/symdb.valk")
+(load "symdb/validate.valk")
+
+(module lsp)
+
+; ---------------------------------------------------------------------------
+; Typed contexts — replace ad-hoc plists with var:field access
+; ---------------------------------------------------------------------------
+
+(type {DocCtx}
+  {:uri Str :text Str :ast List})
+
+(type {TextPosCtx}
+  {:uri Str :text Str :ast List :line Num :col Num})
+
+(type {WordCtx}
+  {:uri Str :text Str :ast List :line Num :col Num :word Str})
+
+(type {FormSnippet}
+  {:label Str :detail Str :snippet Str :sort Str})
+
+; Hint context for inlay hint walker
+(type {HintCtx}
+  {:local List :db Ref})
+
+; LSP request parameter types
+(type {LspTextDoc} {:uri Str})
+(type {LspTextDocText} {:uri Str :text Str})
+(type {LspPosition} {:line Num :character Num})
+(type {LspRange} {:start LspPosition :end LspPosition})
+
+(type {DocParams} {:textDocument LspTextDoc})
+(type {TextDocPosParams} {:textDocument LspTextDoc :position LspPosition})
+(type {OpenParams} {:textDocument LspTextDocText})
+(type {ChangeParams} {:textDocument LspTextDoc :contentChanges List})
+(type {SaveParams} {:textDocument LspTextDoc :text Str})
+(type {InitParams} {:rootUri Str :capabilities List})
+(type {RangeParams} {:textDocument LspTextDoc :range LspRange})
+(type {HintParams} {:textDocument LspTextDoc :range LspRange})
+(type {RenameParams} {:textDocument LspTextDoc :position LspPosition :newName Str})
+(type {QueryParams} {:query Str})
+(type {CodeActionContext} {:diagnostics List})
+(type {CodeActionParams} {:textDocument LspTextDoc :range LspRange :context CodeActionContext})
+(type {SelectionParams} {:textDocument LspTextDoc :positions List})
+(type {LinkParams} {:textDocument LspTextDoc})
+
+; ---------------------------------------------------------------------------
+; LSP I/O — Content-Length framing over uv_pipe_t
+; ---------------------------------------------------------------------------
+
+(def {sys} nil)
+(def {idx-sys} nil)
+(def {out} nil)
+(def {initialized} 0)
+; Set by `shutdown`. Requests after it are InvalidRequest, and `exit`
+; without it is a protocol violation the server reports via exit code 1.
+(def {shutdown-requested} 0)
+
+(sig 'write-message {-> List Nil})
+(fun {write-message json-body} {do
+  (= {msg} (json/encode json-body))
+  (pipe/write out (str "Content-Length: " (len msg) "\r\n\r\n" msg))})
+
+(sig 'send-request {-> Num Str Any Nil})
+(fun {send-request id method params}
+  {write-message
+    (list :jsonrpc "2.0" :id id :method method :params params)})
+
+(sig 'send-response {-> Num Any Nil})
+(fun {send-response id result}
+  {write-message (list :jsonrpc "2.0" :id id :result result)})
+
+(sig 'send-error {-> Num Num Str Nil})
+(fun {send-error id code message}
+  {write-message
+    (list :jsonrpc "2.0" :id id
+          :error (list :code code :message message))})
+
+; `initialize` failures carry an InitializeError payload; retry:false stops
+; the client from re-sending a request that can never succeed.
+(sig 'send-init-error {-> Num Str Nil})
+(fun {send-init-error id message}
+  {write-message
+    (list :jsonrpc "2.0" :id id
+          :error (list :code -32602 :message message
+                       :data (list :retry :false)))})
+
+(sig 'send-notification {-> Str List Nil})
+(fun {send-notification method params}
+  {write-message
+    (list :jsonrpc "2.0" :method method :params params)})
+
+; Monotonic counter for server->client request IDs. Must not collide with
+; progress-token IDs (which start at 100000), so we allocate at 200000+.
+(def {server-req-counter} 0)
+
+(sig 'next-server-req-id {-> Num})
+(fun {next-server-req-id} {do
+  (def {lsp/server-req-counter} (+ server-req-counter 1))
+  (+ 200000 server-req-counter)})
+
+; Tracks the doc-version at which we last asked the client to refresh
+; tokens. didOpen / didChange / didSave each fire two dispatches whose
+; done-cbs both want to refresh; without coalescing the client receives
+; up to 2 requests per keystroke and re-runs semanticTokens/full each
+; time. Coalescing by version keeps refresh count to <=1 per version.
+(def {last-refresh-version} -1)
+
+; Tells the client to re-request semantic tokens. Call this once per document
+; sync after the AST + symdb are populated, so the initial lex-tokens paint
+; gets upgraded to full AST-based tokens. Uses lsp/send-request resolved at
+; call-time so test stubs can intercept it.
+(sig 'refresh-semantic-tokens {-> Nil})
+(fun {refresh-semantic-tokens} {do
+  (if (== last-refresh-version doc-version) {nil}
+    {do
+      (def {lsp/last-refresh-version} doc-version)
+      (lsp/send-request (next-server-req-id)
+        "workspace/semanticTokens/refresh" (None))})})
+
+; ---------------------------------------------------------------------------
+; State
+; ---------------------------------------------------------------------------
+
+(def {documents} (dict/new))
+(def {db} nil)
+(def {idx-db} nil)
+(def {idx-db-own} 0)
+(def {db-path} nil)
+(def {root-path} nil)
+(def {doc-version} 0)
+
+(sig 'doc-store {-> Str Str Nil})
+(fun {doc-store uri text}
+  {dict/set! documents uri text})
+
+(sig 'doc-get {-> Str Any})
+(fun {doc-get uri}
+  {dict/get documents uri})
+
+(def {ast-cache} (dict/new))
+
+; Returns the first parse error in an AST list, or nil if there are none.
+; Parse errors are now preserved in the AST list as LVAL_ERR elements
+; (see valk_parse_text in src/reader.c).
+(sig 'ast-find-error {-> List Any})
+(fun {ast-find-error ast} {
+  if (nil? ast) {nil}
+  {if (not (list? ast)) {nil}
+  {if (error? ast) {ast}
+  {if (error? (head ast)) {head ast}
+  {ast-find-error (tail ast)}}}}
+})
+
+(sig 'ast-has-error {-> List Num})
+(fun {ast-has-error ast} {error? (ast-find-error ast)})
+
+; Cache entries are stored as (text ast) so readers can verify the cached
+; AST was parsed from the exact text they're about to render against.
+; Without this pairing, an async cache-ast(vN) write could land after the
+; document has moved to vN+1, and a subsequent get-ast would hand back
+; vN's AST offsets applied to vN+1's text — producing tokens/hints at
+; wrong columns (the "jumpy colors, ::A mid-word" visual bug).
+(sig 'cache-ast {-> Str Str List})
+(fun {cache-ast uri text} {do
+  (= {ast} (parse text))
+  (dict/set! ast-cache uri (list text ast))
+  ast})
+
+; Parses `text` when the ast-cache entry is missing or stale (different text).
+(sig 'get-ast {-> Str Str List})
+(fun {get-ast uri text} {do
+  (= {cached} (dict/get ast-cache uri))
+  (if (nil? cached) {cache-ast uri text}
+    {if (== (head cached) text) {head (tail cached)}
+      {cache-ast uri text}})})
+
+; ---------------------------------------------------------------------------
+; Incremental text sync — apply content changes to stored text
+; ---------------------------------------------------------------------------
+; Each change is a plist with :range (optional) and :text.
+; If :range is nil, it's a full document replacement.
+; Range has :start {:line N :character N} and :end {:line N :character N}.
+
+(sig 'apply-changes {-> Str List Str})
+(fun {apply-changes text changes} {
+  if (nil? changes) {text}
+  {apply-changes (apply-one-change text (head changes))
+                     (tail changes)}
+})
+
+(sig 'apply-one-change {-> Str List Str})
+(fun {apply-one-change text change} {do
+  (= {range} (plist/get change :range))
+  (= {new-text} (plist/get change :text))
+  (if (nil? range) {new-text}
+    {do
+      (= {start} (plist/get range :start))
+      (= {end} (plist/get range :end))
+      (= {start-offset} (str/lc->offset text (plist/get start :line) (plist/get start :character)))
+      (= {end-offset} (str/lc->offset text (plist/get end :line) (plist/get end :character)))
+      (str (str/slice text 0 start-offset) new-text (str/slice text end-offset (len text)))})
+})
+
+; Returns a DocCtx for display features (hover, semantic tokens, definition,
+; references, completion, etc). The AST is always the current text's: the
+; reader keeps the forms either side of a broken one and every walker skips
+; the error element, so a mid-edit document degrades to "nothing to say
+; about the form being typed" rather than answering with positions into a
+; document the client no longer has.
+(sig 'get-doc {-> DocParams DocCtx})
+(fun {get-doc params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {text} (doc-get uri))
+  (if (nil? text) {nil}
+    {(DocCtx :uri uri :text text :ast (get-ast uri text))})
+})
+
+(sig 'get-text-pos {-> TextDocPosParams List})
+(fun {get-text-pos params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (if (or (error? uri) (nil? uri)) {nil}
+    {do
+      (= {text} (doc-get uri))
+      (= {pos} params:position)
+      (if (or (nil? text) (error? text)) {nil}
+        {do
+          ; Parse can fail on broken source; the AST field holds the raw
+          ; parse result (list-of-errors is fine, a bare Error is not).
+          (= {ast-val} (get-ast uri text))
+          (= {ast-val} (if (error? ast-val) {nil} {ast-val}))
+          (list :uri uri :text text :ast ast-val
+                :line pos:line :col pos:character)})})
+})
+
+(fun {get-word-ctx params} {do
+  (= {ctx} (get-text-pos params))
+  (if (or (nil? ctx) (error? ctx)) {nil}
+    {do
+      (= {w} (symdb/word-at-position ctx:text ctx:line ctx:col))
+      (if (or (nil? w) (error? w)) {nil}
+        {list :uri ctx:uri :text ctx:text :ast ctx:ast :line ctx:line :col ctx:col :word w})})
+})
+
+; ---------------------------------------------------------------------------
+; LSP Capabilities
+; ---------------------------------------------------------------------------
+
+(def {capabilities}
+  {:capabilities
+    {:positionEncoding "utf-8"
+     :textDocumentSync
+       {:openClose :true
+        :change 2
+        :save {:includeText :true}}
+     :completionProvider
+       {:triggerCharacters {"(" "/" ":"}
+        :resolveProvider :false}
+     :hoverProvider :true
+     :definitionProvider :true
+     :referencesProvider :true
+     :renameProvider {:prepareProvider :true}
+     :documentSymbolProvider :true
+     :workspaceSymbolProvider :true
+     :semanticTokensProvider
+       {:legend
+         {:tokenTypes {"keyword" "function" "parameter" "variable"
+                       "number" "string" "type" "operator" "property"}
+          :tokenModifiers {"declaration" "defaultLibrary"}}
+        :full :true
+        :range :true}
+     :inlayHintProvider :true
+     :signatureHelpProvider
+       {:triggerCharacters {"(" " "}
+        :retriggerCharacters {" "}}
+     :documentHighlightProvider :true
+     :documentLinkProvider {:resolveProvider :false}
+     :foldingRangeProvider :true
+     :selectionRangeProvider :true
+     :codeLensProvider {:resolveProvider :false}
+     ; No :diagnosticProvider. Diagnostics are push-only
+     ; (textDocument/publishDiagnostics). Advertising the 3.17 pull model
+     ; as well makes clients run both: neovim files push and pull results
+     ; into separate namespaces, so every diagnostic renders twice.
+     :codeActionProvider {:codeActionKinds {"quickfix"}}}
+   :serverInfo
+     {:name "valk-lsp"}})
+
+; ---------------------------------------------------------------------------
+; Known-set cache — rebuilt only when symdb changes
+; ---------------------------------------------------------------------------
+
+(def {known-set-cache} nil)
+
+(sig 'invalidate-known-set {-> Nil})
+(fun {invalidate-known-set} {
+  def {lsp/known-set-cache} nil
+})
+
+(sig 'get-known-set {-> List})
+(fun {get-known-set} {
+  if (nil? known-set-cache)
+    {do (def {lsp/known-set-cache} (vd/load-known-set db))
+        known-set-cache}
+    {known-set-cache}
+})

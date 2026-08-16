@@ -183,8 +183,8 @@ curl -k https://localhost:8443
 ## Documentation
 
 For more details:
-- [Language Reference](../docs/LANGUAGE.md)
-- [Architecture Guide](../docs/ARCHITECTURE.md)
+- [Language Reference](../runtime/docs/LANGUAGE.md)
+- [Documentation Index](../docs/README.md)
 - [Contributing](../docs/CONTRIBUTING.md)
 
 ## Feedback

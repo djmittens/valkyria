@@ -1,0 +1,338 @@
+; This is the beginning of my fun.
+; Default program to be parsed and loaded
+; Valkyria Standard Prelude
+
+; Type signatures for C builtins. Loaded first so the rest of the prelude
+; (and user code) can rely on sig declarations for the primitive functions.
+(load "stdlib/builtins.valk")
+
+; Function Definitions
+; Named function definition.
+(sig 'fun {-> QExpr QExpr A})
+(macro {fun _fn _body}
+  {`(def {,(head _fn)} (\ ,(tail _fn) ,_body))})
+
+; Declare the current file's module prefix. Every bare top-level def after
+; the (module foo/bar) form gets qualified as `foo/bar/name`. Module
+; prefixes nest: loading this file from a file whose module is `baz` yields
+; `baz/foo/bar/name`. Loads placed before the (module ...) form run in the
+; enclosing prefix (use this for shared dependencies that must not nest).
+; Only top-level defs are auto-qualified: a nested (def {name} ...) inside
+; a function body must spell the qualified name explicitly, or it defines
+; a bare global. Types and sigs' type names always register unqualified.
+; The macro runs `set-module-prefix!` as a side effect during expansion
+; and expands to nil.
+(macro {module _name}
+  {do (set-module-prefix! _name) ()})
+
+;(error "And this is an error n stuff")
+; Atoms
+(def {nil} {})
+(def {true} 1)
+(def {false} 0)
+
+(sig 'head {-> (List a) a})
+(sig 'tail {-> (List a) (List a)})
+(sig 'cons {-> a (List a) (List a)})
+(sig 'init {-> (List a) (List a)})
+(sig 'join {-> & (List a) (List a)})
+(sig 'nth {-> Num (List a) a})
+(sig 'map {-> (-> a b) (List a) (List b)})
+(sig 'foldl {-> (-> a b a) a (List b) a})
+(sig 'foldr {-> (-> a b b) b (List a) b})
+
+; Check if value is nil (empty list)
+(sig 'nil? {-> A Num})
+(fun {nil? x} {== x nil})
+
+; === Standard Types ===
+
+(type {Option a}
+  {None}
+  {Some :value a})
+
+(type {Result ok err}
+  {Ok :value ok}
+  {Err :error err})
+
+(type {Pair a b}
+  {:fst a :snd b})
+
+(type {Order}
+  {LT}
+  {EQ}
+  {GT})
+
+(type {Response}
+  {:status Str :content-type Str :body Str})
+ 
+; === Option utilities ===
+
+(sig 'some? {-> A Num})
+(fun {some? x} {
+  if (not (list? x)) {false}
+    {match x {(Some :value _) true} {_ false}}
+})
+
+(sig 'none? {-> A Num})
+(fun {none? x} {
+  if (not (list? x)) {false}
+    {match x {(None) true} {_ false}}
+})
+
+; === Result utilities ===
+
+(sig 'ok? {-> A Num})
+(fun {ok? x} {
+  if (not (list? x)) {false}
+    {match x {(Ok :value _) true} {_ false}}
+})
+(sig 'err? {-> A Num})
+(fun {err? x} {
+  if (not (list? x)) {false}
+    {match x {(Err :error _) true} {_ false}}
+})
+
+; === Pair utilities ===
+
+(sig 'pair {-> A B List})
+(fun {pair a b} {(Pair :fst a :snd b)})
+
+; === Order utilities ===
+
+(sig 'compare {-> A A List})
+(fun {compare a b} {
+  if (< a b) {(LT)} {if (== a b) {(EQ)} {(GT)}}
+})
+
+; unpack list for a function
+(sig 'unpack {-> (-> & A B) (List A) B})
+(fun {unpack f l} {
+     eval (join (list f) l)
+})
+
+(sig 'curry {-> (-> & A B) (List A) B})
+(def {curry} unpack)
+
+; Pack the list for a function
+; eg for a function f, (pack f 1 2 3) becomes (f {1 2 3})
+; Note: pack requires at least one argument beyond f to work
+; For currying/uncurrying, use the curry/uncurry wrappers
+(sig 'pack {-> (-> (List A) B) & A B})
+(fun {pack f & xs} {f xs})
+
+; uncurry: Takes a function that expects a list and returns one that takes varargs
+; (uncurry f) returns a function that collects args into a list and calls f
+(sig 'uncurry {-> (-> (List A) B) & A B})
+(fun {uncurry f} {
+  (\ {& args} {f args})
+})
+
+; Perform several things in sequence, and return the last result
+; NOTE: 'do' is a builtin (parser.c:valk_builtin_do) for TCO support
+; This is a necessary primitive for control flow with side effects
+
+; Open a new scope
+(sig 'let {-> QExpr A})
+(fun {let  b} {
+   ((\ {_} b) ())
+})
+
+; List functions
+; LISTS ARE 1-BASED LIKE LUA
+
+; Identity function for unpacking
+(sig 'id {-> A A})
+(fun {id x} {x})
+
+; Return first item in the list
+(sig 'fst {-> (List A) A})
+(fun {fst _l} {head _l})
+
+; Return the second item in the list
+(sig 'snd {-> (List A) A})
+(fun {snd _y} {head (tail _y)})
+
+; Return the third item in the list
+(sig 'trd {-> (List A) A})
+(fun {trd l} {head (tail (tail l))})
+
+; length of the list (there is a builtin for that??)
+; i need to draw a line here, the builtin would be way more performant
+; and its not something  that can be native, as sexpr and stuff is also a list
+; (fun {len l} {
+;      if (== l nil)
+;        {0}
+;        {+ 1 (len (tail l))}
+; })
+
+; Nth item in the list
+; LISTS ARE 1-BASED LIKE LUA
+(sig 'nth {-> Num (List A) A})
+
+;last item in the list
+(sig 'last {-> (List A) A})
+(fun {last l} {nth (len l) l})
+
+; Take N items from the front of the list
+(sig 'take {-> Num (List A) (List A)})
+(fun {take n l} {
+     if (== n 0)
+      {nil}
+      {join (list (head l)) (take (- n 1) (tail l))}
+})
+
+; Drop N items from the front of the list
+(sig 'drop {-> Num (List A) (List A)})
+(fun {drop n l} {
+     if (== n 0)
+     {l}
+     {drop (- n 1) (tail l)}
+})
+
+; Split a list at N forming two other lists as sublist
+; valkyria> split 4 {1 2 3 4 5 6 7 8}
+; Qexpr{ Qexpr{ Num[1] Num[2] Num[3] Num[4] } Qexpr{ Num[5] Num[6] Num[7] Num[8] } }
+; {{1 2 3 4} {5 6 7 8}}
+(sig 'split {-> Num (List A) (List (List A))})
+(fun {split n l} { 
+     list (take n l) (drop n l)
+})
+
+; true if value exists inside of a list
+(sig 'exists {-> A (List A) Num})
+(fun {exists x l} {
+     if(== l nil)
+      {false}
+      {if (== x (head l)) { true } {exists x (tail l)}}
+})
+
+; Apply a function to List
+(sig 'map {-> (-> A B) (List A) (List B)})
+(fun {map f l} {
+     if(== l nil)
+      {nil}
+      {join (list (f (head l))) (map f (tail l))}
+})
+
+; Filter the list n stuff
+(sig 'filter {-> (-> A Num) (List A) (List A)})
+(fun {filter f l} {
+     if(== l nil)
+       {nil}
+       {join (if (f (head l)) {list (head l)} {nil}) (filter f (tail l))}
+})
+
+; fold left or something
+(sig 'foldl {-> (-> A B A) A (List B) A})
+(fun {foldl f z l} {
+     if (== l nil)
+      {z}
+      {foldl f (f z (head l)) (tail  l)}
+})
+
+; Concatenate a list of lists into a single list. nil elements are
+; treated as empty, so `(flatten (list (list 1) nil (list 2)))` = `(1 2)`.
+(sig 'flatten {-> (List (List A)) (List A)})
+(fun {flatten l} {
+  if (== l nil)
+    {nil}
+    {join (head l) (flatten (tail l))}
+})
+
+; reverse is a C builtin (O(n) — was O(n²) in Valk via join)
+(sig 'reverse {-> (List A) (List A)})
+
+; Returns the sum of the list
+(sig 'sum {-> (List Num) Num})
+(fun {sum l} {foldl + 0 l})
+(sig 'product {-> (List Num) Num})
+(fun {product l} {foldl * 1 l})
+
+; Logics
+
+(sig 'not {-> Num Num})
+(fun {not x} {if x {0} {1}})
+
+; `and` and `or` are BUILTINS (valk_builtin_and / valk_builtin_or in
+; builtins_math.c), so they are values: pass them to foldl, store them,
+; hand them to a lambda. The evaluator (CONT_LOGIC_NEXT in eval.c) and the
+; LLVM backend (valk_codegen_and_or) additionally recognise them in head
+; position and emit branches rather than a call, which is what gives the
+; short circuit. This is the same arrangement `+` has — `(foldl + 0 l)`
+; works and `(+ a b)` still lowers to a native add.
+;
+; Both paths agree on the RESULT. They differ only in whether the operands
+; past the deciding one are evaluated, which is observable only through
+; side effects: `(or a (launch))` will not launch, `(foldl or 0 lst)` has
+; already evaluated everything before `or` is called.
+;
+; The value is the operand that DECIDED the chain, not a boolean:
+;   (and)          => 1        identity: nothing to falsify
+;   (and a)        => a
+;   (and a b ...)  => the first falsey operand, else the LAST operand
+;   (or)           => 0        identity: nothing to satisfy
+;   (or a)         => a
+;   (or a b ...)   => the first truthy operand, else the LAST operand
+;
+; They were previously `{or x y} {+ x y}` and `{and x y} {* x y}` — binary,
+; always evaluating both sides, and returning a sum/product rather than a
+; decision.
+
+; Higher-order function utilities
+
+(sig 'flip {-> (-> A B C) B A C})
+(fun {flip f a b} {f b a})
+
+(sig 'comp {-> (-> B C) (-> A B) A C})
+(fun {comp f g x} {f (g x)})
+
+; Coniditionals
+
+; Basically a switch statement but allows you to specify your conditions
+;(fun {fib n} {
+; select
+;     { (== n 0) 0 }
+;     { (== n 1) 1 }
+;     { otherwise (+ (fib (- n 1)) (fib (- n 2))) }
+; })
+; select is a C builtin (valk_builtin_select) - it needs to evaluate
+; conditions in the caller's environment, which requires special handling
+; that can't be done in pure Lisp with lexical scoping
+
+; This is a default case and stuff, i guess its useful, just an alias to true tho
+(def  {otherwise} true)
+
+; Convenient way to match on a specific value instead of using select
+; Usage: (case val {{1} "one"} {{2} "two"} {{3} "three"})
+; Helper: takes x and cases as separate args (allows recursion without unpack)
+; With QEXPR: {1} evals directly to 1, so no fst needed after eval
+(sig 'case-impl {-> A (List QExpr) B})
+(fun {case-impl x cs} {
+     if (== cs nil)
+      {error "No case found"}
+      {if (== x (eval (fst (fst cs))))
+          {snd (fst cs)}
+          {case-impl x (tail cs)}
+      }
+})
+(sig 'case {-> A & QExpr B})
+(fun {case x & cs} {case-impl x cs})
+
+; Namespaced stdlib modules. Loaded last so they can use the bare prelude
+; helpers above. Each declares its own (module ...) prefix.
+(load "stdlib/option.valk")
+(load "stdlib/result.valk")
+(load "stdlib/pair.valk")
+(load "stdlib/plist.valk")
+(load "stdlib/list.valk")
+
+; 3-argument get function with default value
+; Usage: (get plist key default) => value or default
+(sig 'get {-> A Sym B B})
+(fun {get pl key default} {
+  (= {val} (plist/get pl key))
+  (if (== val nil) {default} {val})
+})
+
+

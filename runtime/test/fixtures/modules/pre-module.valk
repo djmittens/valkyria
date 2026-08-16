@@ -1,0 +1,8 @@
+; Fixture: a load placed before the (module ...) declaration runs in the
+; enclosing prefix — plain.valk stays unnested.
+(load "plain.valk")
+
+(module pre)
+
+(fun {h x} {+ x (plain-fn x)})
+(h 20)

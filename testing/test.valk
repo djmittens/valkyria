@@ -1,0 +1,623 @@
+; Simple test framework for Valkyria
+; Supports both sync and async tests with timeout enforcement
+
+; lint:allow-globals *test-default-timeout-ms* *test-default-suite-timeout-ms* *test-json-output*
+;   Framework configuration, written once at load and read-only after.
+
+(module test)
+
+; Default timeouts (milliseconds)
+(def {*test-default-timeout-ms*} 5000)       ; 5 seconds per test
+(def {*test-default-suite-timeout-ms*} 60000) ; 60 seconds for entire suite
+
+; JSON output mode (set VALK_TEST_JSON=1 env var)
+(def {*test-json-output*} (if (== (env/get "VALK_TEST_JSON") nil) {0} {1}))
+
+
+
+(fun {context-new} {
+  (list :passed 0 :failed 0 :skipped 0 :timed-out 0
+   :suite-name "Valkyria Test Suite"
+   :skip-suite 0 :skip-reason ""
+   :debug 0 :expected-exit 0
+   :timeout-ms *test-default-timeout-ms*
+   :suite-timeout-ms *test-default-suite-timeout-ms*)
+})
+
+(fun {debug ctx enabled} {
+  (plist/set ctx :debug enabled)
+})
+
+(fun {suite ctx name} {
+  (plist/set ctx :suite-name name)
+})
+
+(fun {skip ctx reason} {
+  (= {ctx} (plist/set ctx :skip-suite 1))
+  (plist/set ctx :skip-reason reason)
+})
+
+(fun {expect-exit ctx code} {
+  (plist/set ctx :expected-exit code)
+})
+
+(fun {timeout ctx ms} {
+  (plist/set ctx :timeout-ms ms)
+})
+
+(fun {suite-timeout ctx ms} {
+  (plist/set ctx :suite-timeout-ms ms)
+})
+
+(fun {case name body} {
+  (list name body)
+})
+
+(fun {add tests name body} {
+  (join tests (list (case name body)))
+})
+
+(fun {assert cond msg} {
+  if cond
+    {true}
+    {error msg}
+})
+
+(fun {assert-eq expected actual msg} {
+  (assert (== expected actual) msg)
+})
+
+(fun {*test-print-captured* test-name captured} {
+  do
+    (= {out} captured:stdout)
+    (= {err} captured:stderr)
+    (printf "<<<CAPTURED name=%s\n" test-name)
+    (printf "<<<STDOUT\n%s\n>>>STDOUT\n" out)
+    (printf "<<<STDERR\n%s\n>>>STDERR\n" err)
+    (printf ">>>CAPTURED\n")
+})
+
+; Tail-recursive helper to print n dots
+(fun {*test-pad-dots-helper* n} {
+  if (<= n 0)
+    {true}
+    {do (printf ".") (*test-pad-dots-helper* (- n 1))}
+})
+
+(fun {*test-pad-dots* str width} {
+  do
+    (printf "%s" str)
+    (*test-pad-dots-helper* (- width (len str)))
+})
+
+(fun {*test-json-escape* s} {
+  (= {s} (str/replace s "\\" "\\\\"))
+  (= {s} (str/replace s "\"" "\\\""))
+  (= {s} (str/replace s "\n" "\\n"))
+  (= {s} (str/replace s "\r" "\\r"))
+  (= {s} (str/replace s "\t" "\\t"))
+  s
+})
+
+(fun {*test-json-result* test-name status elapsed-us suite-name} {
+  (printf "{\"test\":\"%s\",\"status\":\"%s\",\"us\":%ld,\"suite\":\"%s\"}\n"
+    (*test-json-escape* test-name) status elapsed-us (*test-json-escape* suite-name))
+})
+
+; Suite timeout callback - called if suite takes too long
+(fun {*test-suite-timeout-cb* suite-name} {
+  do
+    (printf "\n\n⏰ SUITE TIMEOUT: %s exceeded time limit\n" suite-name)
+    (shutdown 1)
+})
+
+; Run a single sync test with timeout (requires aio)
+(fun {*test-run-one-with-timeout* aio ctx test} {
+  do
+    (= {test-name} (eval (head test)))
+    (= {test-body} (head (tail test)))
+    (= {skip-suite} ctx:skip-suite)
+    (= {debug} ctx:debug)
+    (= {timeout-ms} ctx:timeout-ms)
+
+    (= {suite-name} ctx:suite-name)
+    (if (== skip-suite 1)
+      {do
+        (if (== *test-json-output* 1)
+          {(*test-json-result* test-name "skip" 0 suite-name)}
+          {do (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")})
+        (plist/set ctx :skipped (+ ctx:skipped 1))}
+      {do
+        (if (== debug 1)
+          {do
+            (printf "[DEBUG] Running test: ")
+            (print test)
+            (printf "[DEBUG] Test name: %s\n" test-name)
+            (printf "[DEBUG] Test body: ")
+            (print test-body)}
+          {true})
+
+        ; Set up per-test timeout
+        (= {timer-handle} (aio/schedule aio timeout-ms (\ {} {
+          (printf "\n⏰ TEST TIMEOUT: %s\n" test-name)
+        })))
+
+        (= {cap} (test/capture-start))
+        (= {start-time} (time-us {}))
+        (= {result} ((\ {__body} {eval __body}) test-body))
+        (= {end-time} (time-us {}))
+        (= {elapsed} (- end-time start-time))
+        (= {captured} (test/capture-stop cap))
+
+        ; Cancel timeout timer - returns :true if cancelled, :false if already completed
+        (= {cancelled} (aio/cancel timer-handle))
+
+        ; Check if we timed out (cancel failed means timer already fired)
+        (if (== cancelled :false)
+          {do
+            (if (== *test-json-output* 1)
+              {(*test-json-result* test-name "timeout" (* timeout-ms 1000) suite-name)}
+              {do
+                (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
+                (*test-print-captured* test-name captured)})
+            (plist/set ctx :timed-out (+ ctx:timed-out 1))}
+          {do
+            (if (== debug 1)
+              {do
+                (printf "[DEBUG] Result: ")
+                (print result)
+                (if (error? result)
+                  {printf "[DEBUG] Result is an ERROR!\n"}
+                  {true})}
+              {true})
+
+            (= {passed} (if (== result true) {1} {0}))
+            (= {xfail} (if (and (== passed 0) (!= ctx:expected-exit 0)) {1} {0}))
+
+            (if (== *test-json-output* 1)
+              {(*test-json-result* test-name (if (== passed 1) {"pass"} {(if (== xfail 1) {"xfail"} {"fail"})}) elapsed suite-name)}
+              {do
+                (if (== passed 1)
+                  {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+                  {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+                      (*test-print-captured* test-name captured)})})
+
+            (if (or (== passed 1) (== xfail 1))
+              {(plist/set ctx :passed (+ ctx:passed 1))}
+              {(plist/set ctx :failed (+ ctx:failed 1))})})})
+})
+
+; Run a single sync test without timeout (no aio)
+(fun {*test-run-one-ctx* ctx test} {
+  do
+    (= {test-name} (eval (head test)))
+    (= {test-body} (head (tail test)))
+    (= {skip-suite} ctx:skip-suite)
+    (= {debug} ctx:debug)
+    (= {suite-name} ctx:suite-name)
+
+    (if (== skip-suite 1)
+      {do
+        (if (== *test-json-output* 1)
+          {(*test-json-result* test-name "skip" 0 suite-name)}
+          {do (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")})
+        (plist/set ctx :skipped (+ ctx:skipped 1))}
+      {do
+        (if (== debug 1)
+          {do
+            (printf "[DEBUG] Running test: ")
+            (print test)
+            (printf "[DEBUG] Test name: %s\n" test-name)
+            (printf "[DEBUG] Test body: ")
+            (print test-body)}
+          {true})
+
+        (= {cap} (test/capture-start))
+        (= {start-time} (time-us {}))
+        (= {result} ((\ {__body} {eval __body}) test-body))
+        (= {end-time} (time-us {}))
+        (= {elapsed} (- end-time start-time))
+        (= {captured} (test/capture-stop cap))
+
+        ; Under BYOL error propagation, an assertion failure inside the test
+        ; body returns LVAL_ERR, and any subsequent function receiving it
+        ; short-circuits. We fork here into `is-err` (failure), `is-true`
+        ; (pass), or `other` (also fail) explicitly so the rest of this
+        ; function never sees an error value as an arg.
+        (= {is-err} (if (error? result) {1} {0}))
+        (= {is-true} (if (== is-err 1) {0} {if (== result true) {1} {0}}))
+        (= {passed} is-true)
+        (= {xfail} (if (and (== passed 0) (!= ctx:expected-exit 0)) {1} {0}))
+
+        (if (== *test-json-output* 1)
+          {(*test-json-result* test-name (if (== passed 1) {"pass"} {(if (== xfail 1) {"xfail"} {"fail"})}) elapsed suite-name)}
+          {do
+            (if (== passed 1)
+              {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+              {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+                  (*test-print-captured* test-name captured)})})
+
+        (if (or (== passed 1) (== xfail 1))
+          {(plist/set ctx :passed (+ ctx:passed 1))}
+          {(plist/set ctx :failed (+ ctx:failed 1))})})
+})
+
+(fun {*is-test-list* arg} {
+  (if (not (list? arg))
+    {false}
+    {(if (== (len arg) 0)
+      {true}
+      {(if (list? (head arg))
+        {(== (len (head arg)) 2)}
+        {false})})})
+})
+
+(fun {*test-is-keyword* val} {
+  (= {s} (str val))
+  (= {parts} (str/split s ":"))
+  (if (< (len parts) 2)
+    {false}
+    {(== (head parts) "")})
+})
+
+(fun {*test-is-config* arg} {
+  (if (not (list? arg))
+    {false}
+    {(if (== (len arg) 0)
+      {false}
+      {(*test-is-keyword* (head arg))})}
+  )
+})
+
+(fun {*test-parse-args* args} {
+  (= {tests} {})
+  (= {config} {})
+  (if (== (len args) 0)
+    {(list tests config)}
+    {do
+      (= {first} (head args))
+      (if (*is-test-list* first)
+        {do
+          (= {tests} first)
+          (if (> (len args) 1)
+            {(= {config} (head (tail args)))}
+            {true})}
+        {(if (*test-is-config* first)
+          {(= {config} first)}
+          {true})})
+      (list tests config)})
+})
+
+(fun {*test-ctx-from-config* config} {
+  (= {ctx} (context-new))
+  (if (plist/has? config :suite-name)
+    {(= {ctx} (plist/set ctx :suite-name config:suite-name))}
+    {true})
+  (if (plist/has? config :skip-suite)
+    {(= {ctx} (plist/set ctx :skip-suite config:skip-suite))}
+    {true})
+  (if (plist/has? config :skip-reason)
+    {(= {ctx} (plist/set ctx :skip-reason config:skip-reason))}
+    {true})
+  (if (plist/has? config :debug)
+    {(= {ctx} (plist/set ctx :debug config:debug))}
+    {true})
+  (if (plist/has? config :expected-exit)
+    {(= {ctx} (plist/set ctx :expected-exit config:expected-exit))}
+    {true})
+  (if (plist/has? config :timeout-ms)
+    {(= {ctx} (plist/set ctx :timeout-ms config:timeout-ms))}
+    {true})
+  (if (plist/has? config :suite-timeout-ms)
+    {(= {ctx} (plist/set ctx :suite-timeout-ms config:suite-timeout-ms))}
+    {true})
+  ctx
+})
+
+; Print final results and exit
+(fun {*test-print-results-and-exit* ctx} {
+  do
+    (= {passed} ctx:passed)
+    (= {failed} ctx:failed)
+    (= {skipped} ctx:skipped)
+    (= {timed-out} ctx:timed-out)
+    (= {expected-exit} ctx:expected-exit)
+
+    (printf "\n🏁 Test Results: ")
+    (if (> timed-out 0)
+      {printf "⏰ %ld timed out, " timed-out}
+      {true})
+    (if (> skipped 0)
+      {printf "⏭️  %ld skipped, " skipped}
+      {true})
+    (if (== (+ failed timed-out) 0)
+      {printf "✨ All %ld tests passed! ✨\n" passed}
+      {printf "⚠️  %ld passed, %ld failed\n" passed (+ failed timed-out)})
+
+    (= {actual-exit} (if (== (+ failed timed-out) 0) {0} {1}))
+
+    (if (== actual-exit expected-exit)
+      {(shutdown 0)}
+      {(shutdown actual-exit)})
+})
+
+; Main test runner - sync tests without aio (no per-test timeout, but has suite timeout awareness)
+(fun {run & args} {
+  do
+    (= {parsed} (*test-parse-args* args))
+    (= {tests} (head parsed))
+    (= {config} (head (tail parsed)))
+    (= {total} (len tests))
+
+    (= {ctx} (*test-ctx-from-config* config))
+    (= {expected-exit} ctx:expected-exit)
+
+    (if (== total 0)
+      {do
+        (printf "❌ No tests registered!\n")
+        (if (== expected-exit 1)
+          {(shutdown 0)}
+          {(shutdown 1)})}
+      {do
+        (= {suite-name} ctx:suite-name)
+        (= {skip-suite} ctx:skip-suite)
+        (= {skip-reason} ctx:skip-reason)
+
+        (if (== *test-json-output* 0)
+          {(if (== skip-suite 1)
+            {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
+            {printf "🧪 [%ld/%ld] %s\n" total total suite-name})}
+          {true})
+
+        (= {final-ctx} (foldl *test-run-one-ctx* ctx tests))
+
+        (if (== *test-json-output* 1)
+          {do
+            (= {exit-code} (if (== (+ final-ctx:failed final-ctx:timed-out) 0) {0} {1}))
+            (= {expected-exit} final-ctx:expected-exit)
+            (if (== exit-code expected-exit) {(shutdown 0)} {(shutdown exit-code)})}
+          {(*test-print-results-and-exit* final-ctx)})})
+})
+
+; Sync test runner WITH timeout support (requires aio system)
+; Usage: (test/run-with-timeout aio tests {:suite-name "My Suite" :timeout-ms 5000})
+(fun {run-with-timeout aio & args} {
+  do
+    (= {parsed} (*test-parse-args* args))
+    (= {tests} (head parsed))
+    (= {config} (head (tail parsed)))
+    (= {total} (len tests))
+
+    (= {ctx} (*test-ctx-from-config* config))
+    (= {expected-exit} ctx:expected-exit)
+    (= {suite-timeout-ms} ctx:suite-timeout-ms)
+    (= {timeout-ms} ctx:timeout-ms)
+
+    (if (== total 0)
+      {do
+        (printf "❌ No tests registered!\n")
+        (if (== expected-exit 1)
+          {(shutdown 0)}
+          {(shutdown 1)})}
+      {do
+        (= {suite-name} ctx:suite-name)
+        (= {skip-suite} ctx:skip-suite)
+        (= {skip-reason} ctx:skip-reason)
+
+        (if (== *test-json-output* 0)
+          {(if (== skip-suite 1)
+            {printf "🧪 [%ld/%ld] %s (SKIPPED: %s)\n" total total suite-name skip-reason}
+            {printf "🧪 [%ld/%ld] %s (timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms})}
+          {true})
+
+        ; Run all tests with individual timeouts, racing against suite timeout
+        (= {test-handle} (aio/pure (foldl (\ {ctx test} {(*test-run-one-with-timeout* aio ctx test)}) ctx tests)))
+        (= {timeout-handle} (aio/then (aio/sleep aio suite-timeout-ms) (\ {_} {:suite-timeout})))
+        (= {race-result} (aio/race (list test-handle timeout-handle)))
+        (= {final-ctx} (if (== race-result :suite-timeout)
+                         {do
+                           (*test-suite-timeout-cb* suite-name)
+                           ctx}
+                         {race-result}))
+
+        ; Stop aio and print results
+        (aio/stop aio)
+        (if (== *test-json-output* 1)
+          {do
+            (= {exit-code} (if (== (+ final-ctx:failed final-ctx:timed-out) 0) {0} {1}))
+            (= {expected-exit} final-ctx:expected-exit)
+            (if (== exit-code expected-exit) {(shutdown 0)} {(shutdown exit-code)})}
+          {(*test-print-results-and-exit* final-ctx)})})
+})
+
+; ============================================================================
+; Async Test Support
+; ============================================================================
+; For tests that require the event loop (HTTP, timers, etc.)
+; Usage:
+;   (= {tests} (-> {} (test/async-add "test name" (\ {done} { ... (done true) }))))
+;   (test/run-async aio tests {:timeout-ms 5000 :suite-timeout-ms 30000})
+;   (aio/run aio)
+
+
+
+(fun {case-async name body} {
+  (list name body)
+})
+
+(fun {async-add tests name body} {
+  (join tests (list (case-async name body)))
+})
+
+
+
+
+
+(fun {*test-run-async-one* aio ctx test} {
+  do
+    (= {test-name} (eval (head test)))
+    (= {test-body} (eval (head (tail test))))
+    (= {skip-suite} ctx:skip-suite)
+    (= {debug} ctx:debug)
+    (= {timeout-ms} ctx:timeout-ms)
+
+    (= {suite-name} ctx:suite-name)
+    (if (== skip-suite 1)
+      {do
+        (if (== *test-json-output* 1)
+          {(*test-json-result* test-name "skip" 0 suite-name)}
+          {do (printf "⏭️  ") (*test-pad-dots* test-name 97) (printf "  SKIP\n")})
+        (plist/set ctx :skipped (+ ctx:skipped 1))}
+      {do
+        (= {cap} (test/capture-start))
+        (= {start-time} (time-us {}))
+
+        (= {test-handle} (test-body))
+
+        ; Validate that test body returned a handle - fail fast if not.
+        ; An error body must be forked on explicitly: under BYOL error
+        ; propagation `(aio/handle? err)` returns the error, which would
+        ; short-circuit the rest of this function and silently abandon
+        ; every remaining test in the suite with exit 0.
+        (= {is-err} (if (error? test-handle) {1} {0}))
+        (= {is-handle} (if (== is-err 1) {0} {if (aio/handle? test-handle) {1} {0}}))
+        (if (== is-handle 0)
+          {(do
+            (= {captured} (test/capture-stop cap))
+            (printf "\n\nFATAL: test-async body must return a handle!\n")
+            (printf "  Test: %s\n" test-name)
+            (printf "  Got:  ")
+            (print test-handle)
+            (printf "\n")
+            (*test-print-captured* test-name captured)
+            (shutdown 1))}
+          {true})
+
+        ; Flatten nested handle chains then apply timeout
+        (= {flat-h} (aio/then test-handle (\ {r} {r})))
+        (= {within-h} (aio/within flat-h timeout-ms))
+        (= {catch-h} (aio/catch within-h (\ {err} {:timeout})))
+
+        ; Block until this test completes or times out
+        (= {result} (aio/await catch-h))
+        (= {end-time} (time-us {}))
+        (= {elapsed} (- end-time start-time))
+        (= {captured} (test/capture-stop cap))
+
+        (if (== result :timeout)
+          {do
+            (if (== *test-json-output* 1)
+              {(*test-json-result* test-name "timeout" (* timeout-ms 1000) suite-name)}
+              {do
+                (printf "⏰ ") (*test-pad-dots* test-name 97) (printf "  TIMEOUT : after %ldms\n" timeout-ms)
+                (*test-print-captured* test-name captured)})
+            (plist/set ctx :timed-out (+ ctx:timed-out 1))}
+          {do
+            (= {passed} (if (== result true) {1}
+                          {(if (== result :pass) {1}
+                            {(if (list? result)
+                              {(if (plist/has? result :status)
+                                {(== result:status :pass)}
+                                {0})}
+                              {0})})}))
+
+            (= {xfail} (if (and (== passed 0) (!= ctx:expected-exit 0)) {1} {0}))
+
+            (if (== *test-json-output* 1)
+              {(*test-json-result* test-name (if (== passed 1) {"pass"} {(if (== xfail 1) {"xfail"} {"fail"})}) elapsed suite-name)}
+              {do
+                (if (== passed 1)
+                  {do (printf "✅ ") (*test-pad-dots* test-name 97) (printf "  PASS : in %ld(µs)\n" elapsed)}
+                  {do (printf "❌ ") (*test-pad-dots* test-name 97) (printf "  FAIL : in %ld(µs)\n" elapsed)
+                      (*test-print-captured* test-name captured)})})
+
+            (if (or (== passed 1) (== xfail 1))
+              {(plist/set ctx :passed (+ ctx:passed 1))}
+              {(plist/set ctx :failed (+ ctx:failed 1))})})})
+})
+
+
+
+(fun {*test-async-parse-args* args} {
+  (= {tests} {})
+  (= {config} {})
+  (if (== (len args) 0)
+    {(list tests config)}
+    {do
+      (= {first} (head args))
+      (if (*is-test-list* first)
+        {do
+          (= {tests} first)
+          (if (> (len args) 1)
+            {(= {config} (head (tail args)))}
+            {true})}
+        {(if (*test-is-config* first)
+          {(= {config} first)}
+          {true})})
+      (list tests config)})
+})
+
+(fun {*test-async-ctx-from-config* config} {
+  (= {ctx} (list :suite-name "Valkyria Test Suite" :expected-exit 0
+            :timeout-ms *test-default-timeout-ms*
+            :suite-timeout-ms *test-default-suite-timeout-ms*))
+  (if (plist/has? config :suite-name)
+    {(= {ctx} (plist/set ctx :suite-name config:suite-name))}
+    {true})
+  (if (plist/has? config :expected-exit)
+    {(= {ctx} (plist/set ctx :expected-exit config:expected-exit))}
+    {true})
+  (if (plist/has? config :timeout-ms)
+    {(= {ctx} (plist/set ctx :timeout-ms config:timeout-ms))}
+    {true})
+  (if (plist/has? config :suite-timeout-ms)
+    {(= {ctx} (plist/set ctx :suite-timeout-ms config:suite-timeout-ms))}
+    {true})
+  ctx
+})
+
+(fun {*test-run-async-loop* aio ctx remaining} {
+  (if (== (len remaining) 0)
+    {ctx}
+    {(*test-run-async-loop* aio (*test-run-async-one* aio ctx (head remaining)) (tail remaining))})
+})
+
+(fun {run-async aio & args} {
+  do
+    (= {parsed} (*test-async-parse-args* args))
+    (= {tests} (head parsed))
+    (= {config} (head (tail parsed)))
+    (= {total} (len tests))
+
+    (= {ctx} (*test-ctx-from-config* config))
+    (= {suite-name} ctx:suite-name)
+    (= {expected-exit} ctx:expected-exit)
+    (= {timeout-ms} ctx:timeout-ms)
+    (= {suite-timeout-ms} ctx:suite-timeout-ms)
+    
+    (if (== total 0)
+      {do
+        (printf "❌ No async tests registered!\n")
+        (if (== expected-exit 1)
+          {(shutdown 0)}
+          {(shutdown 1)})}
+      {do
+        (if (== *test-json-output* 0)
+          {printf "🧪 [%ld/%ld] %s (async, timeout: %ldms/test, %ldms/suite)\n" total total suite-name timeout-ms suite-timeout-ms}
+          {true})
+
+        ; Run tests sequentially via recursion
+        (= {ctx} (*test-run-async-loop* aio ctx tests))
+
+        (aio/stop aio)
+        (if (== *test-json-output* 1)
+          {do
+            (= {exit-code} (if (== (+ ctx:failed ctx:timed-out) 0) {0} {1}))
+            (= {expected-exit} ctx:expected-exit)
+            (if (== exit-code expected-exit) {(shutdown 0)} {(shutdown exit-code)})}
+          {(*test-print-results-and-exit* ctx)})})
+})
+
+
+
+; Test module loaded

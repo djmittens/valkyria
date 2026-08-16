@@ -3,9 +3,15 @@ name: Coverage
 on:
   pull_request:
     paths:
-      - 'src/**'
-      - 'test/**'
-      - 'CMakeLists.txt'
+      - 'runtime/**'
+      - 'stdlib/**'
+      - 'testing/**'
+      - 'lsp/**'
+      - 'symdb/**'
+      - 'coverage/**'
+      - 'check/**'
+      - 'quality/**'
+      - 'Makefile'
       - '.github/workflows/coverage.yml'
   push:
     branches:
@@ -41,9 +47,17 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev libgcc-14-dev llvm
+          sudo apt-get install -y cmake ninja-build pkg-config libssl-dev libuv1-dev libedit-dev libgcc-14-dev
+          # Install LLVM 22 from the official apt.llvm.org repo
+          curl -fsSL https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
           # libbacktrace.a lives under /usr/lib/gcc/<triple>/14/ - symlink so CMake find_library can find it
           sudo ln -sf /usr/lib/gcc/$(gcc -dumpmachine)/14/libbacktrace.a /usr/lib/libbacktrace.a
+          # Point CMake at LLVM 22 (pre-installed llvm-17 would win otherwise)
+          echo "LLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm" >> $GITHUB_ENV
+          echo "CC=clang-22" >> $GITHUB_ENV
+          echo "CXX=clang++-22" >> $GITHUB_ENV
+          # Unversioned llvm tools (llvm-cov etc.) for coverage collection
+          echo "/usr/lib/llvm-22/bin" >> $GITHUB_PATH
       
       - name: System Info
         run: |
@@ -59,9 +73,46 @@ jobs:
         env:
           VALK_HEAP_HARD_LIMIT: "2147483648"
         run: |
-          build/valk bin/run-tests.valk -- --build-dir build-coverage --junit-dir build/junit --examples
+          build/valk testing/run-tests.valk -- --build-dir build-coverage --junit-dir build/junit --examples
       
+      # UAT drives the real LSP server through real neovim. It was previously
+      # not run in CI at all, so user-facing LSP regressions could land freely.
+      # VALK_UAT_STRICT makes a missing nvim a hard failure rather than a
+      # silent skip, which is the whole point of running it here.
+      # The UAT lua uses vim.uv (nvim 0.10+); noble's apt neovim is 0.9,
+      # so install the official release tarball on Linux.
+      - name: Install Neovim
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            case "$(uname -m)" in
+              x86_64)  NVIM=nvim-linux-x86_64 ;;
+              aarch64) NVIM=nvim-linux-arm64 ;;
+            esac
+            curl -fsSL -o /tmp/nvim.tar.gz "https://github.com/neovim/neovim/releases/latest/download/${NVIM}.tar.gz"
+            sudo tar -C /opt -xzf /tmp/nvim.tar.gz
+            echo "/opt/${NVIM}/bin" >> $GITHUB_PATH
+            "/opt/${NVIM}/bin/nvim" --version | head -1
+          else
+            brew install neovim
+            nvim --version | head -1
+          fi
+
+      # Run separately from the step above because that one targets
+      # build-coverage, which has no valk-lsp; `make uat` builds and uses
+      # build/valk-lsp. JUNIT points at the same directory the other suites
+      # report into, so the collector below sees UAT results too.
+      - name: Run LSP UAT (JUnit XML output)
+        env:
+          VALK_UAT_STRICT: "1"
+          VALK_UAT_HOVER_BUDGET_MS: "3000"
+        run: |
+          make uat JUNIT=${{ github.workspace }}/build/junit
+
+      # The coverage gate thresholds are calibrated against Linux data;
+      # macOS exercises different platform branches and reports structurally
+      # lower numbers, so it generates the report without enforcing the gate.
       - name: Generate Coverage Report
+        continue-on-error: ${{ runner.os == 'macOS' }}
         env:
           VALK_HEAP_HARD_LIMIT: "2147483648"
         run: |
@@ -69,7 +120,11 @@ jobs:
       
       - name: Check Global Mutation Lint
         run: |
-          build/valk bin/check-no-globals.valk
+          build/valk check/check-no-globals.valk
+      
+      - name: Workspace Parse Check
+        run: |
+          make check
       
       - name: Remove expected-failure JUnit
         if: always()

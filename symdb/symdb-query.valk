@@ -1,0 +1,561 @@
+; Valkyria Symbol Database — query & display functions
+; Loaded by symdb.valk.
+
+(load "symdb/symdb-types.valk")
+
+; ---------------------------------------------------------------------------
+; Query functions for precomputed data
+; ---------------------------------------------------------------------------
+
+(module symdb)
+
+(sig 'get-scoped-refs {-> Ref Str Str Num List})
+(fun {get-scoped-refs db path name scope-id} {
+  if (nil? db) {nil}
+  {sqlite/query db
+    "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.name=?2 AND r.scope_id=?3 ORDER BY r.pos"
+    path name scope-id}
+})
+
+(sig 'get-ref-at-offset {-> Ref Str Num List})
+(fun {get-ref-at-offset db path offset} {
+  if (nil? db) {nil}
+  {sqlite/query-maybe db
+    "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.pos<=?2 AND (r.pos+r.len)>?2 LIMIT 1"
+    path offset}
+})
+
+(sig 'get-all-file-refs {-> Ref Str Str List})
+(fun {get-all-file-refs db path name} {
+  if (nil? db) {nil}
+  {sqlite/query db
+    "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.name=?2 ORDER BY r.pos"
+    path name}
+})
+
+(sig 'find-scoped-def {-> Ref Str Str Num List})
+(fun {find-scoped-def db path name scope-id} {
+  if (nil? db) {nil}
+  {sqlite/query-maybe db
+    "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.name=?2 AND r.scope_id=?3 AND r.is_def=1 LIMIT 1"
+    path name scope-id}
+})
+
+(sig 'find-def-in-scope-chain {-> Ref Str Str Num List})
+(fun {find-def-in-scope-chain db path name scope-pos} {
+  if (nil? db) {nil}
+  {if (< scope-pos 0) {nil}
+  {do
+    (= {found} (sqlite/query-maybe db
+      "SELECT name, pos, len, scope_id, is_def FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE f.path=?1 AND r.name=?2 AND r.scope_id=?3 AND r.is_def=1 LIMIT 1"
+      path name scope-pos))
+    (if (not (nil? found)) {found}
+      {do
+        (= {parent} (sqlite/query-maybe db
+          "SELECT parent_pos FROM scopes s JOIN files f ON s.file_id=f.id WHERE f.path=?1 AND s.pos=?2 LIMIT 1"
+          path scope-pos))
+        (if (nil? parent) {nil}
+          {find-def-in-scope-chain db path name (plist/get parent :parent_pos)})})}}
+})
+
+(sig 'find-field-definition {-> Ref Str Str Str List})
+(fun {find-field-definition db field-name context doc-path} {
+  if (nil? db) {nil}
+  {do
+    (= {ctor-name} (if (nil? context) {nil}
+      {resolve-var-type db context doc-path}))
+    (= {ctor-cols}
+      "SELECT s.name, f.path, n.pos FROM symbols s JOIN files f ON s.file_id=f.id LEFT JOIN nodes n ON n.file_id=s.file_id AND n.name=s.name AND n.type='sym' WHERE s.kind=4")
+    (= {ctor} (if (nil? ctor-name)
+      {do
+        (= {vis} (if (nil? doc-path) {nil}
+          {sqlite/query-maybe db
+            (str closure-cte ctor-cols " AND s.sig LIKE ?2 AND s.file_id IN (SELECT fid FROM closure) LIMIT 1")
+            doc-path (str "%" field-name " %")}))
+        (if (not (nil? vis)) {vis}
+          {sqlite/query-maybe db
+            (str ctor-cols " AND s.sig LIKE ?2 LIMIT 1")
+            "" (str "%" field-name " %")})}
+      {do
+        (= {vis} (if (nil? doc-path) {nil}
+          {sqlite/query-maybe db
+            (str closure-cte ctor-cols " AND s.name=?2 AND s.sig LIKE ?3 AND s.file_id IN (SELECT fid FROM closure) LIMIT 1")
+            doc-path ctor-name (str "%" field-name " %")}))
+        (if (not (nil? vis)) {vis}
+          {sqlite/query-maybe db
+            (str ctor-cols " AND s.name=?2 AND s.sig LIKE ?3 LIMIT 1")
+            "" ctor-name (str "%" field-name " %")})}))
+    (if (nil? ctor) {nil}
+      {do
+        (= {ctor-path} (plist/get ctor :path))
+        (= {ctor-pos} (plist/get ctor :col))
+        (= {ctor-line} (plist/get ctor :line))
+        (= {field-node} (sqlite/query-maybe db
+          "SELECT n.pos, n.end_pos FROM nodes n JOIN files f ON n.file_id=f.id WHERE f.path=?1 AND n.type='sym' AND n.name=?2 AND n.context IS NULL AND n.pos > ?3 ORDER BY n.pos LIMIT 1"
+          ctor-path field-name (plist/get ctor :pos)))
+        (if (nil? field-node) {nil}
+          {list :pos (plist/get field-node :pos)
+                :len (- (plist/get field-node :end_pos) (plist/get field-node :pos))
+                :path ctor-path})})}
+})
+
+(sig 'resolve-var-type {-> Ref Str Str Str})
+(fun {resolve-var-type db context doc-path} {
+  if (nil? db) {nil}
+  {if (nil? context) {nil}
+  {do
+    (= {direct} (ctor-sig-of db doc-path context))
+    (if (not (nil? direct)) {context}
+    {do
+      (= {inferred} (inferred-type-of db doc-path context))
+      (if (not (nil? inferred)) {plist/get inferred :inferred_type}
+      {do
+        ; Local variable defs are file-scoped facts: probe only the
+        ; requesting document, never same-named variables elsewhere.
+        (= {def-ref} (if (nil? doc-path)
+          {sqlite/query-maybe db
+            "SELECT scope_id FROM scoped_refs WHERE name=?1 AND is_def=1 LIMIT 1"
+            context}
+          {sqlite/query-maybe db
+            "SELECT r.scope_id FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE r.name=?1 AND r.is_def=1 AND f.path=?2 LIMIT 1"
+            context doc-path}))
+        (if (nil? def-ref) {nil}
+          {do
+            (= {scope-pos} (plist/get def-ref :scope_id))
+            (= {fn-ref} (if (nil? doc-path)
+              {sqlite/query-maybe db
+                "SELECT name FROM scoped_refs WHERE is_def=1 AND scope_id=-1 AND pos > ?1 AND pos < ?1 + 20 ORDER BY pos LIMIT 1"
+                scope-pos}
+              {sqlite/query-maybe db
+                "SELECT r.name FROM scoped_refs r JOIN files f ON r.file_id=f.id WHERE r.is_def=1 AND r.scope_id=-1 AND r.pos > ?1 AND r.pos < ?1 + 20 AND f.path=?2 ORDER BY r.pos LIMIT 1"
+                scope-pos doc-path}))
+            (if (nil? fn-ref) {nil}
+              {do
+                (= {fname} (plist/get fn-ref :name))
+                (= {param-type} (resolve-param-type db fname context doc-path))
+                param-type})})})})}}
+})
+
+(sig 'resolve-param-type {-> Ref Str Str Str Str})
+(fun {resolve-param-type db fname param-name doc-path} {
+  if (nil? db) {nil}
+  {do
+    ; Get the function sig
+    (= {sig-row} (sig-of db doc-path fname))
+    (if (nil? sig-row) {nil}
+      {do
+        ; Get formals to find param position
+        (= {formals-row} (fun-sig-of db doc-path fname))
+        (if (nil? formals-row) {nil}
+          {do
+            (= {sig-str} (plist/get sig-row :sig))
+            (= {formals-str} (plist/get formals-row :sig))
+            (= {param-idx} (find-param-index formals-str param-name))
+            (if (< param-idx 0) {nil}
+              {get-sig-type-at sig-str param-idx})})})}
+})
+
+(sig 'find-param-index {-> Str Str Num})
+(fun {find-param-index formals-str param-name} {
+  if (nil? formals-str) {-1}
+  {do
+    ; formals-str is like "(fun {fname p1 p2 p3} ...)"
+    ; Extract params between first { and }
+    (= {open} (str/index-of formals-str "{"))
+    (= {close} (str/index-of formals-str "}"))
+    (if (or (< open 0) (< close 0)) {-1}
+      {do
+        (= {inner} (str/slice formals-str (+ open 1) close))
+        (= {parts} (str/split inner " "))
+        ; Skip first (function name), find param-name in rest
+        (find-in-parts (tail parts) param-name 0)})}
+})
+
+(sig 'find-in-parts {-> List Str Num Num})
+(fun {find-in-parts parts name idx} {
+  if (nil? parts) {-1}
+  {if (== (head parts) name) {idx}
+  {find-in-parts (tail parts) name (+ idx 1)}}
+})
+
+(sig 'get-sig-type-at {-> Str Num Str})
+(fun {get-sig-type-at sig-str idx} {
+  if (nil? sig-str) {nil}
+  {if (< (len sig-str) 4) {nil}
+  {do
+    (= {inner} (str/slice sig-str 4 (- (len sig-str) 1)))
+    (= {parts} (str/split inner " "))
+    (= {parts} (filter (\ {p} {not (== p "&")}) parts))
+    (if (>= idx (- (len parts) 1)) {nil}
+      {nth (+ idx 1) parts})}}
+})
+
+; === Query functions ===
+
+(sig 'find-definition {-> Ref Str Any})
+(fun {find-definition db name} {
+  find-definition-in db name nil})
+
+(sig 'find-definition-in {-> Ref Str Str Any})
+(fun {find-definition-in db name path} {do
+  (= {local} (if (nil? path) {nil}
+    {sqlite/query-maybe db
+      "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND f.path=?2 AND s.kind != 0 ORDER BY (CASE WHEN s.arity >= 0 THEN 0 ELSE 1 END), s.id LIMIT 1"
+      name path}))
+  (if (nil? local)
+    {sqlite/query-maybe db
+      "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 AND s.kind != 0 ORDER BY (CASE WHEN s.arity >= 0 THEN 0 ELSE 1 END), s.id LIMIT 1"
+      name}
+    {local})})
+
+(sig 'find-definitions {-> Ref Str List})
+(fun {find-definitions db name} {
+  sqlite/query db
+    "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 ORDER BY s.id"
+    name
+})
+
+; All distinct definition sites for a name, one row per file, preferring the
+; row that carries an arity (the `fun` over its paired `sig`). Same-file
+; definitions win outright: a local definition is never ambiguous with one
+; in another file. Only when the name is defined nowhere in `path` do we
+; report every workspace candidate, which lets the caller return a
+; multi-Location response instead of silently guessing.
+(sig 'find-definition-sites {-> Ref Str Str List})
+; The load closure of a file: itself, everything reachable through its
+; (load ...) edges, and the ambient files the runtime bootstraps into every
+; program. Binds ?1 = the file's canonical path. Shared by navigation here
+; and by the validator's shape checks (vd/*).
+(def {closure-cte} "
+WITH RECURSIVE closure(fid) AS (
+  SELECT id FROM files WHERE path = ?1
+  UNION
+  SELECT id FROM files WHERE path LIKE '%/stdlib/prelude.valk'
+     OR path LIKE '%/stdlib/builtins.valk'
+     OR path LIKE '%/stdlib/aio/handles.valk'
+  UNION
+  SELECT f.id FROM closure c
+    JOIN loads l ON l.file_id = c.fid
+    JOIN files f ON f.path = l.target_path
+)")
+
+; Definition resolution respects the dependency graph: same file first,
+; then anything reachable through the file's loads, and only if the name
+; is not visible at all from there, the whole workspace (better a distant
+; answer than none for exploratory navigation).
+(fun {find-definition-sites db name path} {do
+  ; ?1 = requesting file's path (feeds the closure CTE), ?2 = name.
+  (= {best-per-file}
+    "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?2 AND s.kind != 0 AND s.id = (SELECT s2.id FROM symbols s2 WHERE s2.name=s.name AND s2.file_id=s.file_id AND s2.kind != 0 ORDER BY (CASE WHEN s2.arity >= 0 THEN 0 ELSE 1 END), s2.id LIMIT 1)")
+  (= {local} (if (nil? path) {nil}
+    {sqlite/query db (str best-per-file " AND f.path=?1") path name}))
+  (if (not (nil? local)) {local}
+    {do
+      (= {visible} (if (nil? path) {nil}
+        {sqlite/query db
+          (str closure-cte best-per-file
+               " AND s.file_id IN (SELECT fid FROM closure) ORDER BY f.path")
+          path name}))
+      (if (not (nil? visible)) {visible}
+        ; ?1 unused here (no closure) — bound to keep arg positions stable.
+        {sqlite/query db (str best-per-file " ORDER BY f.path") "" name})})})
+
+(sig 'file-symbols {-> Ref Str List})
+(fun {file-symbols db path} {
+  sqlite/query db
+    "SELECT s.name, s.line, s.col, s.kind, s.arity, s.doc FROM symbols s JOIN files f ON s.file_id=f.id WHERE f.path=?1 ORDER BY s.line, s.col"
+    path
+})
+
+(sig 'search-symbols {-> Ref Str List})
+(fun {search-symbols db query} {
+  sqlite/query db
+    "SELECT s.name, s.line, s.col, s.kind, s.doc, f.path FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name LIKE ?1 ORDER BY s.name LIMIT 50"
+    (str "%" query "%")
+})
+
+(sig 'all-symbol-names {-> Ref List})
+(fun {all-symbol-names db} {
+  sqlite/query db
+    "SELECT s.name, s.kind, s.doc, s.line, s.col, f.path FROM symbols s JOIN files f ON s.file_id=f.id GROUP BY s.name ORDER BY s.name LIMIT 200"
+})
+
+(sig 'completion-all {-> Ref List})
+(fun {completion-all db} {
+  sqlite/query db
+    "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc FROM symbols GROUP BY name ORDER BY name LIMIT 200"
+})
+
+; Completion offers what the document can actually call: names visible
+; through its load closure. Falls back to the workspace when the file has
+; no identity in the DB yet.
+(sig 'completion-all-in {-> Ref Str List})
+(fun {completion-all-in db path} {do
+  (= {vis} (if (nil? path) {nil}
+    {sqlite/query db
+      (str closure-cte
+        "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc FROM symbols WHERE file_id IN (SELECT fid FROM closure) GROUP BY name ORDER BY name LIMIT 200")
+      path}))
+  (if (nil? vis) {completion-all db} {vis})
+})
+
+(sig 'completion-symbols-in {-> Ref Str Str List})
+(fun {completion-symbols-in db path prefix} {do
+  (= {vis} (if (nil? path) {nil}
+    {sqlite/query db
+      (str closure-cte
+        "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc, MIN(CASE WHEN name LIKE ?2 || '%' THEN 0 WHEN name LIKE '%/' || ?2 || '%' THEN 1 ELSE 2 END) as rank FROM symbols WHERE name LIKE '%' || ?2 || '%' AND file_id IN (SELECT fid FROM closure) GROUP BY name ORDER BY rank, name LIMIT 100")
+      path prefix}))
+  (if (nil? vis) {completion-symbols db prefix} {vis})
+})
+
+; --- Closure-first single-row lookups (sig/type info for hover, inlay
+; hints, signature help, match checking). Each prefers the definition the
+; document can see; global fallback keeps answers available for orphan
+; lookups.
+
+(sig 'sig-of {-> Ref Str Str Any})
+(fun {sig-of db path name} {do
+  (= {vis} (if (nil? path) {nil}
+    {sqlite/query-maybe db
+      (str closure-cte
+        "SELECT sig, doc FROM symbols WHERE name=?2 AND sig LIKE '{->%' AND file_id IN (SELECT fid FROM closure) LIMIT 1")
+      path name}))
+  (if (not (nil? vis)) {vis}
+    {sqlite/query-maybe db
+      "SELECT sig, doc FROM symbols WHERE name=?2 AND sig LIKE '{->%' LIMIT 1"
+      "" name})
+})
+
+(sig 'fun-sig-of {-> Ref Str Str Any})
+(fun {fun-sig-of db path name} {do
+  (= {vis} (if (nil? path) {nil}
+    {sqlite/query-maybe db
+      (str closure-cte
+        "SELECT sig FROM symbols WHERE name=?2 AND sig LIKE '(fun %' AND kind=1 AND file_id IN (SELECT fid FROM closure) LIMIT 1")
+      path name}))
+  (if (not (nil? vis)) {vis}
+    {sqlite/query-maybe db
+      "SELECT sig FROM symbols WHERE name=?2 AND sig LIKE '(fun %' AND kind=1 LIMIT 1"
+      "" name})
+})
+
+(sig 'ctor-sig-of {-> Ref Str Str Any})
+(fun {ctor-sig-of db path name} {do
+  (= {vis} (if (nil? path) {nil}
+    {sqlite/query-maybe db
+      (str closure-cte
+        "SELECT sig, arity FROM symbols WHERE name=?2 AND kind=4 AND file_id IN (SELECT fid FROM closure) LIMIT 1")
+      path name}))
+  (if (not (nil? vis)) {vis}
+    {sqlite/query-maybe db
+      "SELECT sig, arity FROM symbols WHERE name=?2 AND kind=4 LIMIT 1"
+      "" name})
+})
+
+(sig 'ctor-sig-with-field {-> Ref Str Str Any})
+(fun {ctor-sig-with-field db path field-pat} {do
+  (= {vis} (if (nil? path) {nil}
+    {sqlite/query-maybe db
+      (str closure-cte
+        "SELECT sig FROM symbols WHERE kind=4 AND sig LIKE ?2 AND file_id IN (SELECT fid FROM closure) LIMIT 1")
+      path field-pat}))
+  (if (not (nil? vis)) {vis}
+    {sqlite/query-maybe db
+      "SELECT sig FROM symbols WHERE kind=4 AND sig LIKE ?2 LIMIT 1"
+      "" field-pat})
+})
+
+(sig 'inferred-type-of {-> Ref Str Str Any})
+(fun {inferred-type-of db path name} {do
+  (= {vis} (if (nil? path) {nil}
+    {sqlite/query-maybe db
+      (str closure-cte
+        "SELECT inferred_type FROM symbols WHERE name=?2 AND inferred_type IS NOT NULL AND file_id IN (SELECT fid FROM closure) LIMIT 1")
+      path name}))
+  (if (not (nil? vis)) {vis}
+    {sqlite/query-maybe db
+      "SELECT inferred_type FROM symbols WHERE name=?2 AND inferred_type IS NOT NULL LIMIT 1"
+      "" name})
+})
+
+(sig 'ctor-sigs-in {-> Ref Str List})
+(fun {ctor-sigs-in db path} {do
+  (= {vis} (if (nil? path) {nil}
+    {sqlite/query db
+      (str closure-cte
+        "SELECT name, sig FROM symbols WHERE kind=4 AND sig IS NOT NULL AND sig != '' AND file_id IN (SELECT fid FROM closure)")
+      path}))
+  (if (not (nil? vis)) {vis}
+    {sqlite/query db
+      "SELECT name, sig FROM symbols WHERE kind=4 AND sig IS NOT NULL AND sig != ''"})
+})
+
+(sig 'types-in {-> Ref Str List})
+(fun {types-in db path} {do
+  (= {vis} (if (nil? path) {nil}
+    {if (== (len path) 0) {nil}
+      {sqlite/query db
+        (str closure-cte
+          "SELECT DISTINCT name FROM symbols WHERE kind=3 AND file_id IN (SELECT fid FROM closure)")
+        path}}))
+  (if (not (nil? vis)) {vis}
+    {sqlite/query db "SELECT DISTINCT name FROM symbols WHERE kind=3"})
+})
+
+; Substring match, ranked: exact-prefix first, then module-qualified names
+; whose base matches after the slash (typing "map" finds "list/map"), then
+; plain substring hits. Prefix-only LIKE made completion useless unless the
+; user typed a name from its first character.
+(sig 'completion-symbols {-> Ref Str List})
+(fun {completion-symbols db prefix} {
+  sqlite/query db
+    "SELECT name, kind, COALESCE(MAX(CASE WHEN sig LIKE '{->%' THEN sig END), MAX(sig)) as sig, MAX(doc) as doc, MIN(CASE WHEN name LIKE ?1 || '%' THEN 0 WHEN name LIKE '%/' || ?1 || '%' THEN 1 ELSE 2 END) as rank FROM symbols WHERE name LIKE '%' || ?1 || '%' GROUP BY name ORDER BY rank, name LIMIT 100"
+    prefix
+})
+
+(sig 'find-refs {-> Ref Str List})
+(fun {find-refs db name} {
+  sqlite/query db
+    "SELECT r.line, r.col, f.path FROM refs r JOIN files f ON r.file_id=f.id WHERE r.name=?1 ORDER BY f.path, r.line, r.col"
+    name
+})
+
+; --- Load-graph resolution primitives -------------------------------------
+
+(sig 'in-closure? {-> Ref Str Str Num})
+(fun {in-closure? db of-path def-path} {do
+  (= {n} (sqlite/query-value db
+    (str closure-cte
+      "SELECT COUNT(*) FROM closure WHERE fid = (SELECT id FROM files WHERE path=?2)")
+    of-path def-path))
+  (if (nil? n) {0} {if (> n 0) {1} {0}})
+})
+
+(sig 'defines? {-> Ref Str Str Num})
+(fun {defines? db path name} {do
+  (= {n} (sqlite/query-value db
+    "SELECT COUNT(*) FROM symbols s JOIN files f ON s.file_id=f.id WHERE f.path=?1 AND s.name=?2 AND s.kind != 0"
+    path name))
+  (if (nil? n) {0} {if (> n 0) {1} {0}})
+})
+
+(sig 'sees-definition? {-> Ref Str Str Num})
+(fun {sees-definition? db path name} {do
+  (= {n} (sqlite/query-value db
+    (str closure-cte
+      "SELECT COUNT(*) FROM symbols WHERE name=?2 AND kind != 0 AND file_id IN (SELECT fid FROM closure)")
+    path name))
+  (if (nil? n) {0} {if (> n 0) {1} {0}})
+})
+
+; Files referencing `name` whose own resolution of it (same file, then load
+; closure, then global fallback) reaches the definition in `def-path`.
+; This is the reverse direction of find-definition-sites: it scopes
+; references/rename/ref-counts to the consumers of THIS definition, not of
+; every same-named symbol in the workspace.
+(sig 'files-resolving-to {-> Ref Str Str List})
+(fun {files-resolving-to db name def-path} {do
+  (= {cands} (sqlite/query db
+    "SELECT DISTINCT f.path AS path FROM refs r JOIN files f ON r.file_id=f.id WHERE r.name=?1"
+    name))
+  (map (\ {row} {plist/get row :path})
+    (filter (\ {row} {do
+      (= {p} (plist/get row :path))
+      (if (== p def-path) {1}
+      {if (== (defines? db p name) 1) {0}
+      {if (== (in-closure? db p def-path) 1) {1}
+      {== (sees-definition? db p name) 0}}})}) cands))
+})
+
+(sig 'find-refs-resolved {-> Ref Str Str List})
+(fun {find-refs-resolved db name def-path} {
+  if (nil? def-path) {find-refs db name}
+  {do
+    (= {fset} (dict/from-keys (files-resolving-to db name def-path)))
+    (filter (\ {r} {dict/has? fset (plist/get r :path)})
+            (find-refs db name))}
+})
+
+(sig 'ref-count-resolved {-> Ref Str Str Num})
+(fun {ref-count-resolved db name def-path} {
+  if (nil? def-path) {ref-count db name}
+  {len (find-refs-resolved db name def-path)}
+})
+
+(sig 'symbol-hover {-> Ref Str SymInfo})
+(fun {symbol-hover db name} {
+  symbol-hover-in db name nil})
+
+(sig 'symbol-hover-in {-> Ref Str Str SymInfo})
+(fun {symbol-hover-in db name path} {do
+  (= {hover-cols}
+    "SELECT s.name, s.kind, s.arity, s.doc, s.sig, s.inferred_type, f.path, s.line, s.col FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?2 AND s.line >= 0")
+  (= {def-row} (if (nil? path)
+    {sqlite/query-maybe db
+      (str hover-cols " ORDER BY s.id LIMIT 1") "" name}
+    {do
+      (= {local} (sqlite/query-maybe db
+        (str hover-cols " AND f.path=?1 ORDER BY s.id LIMIT 1") path name))
+      (if (not (nil? local)) {local}
+        {do
+          ; Prefer the definition reachable through this file's loads.
+          (= {vis} (sqlite/query-maybe db
+            (str closure-cte hover-cols
+                 " AND s.file_id IN (SELECT fid FROM closure)"
+                 " ORDER BY s.id LIMIT 1")
+            path name))
+          (if (not (nil? vis)) {vis}
+            {sqlite/query-maybe db
+              (str hover-cols " ORDER BY s.id LIMIT 1") "" name})})}))
+
+  (= {sig-row} (sig-of db path name))
+  (if (nil? def-row)
+    {if (nil? sig-row) {nil}
+      {do
+        (= {fallback} (sqlite/query-maybe db
+          "SELECT s.name, s.kind, s.arity, s.doc, s.sig, s.inferred_type, f.path, s.line, s.col FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name=?1 ORDER BY s.id LIMIT 1"
+          name))
+        (if (nil? fallback) {nil}
+          {do
+            (= {type-sig} (if (nil? sig-row) {nil} {sig-row:sig}))
+            (= {type-sig} (if (nil? type-sig) {fallback:inferred_type} {type-sig}))
+            (= {sig-doc} (if (nil? sig-row) {nil} {sig-row:doc}))
+            (= {fb-doc} fallback:doc)
+            (= {final-doc} (if (nil? fb-doc) {sig-doc} {fb-doc}))
+            (SymInfo fallback:name fallback:kind fallback:arity
+              final-doc type-sig fallback:path fallback:line fallback:col nil)})}}
+    {do
+      (= {type-sig} (if (nil? sig-row) {nil} {sig-row:sig}))
+      (= {type-sig} (if (nil? type-sig) {def-row:inferred_type} {type-sig}))
+      (= {formals} def-row:sig)
+      (= {def-doc} def-row:doc)
+      (= {sig-doc} (if (nil? sig-row) {nil} {sig-row:doc}))
+      (= {final-doc} (if (nil? def-doc) {sig-doc} {def-doc}))
+      (SymInfo def-row:name def-row:kind def-row:arity
+        final-doc type-sig def-row:path def-row:line def-row:col formals)})
+})
+
+; === Reference counting ===
+
+(sig 'ref-count {-> Ref Str Num})
+(fun {ref-count db name} {
+  sqlite/query-value db
+    "SELECT COUNT(*) FROM refs WHERE name=?1" name
+})
+
+; === Stale file cleanup ===
+
+(sig 'all-indexed-paths {-> Ref List})
+(fun {all-indexed-paths db} {
+  sqlite/query db "SELECT id, path FROM files"
+})
+
+(sig 'remove-file {-> Ref Num Nil})
+(fun {remove-file db file-id} {do
+  (sqlite/exec db "DELETE FROM main.symbols WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM main.refs WHERE file_id=?1" file-id)
+  (sqlite/exec db "DELETE FROM main.files WHERE id=?1" file-id)
+})
+
+

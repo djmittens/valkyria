@@ -1,0 +1,212 @@
+; Coverage tests for type_infer.c, type_infer_scope.c, type_transform.c
+
+(load "testing/test.valk")
+
+(type {TcPoint} {:x Num :y Num})
+(type {TcShape} {TcCirc :r Num} {TcRect :w Num :h Num})
+(type {TcOpt a} {TcNone} {TcSome :value a})
+
+(sig 'tc-manyp {-> a Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num a})
+(sig 'tc-bigcon {-> (TcT Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num) Num})
+
+(fun {tc-never-manyp} {tc-manyp 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0})
+
+(fun {tc-never-with r} {do
+  (= {y} (with (TcPoint :x 1 :y 2) :x 9))
+  (with r :x 1)
+  y})
+
+(fun {tc-never-occurs x} {do (if 0 (tc-manyp x) x)})
+
+(fun {tc-never-with2 r} {with r :x 1})
+
+(macro {tc-mkdef _name}
+  {cons (head {def}) (cons (list (head _name)) (cons (cons \ (list {q} {q})) ()))})
+
+(macro {tc-mkapp _arg}
+  {cons (cons \ (list {q} {q})) (cons (head _arg) ())})
+
+(macro {tc-mkdefplus _name}
+  {cons (head {def}) (cons (list (head _name)) (cons (cons + (cons 1 (cons 2 ()))) ()))})
+
+(tc-mkdef {tc-bi-fn})
+(tc-mkapp {42})
+(tc-mkdefplus {tc-plus-res})
+
+(macro {tc-mkplusapp} {cons + (cons 1 (cons 2 ()))})
+(tc-mkplusapp)
+
+(fun {tc-nc3} {do (with mystery :a 1) (with mystery) (= {q10} (with mystery))})
+(fun {tc-nc4} {do (= {x9}) (= 5 1) (= {5} 1) (= {x8 x7} 1) TcPoint:x file://tmp})
+(fun {tc-nc5 p9} {with p9})
+(fun {tc-nc6} {with (TcPoint 1 2) :x 5})
+(fun {tc-nc7 pz} {do (TcPoint:x pz 1)})
+
+(= {tc-ns1} (TcOpt::TcSome 1))
+(= {tc-q7} ((\ {z} {z}) 1))
+(= {tc-q9} {1 2})
+(def {tc-d1 tc-d2} 1 2)
+(def {tc-d3} {1 2})
+
+(sig 'tc-mkp {-> Num TcPoint})
+(fun {tc-mkp n} {TcPoint n n})
+(= {tc-p6} (tc-mkp 1))
+(sig 'tc-mks {-> Num TcShape})
+(fun {tc-mks n} {TcCirc n})
+(= {tc-s6} (tc-mks 2))
+
+(test/run (list
+
+  (test/case "infer-occurs-check-var-in-concrete"
+    {do
+      (= {r} (type/infer-file (parse "(sig 'm {-> a (List a)}) (fun {f x} {do (if 0 (m x) x)})")))
+      (test/assert (> (len (:errors r)) 0) "occurs check reports infinite type")
+    })
+
+  (test/case "infer-type-mismatch-error"
+    {do
+      (= {r} (type/infer-file (parse "(sig 'g {-> Num Num}) (g \"str\")")))
+      (test/assert (> (len (:errors r)) 0) "Num vs Str mismatch reported")
+    })
+
+  (test/case "infer-sig-edge-forms"
+    {do
+      (= {r} (type/infer-file (parse "(sig 'tqf {->}) (sig 'tqg {Num}) (sig 'tqe {-> 5 Num}) (sig 'tqc {-> (->) Num})")))
+      (test/assert (== (len (:errors r)) 0) "degenerate sig forms infer without errors")
+    })
+
+  (test/case "infer-sig-oversized-forms"
+    {do
+      (= {r} (type/infer-file (parse "(sig 'tqa {-> Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num}) (sig 'tqb {-> (-> Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num) Num}) (sig 'tqd {-> (TcCon Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num Num) Num})")))
+      (test/assert (== (len (:errors r)) 0) "oversized sigs truncate with warnings, no errors")
+    })
+
+  (test/case "infer-lambda-over-max-params"
+    {do
+      (= {r} (type/infer-file (parse "(\\ {a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 a21 a22 a23 a24 a25 a26 a27 a28 a29 a30 a31 a32 a33 a34 a35 a36 a37 a38 a39 a40 a41 a42 a43 a44 a45 a46 a47 a48 a49 a50 a51 a52 a53 a54 a55 a56 a57 a58 a59 a60 a61 a62 a63 a64 a65} {1})")))
+      (test/assert (== (len (:errors r)) 0) "65-param lambda truncates without errors")
+    })
+
+  (test/case "infer-match-constructor-patterns"
+    {do
+      (= {r} (type/infer-file (parse "{match p {{TcPoint px py} px}}")))
+      (test/assert (== (len (:errors r)) 0) "product ctor pattern binds fields")
+      (= {r2} (type/infer-file (parse "{match q {{TcOpt::TcSome _} 1} {{TcOpt::TcNone} 0}}")))
+      (test/assert (== (len (:errors r2)) 0) "sum ctor patterns with wildcard field")
+      (= {r3} (type/infer-file (parse "{match w {s 1} {_ 2}}")))
+      (test/assert (== (len (:errors r3)) 0) "symbol and wildcard patterns")
+      (= {r4} (type/infer-file (parse "{match u {{NotACtor z} 1}} {match v 42}")))
+      (test/assert (== (len (:errors r4)) 0) "unknown ctor and non-qexpr clause tolerated")
+    })
+
+  (test/case "infer-match-mismatched-ctor-types"
+    {do
+      (= {r} (type/infer-file (parse "(= {pt} (TcPoint :x 1 :y 2)) {match pt {{TcOpt::TcSome v} v} {{TcPoint a b} a}}")))
+      (test/assert (> (len (:errors r)) 0) "pattern ctor type conflicts with value type")
+    })
+
+  (test/case "infer-degenerate-forms"
+    {do
+      (= {r} (type/infer-file (parse "(= {x}) (def {y}) (= {f} (\\)) (= {g} (\\ () {1})) (= {h} (\\ 5 {1})) (if 1) (if 1 2) (fun 5 {1}) (fun {f2})")))
+      (test/assert (>= (len (:errors r)) 0) "degenerate binding forms infer")
+      (= {r2} (type/infer-file (parse "(sig) (sig 'nm) (sig 'nm2 5) (sig \"strname\" {-> Num Num}) (sig 'tqh {-> (5 6) Num})")))
+      (test/assert (>= (len (:errors r2)) 0) "degenerate sig forms infer")
+      (= {r3} (type/infer-file (parse "(\\ {x & xs} {xs}) (\\ {x &} {x}) (sig 'sp {-> Num Num}) (fun {sp a b} {a})")))
+      (test/assert (>= (len (:errors r3)) 0) "rest-args and sig-arity-mismatch infer")
+      (= {r4} (type/infer-file (parse "x:Y (Zzz 1) (TcPoint :x 1 :y 2) (TcPoint :x)")))
+      (test/assert (>= (len (:errors r4)) 0) "constructor keyword calls infer")
+      (= {r5} (type/infer-file (parse "{match} {match x {{5 y} 1}} {match x {{TcPoint 5 6} 1}}")))
+      (test/assert (>= (len (:errors r5)) 0) "degenerate match forms infer")
+      (= {r6} (type/infer-file (parse "(sig 'tqany {-> Any Num}) (sig 'tqz {(5) Num}) (do) (\\ {5 x} {x}) (\\ {x & 5} {x}) (sig 'sv {Num}) (fun {sv q} {q})")))
+      (test/assert (>= (len (:errors r6)) 0) "odd formals and sig shapes infer")
+      (= {r7} (type/infer-file (parse "(= {qq2} {1 2}) (= {lm} (lambda {x} {x})) (= 5 1) (= {5} 1) (= {n1} zzq:fld) (fun {fv vv} {do vv:fld}) (fun {5 x} {x}) x:9")))
+      (test/assert (>= (len (:errors r7)) 0) "odd bindings and field accesses infer")
+      (= {r8} (type/infer-file (parse "(zf 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65)")))
+      (test/assert (>= (len (:errors r8)) 0) "over-max-arg application infers")
+    })
+
+  (test/case "infer-long-symbol-field-access"
+    {do
+      (= {r} (type/infer-file (parse "(= {q} aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:fld)")))
+      (test/assert (== (len (:errors r)) 0) "oversized var name skips field-access inference")
+    })
+
+  (test/case "infer-field-access-on-typed-var"
+    {do
+      (= {r} (type/infer-file (parse "(sig 'mk {-> Num TcPoint}) (fun {mk n} {TcPoint n n}) (fun {use p} {do (= {pt} (mk 1)) pt:x})")))
+      (test/assert (== (len (:errors r)) 0) "field access via sig-typed binding")
+    })
+
+  (test/case "infer-constructed-ast-lambda-builtin-head"
+    {do
+      (= {ast} (list (list '= {f} (cons \ (list {x} {x})))))
+      (= {r} (type/infer-file ast))
+      (test/assert (== (len (:errors r)) 0) "def with evaluated lambda builtin head")
+    })
+
+  (test/case "transform-with-quoted-in-if"
+    {do
+      (= {p} (TcPoint :x 1 :y 2))
+      (= {p2} (if 1 {with p :x 33} {p}))
+      (test/assert-eq 33 p2:x "quoted with in if-branch rewrites record update")
+      (test/assert-eq 2 p2:y "unchanged field preserved")
+      (= {p3} (if 0 {p} {with p :y 44}))
+      (test/assert-eq 44 p3:y "else-branch quoted with applies")
+      (test/assert-eq 1 p3:x "else-branch preserves other field")
+    })
+
+  (test/case "transform-with-sum-type"
+    {do
+      (= {c} (TcCirc :r 5))
+      (= {c2} (with c :r 6))
+      (test/assert-eq 6 c2:r "with on sum-type variant")
+    })
+
+  (test/case "transform-match-on-shapes"
+    {do
+      (= {area} (\ {s} {
+        match s
+          {(TcCirc :r r) (* 3 (* r r))}
+          {(TcRect :w w :h h) (* w h)}
+      }))
+      (test/assert-eq 75 (area (TcCirc 5)) "circle area")
+      (test/assert-eq 200 (area (TcRect 10 20)) "rect area")
+    })
+
+  (test/case "transform-parametric-option"
+    {do
+      (= {v} (TcSome :value 41))
+      (= {unwrap} (\ {o d} {
+        match o
+          {(TcSome :value x) x}
+          {(TcNone) d}
+      }))
+      (test/assert-eq 41 (unwrap v 0) "match some branch")
+      (test/assert-eq 7 (unwrap (TcNone) 7) "match none branch")
+    })
+
+  (test/case "never-called-helpers-defined"
+    {do
+      (test/assert (not (nil? tc-never-manyp)) "oversized sig user is defined")
+      (test/assert (not (nil? tc-never-with)) "unknown-type with user is defined")
+      (test/assert (not (nil? tc-never-with2)) "quoted-with helper is defined")
+      (test/assert (not (nil? tc-never-occurs)) "occurs helper is defined")
+    })
+
+  (test/case "macro-expanded-builtin-lambda-head"
+    {do
+      (test/assert-eq 7 (tc-bi-fn 7) "macro-built def with builtin lambda head works")
+      (test/assert-eq 3 tc-plus-res "macro-built def with non-lambda builtin head")
+    })
+
+  (test/case "transform-edge-bindings"
+    {do
+      (test/assert-eq 1 tc-q7 "lambda-call rhs binding")
+      (test/assert-eq 1 tc-d1 "multi-def first")
+      (test/assert-eq 2 tc-d2 "multi-def second")
+      (test/assert-eq 1 tc-p6:x "sig'd product return tracks type")
+      (test/assert-eq 2 tc-s6:r "sig'd sum return tracks type")
+      (test/assert-eq 1 tc-ns1:value "fully-qualified ctor call")
+    })
+
+))

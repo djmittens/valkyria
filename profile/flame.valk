@@ -1,0 +1,228 @@
+; profile/flame.valk - perf stack folding and flame graph SVG rendering.
+;
+; (flame/fold-file path)            parse `perf script` output into a state
+;                                   dict {"stacks" dict{stack->count},
+;                                        "samples" total}
+; (flame/build-tree stacks)         fold the stacks dict into a call tree
+; (flame/render tree samples t st)  render the tree as an SVG string
+
+(module flame)
+
+; --- deterministic string sort (insertion, ord-based) ---
+
+(fun {_insert-sorted x sorted} {
+  (if (== sorted nil)
+    {(list x)}
+    {(if (< (ord x (head sorted)) 1)
+      {(cons x sorted)}
+      {(cons (head sorted) (_insert-sorted x (tail sorted)))})})
+})
+
+(fun {sort-strs l} {
+  (foldl (\ {acc x} {(_insert-sorted x acc)}) nil l)
+})
+
+; --- perf script parsing ---
+
+; Frame line: "<addr> <symbol>+0x<off> (<module>)" -> "<symbol>", or nil
+; for unusable frames.
+(fun {_frame-name line} {
+  (= {t} (str/trim line))
+  (= {sp} (str/index-of t " "))
+  (if (== sp -1) {nil}
+    {do
+      (= {rest} (str/slice t (+ sp 1) (len t)))
+      (= {par} (str/last-index-of rest " ("))
+      (= {sym} (if (== par -1) {rest} {(str/slice rest 0 par)}))
+      (= {plus} (str/last-index-of sym "+0x"))
+      (= {sym} (if (== plus -1) {sym} {(str/slice sym 0 plus)}))
+      (if (== sym "[unknown]") {nil} {sym})})
+})
+
+; A blank line terminates a sample. Frames arrive leaf-first; consing
+; them yields a root-first list, which is the fold order we want.
+(fun {_flush st} {
+  (= {frames} (dict/get st "frames"))
+  (if (== frames nil) {}
+    {do
+      (= {key} (str/join frames ";"))
+      (= {stacks} (dict/get st "stacks"))
+      (= {old} (dict/get stacks key))
+      (dict/set! stacks key (+ 1 (if (== old nil) {0} {old})))
+      (dict/set! st "samples" (+ 1 (dict/get st "samples")))
+      (dict/set! st "frames" nil)})
+})
+
+(fun {fold-file path} {
+  (= {st} (dict/new))
+  (dict/set! st "stacks" (dict/new))
+  (dict/set! st "frames" nil)
+  (dict/set! st "samples" 0)
+  (for-each-line path (\ {line} {
+    (if (== (str/trim line) "")
+      {(_flush st)}
+      {(if (or (str/starts-with? line "\t") (str/starts-with? line " "))
+        {do
+          (= {sym} (_frame-name line))
+          (if (== sym nil) {}
+            {(dict/set! st "frames" (cons sym (dict/get st "frames")))})}
+        {})})
+  }))
+  (_flush st)
+  st
+})
+
+; --- call tree ---
+
+(fun {_node-new} {do
+  (= {n} (dict/new))
+  (dict/set! n "total" 0)
+  (dict/set! n "children" (dict/new))
+  n
+})
+
+(fun {_insert-stack node frames count} {
+  (dict/set! node "total" (+ count (dict/get node "total")))
+  (if (== frames nil) {}
+    {do
+      (= {kids} (dict/get node "children"))
+      (= {name} (head frames))
+      (= {child} (dict/get kids name))
+      (= {child} (if (== child nil)
+        {do (= {c} (_node-new)) (dict/set! kids name c) c}
+        {child}))
+      (_insert-stack child (tail frames) count)})
+})
+
+(fun {_build-loop keys stacks root} {
+  (if (== keys nil) {root}
+    {do
+      (= {key} (head keys))
+      (_insert-stack root (str/split key ";") (dict/get stacks key))
+      (_build-loop (tail keys) stacks root)})
+})
+
+(fun {build-tree stacks} {
+  (_build-loop (dict/keys stacks) stacks (_node-new))
+})
+
+(fun {_max-depth node} {do
+  (= {kids} (dict/get node "children"))
+  (= {ks} (dict/keys kids))
+  (if (== ks nil) {0}
+    {(+ 1 (foldl (\ {acc k} {(max acc (_max-depth (dict/get kids k)))}) 0 ks))})
+})
+
+; --- SVG rendering ---
+;
+; All horizontal geometry is integer millipixels (mpx): 1 px = 1000 mpx.
+
+(def {_WIDTH} 1200)
+(def {_XPAD} 10)
+(def {_FRAMEH} 16)
+(def {_USABLE-MPX} 1180000)
+(def {_MIN-W-MPX} 100)          ; cull rects narrower than 0.1 px
+(def {_TEXT-MIN-MPX} 35000)     ; label rects wider than 35 px
+
+(def {_ALPHA} "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/:.<>~-*[]@$")
+
+(fun {_hash-loop s i n h} {
+  (if (>= i n) {h}
+    {do
+      (= {c} (str/index-of _ALPHA (str/slice s i (+ i 1))))
+      (= {c} (if (== c -1) {13} {c}))
+      (_hash-loop s (+ i 1) n (mod (+ (* h 31) c) 1000003))})
+})
+
+; Warm palette keyed off a stable hash of the frame name, so the same
+; function keeps its color across graphs.
+(fun {_color name} {do
+  (= {h} (_hash-loop name 0 (min 16 (len name)) 7))
+  (str "rgb(" (+ 205 (mod h 50)) "," (mod (/ h 7) 230) "," (mod (/ h 13) 55) ")")
+})
+
+(fun {_esc s} {do
+  (= {s} (str/replace s "&" "&amp;"))
+  (= {s} (str/replace s "<" "&lt;"))
+  (= {s} (str/replace s ">" "&gt;"))
+  (= {s} (str/replace s "\"" "&quot;"))
+  s
+})
+
+(fun {_mpx->str v} {do
+  (= {f} (mod v 1000))
+  (str (/ v 1000) "." (/ f 100) (/ (mod f 100) 10) (mod f 10))
+})
+
+(fun {_pct-str n total} {do
+  (= {t} (/ (* n 1000) total))
+  (str (/ t 10) "." (mod t 10) "%")
+})
+
+(fun {_emit out frag} {
+  (dict/set! out "frags" (cons frag (dict/get out "frags")))
+})
+
+; Emit one frame rect (+label when wide enough), then its children.
+; y grows upward from the bottom of the graph area: root sits at depth 0.
+(fun {_render-node out name node x-mpx depth samples height} {do
+  (= {total} (dict/get node "total"))
+  (= {w-mpx} (/ (* total _USABLE-MPX) samples))
+  (if (< w-mpx _MIN-W-MPX) {}
+    {do
+      (= {y} (- height (* (+ depth 1) _FRAMEH)))
+      (= {label} (if (>= w-mpx _TEXT-MIN-MPX)
+        {do
+          (= {fit} (/ w-mpx 7500))
+          (if (> (len name) fit)
+            {(str (str/slice name 0 (max 1 (- fit 2))) "..")}
+            {name})}
+        {""}))
+      (_emit out (str
+        "<g><title>" (_esc name) " (" total " samples, "
+        (_pct-str total samples) ")</title>\n"
+        "<rect x=\"" (_mpx->str x-mpx) "\" y=\"" y
+        "\" width=\"" (_mpx->str w-mpx) "\" height=\"" (- _FRAMEH 1)
+        "\" fill=\"" (_color name) "\" rx=\"1\" ry=\"1\"/>\n"
+        (if (== label "") {""}
+          {(str "<text x=\"" (_mpx->str (+ x-mpx 2000)) "\" y=\"" (+ y 12)
+                "\" font-size=\"11\" font-family=\"monospace\">"
+                (_esc label) "</text>\n")})
+        "</g>\n"))
+      (_render-kids out (sort-strs (dict/keys (dict/get node "children")))
+                    (dict/get node "children") x-mpx (+ depth 1) samples height)})
+})
+
+(fun {_render-kids out names kids x-mpx depth samples height} {
+  (if (== names nil) {}
+    {do
+      (= {name} (head names))
+      (= {child} (dict/get kids name))
+      (_render-node out name child x-mpx depth samples height)
+      (_render-kids out (tail names) kids
+                    (+ x-mpx (/ (* (dict/get child "total") _USABLE-MPX) samples))
+                    depth samples height)})
+})
+
+(fun {render tree samples title subtitle} {do
+  (= {depth} (_max-depth tree))
+  (= {graph-h} (* (+ depth 1) _FRAMEH))
+  (= {height} (+ 50 graph-h 20))
+  (= {out} (dict/new))
+  (dict/set! out "frags" nil)
+  (_emit out (str
+    "<?xml version=\"1.0\" standalone=\"no\"?>\n"
+    "<svg version=\"1.1\" width=\"" _WIDTH "\" height=\"" height
+    "\" xmlns=\"http://www.w3.org/2000/svg\">\n"
+    "<rect x=\"0\" y=\"0\" width=\"" _WIDTH "\" height=\"" height
+    "\" fill=\"#f8f8f8\"/>\n"
+    "<text x=\"" (/ _WIDTH 2) "\" y=\"22\" text-anchor=\"middle\""
+    " font-size=\"16\" font-family=\"monospace\">" (_esc title) "</text>\n"
+    "<text x=\"" (/ _WIDTH 2) "\" y=\"40\" text-anchor=\"middle\""
+    " font-size=\"11\" font-family=\"monospace\" fill=\"#666\">"
+    (_esc subtitle) "</text>\n"
+    "<g transform=\"translate(" _XPAD ",50)\">\n"))
+  (_render-node out "all" tree 0 0 samples graph-h)
+  (_emit out "</g>\n</svg>\n")
+  (str/join (reverse (dict/get out "frags")) "")
+})

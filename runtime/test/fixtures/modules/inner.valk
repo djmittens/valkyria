@@ -1,0 +1,6 @@
+; Fixture: module whose bare defs get qualified (and nested when loaded
+; from another module).
+(module inner)
+
+(fun {f x} {+ x 1})
+(fun {g x} {f (f x)})

@@ -1,0 +1,366 @@
+; Valkyria LSP Server — dispatch, main loop
+
+; Shared dependencies load before the (module lsp) declaration so they keep
+; their own top-level module prefixes instead of nesting under lsp/.
+(load "symdb/symdb.valk")
+(load "symdb/validate.valk")
+(load "lsp/analysis.valk")
+(load "lsp/refs.valk")
+(load "lsp/hints.valk")
+(load "lsp/hints-fields.valk")
+(load "lsp/io.valk")
+(load "lsp/workspace.valk")
+(load "lsp/scan.valk")
+(load "lsp/nav.valk")
+(load "lsp/features.valk")
+
+(module lsp)
+
+; ---------------------------------------------------------------------------
+; Semantic tokens range — tokens for visible viewport only
+; ---------------------------------------------------------------------------
+
+(sig 'handle-semantic-tokens-range {-> Num RangeParams Nil})
+(fun {handle-semantic-tokens-range id params} {do
+  (= {td} params:textDocument)
+  (= {uri} td:uri)
+  (= {text} (lsp/doc-get uri))
+  (if (nil? text) {lsp/send-response id (list :data nil)}
+    {do
+      (= {start-line} params:range:start:line)
+      (= {end-line} params:range:end:line)
+      ; Same rule as handle-semantic-tokens (see nav.valk): tokens describe
+      ; the current text, broken form included.
+      (= {ast} (lsp/get-ast uri text))
+      (= {data} (if (nil? ast) {sem/lex-tokenize text} {sem/tokenize-ast ast text}))
+      (= {typed} (sem/parse-flat data))
+      (= {filtered} (sem/filter-range typed start-line end-line 0 nil))
+      (= {result} (sem/flatten filtered))
+      (lsp/send-response id (list :data result))})
+})
+
+; Filter the typed token list down to the [start-line, end-line] range.
+;
+; The wire format encodes each token's dl as the line distance from the
+; *previous emitted token*, with the first token's dl being its absolute
+; line (equivalent to "previous = line 0"). When we drop tokens before
+; start-line, the FIRST kept token still has its original dl — relative
+; to a token we just dropped. nvim accumulates dl from 0, so without
+; fixup the first kept token lands at line N (= original dl) instead of
+; its real absolute line. Visible symptom: the visible viewport's
+; tokens render shifted to the top of the file → most positions in the
+; viewport have no token = default (orange) coloring.
+;
+; Fix: when emitting the first kept token, override its dl with the
+; cumulative absolute line. Subsequent kept tokens are correct because
+; we don't drop anything within the range — their dl is relative to
+; the previous kept token, same as the original.
+(sig 'sem/filter-range {-> List Num Num Num List List})
+(fun {sem/filter-range tokens start-line end-line cur-line acc} {
+  if (nil? tokens) {reverse acc}
+  {do
+    (= {t} (head tokens))
+    (= {new-line} (+ cur-line (SemToken:dl t)))
+    (if (> new-line end-line) {reverse acc}
+      {if (< new-line start-line)
+        {sem/filter-range (tail tokens) start-line end-line new-line acc}
+        {do
+          (= {emit-t}
+            (if (nil? acc)
+              {SemToken :dl new-line
+                       :dc (SemToken:dc t)
+                       :len (SemToken:len t)
+                       :ttype (SemToken:ttype t)
+                       :mods (SemToken:mods t)}
+              {t}))
+          (sem/filter-range (tail tokens) start-line end-line new-line
+            (qcons emit-t acc))}})}
+})
+
+; ---------------------------------------------------------------------------
+; Dispatch
+; ---------------------------------------------------------------------------
+
+; Done-callback for dispatched requests. A handler error used to be
+; swallowed by lsp/noop-cb — no response was ever sent for that id, so the
+; client waited on it forever (perceived as a hang/crash). JSON-RPC requires
+; a response for every request: surface handler failures as -32603.
+(sig 'request-done-cb {-> Str Any Fun})
+(fun {request-done-cb method id} {
+  \ {r} {if (error? r)
+    {do (stderr/write (str "[valk-lsp] handler error " method ": " r "\n"))
+        (lsp/send-error id -32603 (str "Internal error in " method))}
+    {}}
+})
+
+(sig 'dispatch-to-worker {-> Str Any List Nil})
+(fun {dispatch-to-worker method id params} {
+  aio/dispatch lsp/sys
+    (\ {_} {do (handle-readonly method id params) nil})
+    nil
+    (request-done-cb method id)
+})
+
+; Notifications (didOpen/didChange/didClose/didSave) run on the SAME single
+; worker loop as requests, in arrival order (one FIFO task queue). Evaluating
+; them inline on loop 0 raced the worker: notification handlers mutate shared
+; non-cmap envs via (=  ...) while the worker walks them in lenv_get (TSAN:
+; lenv.c valk_lenv_put vs valk_lenv_get). Loop 0's Lisp is now limited to
+; parse-and-dispatch, which touches only thread-local call envs, the cmap
+; root env, and lock-protected dicts.
+(sig 'handle-notification {-> Str List Nil})
+(fun {handle-notification method params} {
+  match method
+    {"textDocument/didOpen" (lsp/handle-did-open (to-open-params params))}
+    {"textDocument/didChange" (lsp/handle-did-change (to-change-params params))}
+    {"textDocument/didClose" (lsp/handle-did-close (to-doc-params params))}
+    {"textDocument/didSave" (lsp/handle-did-save (to-save-params params))}
+    {_ nil}
+})
+
+; Notifications have no id to answer, but a failed handler means lost
+; document state (e.g. a didChange that never applied) — log loudly.
+(sig 'dispatch-notification {-> Str List Nil})
+(fun {dispatch-notification method params} {
+  aio/dispatch lsp/sys
+    (\ {_} {do (handle-notification method params) nil})
+    nil
+    (\ {r} {if (error? r)
+      {stderr/write (str "[valk-lsp] notification error " method ": " r "\n")}
+      {}})
+})
+
+; Tokens and hints go through the same worker dispatch as everything else.
+; They used to be "debounced": a request that another request of the same
+; family had overtaken answered from a last-good cache instead of being
+; computed. That answer described whatever text last parsed cleanly, so the
+; client painted one document's offsets onto another's — and it fired on
+; every keystroke, which is exactly when it is most visible. Recomputing
+; costs one AST walk over text the handler reads fresh, and it is the only
+; answer that matches what the client is holding.
+(sig 'dispatch-request {-> Str Any List Nil})
+(fun {dispatch-request method id params} {
+  dispatch-to-worker method id params
+})
+
+(sig 'to-doc-params {-> List DocParams})
+(fun {to-doc-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (DocParams (LspTextDoc (plist/get td :uri)))
+})
+
+(sig 'to-tdp-params {-> List TextDocPosParams})
+(fun {to-tdp-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (= {pos} (plist/get raw :position))
+  (TextDocPosParams (LspTextDoc (plist/get td :uri))
+                    (LspPosition (plist/get pos :line) (plist/get pos :character)))
+})
+
+(sig 'to-open-params {-> List OpenParams})
+(fun {to-open-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (OpenParams (LspTextDocText (plist/get td :uri) (plist/get td :text)))
+})
+
+(sig 'to-change-params {-> List ChangeParams})
+(fun {to-change-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (ChangeParams (LspTextDoc (plist/get td :uri))
+                (plist/get raw :contentChanges))
+})
+
+(sig 'to-save-params {-> List SaveParams})
+(fun {to-save-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (SaveParams (LspTextDoc (plist/get td :uri))
+              (plist/get raw :text))
+})
+
+(sig 'to-range-params {-> List RangeParams})
+(fun {to-range-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (= {r} (plist/get raw :range))
+  (= {s} (plist/get r :start))
+  (= {e} (plist/get r :end))
+  (RangeParams (LspTextDoc (plist/get td :uri))
+               (LspRange (LspPosition (plist/get s :line) (plist/get s :character))
+                         (LspPosition (plist/get e :line) (plist/get e :character))))
+})
+
+(sig 'to-rename-params {-> List RenameParams})
+(fun {to-rename-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (= {pos} (plist/get raw :position))
+  (RenameParams (LspTextDoc (plist/get td :uri))
+                (LspPosition (plist/get pos :line) (plist/get pos :character))
+                (plist/get raw :newName))
+})
+
+; Selection range carries an array of positions rather than a single one.
+; Build SelectionParams so handle-selection-range can use field-access on
+; a typed record — see the note on lsp/get-doc for why raw plist input
+; can't be field-accessed directly (key order is non-deterministic).
+(sig 'to-selection-params {-> List SelectionParams})
+(fun {to-selection-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (SelectionParams (LspTextDoc (plist/get td :uri))
+                   (plist/get raw :positions))
+})
+
+; Code action carries a range and a context (with diagnostics).
+(sig 'to-code-action-params {-> List CodeActionParams})
+(fun {to-code-action-params raw} {do
+  (= {td} (plist/get raw :textDocument))
+  (= {r} (plist/get raw :range))
+  (= {s} (plist/get r :start))
+  (= {e} (plist/get r :end))
+  (= {ctx} (plist/get raw :context))
+  (CodeActionParams (LspTextDoc (plist/get td :uri))
+                    (LspRange (LspPosition (plist/get s :line) (plist/get s :character))
+                              (LspPosition (plist/get e :line) (plist/get e :character)))
+                    (CodeActionContext (plist/get ctx :diagnostics)))
+})
+
+(sig 'handle-readonly {-> Str Any List Nil})
+(fun {handle-readonly method id params} {
+  match method
+    {"textDocument/hover" (nav/handle-hover id (to-tdp-params params))}
+    {"textDocument/definition" (nav/handle-definition id (to-tdp-params params))}
+    {"textDocument/references" (nav/handle-references id (to-tdp-params params))}
+    {"textDocument/completion" (nav/handle-completion id (to-tdp-params params))}
+    {"textDocument/documentSymbol" (nav/handle-document-symbols id (to-doc-params params))}
+    {"workspace/symbol" (nav/handle-workspace-symbols id (QueryParams (plist/get params :query)))}
+    {"textDocument/semanticTokens/full" (nav/handle-semantic-tokens id (to-doc-params params))}
+    {"textDocument/semanticTokens/range" (handle-semantic-tokens-range id (to-range-params params))}
+    {"textDocument/prepareRename" (nav/handle-prepare-rename id (to-tdp-params params))}
+    {"textDocument/rename" (nav/handle-rename id (to-rename-params params))}
+    {"textDocument/inlayHint" (features/handle-inlay-hints id (to-range-params params))}
+    {"textDocument/signatureHelp" (features/handle-signature-help id (to-tdp-params params))}
+    {"textDocument/documentHighlight" (features/handle-document-highlight id (to-tdp-params params))}
+    {"textDocument/documentLink" (features/handle-document-link id (to-doc-params params))}
+    {"textDocument/foldingRange" (features/handle-folding-range id (to-doc-params params))}
+    {"textDocument/selectionRange" (features/handle-selection-range id (to-selection-params params))}
+    {"textDocument/codeLens" (features/handle-code-lens id (to-doc-params params))}
+    {"textDocument/codeAction" (features/handle-code-action id (to-code-action-params params))}
+    {_ (if (not (nil? id))
+         {lsp/send-error id -32601 (str "Method not found: " method)} {})}
+})
+
+; ---------------------------------------------------------------------------
+; Event-driven main loop — pipe/lsp-reader delivers parsed messages
+; ---------------------------------------------------------------------------
+(sig 'on-message {-> Str Nil})
+(fun {on-message body} {do
+  (= {msg} (json/parse body))
+  ; Unparseable JSON must be answered (id null) per JSON-RPC — silently
+  ; dropping it leaves the client waiting on whatever id it sent.
+  (if (or (nil? msg) (not (list? msg)))
+    {do (stderr/write "[valk-lsp] malformed message\n")
+        (lsp/send-error (None) -32700 "Parse error")}
+    {do
+      (= {method} msg:method)
+      (= {id} msg:id)
+      (= {params} msg:params)
+
+      (if (nil? method) {}
+        {match method
+            {"initialize" (do (stderr/write (str "[valk-lsp] <- initialize\n"))
+                              ; A second initialize is InvalidRequest per spec.
+                              ; Re-running the handler would reopen the symdb
+                              ; and re-seed builtins under the live server.
+                              (if (== lsp/initialized 1)
+                                {lsp/send-error id -32600 "Server already initialized"}
+                                {lsp/handle-initialize id
+                                  (InitParams (plist/get params :rootUri)
+                                              (plist/get params :capabilities))}))}
+            {"initialized" (do
+              ; Dispatch workspace scan to lsp/idx-sys, not lsp/sys. All
+              ; done-callbacks (including sqlite writes) land on idx-sys
+              ; loop 0 — completely separated from lsp/sys loop 0, which
+              ; keeps handling interactive LSP traffic (semanticTokens,
+              ; hover, diagnostics) with zero backlog from indexing.
+              ;
+              ; The idx-sys worker owns its own sqlite connection (lsp/idx-db),
+              ; opened on this thread and used for scan + diagnostics. Builtin
+              ; names are NOT seeded into the DB — the validator gets them from
+              ; (penv) directly (see vd/load-known-set), so there is no
+              ; cross-thread connection sharing to coordinate.
+              (if (not (nil? lsp/db-path))
+                {aio/dispatch lsp/idx-sys
+                  (\ {_} {do
+                    (def {lsp/idx-db} (symdb/init lsp/db-path))
+                    (def {lsp/idx-db-own} 1)
+                    (lsp/seed-builtins lsp/idx-db lsp/root-path)
+                    (symdb/attach-live lsp/idx-db)
+                    (lsp/collect-workspace-files lsp/root-path)})
+                  nil
+                  (\ {files} {if (or (nil? files) (error? files)) {}
+                    {do
+                      (= {tok} (lsp/next-progress-token))
+                      (lsp/progress-begin tok "Indexing workspace" (len files))
+                      (lsp/scan-all lsp/idx-db files tok)}})}
+                {}))}
+            {"shutdown" (do (def {lsp/shutdown-requested} 1)
+                            (lsp/send-response id (None)))}
+            {"exit" (aio/stop lsp/sys)}
+            ; JSON-RPC ids are `integer | string`, so the guard is "has an
+            ; id", not "has a numeric id" — a string-id request that goes
+            ; unanswered hangs that client forever.
+            {_ (if (== lsp/initialized 0)
+                 {if (not (nil? id))
+                   {lsp/send-error id -32002 "Server not initialized"} {}}
+               {if (== lsp/shutdown-requested 1)
+                 {if (not (nil? id))
+                   {lsp/send-error id -32600 "Server is shut down"} {}}
+                 {match method
+                   {"textDocument/didOpen" (dispatch-notification method params)}
+                   {"textDocument/didChange" (dispatch-notification method params)}
+                   {"textDocument/didClose" (dispatch-notification method params)}
+                   {"textDocument/didSave" (dispatch-notification method params)}
+                   {"$/cancelRequest" {}}
+                   {_ (if (not (nil? id))
+                          {dispatch-request method id params}
+                                                  {})}}})}})})})
+
+
+; Returns the process exit code: 0 if the client sent `shutdown` before
+; `exit`, 1 otherwise. The spec makes that distinction observable so a
+; supervisor can tell a clean stop from a client that dropped the
+; protocol.
+(sig 'start {-> Num})
+(fun {start} {do
+  (stderr/write "[valk-lsp] starting (threaded)\n")
+  ; Two loops: loop 0 owns stdin/stdout + notification handlers; loop 1
+  ; is the single worker every request dispatches to (round-robin over
+  ; loops 1..N-1 degenerates to always loop 1). :num-threads 0 resolved
+  ; to CPU-count loops, which ran handlers concurrently on many threads —
+  ; but handlers mutate shared Lisp state (caches, closure envs, version
+  ; counters) and non-root envs have no cross-thread synchronization,
+  ; producing use-after-free crashes under load. Handlers are ~1-2ms, so
+  ; one serialized worker meets latency budgets while keeping loop 0
+  ; free for I/O; indexing still runs off-thread on lsp/idx-sys.
+  (def {lsp/sys} (aio/await (aio/start {:num-threads 2})))
+  ; Dedicated aio system for workspace indexing so lsp/sys stays clear for
+  ; interactive traffic. ONE loop: with two, dispatch workers (loop 1) and
+  ; done-callbacks (loop 0) both wrote lsp/idx-db over a single sqlite
+  ; connection, interleaving BEGIN/COMMIT ("cannot start a transaction
+  ; within a transaction" under load). One loop serializes every idx-db
+  ; write by construction.
+  (def {lsp/idx-sys} (aio/await (aio/start {:num-threads 1})))
+  (= {stdin-pipe} (pipe/stdin-open lsp/sys))
+  (def {lsp/out} (pipe/stdout-open lsp/sys))
+  (pipe/lsp-reader stdin-pipe (\ {body} {on-message body}))
+  (aio/run lsp/sys)
+  (aio/stop lsp/idx-sys)
+  ; Join idx-sys before closing its database: aio/stop only SIGNALS the
+  ; loops, and an idx worker can still be mid sqlite3_exec on lsp/idx-db
+  ; when the closes below run (TSAN-caught race: main's sqlite3_close vs
+  ; worker's sqlite3_exec). aio/run on an already-stopping system falls
+  ; straight through its wait loop and joins the loop threads.
+  (aio/run lsp/idx-sys)
+  (if (and (not (nil? lsp/idx-db)) (== lsp/idx-db-own 1))
+    {symdb/close lsp/idx-db} {})
+  (if (not (nil? lsp/db)) {symdb/close lsp/db} {})
+  (stderr/write "[valk-lsp] shutdown\n")
+  (if (== lsp/shutdown-requested 1) {0} {1})})

@@ -1,0 +1,572 @@
+#include "builtins_internal.h"
+
+#include <string.h>
+
+static valk_lval_t* valk_builtin_cons(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  valk_lval_t* arg1 = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, arg1, LVAL_CONS, LVAL_NIL);
+
+  valk_lval_t* head = valk_lval_list_nth(a, 0);
+  valk_lval_t* tail = arg1;
+
+  return valk_lval_cons(head, tail);
+}
+
+static valk_lval_t* valk_builtin_len(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* arg = valk_lval_list_nth(a, 0);
+  switch (LVAL_TYPE(arg)) {
+    case LVAL_CONS:
+    case LVAL_NIL: {
+      u64 count = valk_lval_list_count(arg);
+      return valk_lval_num(count);
+    }
+    case LVAL_STR: {
+      u64 n = strlen(arg->str);
+      return valk_lval_num((long)n);
+    }
+    default:
+      LVAL_RAISE(a, "Actual: %s, Expected(One-Of): [List, Nil, String]",
+                 valk_ltype_name(LVAL_TYPE(arg)));
+      return valk_lval_err("len invalid type");
+  }
+}
+
+static valk_lval_t* valk_builtin_head(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT(a, valk_lval_list_count(a) == 1,
+              "Builtin `head` passed too many arguments");
+  valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_QEXPR);
+  LVAL_ASSERT_COUNT_GT(a, arg0, 0); // LCOV_EXCL_BR_LINE - cons with NULL head unconstructible from Valk
+
+  return arg0->cons.head;
+}
+
+static valk_lval_t* valk_builtin_tail(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT(a, valk_lval_list_count(a) == 1,
+              "Builtin `tail` passed too many arguments");
+  valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_QEXPR);
+  LVAL_ASSERT(a, !valk_lval_list_is_empty(arg0), // LCOV_EXCL_BR_LINE - cons with NULL head unconstructible from Valk
+              "Builtin `tail` cannot operate on empty list");
+
+  return arg0->cons.tail;
+}
+
+// LCOV_EXCL_BR_START - recursive list init: empty guard validated at API boundary
+static valk_lval_t* valk_list_init(valk_lval_t* list, bool is_qexpr) {
+  if (valk_lval_list_is_empty(list)) {
+    return valk_lval_nil();
+  }
+  // LCOV_EXCL_BR_STOP
+
+  if (valk_lval_list_is_empty(list->cons.tail)) {
+    return valk_lval_nil();
+  }
+
+  if (is_qexpr) {
+    return valk_lval_qcons(list->cons.head,
+                           valk_list_init(list->cons.tail, is_qexpr));
+  } else {
+    return valk_lval_cons(list->cons.head,
+                          valk_list_init(list->cons.tail, is_qexpr));
+  }
+}
+
+static valk_lval_t* valk_builtin_init(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS);
+  LVAL_ASSERT_COUNT_GT(a, arg0, 0); // LCOV_EXCL_BR_LINE - cons with NULL head unconstructible from Valk
+
+  bool is_qexpr = (arg0->flags & LVAL_FLAG_QUOTED) != 0;
+  return valk_list_init(arg0, is_qexpr);
+}
+
+static valk_lval_t* valk_builtin_join(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_TYPE(a, arg0, LVAL_CONS, LVAL_QEXPR, LVAL_NIL);
+
+  valk_lval_t* x = arg0;
+  u64 count = valk_lval_list_count(a);
+  for (u64 i = 1; i < count; i++) {
+    x = valk_lval_join(x, valk_lval_list_nth(a, i));
+  }
+
+  return x;
+}
+
+static valk_lval_t* valk_builtin_range(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+
+  long start = valk_lval_list_nth(a, 0)->num;
+  long end = valk_lval_list_nth(a, 1)->num;
+
+  if (start >= end) {
+    return valk_lval_nil();
+  }
+
+  valk_lval_t* result = valk_lval_nil();
+  for (long i = end - 1; i >= start; i--) {
+    result = valk_lval_cons(valk_lval_num(i), result);
+  }
+
+  return result;
+}
+
+static valk_lval_t* valk_builtin_repeat(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 1), LVAL_NUM);
+
+  valk_lval_t* func = valk_lval_list_nth(a, 0);
+  long count = valk_lval_list_nth(a, 1)->num;
+
+  // A negative count would declare a negative-length VLA below, which is
+  // undefined behaviour. Repeating something a negative number of times is
+  // the same as not repeating it.
+  if (count <= 0) return valk_lval_nil();
+
+  valk_lval_t* res[count];
+  valk_lval_t* nil = valk_lval_nil();
+
+  for (long i = 0; i < count; i++) {
+    valk_lval_t* args = valk_lval_cons(valk_lval_num(i), nil);
+    res[i] = valk_lval_eval_call(e, func, args);
+  }
+
+  return valk_lval_list(res, count);
+}
+
+// LCOV_EXCL_BR_START - evaluator passes args as unquoted cons
+valk_lval_t* valk_builtin_list(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  if (LVAL_TYPE(a) == LVAL_NIL) {
+    return a;
+  }
+  if (LVAL_TYPE(a) == LVAL_CONS && (a->flags & LVAL_FLAG_QUOTED)) {
+    return a;
+  }
+  // LCOV_EXCL_BR_STOP
+  u64 count = valk_lval_list_count(a);
+  valk_lval_t* items[count];
+  valk_lval_t* curr = a;
+  for (u64 i = 0; i < count; i++) {
+    items[i] = curr->cons.head;
+    curr = curr->cons.tail;
+  }
+  return valk_lval_qlist(items, count);
+}
+
+static valk_lval_t* valk_builtin_eval(valk_lenv_t* e, valk_lval_t* a) {
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* arg0 = valk_lval_list_nth(a, 0);
+
+  if (LVAL_TYPE(arg0) == LVAL_CONS && (arg0->flags & LVAL_FLAG_QUOTED)) {
+    arg0 = valk_qexpr_to_cons(arg0);
+  }
+
+  return valk_lval_eval(e, arg0);
+}
+
+// LCOV_EXCL_BR_START - internal list traversal null guards
+static valk_lval_t* valk_builtin_reverse(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* list = valk_lval_list_nth(a, 0);
+
+  if (!list || LVAL_TYPE(list) == LVAL_NIL)
+    return valk_lval_nil();
+
+  LVAL_ASSERT_TYPE(a, list, LVAL_CONS, LVAL_NIL);
+
+  bool is_qexpr = (list->flags & LVAL_FLAG_QUOTED) != 0;
+  valk_lval_t* result = valk_lval_nil();
+  valk_lval_t* curr = list;
+  while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+    if (is_qexpr)
+      result = valk_lval_qcons(curr->cons.head, result);
+    else
+      result = valk_lval_cons(curr->cons.head, result);
+    curr = curr->cons.tail;
+  }
+  return result;
+}
+// LCOV_EXCL_BR_STOP
+
+// LCOV_EXCL_BR_START - internal list traversal null guards
+static valk_lval_t* valk_builtin_list_group(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+  long n = valk_lval_list_nth(a, 0)->num;
+  valk_lval_t* list = valk_lval_list_nth(a, 1);
+  if (n <= 0) return valk_lval_nil();
+  if (LVAL_TYPE(list) == LVAL_NIL) return list;
+
+  valk_lval_t* rev = valk_lval_nil();
+  valk_lval_t* curr = list;
+  while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+    valk_lval_t* items[n];
+    long count = 0;
+    for (long i = 0; i < n && curr && LVAL_TYPE(curr) == LVAL_CONS; i++) {
+      items[i] = curr->cons.head;
+      curr = curr->cons.tail;
+      count++;
+    }
+    if (count == n)
+      rev = valk_lval_qcons(valk_lval_qlist(items, count), rev);
+  }
+  valk_lval_t* result = valk_lval_nil();
+  curr = rev;
+  while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+    result = valk_lval_qcons(curr->cons.head, result);
+    curr = curr->cons.tail;
+  }
+  // LCOV_EXCL_BR_STOP
+  return result;
+}
+
+// Type-directed field access with runtime fallback. Emitted by the type
+// transform in place of a bare `(nth N x)` whenever a record type is
+// known at compile time.
+//
+// The dispatch heuristic looks at the value's first element:
+//   - If it's a keyword (starts with `:`) → it's a plist; walk for the
+//     field's keyword and return the matching value.
+//   - Otherwise (sym tag, value, anything else) → treat as a positional
+//     record and return (nth IDX value).
+//
+// Why not strict tag-match against the expected constructor name? Two
+// records with structurally-compatible prefixes (e.g. RenameParams vs
+// TextDocPosParams, both starting :textDocument :position ...) need to
+// be field-accessible against either sig. The keyword-vs-not heuristic
+// captures the only thing that actually matters at runtime: "does this
+// value lay out as <tag, v0, v1, ...> or as <:k0, v0, :k1, v1, ...>?".
+//
+// This makes a sig-misannotation against a raw JSON plist degrade to
+// "wrong key returns nil" rather than "wrong byte returns garbage" —
+// the bug class we're protecting against — while still allowing
+// positional access across compatible record types.
+//
+// TAG-SYM is currently unused but kept in the call site for future
+// runtime-type-checking diagnostics.
+//
+// Args: (record/field VALUE TAG-SYM IDX FIELD-KEY)
+static valk_lval_t* valk_builtin_record_field(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 4);
+  valk_lval_t* value = valk_lval_list_nth(a, 0);
+  valk_lval_t* idx   = valk_lval_list_nth(a, 2);
+  valk_lval_t* key   = valk_lval_list_nth(a, 3);
+  LVAL_ASSERT_TYPE(a, idx, LVAL_NUM);
+
+  // Non-cons values (Err, Nil, Num, Str) — no field to fetch.
+  if (!value || (LVAL_TYPE(value) != LVAL_CONS && LVAL_TYPE(value) != LVAL_QEXPR)) // LCOV_EXCL_BR_LINE - values never NULL; QEXPR aliases CONS
+    return valk_lval_nil();
+
+  valk_lval_t* head = value->cons.head;
+  bool looks_like_plist = head && LVAL_TYPE(head) == LVAL_SYM && // LCOV_EXCL_BR_LINE - cons head/sym str never NULL
+                          head->str && head->str[0] == ':'; // LCOV_EXCL_BR_LINE - cons head/sym str never NULL
+
+  if (!looks_like_plist) {
+    // Positional fast path: head is a constructor tag (or any non-keyword).
+    long n = idx->num;
+    valk_lval_t* curr = value;
+    for (long i = 1; i < n; i++) {
+      if (!curr || (LVAL_TYPE(curr) != LVAL_CONS && LVAL_TYPE(curr) != LVAL_QEXPR)) // LCOV_EXCL_BR_LINE - values never NULL; QEXPR aliases CONS // LCOV_EXCL_BR_LINE - values never NULL; QEXPR aliases CONS
+        return valk_lval_nil();
+      curr = curr->cons.tail;
+    }
+    if (!curr || (LVAL_TYPE(curr) != LVAL_CONS && LVAL_TYPE(curr) != LVAL_QEXPR)) // LCOV_EXCL_BR_LINE - values never NULL; QEXPR aliases CONS
+      return valk_lval_nil();
+    return curr->cons.head;
+  }
+
+  // Plist path: head is a keyword, walk pairs looking for the field key.
+  const char* key_str = NULL;
+  if (LVAL_TYPE(key) == LVAL_SYM || LVAL_TYPE(key) == LVAL_STR)
+    key_str = key->str;
+  if (!key_str) return valk_lval_nil();
+  valk_lval_t* curr = value;
+  while (curr && LVAL_TYPE(curr) == LVAL_CONS) { // LCOV_EXCL_BR_LINE - list values never NULL
+    valk_lval_t* k = curr->cons.head;
+    valk_lval_t* rest = curr->cons.tail;
+    if (!rest || LVAL_TYPE(rest) != LVAL_CONS) break; // LCOV_EXCL_BR_LINE - tails never NULL
+    if ((LVAL_TYPE(k) == LVAL_SYM || LVAL_TYPE(k) == LVAL_STR) &&
+        strcmp(k->str, key_str) == 0)
+      return rest->cons.head;
+    curr = rest->cons.tail;
+  }
+  return valk_lval_nil();
+}
+
+// LCOV_EXCL_BR_START - internal plist traversal null guards
+static valk_lval_t* valk_builtin_plist_get(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  valk_lval_t* plist = valk_lval_list_nth(a, 0);
+  valk_lval_t* key = valk_lval_list_nth(a, 1);
+
+  if (!plist || LVAL_TYPE(plist) == LVAL_NIL)
+    return valk_lval_nil();
+
+  const char* key_str = NULL;
+  if (LVAL_TYPE(key) == LVAL_SYM)
+    key_str = key->str;
+  else if (LVAL_TYPE(key) == LVAL_STR)
+    key_str = key->str;
+  else
+    return valk_lval_nil();
+
+  valk_lval_t* curr = plist;
+  while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+    valk_lval_t* k = curr->cons.head;
+    valk_lval_t* rest = curr->cons.tail;
+    if (!rest || LVAL_TYPE(rest) != LVAL_CONS) break; // LCOV_EXCL_BR_LINE - tails never NULL
+    if ((LVAL_TYPE(k) == LVAL_SYM || LVAL_TYPE(k) == LVAL_STR) &&
+        strcmp(k->str, key_str) == 0)
+      return rest->cons.head;
+    curr = rest->cons.tail;
+  }
+  return valk_lval_nil();
+  // LCOV_EXCL_BR_STOP
+}
+
+static valk_lval_t* valk_builtin_nth(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  LVAL_ASSERT_TYPE(a, valk_lval_list_nth(a, 0), LVAL_NUM);
+  long n = valk_lval_list_nth(a, 0)->num;
+  valk_lval_t* list = valk_lval_list_nth(a, 1);
+  if (n <= 0)
+    LVAL_RAISE(a, "Invalid array index (should start with 1)");
+  valk_lval_t* curr = list;
+  // LCOV_EXCL_BR_START - LVAL_QEXPR == LVAL_CONS, redundant check
+  for (long i = 1; i < n; i++) {
+    if (!curr || (LVAL_TYPE(curr) != LVAL_CONS && LVAL_TYPE(curr) != LVAL_QEXPR)) // LCOV_EXCL_BR_LINE - values never NULL; QEXPR aliases CONS
+      LVAL_RAISE(a, "nth: index %ld out of bounds", n);
+    curr = curr->cons.tail;
+  }
+  if (!curr || (LVAL_TYPE(curr) != LVAL_CONS && LVAL_TYPE(curr) != LVAL_QEXPR))
+    LVAL_RAISE(a, "nth: index %ld out of bounds", n);
+  // LCOV_EXCL_BR_STOP
+  return curr->cons.head;
+}
+
+static valk_lval_t* valk_builtin_ast_node_type(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  switch (LVAL_TYPE(v)) { // LCOV_EXCL_BR_LINE - ERR args short-circuit before builtins run
+    case LVAL_SYM: return valk_lval_str("sym");
+    case LVAL_NUM: return valk_lval_str("num");
+    case LVAL_STR: return valk_lval_str("str");
+    case LVAL_CONS:
+      return (v->flags & LVAL_FLAG_QUOTED) ? valk_lval_str("qexpr") : valk_lval_str("sexpr");
+    case LVAL_NIL: return valk_lval_str("nil");
+    case LVAL_FUN: return valk_lval_str("fun");
+    case LVAL_ERR: return valk_lval_str("err");
+    default: return valk_lval_str("unknown");
+  }
+}
+
+static valk_lval_t* valk_builtin_ast_node_name(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  if (LVAL_TYPE(v) == LVAL_SYM) return valk_lval_str(v->str);
+  if (LVAL_TYPE(v) == LVAL_STR) return v;
+  if (LVAL_TYPE(v) == LVAL_NUM) {
+    char buf[32]; snprintf(buf, sizeof(buf), "%ld", (long)v->num);
+    return valk_lval_str(buf);
+  }
+  return valk_lval_nil();
+}
+
+// Convert a raw AST lval into a safe data representation.
+// Symbols become strings (no evaluation). Lists become quoted.
+// Returns a plist: {:type "sym" :name "def" :pos 0}
+//                  {:type "num" :val 42 :pos 5}
+//                  {:type "sexpr" :children (...) :pos 0}
+static valk_lval_t* ast_to_data(valk_lval_t* v);
+static valk_lval_t* ast_children_to_data(valk_lval_t* list);
+
+static valk_lval_t* ast_children_to_data(valk_lval_t* list) {
+  if (!list || LVAL_TYPE(list) == LVAL_NIL) return valk_lval_nil(); // LCOV_EXCL_BR_LINE - AST values never NULL
+  if (LVAL_TYPE(list) != LVAL_CONS) return valk_lval_cons(ast_to_data(list), valk_lval_nil());
+  valk_lval_t* hd = ast_to_data(list->cons.head);
+  valk_lval_t* tl = ast_children_to_data(list->cons.tail);
+  return valk_lval_cons(hd, tl);
+}
+
+static valk_lval_t* ast_to_data(valk_lval_t* v) {
+  if (!v || LVAL_TYPE(v) == LVAL_NIL) return valk_lval_nil(); // LCOV_EXCL_BR_LINE - AST values never NULL
+  i64 pos = LVAL_SRC_POS(v);
+  switch (LVAL_TYPE(v)) { // LCOV_EXCL_BR_LINE - ERR args short-circuit before builtins run
+    case LVAL_SYM:
+      return valk_lval_cons(valk_lval_sym(":type"), valk_lval_cons(valk_lval_str("sym"),
+        valk_lval_cons(valk_lval_sym(":name"), valk_lval_cons(valk_lval_str(v->str),
+        valk_lval_cons(valk_lval_sym(":pos"), valk_lval_cons(valk_lval_num(pos),
+        valk_lval_nil()))))));
+    case LVAL_NUM: {
+      char buf[32]; snprintf(buf, sizeof(buf), "%ld", (long)v->num);
+      return valk_lval_cons(valk_lval_sym(":type"), valk_lval_cons(valk_lval_str("num"),
+        valk_lval_cons(valk_lval_sym(":name"), valk_lval_cons(valk_lval_str(buf),
+        valk_lval_cons(valk_lval_sym(":pos"), valk_lval_cons(valk_lval_num(pos),
+        valk_lval_nil()))))));
+    }
+    case LVAL_STR:
+      return valk_lval_cons(valk_lval_sym(":type"), valk_lval_cons(valk_lval_str("str"),
+        valk_lval_cons(valk_lval_sym(":name"), valk_lval_cons(valk_lval_str(v->str),
+        valk_lval_cons(valk_lval_sym(":pos"), valk_lval_cons(valk_lval_num(pos),
+        valk_lval_cons(valk_lval_sym(":len"), valk_lval_cons(valk_lval_num((i64)strlen(v->str) + 2),
+        valk_lval_nil()))))))));
+    case LVAL_CONS: {
+      const char *kind = (v->flags & LVAL_FLAG_QUOTED) ? "qexpr" : "sexpr";
+      valk_lval_t* children = ast_children_to_data(v);
+      return valk_lval_cons(valk_lval_sym(":type"), valk_lval_cons(valk_lval_str(kind),
+        valk_lval_cons(valk_lval_sym(":children"), valk_lval_cons(children,
+        valk_lval_cons(valk_lval_sym(":pos"), valk_lval_cons(valk_lval_num(pos),
+        valk_lval_nil()))))));
+    }
+    default: return valk_lval_nil();
+  }
+}
+
+static valk_lval_t* valk_builtin_ast_head_name(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* list = valk_lval_list_nth(a, 0);
+  if (!list || LVAL_TYPE(list) != LVAL_CONS || !list->cons.head) // LCOV_EXCL_BR_LINE - AST lists and heads never NULL
+    return valk_lval_str("");
+  valk_lval_t* head = list->cons.head;
+  if (LVAL_TYPE(head) == LVAL_SYM) return valk_lval_str(head->str);
+  return valk_lval_str("");
+}
+
+static valk_lval_t* valk_builtin_ast_head_type(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* list = valk_lval_list_nth(a, 0);
+  if (!list || LVAL_TYPE(list) != LVAL_CONS || !list->cons.head) // LCOV_EXCL_BR_LINE - AST lists and heads never NULL
+    return valk_lval_str("");
+  valk_lval_t* head = list->cons.head;
+  switch (LVAL_TYPE(head)) {
+    case LVAL_SYM: return valk_lval_str("sym");
+    case LVAL_NUM: return valk_lval_str("num");
+    case LVAL_STR: return valk_lval_str("str");
+    case LVAL_CONS: return (head->flags & LVAL_FLAG_QUOTED)
+      ? valk_lval_str("qexpr") : valk_lval_str("sexpr");
+    case LVAL_NIL: return valk_lval_str("nil");
+    default: return valk_lval_str("other");
+  }
+}
+
+static valk_lval_t* valk_builtin_ast_nth_name(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  i64 idx = (i64)valk_lval_list_nth(a, 0)->num;
+  valk_lval_t* list = valk_lval_list_nth(a, 1);
+  if (!list || LVAL_TYPE(list) != LVAL_CONS) return valk_lval_str(""); // LCOV_EXCL_BR_LINE - AST values never NULL
+  valk_lval_t* cur = list;
+  for (i64 i = 1; i < idx && cur && LVAL_TYPE(cur) == LVAL_CONS; i++) // LCOV_EXCL_BR_LINE - spine cells never NULL
+    cur = cur->cons.tail;
+  if (!cur || LVAL_TYPE(cur) != LVAL_CONS || !cur->cons.head) // LCOV_EXCL_BR_LINE - spine cells and heads never NULL
+    return valk_lval_str("");
+  valk_lval_t* elem = cur->cons.head;
+  if (LVAL_TYPE(elem) == LVAL_SYM) return valk_lval_str(elem->str);
+  return valk_lval_str("");
+}
+
+static valk_lval_t* valk_builtin_ast_to_data(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return ast_children_to_data(v);
+}
+
+static valk_lval_t* valk_builtin_ast_src_pos(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return valk_lval_num(LVAL_SRC_POS(v));
+}
+
+static valk_lval_t* valk_builtin_ast_nil(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  if (v == NULL || LVAL_TYPE(v) == LVAL_NIL) return valk_lval_num(1); // LCOV_EXCL_BR_LINE - AST values never NULL
+  if (LVAL_TYPE(v) == LVAL_CONS) return valk_lval_num(valk_lval_list_count(v) == 0 ? 1 : 0);
+  return valk_lval_num(0);
+}
+
+static valk_lval_t* valk_builtin_ast_len(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  valk_lval_t* v = valk_lval_list_nth(a, 0);
+  return valk_lval_num((long)valk_lval_list_count(v));
+}
+
+
+
+static valk_lval_t* valk_builtin_member(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+  valk_lval_t* needle = valk_lval_list_nth(a, 0);
+  valk_lval_t* list = valk_lval_list_nth(a, 1);
+  while (list && LVAL_TYPE(list) == LVAL_CONS) { // LCOV_EXCL_BR_LINE - list values never NULL
+    if (valk_lval_eq(needle, list->cons.head))
+      return valk_lval_num(1);
+    list = list->cons.tail;
+  }
+  // LCOV_EXCL_START - LVAL_QEXPR == LVAL_CONS, first loop handles both
+  if (LVAL_TYPE(list) == LVAL_QEXPR) {
+    valk_lval_t* curr = list;
+    while (curr && LVAL_TYPE(curr) == LVAL_CONS) {
+      if (valk_lval_eq(needle, curr->cons.head))
+        return valk_lval_num(1);
+      curr = curr->cons.tail;
+    }
+  }
+  // LCOV_EXCL_STOP
+  return valk_lval_num(0);
+}
+
+void valk_register_list_builtins(valk_lenv_t* env) {
+  valk_lenv_put_builtin(env, "list", valk_builtin_list);
+  valk_lenv_put_builtin(env, "cons", valk_builtin_cons);
+  valk_lenv_put_builtin(env, "len", valk_builtin_len);
+  valk_lenv_put_builtin(env, "init", valk_builtin_init);
+  valk_lenv_put_builtin(env, "head", valk_builtin_head);
+  valk_lenv_put_builtin(env, "tail", valk_builtin_tail);
+  valk_lenv_put_builtin(env, "join", valk_builtin_join);
+  valk_lenv_put_builtin(env, "range", valk_builtin_range);
+  valk_lenv_put_builtin(env, "repeat", valk_builtin_repeat);
+  valk_lenv_put_builtin(env, "eval", valk_builtin_eval);
+  valk_lenv_put_builtin(env, "nth", valk_builtin_nth);
+  valk_lenv_put_builtin(env, "ast/to-data", valk_builtin_ast_to_data);
+  valk_lenv_put_builtin(env, "ast/node-type", valk_builtin_ast_node_type);
+  valk_lenv_put_builtin(env, "ast/node-name", valk_builtin_ast_node_name);
+  valk_lenv_put_builtin(env, "ast/head-name", valk_builtin_ast_head_name);
+  valk_lenv_put_builtin(env, "ast/head-type", valk_builtin_ast_head_type);
+  valk_lenv_put_builtin(env, "ast/nth-name", valk_builtin_ast_nth_name);
+  valk_lenv_put_builtin(env, "ast/src-pos", valk_builtin_ast_src_pos);
+  valk_lenv_put_builtin(env, "ast/nil?", valk_builtin_ast_nil);
+  valk_lenv_put_builtin(env, "ast/len", valk_builtin_ast_len);
+  valk_lenv_put_builtin(env, "member?", valk_builtin_member);
+  valk_lenv_put_builtin(env, "reverse", valk_builtin_reverse);
+  valk_lenv_put_builtin(env, "list/group", valk_builtin_list_group);
+  valk_lenv_put_builtin(env, "plist/get", valk_builtin_plist_get);
+  valk_lenv_put_builtin(env, "record/field", valk_builtin_record_field);
+}

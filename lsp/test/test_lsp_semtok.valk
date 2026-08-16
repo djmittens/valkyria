@@ -1,0 +1,336 @@
+(load "testing/test.valk")
+(load "symdb/symdb.valk")
+(load "lsp/analysis.valk")
+(load "symdb/validate.valk")
+
+(fun {tok-count text} {do
+  (= {data} (sem/tokenize text))
+  (/ (len data) 5)
+})
+
+(fun {tok-groups text} {
+  list/group 5 (sem/tokenize text)
+})
+
+(fun {nth-tok text n} {
+  nth n (tok-groups text)
+})
+
+(fun {tok-type tok} {nth 4 tok})
+(fun {tok-len tok} {nth 3 tok})
+
+; Decode the delta encoding and check each token lies inside its line.
+(fun {sem-test/tokens-fit groups lines line col} {
+  if (nil? groups) {1}
+  {do
+    (= {g} (head groups))
+    (= {ln} (+ line (nth 1 g)))
+    (= {c} (if (== (nth 1 g) 0) {+ col (nth 2 g)} {nth 2 g}))
+    (= {src} (nth (+ ln 1) lines))
+    (if (nil? src) {0}
+    {if (> (+ c (nth 3 g)) (len src)) {0}
+    {sem-test/tokens-fit (tail groups) lines ln c}})}
+})
+
+(test/run (list
+
+  ; --- Basic token counts ---
+
+  (test/case "empty-input-no-tokens"
+    {do
+      (test/assert-eq 0 (tok-count "")
+        "empty input should produce 0 tokens")
+      true
+    })
+
+  (test/case "number-literal"
+    {do
+      (test/assert-eq 1 (tok-count "42")
+        "single number should produce 1 token")
+      (= {tok} (nth-tok "42" 1))
+      (test/assert-eq sem/SEM_NUMBER (tok-type tok) "should be number type")
+      true
+    })
+
+  (test/case "symbol-classified"
+    {do
+      (test/assert (>= (tok-count "foo") 1)
+        "standalone symbol should produce at least 1 token")
+      (= {tok} (nth-tok "foo" 1))
+      (test/assert-eq sem/SEM_VARIABLE (tok-type tok) "bare symbol should be variable")
+      true
+    })
+
+  (test/case "keyword-property"
+    {do
+      (= {tok} (nth-tok ":foo" 1))
+      (test/assert-eq sem/SEM_PROPERTY (tok-type tok) ":keyword should be property")
+      true
+    })
+
+  ; --- Function calls ---
+
+  (test/case "function-call-head"
+    {do
+      (= {toks} (tok-groups "(+ 1 2)"))
+      (= {head-tok} (nth 1 toks))
+      (test/assert-eq sem/SEM_OPERATOR (tok-type head-tok) "+ should be operator")
+      true
+    })
+
+  (test/case "named-function-call"
+    {do
+      (= {toks} (tok-groups "(foo 1)"))
+      (= {head-tok} (nth 1 toks))
+      (test/assert-eq sem/SEM_FUNCTION (tok-type head-tok) "foo in call pos should be function")
+      true
+    })
+
+  ; --- Keywords ---
+
+  (test/case "if-keyword"
+    {do
+      (= {toks} (tok-groups "(if true {1} {2})"))
+      (= {head-tok} (nth 1 toks))
+      (test/assert-eq sem/SEM_KEYWORD (tok-type head-tok) "if should be keyword")
+      true
+    })
+
+  (test/case "do-keyword"
+    {do
+      (= {toks} (tok-groups "(do 1 2)"))
+      (= {head-tok} (nth 1 toks))
+      (test/assert-eq sem/SEM_KEYWORD (tok-type head-tok) "do should be keyword")
+      true
+    })
+
+  ; --- fun declaration ---
+
+  (test/case "fun-keyword-and-name"
+    {do
+      (= {toks} (tok-groups "(fun {add x y} {+ x y})"))
+      (= {kw} (nth 1 toks))
+      (test/assert-eq sem/SEM_KEYWORD (tok-type kw) "fun should be keyword")
+      (= {name-tok} (nth 2 toks))
+      (test/assert-eq sem/SEM_FUNCTION (tok-type name-tok) "function name should be function type")
+      true
+    })
+
+  (test/case "fun-params-are-parameter"
+    {do
+      (= {toks} (tok-groups "(fun {f x y} {x})"))
+      (= {x-tok} (nth 3 toks))
+      (= {y-tok} (nth 4 toks))
+      (test/assert-eq sem/SEM_PARAMETER (tok-type x-tok) "param x declaration should be parameter")
+      (test/assert-eq sem/SEM_PARAMETER (tok-type y-tok) "param y declaration should be parameter")
+      true
+    })
+
+  (test/case "fun-body-params-classified"
+    {do
+      (= {toks} (tok-groups "(fun {f x} {x})"))
+      (= {body-x} (nth 4 toks))
+      (test/assert-eq sem/SEM_PARAMETER (tok-type body-x) "x in body should be parameter (in scope)")
+      true
+    })
+
+  ; --- Lambda ---
+
+  (test/case "lambda-keyword"
+    {do
+      (= {toks} (tok-groups "(\\ {x} {x})"))
+      (= {kw} (nth 1 toks))
+      (test/assert-eq sem/SEM_KEYWORD (tok-type kw) "\\ should be keyword")
+      true
+    })
+
+  (test/case "lambda-param-in-scope"
+    {do
+      (= {toks} (tok-groups "(\\ {a} {a})"))
+      (= {body-a} (nth 3 toks))
+      (test/assert-eq sem/SEM_PARAMETER (tok-type body-a) "a in lambda body should be parameter")
+      true
+    })
+
+  ; --- def / = bindings ---
+
+  (test/case "def-keyword-and-var"
+    {do
+      (= {toks} (tok-groups "(def {x} 42)"))
+      (= {kw} (nth 1 toks))
+      (test/assert-eq sem/SEM_KEYWORD (tok-type kw) "def should be keyword")
+      (= {var-tok} (nth 2 toks))
+      (test/assert-eq sem/SEM_VARIABLE (tok-type var-tok) "x in def should be variable")
+      true
+    })
+
+  (test/case "assign-keyword-and-var"
+    {do
+      (= {toks} (tok-groups "(= {y} 10)"))
+      (= {kw} (nth 1 toks))
+      (test/assert-eq sem/SEM_KEYWORD (tok-type kw) "= should be keyword")
+      true
+    })
+
+  ; --- type declarations ---
+
+  (test/case "type-keyword-and-names"
+    {do
+      (= {toks} (tok-groups "(type {Color} {Red} {Green})"))
+      (= {kw} (nth 1 toks))
+      (test/assert-eq sem/SEM_KEYWORD (tok-type kw) "type should be keyword")
+      (= {tname} (nth 2 toks))
+      (test/assert-eq sem/SEM_TYPE (tok-type tname) "Color should be type")
+      (= {ctor1} (nth 3 toks))
+      (test/assert-eq sem/SEM_TYPE (tok-type ctor1) "Red should be type")
+      true
+    })
+
+  (test/case "type-field-properties"
+    {do
+      (= {toks} (tok-groups "(type {Point} {Point :x :y})"))
+      (= {field-x} (nth 4 toks))
+      (test/assert-eq sem/SEM_PROPERTY (tok-type field-x) ":x field should be property")
+      true
+    })
+
+  ; --- Operators ---
+
+  (test/case "arithmetic-operators"
+    {do
+      (= {toks} (tok-groups "(* 2 3)"))
+      (= {op} (nth 1 toks))
+      (test/assert-eq sem/SEM_OPERATOR (tok-type op) "* should be operator")
+      true
+    })
+
+  (test/case "comparison-operators"
+    {do
+      (= {toks} (tok-groups "(>= 1 2)"))
+      (= {op} (nth 1 toks))
+      (test/assert-eq sem/SEM_OPERATOR (tok-type op) ">= should be operator")
+      true
+    })
+
+  ; --- Delta encoding ---
+
+  (test/case "delta-same-line"
+    {do
+      (= {data} (sem/tokenize "(+ 1 2)"))
+      (= {groups} (list/group 5 data))
+      (= {tok2} (nth 2 groups))
+      (test/assert-eq 0 (nth 1 tok2) "second token on same line should have deltaLine=0")
+      true
+    })
+
+  (test/case "delta-new-line"
+    {do
+      (= {data} (sem/tokenize "1\n2"))
+      (= {groups} (list/group 5 data))
+      (test/assert-eq 2 (len groups) "should have 2 tokens")
+      (= {tok2} (nth 2 groups))
+      (test/assert-eq 1 (nth 1 tok2) "second token on next line should have deltaLine=1")
+      true
+    })
+
+  ; --- Quasiquote source lengths (regression for crash fix) ---
+
+  (test/case "quote-source-len"
+    {do
+      (test/assert-eq 1 (sem/source-len "quote") "quote = ' = 1 char")
+      (test/assert-eq 1 (sem/source-len "quasiquote") "quasiquote = ` = 1 char")
+      (test/assert-eq 1 (sem/source-len "unquote") "unquote = , = 1 char")
+      (test/assert-eq 2 (sem/source-len "unquote-splicing") "unquote-splicing = ,@ = 2 chars")
+      true
+    })
+
+  (test/case "regular-name-source-len"
+    {do
+      (test/assert-eq 3 (sem/source-len "foo") "foo = 3 chars")
+      (test/assert-eq 2 (sem/source-len "if") "if = 2 chars")
+      true
+    })
+
+  ; --- Ampersand skipped ---
+
+  (test/case "ampersand-skipped-in-params"
+    {do
+      (= {toks} (tok-groups "(fun {f x & rest} {rest})"))
+      (= {types} (map tok-type toks))
+      (test/assert (not (member? -1 types)) "no invalid token types")
+      true
+    })
+
+  ; --- No tokens for strings ---
+
+  (test/case "string-not-tokenized"
+    {do
+      (test/assert-eq 0 (tok-count "\"hello\"")
+        "string literals should not produce semantic tokens")
+      true
+    })
+
+  ; --- Multi-expression input ---
+
+  (test/case "multiple-top-level-exprs"
+    {do
+      (= {n} (tok-count "(def {a} 1)\n(def {b} 2)"))
+      (test/assert (>= n 4) "two defs should produce at least 4 tokens")
+      true
+    })
+
+  ; --- Broken parse: tokens still describe the current text ---
+
+  (test/case "broken-form-does-not-kill-other-tokens"
+    {do
+      (= {good} "(def {a} 1)\n(def {b} 2)\n(def {c} 3)")
+      (= {broken} "(def {a} 1)\n(def {b} 2\n(def {c} 3)")
+      (= {n-good} (tok-count good))
+      (= {n-broken} (tok-count broken))
+      (test/assert (>= n-broken n-good)
+        "a broken middle form must not cost the other forms their tokens")
+      true
+    })
+
+  (test/case "broken-form-is-lexed-in-place"
+    {do
+      ; `(def {b} 2` has no AST, so its tokens come from the lexer — they
+      ; must still land on `def`, `b` and `2` rather than be dropped.
+      (= {groups} (tok-groups "(def {a} 1)\n(def {b} 2\n(def {c} 3)"))
+      (= {lines-hit} (foldl (\{acc t} {+ acc (nth 1 t)}) 0 groups))
+      (test/assert (>= lines-hit 2) "tokens must span all three lines")
+      true
+    })
+
+  (test/case "whole-file-broken-still-tokenizes"
+    {do
+      (= {n} (tok-count "(fun {foo x} {+ x"))
+      (test/assert (> n 0) "an unterminated file must still return tokens")
+      true
+    })
+
+  (test/case "token-offsets-track-the-current-text"
+    {do
+      ; The tokens for an edited document must describe that document:
+      ; every token has to fit inside the line it is reported on.
+      (= {text} "(def {alpha} 1)\n(def {beta} 2\n(def {gamma} 3)")
+      (= {lines} (str/split text "\n"))
+      (= {groups} (tok-groups text))
+      (test/assert (sem-test/tokens-fit groups lines 0 0)
+        "every token must fit within its line in the current text")
+      true
+    })
+
+  ; --- Regression: tokens in range ---
+
+  (test/case "all-tokens-non-negative"
+    {do
+      (= {text} "(fun {greet name} {str \"Hello \" name})")
+      (= {data} (sem/tokenize text))
+      (= {groups} (list/group 5 data))
+      (= {valid} (foldl (\{acc tok} {* acc (* (>= (nth 1 tok) 0) (>= (nth 3 tok) 0))}) 1 groups))
+      (test/assert valid "all deltaLine and length values should be >= 0")
+      true
+    })
+
+) {:suite-name "LSP Semantic Tokens" :debug 0})

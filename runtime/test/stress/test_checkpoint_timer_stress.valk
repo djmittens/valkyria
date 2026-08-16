@@ -1,0 +1,43 @@
+; Stress test: scheduled timers on the event loop while the main thread
+; evaluates expressions. Exercises GC STW coordination between the event
+; loop thread and the main thread (scratch evacuation mutates env pointers
+; at escape points; see gc_evacuation.c).
+
+(def {aio} (aio/await (aio/start)))
+(def {iterations} 50)
+
+(println "=== Checkpoint + Timer Stress Test ===")
+(println "Running interval timer while evaluating expressions...")
+
+; Timer callback reads from env (callback->fun.env) while main thread evacuates
+; We use aio/schedule chained calls instead of mutable state
+(fun {run-timer-iteration n}
+  {(if (>= n iterations)
+     nil
+     (aio/schedule aio 10 (\ {} {(run-timer-iteration (+ n 1))})))})
+
+(run-timer-iteration 0)
+
+; Evaluate expressions to trigger checkpoints between expressions
+; These should coordinate with the timer via STW
+(def {x1} (+ 1 2 3 4 5))
+(def {x2} (* x1 x1))
+(def {x3} (list x1 x2 (+ x1 x2)))
+(def {x4} (map (\ {n} {* n 2}) x3))
+(def {x5} (filter (\ {n} {> n 10}) x4))
+
+; Wait for timers to complete, then verify expressions worked
+(aio/schedule aio 1000 (\ {} {
+  (printf "x1=%d x2=%d\n" x1 x2)
+  (print "x5=" x5)
+  (if (and (== x1 15) (== x2 225))
+    (do
+      (println "PASS: Expressions evaluated correctly while timers ran")
+      (aio/stop aio))
+    (do
+      (println "FAIL: Expression evaluation corrupted")
+      (aio/stop aio)
+      (exit 1)))}))
+
+(aio/run aio)
+(exit 0)

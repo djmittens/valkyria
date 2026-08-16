@@ -1,0 +1,47 @@
+; Property Lists (plists)
+; A plist is a flat list of alternating keys and values: {:key1 val1 :key2 val2 ...}
+; Common in Lisp for lightweight key-value storage without a dedicated map type
+;
+; plist/get is a C builtin (was O(n) Valk with heavy per-step overhead)
+
+(module plist)
+
+; Set/update a key in plist, returns new plist
+; Usage: (plist/set {:name "Alice"} :age 30) => {:name "Alice" :age 30}
+(sig 'set {-> List A B List})
+(fun {set pl key val} {
+  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
+    {list key val}
+    {if (== (head pl) key)
+      {join (list key val) (tail (tail pl))}
+      {join (list (head pl) (head (tail pl))) (set (tail (tail pl)) key val)}}
+})
+
+; Check if key exists in plist
+; Usage: (plist/has? {:name "Alice"} :name) => true
+(sig 'has? {-> List A Num})
+(fun {has? pl key} {
+  if (or (== pl nil) (or (not (list? pl)) (== (len pl) 0)))
+    {false}
+    {if (== (head pl) key)
+      {true}
+      {has? (tail (tail pl)) key}}
+})
+
+; Get all keys from plist
+; Usage: (plist/keys {:name "Alice" :age 30}) => {:name :age}
+(sig 'keys {-> List List})
+(fun {keys pl} {
+  if (== pl nil)
+    {nil}
+    {join (list (head pl)) (keys (tail (tail pl)))}
+})
+
+; Get all values from plist
+; Usage: (plist/vals {:name "Alice" :age 30}) => {"Alice" 30}
+(sig 'vals {-> List List})
+(fun {vals pl} {
+  if (== pl nil)
+    {nil}
+    {join (list (head (tail pl))) (vals (tail (tail pl)))}
+})

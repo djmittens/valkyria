@@ -1,0 +1,98 @@
+; Coverage gap tests for aio/all (aio_comb_all.c)
+; Targets: wrapper path for already-parented children, failure arm with
+; pending siblings, cancellation, duplicate handles.
+
+(load "testing/test.valk")
+
+(def {aio} (aio/await (aio/start {:num-threads 1})))
+
+(test/run (list
+
+  (test/case "aio/all empty list completes with nil"
+    {do
+    (= {h} (aio/all nil))
+    (and (== (aio/status h) :completed)
+         (nil? (aio/await h)))
+  })
+
+  (test/case "aio/all of completed handles completes with results in order"
+    {do
+    (= {a} (aio/pure 1))
+    (= {b} (aio/pure 2))
+    (= {h} (aio/all (list a b)))
+    (and (== (aio/status h) :completed)
+         (== (aio/await h) (list 1 2)))
+  })
+
+  (test/case "aio/all duplicate completed handle goes through wrapper path"
+    {do
+    (= {p} (aio/pure 7))
+    (= {h} (aio/all (list p p)))
+    (and (== (aio/status h) :completed)
+         (== (aio/await h) (list 7 7)))
+  })
+
+  (test/case "aio/all triple duplicate completed handle"
+    {do
+    (= {p} (aio/pure 3))
+    (= {h} (aio/all (list p p p)))
+    (and (== (aio/status h) :completed)
+         (== (aio/await h) (list 3 3 3)))
+  })
+
+  (test/case "aio/all failing child cancels pending siblings"
+    {do
+    (= {n} (aio/never aio))
+    (= {f} (aio/fail "boom"))
+    (= {h} (aio/all (list n f)))
+    (aio/await (aio/sleep aio 5))
+    (= {n-status} (aio/status n))
+    (and (== (aio/status h) :failed)
+         (or (== n-status :cancelled) (== n-status :failed)))
+  })
+
+  (test/case "aio/all duplicate failed handle stays failed"
+    {do
+    (= {f} (aio/fail "boom"))
+    (= {h} (aio/all (list f f)))
+    (== (aio/status h) :failed)
+  })
+
+  (test/case "aio/all cancelled while children pending"
+    {do
+    (= {n} (aio/never aio))
+    (= {h} (aio/all (list n)))
+    (aio/cancel h)
+    (= {status} (aio/status h))
+    (or (== status :cancelled) (== status :failed))
+  })
+
+  (test/case "aio/all wrapper over child of a cancelled sibling all"
+    {do
+    (= {n} (aio/never aio))
+    (= {a1} (aio/all (list n)))
+    (= {a2} (aio/all (list n)))
+    (aio/cancel a1)
+    (aio/await (aio/sleep aio 5))
+    (and (== (aio/status n) :cancelled)
+         (== (aio/status a1) :cancelled))
+  })
+
+  (test/case "aio/all pending timers complete asynchronously"
+    {do
+    (= {h} (aio/all (list (aio/sleep aio 1) (aio/sleep aio 5) (aio/pure 42))))
+    (aio/await h)
+    (== (aio/status h) :completed)
+  })
+
+  (test/case "aio/all duplicate pending timer resolves both slots"
+    {do
+    (= {s} (aio/sleep aio 5))
+    (= {h} (aio/all (list s s)))
+    (aio/await h)
+    (== (aio/status h) :completed)
+  })
+
+) {:suite-name "aio/all coverage"})
+
+(aio/stop aio)

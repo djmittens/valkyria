@@ -1,0 +1,22 @@
+; Allocation-pressure workload for test_gc_verify_full.valk. Not a test
+; suite itself (no test_ prefix): run in a subprocess with the GC verifiers
+; enabled so their HEALTHY paths execute - concurrent cycles with
+; VALK_GC_VERIFY_FULL performing the full save/remark/diff/restore per
+; cycle, VALK_GC_VERIFY_ROOTS walking every root env chain, and the
+; provenance rings recording refills and bit-only marks.
+(mem/gc/set-threshold 1)
+
+(fun {churn i acc} {
+  (if (== i 0) {acc}
+    {do
+      ; garbage: dead strings and pairs every iteration
+      (make-string 16 "abcdefgh")
+      (list i (make-string 4 "zyxwvuts"))
+      ; retain a sample so marking has live structure to walk
+      (churn (- i 1)
+             (if (== (mod i 50) 0)
+               {cons (list i (make-string 8 "abcdefgh")) acc}
+               {acc}))})})
+
+(def {kept} (churn 20000 {}))
+(println (str (len kept)))

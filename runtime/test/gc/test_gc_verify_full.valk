@@ -1,0 +1,22 @@
+; Exercises the GC verifiers' healthy paths, which never run in the normal
+; test environment: VALK_GC_VERIFY_FULL's whole-world remark + diff +
+; restore at every concurrent cycle, plus the VERIFY_ROOTS env-chain walk
+; and provenance rings. The subprocess churns enough allocation to force
+; concurrent cycles; any marker hole the verifiers find aborts it, so a
+; clean exit is the assertion.
+(load "testing/test.valk")
+
+(test/run (list
+  (test/case "verify-full-clean-under-pressure"
+    {do
+    (= {valk-bin} (head sys/argv))
+    (= {r} (exec "env"
+                 "VALK_GC_VERIFY=1"
+                 "VALK_GC_VERIFY_ROOTS=1"
+                 "VALK_GC_VERIFY_FULL=1"
+                 valk-bin
+                 "runtime/test/gc/gc_churn_workload.valk"))
+    (if (not (== (plist/get r :exit-code) 0))
+      {do (println (plist/get r :stderr)) false}
+      {== (str/trim (plist/get r :stdout)) "400"})
+  })))

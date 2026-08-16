@@ -1,0 +1,3 @@
+[valk-lsp] starting (threaded)
+[aio_alloc] Memory tracking: libuv=ok, ssl=ok
+[valk-lsp] shutdown

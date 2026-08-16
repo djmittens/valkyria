@@ -1,0 +1,744 @@
+; Async HTTP Handler Integration Tests
+; Tests aio/sleep, aio/delay, and aio/then chains in real HTTP handlers
+; to exercise async completion paths in aio_uv.c
+
+(load "testing/test.valk")
+(load "stdlib/aio/handles.valk")
+
+(def {aio} (aio/await (aio/start)))
+
+; ============================================================================
+; Handler definitions
+; ============================================================================
+
+(def {delay-handler}
+  (\ {req} {
+    (aio/delay aio 10 (\ {} {{:status "200" :body "delayed-response"}}))
+  }))
+
+(def {sleep-handler}
+  (\ {req} {
+    (aio/then (aio/sleep aio 5) (\ {_} {{:status "200" :body "slept"}}))
+  }))
+
+(def {sleep-chain-handler}
+  (\ {req} {
+    (aio/then 
+      (aio/sleep aio 5)
+      (\ {_} {
+        (aio/then (aio/sleep aio 5) (\ {_} {{:status "200" :body "slept-twice"}}))
+      }))
+  }))
+
+(def {catch-handler}
+  (\ {req} {
+    (aio/catch (aio/fail "error") (\ {err} {{:status "200" :body "recovered"}}))
+  }))
+
+(def {finally-success-handler}
+  (\ {req} {
+    (aio/then
+      (aio/finally
+        (aio/sleep aio 5)
+        (\ {} {nil}))
+      (\ {_} {{:status "200" :body "with-finally"}}))
+  }))
+
+(def {finally-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/finally
+        (aio/fail "inner-error")
+        (\ {} {nil}))
+      (\ {err} {{:status "200" :body "finally-recovered"}}))
+  }))
+
+(def {all-handler}
+  (\ {req} {
+    (aio/then
+      (aio/all (list (aio/sleep aio 5) (aio/sleep aio 10) (aio/sleep aio 15)))
+      (\ {results} {{:status "200" :body "all-completed"}}))
+  }))
+
+(def {all-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/all (list (aio/sleep aio 100) (aio/fail "one-failed") (aio/sleep aio 100)))
+      (\ {err} {{:status "200" :body "all-failed"}}))
+  }))
+
+(def {race-handler}
+  (\ {req} {
+    (aio/then
+      (aio/race (list (aio/sleep aio 5) (aio/sleep aio 100) (aio/sleep aio 200)))
+      (\ {result} {{:status "200" :body "race-won"}}))
+  }))
+
+(def {any-handler}
+  (\ {req} {
+    (aio/then
+      (aio/any (list (aio/fail "e1") (aio/sleep aio 5) (aio/fail "e2")))
+      (\ {result} {{:status "200" :body "any-success"}}))
+  }))
+
+(def {any-all-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/any (list (aio/fail "a") (aio/fail "b") (aio/fail "c")))
+      (\ {err} {{:status "200" :body "any-all-failed"}}))
+  }))
+
+(def {let-single-handler}
+  (\ {req} {
+    (aio/let {((x (aio/sleep aio 5)))} {:status "200" :body "let-single"})
+  }))
+
+(def {let-parallel-handler}
+  (\ {req} {
+    (aio/let {((a (aio/sleep aio 5)) (b (aio/sleep aio 10)))} {:status "200" :body "let-parallel"})
+  }))
+
+(def {let-then-handler}
+  (\ {req} {
+    (aio/let {((x (aio/sleep aio 5)) :then (y (aio/sleep aio 5)))} {:status "200" :body "let-then"})
+  }))
+
+(def {do-handler}
+  (\ {req} {
+    (aio/do {
+      (<- x (aio/sleep aio 5))
+      (<- y (aio/sleep aio 5))
+      {:status "200" :body "do-sequential"}})
+  }))
+
+(def {bracket-handler}
+  (\ {req} {
+    (aio/bracket
+      (aio/then (aio/sleep aio 5) (\ {_} {"resource"}))
+      (\ {r} {(aio/then (aio/sleep aio 5) (\ {_} {nil}))})
+      (\ {r} {(aio/then (aio/sleep aio 5) (\ {_} {{:status "200" :body "bracket-used"}}))}))
+  }))
+
+(def {on-cancel-handler}
+  (\ {req} {
+    (aio/then
+      (aio/on-cancel
+        (aio/sleep aio 5)
+        (\ {} {nil}))
+      (\ {_} {{:status "200" :body "on-cancel-done"}}))
+  }))
+
+(def {triple-then-handler}
+  (\ {req} {
+    (aio/then (aio/sleep aio 5)
+      (\ {_} {(aio/then (aio/sleep aio 5)
+        (\ {_} {(aio/then (aio/sleep aio 5)
+          (\ {_} {{:status "200" :body "triple-then"}}))}))}))
+  }))
+
+(def {catch-rethrow-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/then
+        (aio/sleep aio 5)
+        (\ {_} {(aio/fail "original")}))
+      (\ {err} {{:status "200" :body "catch-rethrow"}}))
+  }))
+
+(def {complex-chain-handler}
+  (\ {req} {
+    (aio/then
+      (aio/all (list (aio/sleep aio 5) (aio/sleep aio 10)))
+      (\ {results} {
+        (aio/then
+          (aio/race (list (aio/sleep aio 5) (aio/sleep aio 100)))
+          (\ {r} {{:status "200" :body "complex-chain"}}))}))
+  }))
+
+(def {let-multi-then-handler}
+  (\ {req} {
+    (aio/let {((a (aio/sleep aio 5)) :then (b (aio/sleep aio 5)) :then (c (aio/sleep aio 5)))}
+      {:status "200" :body "let-multi-then"})
+  }))
+
+(def {pure-handler}
+  (\ {req} {
+    (aio/then (aio/pure "immediate-value") (\ {v} {{:status "200" :body "pure-ok"}}))
+  }))
+
+(def {status-handler}
+  (\ {req} {
+    (= {h} (aio/sleep aio 5))
+    (= {s} (aio/status h))
+    (aio/then h (\ {_} {{:status "200" :body "status-ok"}}))
+  }))
+
+(def {all-mixed-handler}
+  (\ {req} {
+    (aio/then
+      (aio/all (list (aio/sleep aio 5) (aio/pure "v1") (aio/sleep aio 5)))
+      (\ {results} {{:status "200" :body "all-mixed-ok"}}))
+  }))
+
+(def {race-immediate-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/race (list (aio/fail "fast-fail") (aio/sleep aio 100)))
+      (\ {err} {{:status "200" :body "race-fail-caught"}}))
+  }))
+
+(def {race-pure-handler}
+  (\ {req} {
+    (aio/then
+      (aio/race (list (aio/pure "fast") (aio/sleep aio 100)))
+      (\ {_} {{:status "200" :body "race-pure-ok"}}))
+  }))
+
+(def {any-pure-handler}
+  (\ {req} {
+    (aio/then
+      (aio/any (list (aio/fail "e") (aio/pure "fast") (aio/fail "e2")))
+      (\ {_} {{:status "200" :body "any-pure-ok"}}))
+  }))
+
+(def {catch-chain-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "error1")}))
+      (\ {e} {{:status "200" :body "catch-chain-ok"}}))
+  }))
+
+(def {all-empty-handler}
+  (\ {req} {
+    (aio/then
+      (aio/all (list))
+      (\ {results} {{:status "200" :body "all-empty-ok"}}))
+  }))
+
+(def {race-single-handler}
+  (\ {req} {
+    (aio/then
+      (aio/race (list (aio/sleep aio 5)))
+      (\ {result} {{:status "200" :body "race-single-ok"}}))
+  }))
+
+(def {any-single-handler}
+  (\ {req} {
+    (aio/then
+      (aio/any (list (aio/sleep aio 5)))
+      (\ {result} {{:status "200" :body "any-single-ok"}}))
+  }))
+
+(def {let-many-handler}
+  (\ {req} {
+    (aio/let {((a (aio/sleep aio 5)) (b (aio/sleep aio 5)) (c (aio/sleep aio 5))
+               (d (aio/sleep aio 5)) (e (aio/sleep aio 5)) (f (aio/sleep aio 5)))}
+      {:status "200" :body "let-many-ok"})
+  }))
+
+(def {do-result-handler}
+  (\ {req} {
+    (aio/do {
+      (<- x (aio/sleep aio 5))
+      (<- y (aio/sleep aio 5))
+      {:status "200" :body "do-result-ok"}})
+  }))
+
+(def {bracket-error-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/bracket
+        (aio/then (aio/sleep aio 5) (\ {_} {"resource"}))
+        (\ {r} {(aio/then (aio/sleep aio 5) (\ {_} {nil}))})
+        (\ {r} {(aio/fail "use-phase-error")}))
+      (\ {err} {{:status "200" :body "bracket-error-ok"}}))
+  }))
+
+(def {on-cancel-complete-handler}
+  (\ {req} {
+    (aio/then
+      (aio/on-cancel
+        (aio/then (aio/sleep aio 5) (\ {_} {"value"}))
+        (\ {} {nil}))
+      (\ {_} {{:status "200" :body "on-cancel-complete-ok"}}))
+  }))
+
+(def {scope-sync-handler}
+  (\ {req} {
+    (aio/then
+      (aio/scope (\ {s} {(aio/pure "sync-result")}))
+      (\ {r} {{:status "200" :body "scope-sync-ok"}}))
+  }))
+
+(def {scope-async-handler}
+  (\ {req} {
+    (aio/then
+      (aio/scope (\ {s} {(aio/sleep aio 5)}))
+      (\ {r} {{:status "200" :body "scope-async-ok"}}))
+  }))
+
+(def {scope-error-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/scope (\ {s} {(error "scope-error")}))
+      (\ {err} {{:status "200" :body "scope-error-ok"}}))
+  }))
+
+(def {any-async-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/any (list
+        (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "async-fail-1")}))
+        (aio/then (aio/sleep aio 10) (\ {_} {(aio/fail "async-fail-2")}))
+        (aio/then (aio/sleep aio 15) (\ {_} {(aio/fail "async-fail-3")}))))
+      (\ {err} {{:status "200" :body "any-async-fail-ok"}}))
+  }))
+
+(def {async-fail-handler}
+  (\ {req} {
+    (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "handler-async-failed")}))
+  }))
+
+(def {all-async-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/all (list
+        (aio/sleep aio 5)
+        (aio/then (aio/sleep aio 10) (\ {_} {(aio/fail "all-async-fail")}))
+        (aio/sleep aio 15)))
+      (\ {err} {{:status "200" :body "all-async-fail-ok"}}))
+  }))
+
+(def {race-async-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/race (list
+        (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "race-async-fail")}))
+        (aio/sleep aio 100)))
+      (\ {err} {{:status "200" :body "race-async-fail-ok"}}))
+  }))
+
+(def {deep-chain-handler}
+  (\ {req} {
+    (aio/then (aio/sleep aio 5) (\ {_} {
+      (aio/then (aio/sleep aio 5) (\ {_} {
+        (aio/then (aio/sleep aio 5) (\ {_} {
+          (aio/then (aio/sleep aio 5) (\ {_} {
+            (aio/then (aio/sleep aio 5) (\ {_} {
+              {:status "200" :body "deep-chain-ok"}
+            }))
+          }))
+        }))
+      }))
+    }))
+  }))
+
+(def {scope-async-fail-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/scope (\ {s} {
+        (aio/then (aio/sleep aio 5) (\ {_} {(aio/fail "scope-inner-fail")}))
+      }))
+      (\ {err} {{:status "200" :body "scope-async-fail-ok"}}))
+  }))
+
+(def {immediate-fail-handler}
+  (\ {req} {
+    (aio/fail "immediate-handler-failure")
+  }))
+
+(def {raw-error-handler}
+  (\ {req} {
+    (error "raw-handler-error")
+  }))
+
+(def {immediate-complete-handler}
+  (\ {req} {
+    (aio/pure {:status "200" :body "immediate-complete-ok"})
+  }))
+
+(def {race-cancel-handler}
+  (\ {req} {
+    (aio/then
+      (aio/race (list
+        (aio/sleep aio 5)
+        (aio/on-cancel
+          (aio/sleep aio 1000)
+          (\ {} {nil}))))
+      (\ {result} {
+        {:status "200" :body "race-cancel-ok"}
+      }))
+  }))
+
+(def {nested-cancel-handler}
+  (\ {req} {
+    (aio/then
+      (aio/race (list
+        (aio/sleep aio 5)
+        (aio/on-cancel (aio/sleep aio 1000) (\ {} {nil}))
+        (aio/on-cancel (aio/sleep aio 1000) (\ {} {nil}))))
+      (\ {result} {
+        {:status "200" :body "nested-cancel-ok"}
+      }))
+  }))
+
+(def {pre-cancelled-handler}
+  (\ {req} {
+    (= {h} (aio/sleep aio 1000))
+    (aio/cancel h)
+    h
+  }))
+
+(def {pure-error-handler}
+  (\ {req} {
+    (aio/pure (error "pure-wrapped-error"))
+  }))
+
+(def {async-pure-error-handler}
+  (\ {req} {
+    (aio/then (aio/sleep aio 10) (\ {_} {(aio/pure (error "async-pure-error"))}))
+  }))
+
+(def {async-direct-fail-handler}
+  (\ {req} {
+    (aio/then (aio/sleep aio 10) (\ {_} {(aio/fail (error "async-direct-fail"))}))
+  }))
+
+(def {with-timeout-wins-handler}
+  (\ {req} {
+    (aio/catch
+      (aio/with-timeout aio 10 (aio/sleep aio 10000))
+      (\ {err} {{:status "200" :body "timeout-won"}}))
+  }))
+
+(def {retry-backoff-success-handler}
+  (\ {req} {
+    (aio/then
+      (aio/retry-backoff aio 0 10 (\ {} {(aio/pure "success")}))
+      (\ {result} {{:status "200" :body "retry-success"}}))
+  }))
+
+(def {delay-value-handler}
+  (\ {req} {
+    (aio/then
+      (aio/delay-value aio 10 "delayed-val")
+      (\ {result} {(list :status "200" :body result)}))
+  }))
+
+(def {chain-fns-handler}
+  (\ {req} {
+    (aio/then
+      (aio/chain (aio/pure 1) (list
+        (\ {x} {(aio/pure (+ x 1))})
+        (\ {x} {(aio/pure (* x 2))})
+        (\ {x} {(aio/pure (+ x 10))})))
+      (\ {result} {(list :status "200" :body (str "chain-" result))}))
+  }))
+
+(def {aio-map-handler}
+  (\ {req} {
+    (aio/then
+      (aio/map (aio/pure 10) (\ {x} {(* x 3)}))
+      (\ {result} {(list :status "200" :body (str "aiomap-" result))}))
+  }))
+
+(def {aio-try-success-handler}
+  (\ {req} {
+    (aio/then
+      (aio/try (aio/pure 42))
+      (\ {result} {{:status "200" :body "try-ok"}}))
+  }))
+
+(def {aio-try-fail-handler}
+  (\ {req} {
+    (aio/then
+      (aio/try (aio/fail "err"))
+      (\ {result} {{:status "200" :body "try-err-ok"}}))
+  }))
+
+; ============================================================================
+; Router
+; ============================================================================
+
+; Each handler entry is {path handler-fn}. We call (handler-fn req) directly
+; rather than eval'ing a qexpr body so `req` is captured from the caller's
+; scope rather than eval's env (where it isn't bound).
+(fun {route path req handlers} {
+  (if (nil? handlers)
+    {{:status "404" :body "not-found"}}
+    {(if (== path (fst (fst handlers)))
+      {((eval (snd (fst handlers))) req)}
+      {(route path req (tail handlers))})})
+})
+
+(def {router}
+  (\ {req} {
+    (= {path} (req/path req))
+    (route path req (list
+      {"/delay" delay-handler}
+      {"/sleep" sleep-handler}
+      {"/sleep-chain" sleep-chain-handler}
+      {"/catch" catch-handler}
+      {"/finally-success" finally-success-handler}
+      {"/finally-fail" finally-fail-handler}
+      {"/all" all-handler}
+      {"/all-fail" all-fail-handler}
+      {"/race" race-handler}
+      {"/any" any-handler}
+      {"/any-all-fail" any-all-fail-handler}
+      {"/let-single" let-single-handler}
+      {"/let-parallel" let-parallel-handler}
+      {"/let-then" let-then-handler}
+      {"/do" do-handler}
+      {"/bracket" bracket-handler}
+      {"/on-cancel" on-cancel-handler}
+      {"/triple-then" triple-then-handler}
+      {"/catch-rethrow" catch-rethrow-handler}
+      {"/complex-chain" complex-chain-handler}
+      {"/let-multi-then" let-multi-then-handler}
+      {"/pure" pure-handler}
+      {"/status" status-handler}
+      {"/all-mixed" all-mixed-handler}
+      {"/race-immediate-fail" race-immediate-fail-handler}
+      {"/race-pure" race-pure-handler}
+      {"/any-pure" any-pure-handler}
+      {"/catch-chain" catch-chain-handler}
+      {"/all-empty" all-empty-handler}
+      {"/race-single" race-single-handler}
+      {"/any-single" any-single-handler}
+      {"/let-many" let-many-handler}
+      {"/do-result" do-result-handler}
+      {"/bracket-error" bracket-error-handler}
+      {"/on-cancel-complete" on-cancel-complete-handler}
+      {"/scope-sync" scope-sync-handler}
+      {"/scope-async" scope-async-handler}
+      {"/scope-error" scope-error-handler}
+      {"/any-async-fail" any-async-fail-handler}
+      {"/async-fail" async-fail-handler}
+      {"/all-async-fail" all-async-fail-handler}
+      {"/race-async-fail" race-async-fail-handler}
+      {"/deep-chain" deep-chain-handler}
+      {"/scope-async-fail" scope-async-fail-handler}
+      {"/immediate-fail" immediate-fail-handler}
+      {"/immediate-complete" immediate-complete-handler}
+      {"/raw-error" raw-error-handler}
+      {"/race-cancel" race-cancel-handler}
+      {"/nested-cancel" nested-cancel-handler}
+      {"/pre-cancelled" pre-cancelled-handler}
+      {"/pure-error" pure-error-handler}
+      {"/async-pure-error" async-pure-error-handler}
+      {"/async-direct-fail" async-direct-fail-handler}
+      {"/with-timeout-wins" with-timeout-wins-handler}
+      {"/retry-backoff-success" retry-backoff-success-handler}
+      {"/delay-value" delay-value-handler}
+      {"/chain-fns" chain-fns-handler}
+      {"/aio-map" aio-map-handler}
+      {"/aio-try-success" aio-try-success-handler}
+      {"/aio-try-fail" aio-try-fail-handler}))
+  }))
+
+; ============================================================================
+; Helper to make test requests - returns handle completing with true/false
+; ============================================================================
+
+(fun {make-test path expected-status expected-body} {
+  (aio/then (http2/client-request aio "127.0.0.1" TEST_PORT path)
+    (\ {resp} {
+      (if (error? resp)
+        {false}
+        {(do
+          (= {status} (http2/response-status resp))
+          (= {body} (http2/response-body resp))
+          (and (== status expected-status) (== body expected-body)))})
+    }))
+})
+
+; ============================================================================
+; Async tests - using new handle-returning API
+; ============================================================================
+
+; ============================================================================
+; Start server and run tests
+; ============================================================================
+
+(def {server} (http2/server-listen aio 0 router))
+(def {TEST_PORT} (http2/server-port server))
+(test/run-async aio (list
+  (test/case-async "aio/delay handler" (\ {} {
+    (make-test "/delay" "200" "delayed-response")
+  }))
+  (test/case-async "aio/sleep handler" (\ {} {
+    (make-test "/sleep" "200" "slept")
+  }))
+  (test/case-async "aio/sleep chain handler" (\ {} {
+    (make-test "/sleep-chain" "200" "slept-twice")
+  }))
+  (test/case-async "aio/catch handler" (\ {} {
+    (make-test "/catch" "200" "recovered")
+  }))
+  (test/case-async "aio/finally success handler" (\ {} {
+    (make-test "/finally-success" "200" "with-finally")
+  }))
+  (test/case-async "aio/finally fail handler" (\ {} {
+    (make-test "/finally-fail" "200" "finally-recovered")
+  }))
+  (test/case-async "aio/all handler" (\ {} {
+    (make-test "/all" "200" "all-completed")
+  }))
+  (test/case-async "aio/all fail handler" (\ {} {
+    (make-test "/all-fail" "200" "all-failed")
+  }))
+  (test/case-async "aio/race handler" (\ {} {
+    (make-test "/race" "200" "race-won")
+  }))
+  (test/case-async "aio/any handler" (\ {} {
+    (make-test "/any" "200" "any-success")
+  }))
+  (test/case-async "aio/any all fail handler" (\ {} {
+    (make-test "/any-all-fail" "200" "any-all-failed")
+  }))
+  (test/case-async "aio/let single handler" (\ {} {
+    (make-test "/let-single" "200" "let-single")
+  }))
+  (test/case-async "aio/let parallel handler" (\ {} {
+    (make-test "/let-parallel" "200" "let-parallel")
+  }))
+  (test/case-async "aio/let :then handler" (\ {} {
+    (make-test "/let-then" "200" "let-then")
+  }))
+  (test/case-async "aio/do handler" (\ {} {
+    (make-test "/do" "200" "do-sequential")
+  }))
+  (test/case-async "aio/bracket handler" (\ {} {
+    (make-test "/bracket" "200" "bracket-used")
+  }))
+  (test/case-async "aio/on-cancel handler" (\ {} {
+    (make-test "/on-cancel" "200" "on-cancel-done")
+  }))
+  (test/case-async "triple aio/then handler" (\ {} {
+    (make-test "/triple-then" "200" "triple-then")
+  }))
+  (test/case-async "aio/catch rethrow handler" (\ {} {
+    (make-test "/catch-rethrow" "200" "catch-rethrow")
+  }))
+  (test/case-async "complex combinator chain handler" (\ {} {
+    (make-test "/complex-chain" "200" "complex-chain")
+  }))
+  (test/case-async "aio/let multi :then handler" (\ {} {
+    (make-test "/let-multi-then" "200" "let-multi-then")
+  }))
+  (test/case-async "aio/pure handler" (\ {} {
+    (make-test "/pure" "200" "pure-ok")
+  }))
+  (test/case-async "aio/status handler" (\ {} {
+    (make-test "/status" "200" "status-ok")
+  }))
+  (test/case-async "aio/all mixed handler" (\ {} {
+    (make-test "/all-mixed" "200" "all-mixed-ok")
+  }))
+  (test/case-async "aio/race immediate fail handler" (\ {} {
+    (make-test "/race-immediate-fail" "200" "race-fail-caught")
+  }))
+  (test/case-async "aio/race pure handler" (\ {} {
+    (make-test "/race-pure" "200" "race-pure-ok")
+  }))
+  (test/case-async "aio/any pure handler" (\ {} {
+    (make-test "/any-pure" "200" "any-pure-ok")
+  }))
+  (test/case-async "aio/catch chain handler" (\ {} {
+    (make-test "/catch-chain" "200" "catch-chain-ok")
+  }))
+  (test/case-async "aio/all empty handler" (\ {} {
+    (make-test "/all-empty" "200" "all-empty-ok")
+  }))
+  (test/case-async "aio/race single handler" (\ {} {
+    (make-test "/race-single" "200" "race-single-ok")
+  }))
+  (test/case-async "aio/any single handler" (\ {} {
+    (make-test "/any-single" "200" "any-single-ok")
+  }))
+  (test/case-async "aio/let many bindings handler" (\ {} {
+    (make-test "/let-many" "200" "let-many-ok")
+  }))
+  (test/case-async "aio/do result handler" (\ {} {
+    (make-test "/do-result" "200" "do-result-ok")
+  }))
+  (test/case-async "aio/bracket error handler" (\ {} {
+    (make-test "/bracket-error" "200" "bracket-error-ok")
+  }))
+  (test/case-async "aio/on-cancel complete handler" (\ {} {
+    (make-test "/on-cancel-complete" "200" "on-cancel-complete-ok")
+  }))
+  (test/case-async "aio/scope sync handler" (\ {} {
+    (make-test "/scope-sync" "200" "scope-sync-ok")
+  }))
+  (test/case-async "aio/scope async handler" (\ {} {
+    (make-test "/scope-async" "200" "scope-async-ok")
+  }))
+  (test/case-async "aio/scope error handler" (\ {} {
+    (make-test "/scope-error" "200" "scope-error-ok")
+  }))
+  (test/case-async "aio/any async all fail handler" (\ {} {
+    (make-test "/any-async-fail" "200" "any-async-fail-ok")
+  }))
+  (test/case-async "aio/all async fail handler" (\ {} {
+    (make-test "/all-async-fail" "200" "all-async-fail-ok")
+  }))
+  (test/case-async "aio/race async fail handler" (\ {} {
+    (make-test "/race-async-fail" "200" "race-async-fail-ok")
+  }))
+  (test/case-async "deep aio/then chain handler" (\ {} {
+    (make-test "/deep-chain" "200" "deep-chain-ok")
+  }))
+  (test/case-async "aio/scope async fail handler" (\ {} {
+    (make-test "/scope-async-fail" "200" "scope-async-fail-ok")
+  }))
+  (test/case-async "immediate aio/pure handler" (\ {} {
+    (make-test "/immediate-complete" "200" "immediate-complete-ok")
+  }))
+  (test/case-async "immediate aio/fail handler" (\ {} {
+    (make-test "/immediate-fail" "500" "Async operation failed")
+  }))
+  (test/case-async "raw handler error" (\ {} {
+    (make-test "/raw-error" "500" "raw-handler-error")
+  }))
+  (test/case-async "race cancel handler" (\ {} {
+    (make-test "/race-cancel" "200" "race-cancel-ok")
+  }))
+  (test/case-async "nested cancel handler" (\ {} {
+    (make-test "/nested-cancel" "200" "nested-cancel-ok")
+  }))
+  (test/case-async "pre-cancelled handler" (\ {} {
+    (make-test "/pre-cancelled" "503" "Request cancelled")
+  }))
+  (test/case-async "aio/pure with error result" (\ {} {
+    (make-test "/pure-error" "500" "pure-wrapped-error")
+  }))
+  (test/case-async "async completion with error result" (\ {} {
+    (make-test "/async-pure-error" "500" "async-pure-error")
+  }))
+  (test/case-async "async VALK_ASYNC_FAILED handler" (\ {} {
+    (make-test "/async-direct-fail" "500" "async-direct-fail")
+  }))
+  (test/case-async "with-timeout timeout path wins" (\ {} {
+    (make-test "/with-timeout-wins" "200" "timeout-won")
+  }))
+  (test/case-async "retry-backoff immediate success" (\ {} {
+    (make-test "/retry-backoff-success" "200" "retry-success")
+  }))
+  (test/case-async "delay-value helper" (\ {} {
+    (make-test "/delay-value" "200" "delayed-val")
+  }))
+  (test/case-async "chain with multiple fns" (\ {} {
+    (make-test "/chain-fns" "200" "chain-14")
+  }))
+  (test/case-async "aio/map transform" (\ {} {
+    (make-test "/aio-map" "200" "aiomap-30")
+  }))
+  (test/case-async "aio/try on success" (\ {} {
+    (make-test "/aio-try-success" "200" "try-ok")
+  }))
+  (test/case-async "aio/try on failure" (\ {} {
+    (make-test "/aio-try-fail" "200" "try-err-ok")
+  })))
+  {:suite-name "Async HTTP Handlers"})

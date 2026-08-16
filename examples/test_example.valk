@@ -1,7 +1,6 @@
 ; Example: How to use the test framework
 
-(load "src/prelude.valk")
-(load "src/modules/test.valk")
+(load "testing/test.valk")
 
 ; Define tests using test/define
 ; Note: test body must be quoted with {}
