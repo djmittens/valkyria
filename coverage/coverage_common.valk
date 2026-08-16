@@ -468,14 +468,54 @@
   (str "'" (str/replace s "'" "'\\''") "'")
 })
 
+(fun {*gcov-fail* msg} {
+  (stderr/write (str "coverage: ERROR " msg "\n"))
+})
+
+; "<build>/CMakeFiles/valkyria.dir/src/a/b.c.gcda" -> "src/a/b.c"
+(fun {*gcda-rel-source* gcda-file} {
+  (= {parts} (str/split gcda-file ".dir/"))
+  (= {tail-part} (if (> (len parts) 1) {(nth (len parts) parts)} {gcda-file}))
+  (str/slice tail-part 0 (- (len tail-part) 5))
+})
+
+; gcov emitted data for this TU but we could not map it back to the expected
+; source path. Reporting the file as 0% would understate coverage and make the
+; gate meaningless, so refuse to produce a number at all.
+(fun {*assert-gcda-mapped* gcda-file gcov-entries local-files} {
+  (if (== (len gcov-entries) 0) {}
+    {do
+      (= {rel} (*gcda-rel-source* gcda-file))
+      (if (> (len (filter (\ {k} {(str/ends-with? k (str "/" rel))}) (dict/keys local-files))) 0)
+        {}
+        {do
+          (stderr/write (str "\ncoverage: FATAL " gcda-file "\n"
+                             "  llvm-cov gcov emitted " (len gcov-entries) " .gcov file(s) but none"
+                             " mapped to " rel "\n"
+                             "coverage data is incomplete; refusing to report a coverage number.\n"))
+          (exit 2)})})
+})
+
 (fun {*run-gcov-and-parse* gcda-file llvm-cov source-root} {
-  (= {tmpdir} (str/trim (plist/get (exec "mktemp" "-d") :stdout)))
+  (= {mk} (exec "mktemp" "-d" "/tmp/valk-gcov.XXXXXXXX"))
+  (= {tmpdir} (str/trim (plist/get mk :stdout)))
+  (if (or (!= (plist/get mk :exit-code) 0) (== tmpdir ""))
+    {(*gcov-fail* (str "mktemp -d failed: " (str/trim (plist/get mk :stderr))))}
+    {})
   (= {gcda-parent} (str/join (init (str/split gcda-file "/")) "/"))
-  (exec "sh" "-c" (str "cd " (shell-quote tmpdir) " && " (shell-quote llvm-cov) " gcov -b -o " (shell-quote gcda-parent) " " (shell-quote gcda-file) " 2>/dev/null"))
+  (= {r} (exec "sh" "-c" (str "cd " (shell-quote tmpdir) " && " (shell-quote llvm-cov) " gcov -b -o " (shell-quote gcda-parent) " " (shell-quote gcda-file))))
   (= {local-files} (dict/new))
   (= {entries} (if (file/exists? tmpdir) {(list-dir tmpdir)} {{}}))
   (= {gcov-entries} (filter (\ {e} {str/ends-with? (plist/get e :name) ".gcov"}) entries))
+  ; Exit 0 with no .gcov output just means the TU has no instrumented
+  ; functions (e.g. a file that only defines constant tables), which is fine.
+  ; A non-zero exit means we lost data we should have had.
+  (if (!= (plist/get r :exit-code) 0)
+    {(*gcov-fail* (str gcda-file ": llvm-cov gcov exit " (plist/get r :exit-code) ": "
+                       (str/trim (plist/get r :stderr))))}
+    {})
   (*parse-gcov-local* gcov-entries tmpdir source-root local-files)
+  (*assert-gcda-mapped* gcda-file gcov-entries local-files)
   (exec "rm" "-rf" tmpdir)
   local-files
 })
@@ -594,7 +634,7 @@
   (= {bdir} (realpath raw-build-dir))
   (= {sroot} (realpath raw-source-root))
   (= {files} (dict/new))
-  (= {ncpus-r} (exec "nproc"))
+  (= {ncpus-r} (exec "sh" "-c" "command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu"))
   (= {ncpus} (if (== (plist/get ncpus-r :exit-code) 0)
     {(str->num (str/trim (plist/get ncpus-r :stdout)))}
     {4}))

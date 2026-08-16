@@ -108,11 +108,7 @@ jobs:
         run: |
           make uat JUNIT=${{ github.workspace }}/build/junit
 
-      # The coverage gate thresholds are calibrated against Linux data;
-      # macOS exercises different platform branches and reports structurally
-      # lower numbers, so it generates the report without enforcing the gate.
       - name: Generate Coverage Report
-        continue-on-error: ${{ runner.os == 'macOS' }}
         env:
           VALK_HEAP_HARD_LIMIT: "2147483648"
         run: |
