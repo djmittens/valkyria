@@ -30,8 +30,7 @@ tla/states/
 # Test reports
 test-report/
 
-# Ralph Wiggum
-build/ralph-logs/
+# tix
 .tix/cache.db
 
 # Session artifacts
