@@ -99,6 +99,10 @@ void valk_register_list_builtins(valk_lenv_t *env);
 void valk_register_string_builtins(valk_lenv_t *env);
 void valk_register_io_builtins(valk_lenv_t *env);
 void valk_register_env_builtins(valk_lenv_t *env);
+void valk_register_debug_builtins(valk_lenv_t *env);
+// First-class env ref (env/new, debug/frame-env): wraps a GC-heap env with
+// the tracing mark callback wired.
+valk_lval_t *valk_lval_env_ref(valk_lenv_t *env);
 void valk_register_mem_builtins(valk_lenv_t *env);
 void valk_register_http_builtins(valk_lenv_t *env);
 void valk_register_aio_builtins(valk_lenv_t *env);

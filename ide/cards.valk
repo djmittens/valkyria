@@ -1,0 +1,119 @@
+; ide/cards.valk — API item cards (DESIGN.md section 3.4): tier from a
+; maturity score, stat rows from providers, procedural art seed from the
+; symbol's identity. Data comes from the workspace symdb via ide/lsp.valk;
+; every input is a single indexed lookup, so building a card stays on the
+; hover budget. Weights and thresholds are config data (section 3.6).
+
+(load "ide/lsp.valk")
+
+(module ide)
+
+; --- identity hash → art seed ---------------------------------------------
+
+(def {card-alphabet} "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-_?!*<>=+.:")
+
+(fun {card-seed-rec name i acc} {
+  (if (>= i (len name))
+    {acc}
+    {do
+      (= {idx} (+ 2 (str/index-of card-alphabet (str/slice name i (+ i 1)))))
+      (card-seed-rec name (+ i 1)
+        (mod (+ (* acc 31) idx) 2147483647))})
+})
+
+(fun {card-seed name} {card-seed-rec name 0 7})
+
+; --- stat providers --------------------------------------------------------
+
+(fun {card-used name} {do
+  (= {db} (ide/lsp-db))
+  (if (nil? db)
+    {0}
+    {do
+      (= {n} (symdb/ref-count db name))
+      (if (num? n) {n} {0})})
+})
+
+(fun {card-info-str v} {(if (str? v) {v} {""})})
+
+(def {card-stat-providers}
+  `{{:k "used" :label "USED"
+     :provider ,(\ {name info} {card-used name})}
+    {:k "doc" :label "DOC"
+     :provider ,(\ {name info} {(if (== (card-info-str (SymInfo:doc info)) "") {0} {1})})}
+    {:k "sig" :label "SIG"
+     :provider ,(\ {name info} {(if (str/starts-with? (card-info-str (SymInfo:sig info)) "{->") {1} {0})})}})
+
+(fun {card-stats name info} {
+  map (\ {p} {
+    `{:k ,(plist/get p :k)
+      :label ,(plist/get p :label)
+      :v ,((plist/get p :provider) name info)}}) card-stat-providers
+})
+
+(fun {card-stat stats k} {do
+  (= {m} (filter (\ {s} {== (plist/get s :k) k}) stats))
+  (if (nil? m) {0} {plist/get (head m) :v})
+})
+
+; --- tier scoring (0-100 integer scores; weights/thresholds from config) ---
+
+(fun {card-usage-score n} {
+  (select
+    {(>= n 20) 100}
+    {(>= n 5) 70}
+    {(>= n 1) 35}
+    {otherwise 0})
+})
+
+(fun {card-weight weights k} {do
+  (= {m} (filter (\ {w} {== (head w) k}) weights))
+  (if (nil? m) {0} {head (tail (head m))})
+})
+
+(fun {card-score stats} {do
+  (= {weights} (ide/config-get "card-weights" {{"used" 50} {"doc" 30} {"sig" 20}}))
+  (= {used-part} (* (card-usage-score (card-stat stats "used"))
+                    (card-weight weights "used")))
+  (= {doc-part} (* (* (card-stat stats "doc") 100) (card-weight weights "doc")))
+  (= {sig-part} (* (* (card-stat stats "sig") 100) (card-weight weights "sig")))
+  (/ (+ used-part doc-part sig-part) 100)
+})
+
+(fun {card-tier-of score thresholds} {
+  (if (nil? thresholds)
+    {"common"}
+    {do
+      (= {t} (head thresholds))
+      (if (>= score (head (tail t)))
+        {head t}
+        {card-tier-of score (tail thresholds)})})
+})
+
+(fun {card-tier score} {
+  card-tier-of score
+    (ide/config-get "card-thresholds"
+      {{"legendary" 85} {"epic" 65} {"rare" 45} {"uncommon" 25}})
+})
+
+; --- card assembly ---------------------------------------------------------
+
+(fun {card-for word} {do
+  (= {info} (ide/lsp-symbol-info word))
+  (if (nil? info)
+    {nil}
+    {do
+      (= {stats} (card-stats word info))
+      (= {score} (card-score stats))
+      (= {line} (SymInfo:line info))
+      `{:w :card
+        :symbol ,word
+        :tier ,(card-tier score)
+        :score ,score
+        :art {:gen "v1" :seed ,(card-seed word)}
+        :sig ,(card-info-str (SymInfo:sig info))
+        :doc ,(card-info-str (SymInfo:doc info))
+        :loc ,(str (card-info-str (SymInfo:path info)) ":"
+                   (if (num? line) {line} {0}))
+        :stats ,stats}})
+})

@@ -483,6 +483,16 @@ WITH RECURSIVE closure(fid) AS (
   {len (find-refs-resolved db name def-path)}
 })
 
+; Any row of the name may carry the doc comment (fun row vs sig row) — used
+; as a fallback when the resolved def row lacks one.
+(sig 'doc-of-any {-> Ref Str Str})
+(fun {doc-of-any db name} {do
+  (= {row} (sqlite/query-maybe db
+    "SELECT doc FROM symbols WHERE name=?1 AND doc IS NOT NULL AND doc != '' ORDER BY id LIMIT 1"
+    name))
+  (if (nil? row) {nil} {plist/get row :doc})
+})
+
 (sig 'symbol-hover {-> Ref Str SymInfo})
 (fun {symbol-hover db name} {
   symbol-hover-in db name nil})
@@ -523,6 +533,7 @@ WITH RECURSIVE closure(fid) AS (
             (= {sig-doc} (if (nil? sig-row) {nil} {sig-row:doc}))
             (= {fb-doc} fallback:doc)
             (= {final-doc} (if (nil? fb-doc) {sig-doc} {fb-doc}))
+            (= {final-doc} (if (nil? final-doc) {doc-of-any db name} {final-doc}))
             (SymInfo fallback:name fallback:kind fallback:arity
               final-doc type-sig fallback:path fallback:line fallback:col nil)})}}
     {do
@@ -532,6 +543,7 @@ WITH RECURSIVE closure(fid) AS (
       (= {def-doc} def-row:doc)
       (= {sig-doc} (if (nil? sig-row) {nil} {sig-row:doc}))
       (= {final-doc} (if (nil? def-doc) {sig-doc} {def-doc}))
+      (= {final-doc} (if (nil? final-doc) {doc-of-any db name} {final-doc}))
       (SymInfo def-row:name def-row:kind def-row:arity
         final-doc type-sig def-row:path def-row:line def-row:col formals)})
 })

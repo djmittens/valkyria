@@ -1,0 +1,127 @@
+; IDE debugger tool: pure update/view plus a live attach against an
+; in-process debug server with a real paused target.
+; Run with: build/valk ide/test/test_ide_debugger.valk
+
+(load "testing/test.valk")
+(load "ide/machine.valk")
+(load "ide/debugger.valk")
+(load "stdlib/aio/debug-server.valk")
+(load "runtime/test/fixtures/debug_target.valk")
+
+(def {fixture-path} (realpath "runtime/test/fixtures/debug_target.valk"))
+(def {ui-sys} (aio/await (aio/start {:num-threads 1})))
+(def {work-sys} (aio/await (aio/start {:num-threads 2})))
+(def {results} (dict/new))
+
+(dict/set! ide/runtime "ui-sys" ui-sys)
+(def {dbg-server} (debug/serve ui-sys 0))
+(def {dbg-port} (http2/server-port dbg-server))
+
+(fun {sleep-ms ms} {aio/await (aio/schedule ui-sys ms (\ {} {1}))})
+
+(fun {wait-tool-paused tries} {
+  (if (== tries 0)
+    {0}
+    {if (== (plist/get (ide/tool-state "debugger") :paused) 1)
+      {1}
+      {do (sleep-ms 30) (ide/dbg-poll) (wait-tool-paused (- tries 1))}})
+})
+
+(test/run (list
+
+  (test/case "dbg-update-lifecycle"
+    {do
+    (= {st} (ide/dbg-init))
+    (= {st} (ide/dbg-update st {:type "attach" :host "127.0.0.1" :port 7788}))
+    (test/assert-eq 1 (plist/get st :attached) "attached")
+    (test/assert-eq "127.0.0.1:7788" (plist/get st :target) "target label")
+    (= {st} (ide/dbg-update st {:type "dbg-state" :paused 1 :file "/a/b.valk"
+                                :line 4 :expr "(= ...)"}))
+    (test/assert-eq 1 (plist/get st :paused) "paused recorded")
+    (= {st} (ide/dbg-update st {:type "dbg-stack"
+                                :stack {{:kind "current" :fn "x" :file "b.valk" :line 4}}}))
+    (test/assert-eq 1 (len (plist/get st :stack)) "stack stored")
+    (= {st} (ide/dbg-update st {:type "dbg-state" :paused 0 :file "" :line 0 :expr ""}))
+    (test/assert (nil? (plist/get st :stack)) "resume clears stack")
+    (= {st} (ide/dbg-update st {:type "detach"}))
+    (test/assert-eq 0 (plist/get st :attached) "detached")
+    true
+  })
+
+  (test/case "dbg-view-shapes"
+    {do
+    (= {st} (ide/dbg-init))
+    (= {tree} (ide/dbg-view st))
+    (test/assert-eq :panel (plist/get tree :w) "panel root")
+    (test/assert-eq "debugger" (plist/get tree :id) "pane id")
+    (= {paused} (ide/dbg-update (ide/dbg-update (ide/dbg-init)
+      {:type "attach" :host "h" :port 1})
+      {:type "dbg-state" :paused 1 :file "/x/y.valk" :line 7 :expr "(f)"}))
+    (= {tree2} (ide/dbg-view paused))
+    (= {json-str} (json/encode tree2))
+    (test/assert (str/contains? json-str "PAUSED") "paused marker rendered")
+    (test/assert (str/contains? json-str "y.valk:7") "location rendered")
+    (test/assert (str/contains? json-str ":blink") "breakpoint hit blinks")
+    true
+  })
+
+  (test/case "dbg-commands-registered"
+    {do
+    (= {ids} (map (\ {c} {plist/get c :id}) ide/commands))
+    (test/assert (exists "dbg/attach" ids) "attach registered")
+    (test/assert (exists "dbg/continue" ids) "continue registered")
+    (test/assert (exists "dbg/step" ids) "step-in registered")
+    (test/assert (exists "dbg/step-over" ids) "step-over registered")
+    (test/assert (exists "dbg/step-out" ids) "step-out registered")
+    (= {cont} (ide/get-command "dbg/continue"))
+    (test/assert-eq "debugger" (plist/get cont :pane) "continue pane-scoped")
+    (test/assert (not (nil? (plist/get cont :run))) "continue is effectful")
+    (= {sover} (ide/get-command "dbg/step-over"))
+    (test/assert (exists "n" (plist/get sover :keys)) "step-over bound to n")
+    (= {sout} (ide/get-command "dbg/step-out"))
+    (test/assert (exists "f" (plist/get sout :keys)) "step-out bound to f")
+    true
+  })
+
+  (test/case "live-attach-pause-inspect-continue"
+    {do
+    (ide/register-tool ide/debugger-tool)
+    (ide/dbg-attach "127.0.0.1" dbg-port)
+    (sleep-ms 100)
+    (= {st} (ide/tool-state "debugger"))
+    (test/assert-eq 1 (plist/get st :attached) "tool attached")
+    (test/assert-eq 0 (plist/get st :paused) "target running")
+
+    ; break + trigger
+    (ide/dbg-break fixture-path 4)
+    (sleep-ms 100)
+    (aio/dispatch work-sys
+      (\ {_} {debug-target-fn 5})
+      nil
+      (\ {r} {do (dict/set! results "live" r) nil}))
+    (test/assert-eq 1 (wait-tool-paused 100) "tool sees pause")
+
+    (sleep-ms 150)
+    (ide/dbg-poll)
+    (sleep-ms 150)
+    (= {st2} (ide/tool-state "debugger"))
+    (test/assert-eq 4 (plist/get st2 :line) "line in tool state")
+    (test/assert (> (len (plist/get st2 :stack)) 0) "stack in tool state")
+    (= {names} (map (\ {b} {head b}) (ide/dbg-bind-rows (plist/get st2 :binds))))
+    (test/assert (exists "x" names) "bindings in tool state")
+
+    ; continue via the wire client
+    (ide/dbg-post "/dbg/continue" {:a 0})
+    (sleep-ms 300)
+    (test/assert-eq 18 (dict/get results "live" nil) "target completed: 6+12")
+    (ide/dbg-detach)
+    (debug/disable)
+    true
+  }))
+
+  {:suite-name "IDE debugger"})
+
+(aio/stop work-sys)
+(aio/run work-sys)
+(aio/stop ui-sys)
+(aio/run ui-sys)

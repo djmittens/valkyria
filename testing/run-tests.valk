@@ -127,6 +127,7 @@
 
   (= {suites} (join suites (discover-valk-in-dir valk "stdlib/test" "stdlib")))
   (= {suites} (join suites (discover-valk-in-dir valk "lsp/test" "lsp")))
+  (= {suites} (join suites (discover-valk-in-dir valk "ide/test" "ide")))
 
   (if (== include-stress 1)
     {if (file/exists? "runtime/test/stress")

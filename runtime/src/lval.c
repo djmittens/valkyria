@@ -573,7 +573,7 @@ valk_lval_t* valk_lval_qlist(valk_lval_t* arr[], u64 count) {
   return res;
 }
 
-#ifdef VALK_COVERAGE
+#ifdef VALK_SRC_LOC
 static inline void valk_copy_source_loc(valk_lval_t* dst, valk_lval_t* src) {
   dst->cov_file_id = src->cov_file_id;
   dst->cov_line = src->cov_line;
@@ -678,7 +678,7 @@ valk_lval_t* valk_lval_copy(valk_lval_t* lval) {
                                LVAL_FLAG_MACRO | LVAL_SRC_POS_MASK)) |
                valk_alloc_flags_from_allocator(valk_thread_ctx.allocator);
 
-#ifdef VALK_COVERAGE
+#ifdef VALK_SRC_LOC
   res->cov_file_id = lval->cov_file_id;
   res->cov_line = lval->cov_line;
   res->cov_column = lval->cov_column;

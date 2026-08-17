@@ -339,8 +339,10 @@ u64 valk_lenv_snapshot(valk_lenv_t* env, char*** out_names,
 
 void valk_lenv_def(valk_lenv_t* env, valk_lval_t* key, valk_lval_t* val) {
   // Walk up to the outermost mutable env, stopping before any frozen
-  // ancestor (e.g. an image-loaded env).
+  // ancestor (e.g. an image-loaded env) and at def boundaries (session envs
+  // from env/new, which must not leak defs into the global env).
   while (env->parent) {
+    if (atomic_load(&env->flags) & LENV_FLAG_DEF_BOUNDARY) break;
     if (atomic_load(&env->parent->flags) & LENV_FLAG_FROZEN) break; // LCOV_EXCL_BR_LINE - frozen envs exist only in image-backed binaries
     env = env->parent;
   }

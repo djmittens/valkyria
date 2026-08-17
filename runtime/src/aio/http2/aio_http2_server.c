@@ -238,6 +238,7 @@ static nghttp2_session_callbacks *__accept_get_callbacks(void) {
   nghttp2_session_callbacks_set_on_begin_headers_callback(callbacks, valk_http2_on_begin_headers_callback);
   nghttp2_session_callbacks_set_on_header_callback(callbacks, valk_http2_on_header_callback);
   nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, valk_http2_on_frame_recv_callback);
+  nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks, valk_http2_server_on_data_chunk_recv_callback);
   nghttp2_session_callbacks_set_on_frame_send_callback(callbacks, valk_http2_server_on_frame_send_callback);
   nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, valk_http2_server_on_stream_close_callback);
   return callbacks;

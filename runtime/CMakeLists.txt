@@ -14,6 +14,7 @@ project(valkyria LANGUAGES C)
 # Feature flags
 option(VALK_COVERAGE "Enable Valk line coverage instrumentation" OFF)
 option(VALK_TRAMPOLINE "Use trampoline-based eval (for algebraic effects)" OFF)
+option(VALK_DEBUG_INFO "Source positions on lvals + debugger eval hook" ON)
 
 set (CMAKE_EXECUTABLE_ENABLE_EXPORTS on )
 
@@ -114,6 +115,9 @@ set(VALKYRIA_SOURCES
   src/builtins_list.c
   src/builtins_string.c
   src/builtins_env.c
+  src/builtins_debug.c
+  src/debug.c
+  src/debugger.c
   src/builtins_io.c
   src/load.c
   src/builtins_file.c
@@ -145,7 +149,7 @@ set(VALKYRIA_SOURCES
   src/gc_verify.c
   src/gc_region.c
   src/gc_stats.c
-  src/debug.c
+  src/debugger.c
   src/log.c
   src/coverage.c
   src/source_loc.c
@@ -231,6 +235,11 @@ set_source_files_properties(vendor/sqlite3/sqlite3.c PROPERTIES
 if(VALK_COVERAGE)
   add_compile_definitions(VALK_COVERAGE)
   message(STATUS "Valk line coverage: ENABLED")
+endif()
+
+if(VALK_DEBUG_INFO)
+  add_compile_definitions(VALK_DEBUG_INFO)
+  message(STATUS "Valk debug info: ENABLED")
 endif()
 
 # Relative to the workspace root (parent of runtime/): the binary is run from
@@ -365,6 +374,9 @@ target_include_directories(valk_shim SYSTEM PRIVATE
 )
 if(VALK_COVERAGE)
   target_compile_definitions(valk_shim PRIVATE VALK_COVERAGE)
+endif()
+if(VALK_DEBUG_INFO)
+  target_compile_definitions(valk_shim PRIVATE VALK_DEBUG_INFO)
 endif()
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/valk-shim.o

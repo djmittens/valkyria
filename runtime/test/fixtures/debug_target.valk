@@ -1,0 +1,18 @@
+; Debugger test fixture. Line numbers matter — tests break on specific lines.
+(fun {debug-target-fn x}
+  {do
+    (= {a} (+ x 1))
+    (= {b} (* a 2))
+    (+ a b)})
+
+(fun {debug-helper y}
+  {do
+    (= {h1} (+ y 1))
+    (= {h2} (* h1 2))
+    (+ h1 h2)})
+
+(fun {debug-nested-fn x}
+  {do
+    (= {n1} (debug-helper x))
+    (= {n2} (+ n1 1))
+    (+ n1 n2)})

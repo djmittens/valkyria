@@ -1,0 +1,178 @@
+; Tests for the modal edit machine and the REPL tool.
+; Run with: build/valk ide/test/test_ide_repl.valk
+
+(load "testing/test.valk")
+(load "ide/machine.valk")
+(load "ide/repl.valk")
+(load "ide/server.valk")
+
+(fun {type-all buf keys} {
+  foldl (\ {b k} {ide/edit-insert b k}) buf keys
+})
+
+(test/run (list
+
+  (test/case "edit-insert-chars-and-space"
+    {do
+    (= {buf} (type-all (ide/edit-new) {"a" "b" "SPC" "c"}))
+    (test/assert-eq "ab c" (ide/edit-text buf) "chars and space inserted")
+    (test/assert-eq 4 (plist/get buf :col) "cursor advanced")
+    true
+  })
+
+  (test/case "edit-insert-newline-splits"
+    {do
+    (= {buf} (type-all (ide/edit-new) {"a" "b" "CR" "c"}))
+    (test/assert-eq "ab\nc" (ide/edit-text buf) "CR splits line")
+    (test/assert-eq 1 (plist/get buf :row) "row advanced")
+    (test/assert-eq 1 (plist/get buf :col) "col after c")
+    true
+  })
+
+  (test/case "edit-backspace-joins-lines"
+    {do
+    (= {buf} (type-all (ide/edit-new) {"a" "CR" "b"}))
+    (= {buf} (ide/edit-insert buf "BS"))
+    (= {buf} (ide/edit-insert buf "BS"))
+    (test/assert-eq "a" (ide/edit-text buf) "BS deletes char then joins")
+    (test/assert-eq 0 (plist/get buf :row) "back on first line")
+    (test/assert-eq 1 (plist/get buf :col) "col at join point")
+    true
+  })
+
+  (test/case "edit-normal-motions"
+    {do
+    (= {buf} (type-all (ide/edit-new) {"h" "e" "l" "l" "o"}))
+    (= {buf} (ide/edit-esc buf))
+    (test/assert-eq 4 (plist/get buf :col) "esc clamps to last char")
+    (= {buf} (ide/edit-normal buf "0"))
+    (test/assert-eq 0 (plist/get buf :col) "0 to start")
+    (= {buf} (ide/edit-normal buf "$"))
+    (test/assert-eq 4 (plist/get buf :col) "$ to end")
+    (= {buf} (ide/edit-normal buf "h"))
+    (test/assert-eq 3 (plist/get buf :col) "h moves left")
+    (= {buf} (ide/edit-normal buf "l"))
+    (test/assert-eq 4 (plist/get buf :col) "l moves right")
+    (= {buf} (ide/edit-normal buf "l"))
+    (test/assert-eq 4 (plist/get buf :col) "l clamps at end")
+    true
+  })
+
+  (test/case "edit-normal-x-and-D"
+    {do
+    (= {buf} (type-all (ide/edit-new) {"a" "b" "c"}))
+    (= {buf} (ide/edit-esc buf))
+    (= {buf} (ide/edit-normal buf "0"))
+    (= {buf} (ide/edit-normal buf "x"))
+    (test/assert-eq "bc" (ide/edit-text buf) "x deletes under cursor")
+    (= {buf} (ide/edit-normal buf "D"))
+    (test/assert-eq "" (ide/edit-text buf) "D on last line clears it")
+    (= {buf2} (type-all (ide/edit-new) {"a" "CR" "b"}))
+    (= {buf2} (ide/edit-normal (ide/edit-esc buf2) "k"))
+    (= {buf2} (ide/edit-normal buf2 "D"))
+    (test/assert-eq "b" (ide/edit-text buf2) "D removes a line")
+    true
+  })
+
+  (test/case "edit-normal-insert-entries"
+    {do
+    (test/assert (ide/edit-enters-insert? "i") "i enters insert")
+    (test/assert (ide/edit-enters-insert? "o") "o enters insert")
+    (test/assert (not (ide/edit-enters-insert? "x")) "x does not")
+    (= {buf} (ide/edit-esc (type-all (ide/edit-new) {"a" "b"})))
+    (= {a-buf} (ide/edit-normal buf "a"))
+    (test/assert-eq 2 (plist/get a-buf :col) "a moves past char")
+    (= {o-buf} (ide/edit-normal buf "o"))
+    (test/assert-eq "ab\n" (ide/edit-text o-buf) "o opens line below")
+    (test/assert-eq 1 (plist/get o-buf :row) "o moves down")
+    true
+  })
+
+  (test/case "repl-eval-in-session"
+    {do
+    (= {r} (ide/repl-eval-raw "main" "(+ 1 2)"))
+    (test/assert-eq 3 r "arithmetic evals")
+    (ide/repl-eval-raw "main" "(def {rx} 10)")
+    (test/assert-eq 10 (ide/repl-eval-raw "main" "rx") "session bindings persist")
+    (= {root-leak} (env/eval (env/new) {eval rx}))
+    (test/assert (error? root-leak) "session def does not leak to root")
+    true
+  })
+
+  (test/case "repl-eval-error-is-error"
+    {do
+    (= {r} (ide/repl-eval-raw "main" "(undefined-fn-xyz 1)"))
+    (test/assert (error? r) "unbound fn errors")
+    (= {r2} (ide/repl-eval-raw "main" "(((("))
+    (test/assert (error? r2) "parse error surfaces")
+    true
+  })
+
+  (test/case "repl-update-eval-lifecycle"
+    {do
+    (= {st} (ide/repl-init))
+    (= {st} (ide/repl-update st {:type "edit-insert" :key "x"}))
+    (test/assert-eq "x" (ide/edit-text (plist/get st :buffer)) "typing works")
+    (= {st} (ide/repl-update st {:type "eval-start" :text "x"}))
+    (test/assert-eq 1 (len (plist/get st :history)) "history entry added")
+    (test/assert-eq "" (ide/edit-text (plist/get st :buffer)) "buffer cleared")
+    (test/assert-eq "pending" (plist/get (head (plist/get st :history)) :status)
+      "entry pending")
+    (= {st} (ide/repl-update st {:type "eval-result" :out "42" :status "ok"}))
+    (= {entry} (head (plist/get st :history)))
+    (test/assert-eq "42" (plist/get entry :out) "result recorded")
+    (test/assert-eq "ok" (plist/get entry :status) "status recorded")
+    true
+  })
+
+  (test/case "repl-view-shape"
+    {do
+    (= {st} (ide/repl-update (ide/repl-init) {:type "eval-start" :text "(+ 1 1)"}))
+    (= {tree} (ide/repl-view st))
+    (test/assert-eq :panel (plist/get tree :w) "panel root")
+    (= {kids} (plist/get tree :children))
+    (test/assert-eq 3 (len kids) "history in + out + input")
+    (test/assert-eq :input (plist/get (last kids) :w) "input widget last")
+    (= {parsed} (json/parse (json/encode tree)))
+    (test/assert-eq "repl" (plist/get parsed :id) "encodes to json")
+    true
+  })
+
+  (test/case "repl-full-key-flow"
+    {do
+    (ide/register-tool ide/repl-tool)
+    ; focus repl via SPC w w cycle (repl is the only tool here)
+    (= {cs} (ide/client-state "rc1"))
+    (ide/set-client-state "rc1" (plist/set cs :focus "repl"))
+    ; i enters insert, type (+ 1 2), ESC back to normal, CR evals inline
+    (ide/handle-key "rc1" "i" 0)
+    (test/assert-eq "insert" (plist/get (ide/client-state "rc1") :mode)
+      "i enters insert mode")
+    (map (\ {k} {ide/handle-key "rc1" k 0}) {"(" "+" "SPC" "1" "SPC" "2" ")"})
+    (ide/handle-key "rc1" "ESC" 0)
+    (test/assert-eq "normal" (plist/get (ide/client-state "rc1") :mode)
+      "esc back to normal")
+    (ide/handle-key "rc1" "CR" 0)
+    (= {hist} (plist/get (ide/tool-state "repl") :history))
+    (test/assert-eq 1 (len hist) "eval ran")
+    (= {entry} (head hist))
+    (test/assert-eq "(+ 1 2)" (plist/get entry :in) "input recorded")
+    (test/assert-eq "3" (plist/get entry :out) "result recorded")
+    (test/assert-eq "ok" (plist/get entry :status) "ok status")
+    true
+  })
+
+  (test/case "focus-next-cycles"
+    {do
+    (ide/register-tool ide/repl-tool)
+    (= {cs} (ide/client-state "fc1"))
+    (ide/set-client-state "fc1" (plist/set cs :focus "repl"))
+    (ide/handle-key "fc1" "SPC" 0)
+    (ide/handle-key "fc1" "w" 0)
+    (ide/handle-key "fc1" "w" 0)
+    (test/assert-eq "repl" (plist/get (ide/client-state "fc1") :focus)
+      "single tool cycles to itself")
+    true
+  }))
+
+  {:suite-name "IDE repl"})

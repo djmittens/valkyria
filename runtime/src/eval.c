@@ -9,6 +9,7 @@
 #include "builtins_internal.h"
 #include "common.h"
 #include "coverage.h"
+#include "debugger.h"
 #include "gc.h"
 #include "macro.h"
 #include "memory.h"
@@ -504,7 +505,18 @@ static valk_lval_t* valk_lval_eval_iterative(valk_lenv_t* env, valk_lval_t* lval
 
     expr = valk_thread_ctx.eval_expr;
     value = valk_thread_ctx.eval_value;
-    
+
+#ifdef VALK_SRC_LOC
+    if (__builtin_expect(
+            atomic_load_explicit(&valk_debug_active, memory_order_relaxed) != 0,
+            0)) {
+      valk_debug_eval_hook();
+      expr = valk_thread_ctx.eval_expr;
+      value = valk_thread_ctx.eval_value;
+      cur_env = valk_thread_ctx.eval_env;
+    }
+#endif
+
     atomic_fetch_add(&g_eval_metrics.evals_total, 1);
     
     if (expr != NULL) {  // LCOV_EXCL_BR_LINE - evaluator dispatch

@@ -1,0 +1,91 @@
+; Latency UAT (DESIGN.md section 3.3): machine-side key-event-in to
+; echo-patch-built must hold its budget while a separate work system is
+; saturated with allocation-heavy churn (GC pressure included by design).
+; Run with: build/valk ide/test/test_ide_latency.valk
+
+(load "testing/test.valk")
+(load "ide/machine.valk")
+(load "ide/status.valk")
+(load "ide/server.valk")
+
+(def {budget-us} 5000)
+(def {samples} 200)
+(def {allowed-over} 2)
+
+(def {work-sys} (aio/await (aio/start {:num-threads 2})))
+(def {ui-sys} (aio/await (aio/start {:num-threads 1})))
+
+(def {churn-ctl} (dict/new))
+(dict/set! churn-ctl "run" 1)
+
+(fun {churn n acc} {
+  (if (== n 0) {acc} {churn (- n 1) (join acc (list n n))})
+})
+
+(fun {keep-busy _} {do (churn 200 nil) nil})
+
+(fun {re-busy r} {
+  (if (== (dict/get churn-ctl "run" 0) 1)
+    {aio/dispatch work-sys keep-busy nil re-busy}
+    {nil})
+})
+
+(fun {measure-key key} {do
+  (= {t0} (time-us))
+  (ide/handle-key "lat-client" key t0)
+  (- (time-us) t0)
+})
+
+(fun {measure-loop n acc} {
+  (if (== n 0)
+    {acc}
+    {do
+      (= {d1} (measure-key "SPC"))
+      (= {d2} (measure-key "ESC"))
+      (measure-loop (- n 1) (join acc (list d1 d2)))})
+})
+
+(ide/register-tool ide/status-tool)
+(ide/dispatch "status" (ide/status-sample) 0)
+
+(def {server} (http2/server-listen ui-sys 0 (\ {req} {ide/handle-request req})))
+(def {test-port} (http2/server-port server))
+
+(re-busy nil)
+
+(test/run (list
+
+  (test/case "key-echo-latency-under-saturation"
+    {do
+    (measure-loop 10 nil)
+    (= {durations} (measure-loop (/ samples 2) nil))
+    (= {over} (filter (\ {d} {> d budget-us}) durations))
+    (= {worst} (foldl (\ {a b} {if (> b a) {b} {a}}) 0 durations))
+    (= {total} (foldl + 0 durations))
+    (println (str "latency: n=" (len durations)
+                  " mean-us=" (/ total (len durations))
+                  " worst-us=" worst
+                  " over-budget=" (len over)))
+    (test/assert (<= (len over) allowed-over)
+      (str "p99 budget: at most " allowed-over " of " (len durations)
+           " samples over " budget-us "us, got " (len over)))
+    true
+  })
+
+  (test/case "key-event-e2e-roundtrip"
+    {do
+    (= {body} "{\"client\":\"e2e\",\"event\":{\"type\":\"key\",\"key\":\"SPC\",\"ts\":1}}")
+    (= {resp} (aio/await (http2/client-post ui-sys "127.0.0.1" test-port "/event" body)))
+    (test/assert-eq "200" (http2/response-status resp) "event accepted over wire")
+    (test/assert-eq "SPC" (plist/get (ide/client-state "e2e") :pending)
+      "wire key updated client state")
+    true
+  }))
+
+  {:suite-name "IDE latency UAT"})
+
+(dict/set! churn-ctl "run" 0)
+(aio/stop work-sys)
+(aio/run work-sys)
+(aio/stop ui-sys)
+(aio/run ui-sys)

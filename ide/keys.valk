@@ -1,0 +1,101 @@
+; ide/keys.valk — pure key-routing engine (DESIGN.md section 3.3)
+; Commands are data: {:id Str :title Str :keys {Str ...} :pane Str? :run Fun?}
+; Bindings are space-separated key tokens: "r", "SPC SPC", "SPC m r".
+
+(module ide)
+
+(fun {command-bindings cmd} {do
+  (= {ks} (plist/get cmd :keys))
+  (if (nil? ks)
+    {nil}
+    {map (\ {k} {list k (plist/get cmd :id)}) ks})
+})
+
+(fun {bindings-for commands} {flatten (map command-bindings commands)})
+
+(fun {binding-exact bindings b} {do
+  (= {m} (filter (\ {p} {== (head p) b}) bindings))
+  (if (nil? m) {nil} {head (tail (head m))})
+})
+
+(fun {binding-has-prefix? bindings b} {do
+  (= {pre} (str b " "))
+  (> (len (filter (\ {p} {str/starts-with? (head p) pre}) bindings)) 0)
+})
+
+(fun {pane-key-command commands key focus} {do
+  (= {m} (filter (\ {c} {do
+    (= {ks} (plist/get c :keys))
+    (if (nil? ks)
+      {0}
+      {and (== (plist/get c :pane) focus) (exists key ks)})}) commands))
+  (if (nil? m) {nil} {plist/get (head m) :id})
+})
+
+; One normal-mode key against pending leader state.
+; Returns {:pending Str :cmd Str|nil}
+(fun {keys-step pending key commands focus} {
+  (if (== key "ESC")
+    {`{:pending "" :cmd ,nil}}
+    {if (not (== pending ""))
+      {do
+        (= {np} (str pending " " key))
+        (= {bindings} (bindings-for commands))
+        (= {exact} (binding-exact bindings np))
+        (if (not (nil? exact))
+          {`{:pending "" :cmd ,exact}}
+          {if (binding-has-prefix? bindings np)
+            {`{:pending ,np :cmd ,nil}}
+            {`{:pending "" :cmd ,nil}}})}
+      {if (== key "SPC")
+        {`{:pending "SPC" :cmd ,nil}}
+        {`{:pending "" :cmd ,(pane-key-command commands key focus)}}}})
+})
+
+(fun {command-title commands id} {do
+  (= {m} (filter (\ {c} {== (plist/get c :id) id}) commands))
+  (if (nil? m) {id} {plist/get (head m) :title})
+})
+
+(fun {group-name groups prefix} {do
+  (= {m} (filter (\ {g} {== (head g) prefix}) groups))
+  (if (nil? m) {"prefix"} {head (tail (head m))})
+})
+
+(fun {hints-dedupe hints} {
+  foldl (\ {acc h} {
+    (if (exists (plist/get h :key) (map (\ {x} {plist/get x :key}) acc))
+      {acc}
+      {join acc (list h)})}) nil hints
+})
+
+; Which-key continuations for a pending sequence.
+; Returns list of {:key Str :label Str}
+(fun {keyhints commands pending groups} {do
+  (= {bindings} (bindings-for commands))
+  (= {pre} (str pending " "))
+  (= {cont} (filter (\ {p} {str/starts-with? (head p) pre}) bindings))
+  (= {hints} (map (\ {p} {do
+    (= {rest} (str/slice (head p) (len pre) (len (head p))))
+    (= {toks} (str/split rest " "))
+    (= {k} (head toks))
+    (if (== (len toks) 1)
+      {`{:key ,k :label ,(command-title commands (head (tail p)))}}
+      {`{:key ,k :label ,(str "+" (group-name groups (str pending " " k)))}})}) cont))
+  (hints-dedupe hints)
+})
+
+; Case-insensitive subsequence match ("res" matches "status/reset").
+(fun {fuzzy-rec q t qi ti ql tl} {
+  (if (>= qi ql)
+    {1}
+    {if (>= ti tl)
+      {0}
+      {if (== (str/slice q qi (+ qi 1)) (str/slice t ti (+ ti 1)))
+        {fuzzy-rec q t (+ qi 1) (+ ti 1) ql tl}
+        {fuzzy-rec q t qi (+ ti 1) ql tl}}})
+})
+
+(fun {fuzzy-match? query text} {
+  fuzzy-rec (str/lower query) (str/lower text) 0 0 (len query) (len text)
+})

@@ -1,0 +1,194 @@
+; Tests for the interaction core: key engine, which-key hints, palette, chrome.
+; Run with: build/valk ide/test/test_ide_keys.valk
+
+(load "testing/test.valk")
+(load "ide/machine.valk")
+(load "ide/status.valk")
+(load "ide/server.valk")
+
+(def {test-commands}
+  {{:id "palette/open" :title "Command palette" :keys {"SPC SPC"}}
+   {:id "machine/reload-config" :title "Reload config" :keys {"SPC m r"}}
+   {:id "status/reset" :title "Reset status counters" :pane "status" :keys {"r"}}})
+
+(def {test-groups} {{"SPC m" "machine"} {"SPC SPC" "palette"}})
+
+(test/run (list
+
+  (test/case "keys-single-pane-key-resolves"
+    {do
+    (= {r} (ide/keys-step "" "r" test-commands "status"))
+    (test/assert-eq "status/reset" (plist/get r :cmd) "pane key runs command")
+    (test/assert-eq "" (plist/get r :pending) "no pending after run")
+    true
+  })
+
+  (test/case "keys-pane-key-wrong-focus-noop"
+    {do
+    (= {r} (ide/keys-step "" "r" test-commands "other"))
+    (test/assert (nil? (plist/get r :cmd)) "pane key ignored when unfocused")
+    true
+  })
+
+  (test/case "keys-leader-sequence"
+    {do
+    (= {r1} (ide/keys-step "" "SPC" test-commands "status"))
+    (test/assert-eq "SPC" (plist/get r1 :pending) "SPC starts sequence")
+    (test/assert (nil? (plist/get r1 :cmd)) "no command yet")
+    (= {r2} (ide/keys-step "SPC" "m" test-commands "status"))
+    (test/assert-eq "SPC m" (plist/get r2 :pending) "prefix extends")
+    (= {r3} (ide/keys-step "SPC m" "r" test-commands "status"))
+    (test/assert-eq "machine/reload-config" (plist/get r3 :cmd) "exact match runs")
+    (test/assert-eq "" (plist/get r3 :pending) "pending cleared")
+    true
+  })
+
+  (test/case "keys-leader-invalid-clears"
+    {do
+    (= {r} (ide/keys-step "SPC" "z" test-commands "status"))
+    (test/assert-eq "" (plist/get r :pending) "dead-end clears pending")
+    (test/assert (nil? (plist/get r :cmd)) "no command on dead end")
+    true
+  })
+
+  (test/case "keys-esc-clears-pending"
+    {do
+    (= {r} (ide/keys-step "SPC m" "ESC" test-commands "status"))
+    (test/assert-eq "" (plist/get r :pending) "esc clears")
+    true
+  })
+
+  (test/case "keyhints-continuations"
+    {do
+    (= {hints} (ide/keyhints test-commands "SPC" test-groups))
+    (= {keys} (map (\ {h} {plist/get h :key}) hints))
+    (test/assert (exists "SPC" keys) "palette continuation listed")
+    (test/assert (exists "m" keys) "machine group listed")
+    (= {mh} (head (filter (\ {h} {== (plist/get h :key) "m"}) hints)))
+    (test/assert-eq "+machine" (plist/get mh :label) "group label from config")
+    (= {ph} (head (filter (\ {h} {== (plist/get h :key) "SPC"}) hints)))
+    (test/assert-eq "Command palette" (plist/get ph :label) "terminal shows title")
+    true
+  })
+
+  (test/case "fuzzy-match"
+    {do
+    (test/assert (ide/fuzzy-match? "res" "status/reset") "subsequence matches")
+    (test/assert (ide/fuzzy-match? "RES" "status/reset") "case-insensitive")
+    (test/assert (ide/fuzzy-match? "" "anything") "empty query matches")
+    (test/assert (not (ide/fuzzy-match? "xyz" "status/reset")) "no match")
+    true
+  })
+
+  (test/case "palette-filter-and-run"
+    {do
+    (= {pal} {:query "" :sel 0})
+    (= {r1} (ide/palette-step pal "r" test-commands))
+    (= {r2} (ide/palette-step (plist/get r1 :palette) "e" test-commands))
+    (= {r3} (ide/palette-step (plist/get r2 :palette) "s" test-commands))
+    (= {items} (ide/palette-items test-commands "res"))
+    (test/assert-eq 1 (len items) "only reset matches res")
+    (= {r4} (ide/palette-step (plist/get r3 :palette) "CR" test-commands))
+    (test/assert-eq "status/reset" (plist/get r4 :run) "enter runs selection")
+    (test/assert (nil? (plist/get r4 :palette)) "palette closed after run")
+    true
+  })
+
+  (test/case "palette-esc-closes"
+    {do
+    (= {r} (ide/palette-step {:query "ab" :sel 0} "ESC" test-commands))
+    (test/assert (nil? (plist/get r :palette)) "esc closes")
+    (test/assert (nil? (plist/get r :run)) "nothing runs")
+    true
+  })
+
+  (test/case "palette-backspace-and-selection"
+    {do
+    (= {r1} (ide/palette-step {:query "ab" :sel 0} "BS" test-commands))
+    (test/assert-eq "a" (plist/get (plist/get r1 :palette) :query) "bs drops char")
+    (= {r2} (ide/palette-step {:query "" :sel 0} "DOWN" test-commands))
+    (test/assert-eq 1 (plist/get (plist/get r2 :palette) :sel) "down moves")
+    (= {r3} (ide/palette-step {:query "" :sel 1} "UP" test-commands))
+    (test/assert-eq 0 (plist/get (plist/get r3 :palette) :sel) "up moves")
+    true
+  })
+
+  (test/case "palette-selection-clamped-on-run"
+    {do
+    (= {r} (ide/palette-step {:query "res" :sel 9} "CR" test-commands))
+    (test/assert-eq "status/reset" (plist/get r :run) "sel clamps to list")
+    true
+  })
+
+  (test/case "chrome-view-shape"
+    {do
+    (= {cstate} `{:mode "normal" :pending "SPC" :focus "status" :palette ,nil})
+    (= {tree} (ide/chrome-view cstate test-commands test-groups))
+    (test/assert-eq :chrome (plist/get tree :w) "chrome widget")
+    (test/assert-eq "SPC" (plist/get (plist/get tree :statusline) :pending)
+      "statusline carries pending")
+    (test/assert (> (len (plist/get tree :keyhints)) 0) "hints present mid-sequence")
+    (= {parsed} (json/parse (json/encode tree)))
+    (test/assert-eq ":chrome" (plist/get parsed :w) "chrome encodes to json")
+    true
+  })
+
+  (test/case "chrome-view-palette-mode"
+    {do
+    (= {cstate} {:mode "normal" :pending "" :focus "status" :palette {:query "" :sel 0}})
+    (= {tree} (ide/chrome-view cstate test-commands test-groups))
+    (test/assert-eq "palette" (plist/get (plist/get tree :statusline) :mode)
+      "palette mode shown")
+    (test/assert (> (len (plist/get (plist/get tree :palette) :items)) 0)
+      "palette lists commands")
+    true
+  })
+
+  (test/case "handle-key-full-flow"
+    {do
+    (ide/register-tool ide/status-tool)
+    (ide/dispatch "status" (ide/status-sample) 0)
+    (test/assert (> (plist/get (ide/tool-state "status") :ticks) 0) "has ticks")
+
+    ; SPC SPC opens the palette
+    (ide/handle-key "kc1" "SPC" 0)
+    (test/assert-eq "SPC" (plist/get (ide/client-state "kc1") :pending)
+      "pending tracked per client")
+    (ide/handle-key "kc1" "SPC" 0)
+    (test/assert (not (nil? (plist/get (ide/client-state "kc1") :palette)))
+      "palette open")
+
+    ; type res, enter -> status/reset dispatched to the tool
+    (ide/handle-key "kc1" "r" 0)
+    (ide/handle-key "kc1" "e" 0)
+    (ide/handle-key "kc1" "s" 0)
+    (ide/handle-key "kc1" "CR" 0)
+    (test/assert (nil? (plist/get (ide/client-state "kc1") :palette))
+      "palette closed")
+    (test/assert-eq 0 (plist/get (ide/tool-state "status") :ticks)
+      "command reached the tool")
+    true
+  })
+
+  (test/case "handle-key-pane-binding"
+    {do
+    (ide/register-tool ide/status-tool)
+    (ide/dispatch "status" (ide/status-sample) 0)
+    (ide/handle-key "kc2" "r" 0)
+    (test/assert-eq 0 (plist/get (ide/tool-state "status") :ticks)
+      "focused pane key runs command")
+    true
+  })
+
+  (test/case "route-event-post-key-flow"
+    {do
+    (ide/register-tool ide/status-tool)
+    (= {body} "{\"client\":\"kc3\",\"event\":{\"type\":\"key\",\"key\":\"SPC\",\"ts\":1}}")
+    (= {resp} (ide/handle-request `{:method "POST" :path "/event" :body ,body}))
+    (test/assert-eq "200" (plist/get resp :status) "key accepted")
+    (test/assert-eq "SPC" (plist/get (ide/client-state "kc3") :pending)
+      "wire key reaches engine")
+    true
+  }))
+
+  {:suite-name "IDE interaction core"})

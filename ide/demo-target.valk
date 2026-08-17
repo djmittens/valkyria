@@ -1,0 +1,22 @@
+; Demo debug target: runs (debug/serve) and calls the fixture function once
+; a second. Attach the IDE with SPC d a, then set a breakpoint from the
+; REPL: (ide/dbg-break "runtime/test/fixtures/debug_target.valk" 4)
+; Run with: build/valk ide/demo-target.valk
+
+(load "stdlib/aio/debug-server.valk")
+(load "runtime/test/fixtures/debug_target.valk")
+
+(def {sys} (aio/await (aio/start {:num-threads 2})))
+(def {tick} (dict/new))
+(dict/set! tick "n" 0)
+
+(debug/serve sys 7788)
+(printf "debug target on https://localhost:7788 (pid tick loop running)\n")
+
+(aio/interval sys 1000 (\ {} {do
+  (= {n} (+ (dict/get tick "n" 0) 1))
+  (dict/set! tick "n" n)
+  (aio/dispatch sys (\ {x} {debug-target-fn x}) n (\ {r} {nil}))
+  :continue}))
+
+(aio/run sys)

@@ -441,6 +441,9 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
       valk_lval_t *sig_type = (tl->cons.tail && LVAL_TYPE(tl->cons.tail) == LVAL_CONS)
         ? tl->cons.tail->cons.head : NULL;
       const char *sig_str = sig_type ? valk_lspi_sig_to_string(ctx, sig_type) : "(sig)";
+      // Doc comments conventionally sit above the sig, not the fun that
+      // follows it — attach them to the sig row.
+      const char *sig_doc = valk_lspi_extract_doc_comment(ctx, kp);
       // Update a sig-less row if one exists; never clobber a fun row's
       // formals string — insert a separate row instead
       sqlite3_stmt *check;
@@ -454,14 +457,16 @@ static void walk_list_head(index_ctx_t *ctx, valk_lval_t *expr, valk_lval_t *hd,
         sqlite3_finalize(check);
         sqlite3_stmt *upd;
         sqlite3_prepare_v2(ctx->db,
-          "UPDATE symbols SET sig=?1 WHERE id=?2", -1, &upd, NULL);
+          "UPDATE symbols SET sig=?1, doc=COALESCE(doc, ?3) WHERE id=?2",
+          -1, &upd, NULL);
         sqlite3_bind_text(upd, 1, sig_str, -1, SQLITE_STATIC);
         sqlite3_bind_int(upd, 2, sym_id);
+        if (sig_doc) sqlite3_bind_text(upd, 3, sig_doc, -1, SQLITE_STATIC);
         sqlite3_step(upd);
         sqlite3_finalize(upd);
       } else {
         sqlite3_finalize(check);
-        valk_lspi_emit_symbol(ctx, sname, kp, SYMKIND_FUNCTION, -1, NULL, sig_str);
+        valk_lspi_emit_symbol(ctx, sname, kp, SYMKIND_FUNCTION, -1, sig_doc, sig_str);
       }
     }
     walk_each(ctx, tl);

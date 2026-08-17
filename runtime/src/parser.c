@@ -60,6 +60,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_register_aio_diagnostics_builtins(env);
   valk_register_ctx_builtins(env);
   valk_register_coverage_builtins(env);
+  valk_register_debug_builtins(env);
   valk_register_test_builtins(env);
   valk_register_json_builtins(env);
   valk_register_stdio_builtins(env);

@@ -1,0 +1,113 @@
+; Tests for the in-process LSP engine: nav/* pure cores, workspace symdb,
+; symbol docs, enriched completion, K-hover flow.
+; Run with: build/valk ide/test/test_ide_lsp.valk
+
+(load "testing/test.valk")
+(load "ide/repl.valk")
+(load "ide/server.valk")
+
+; In-memory workspace db seeded with one synthetic document.
+(def {test-db} (symdb/init ":memory:"))
+(symdb/attach-live test-db)
+(def {doc-text} "(sig 'zz-add {-> Num Num Num})\n; adds two numbers\n(fun {zz-add a b} {+ a b})\n")
+(symdb/sync-document test-db "file:///tmp/zz-test.valk" doc-text)
+(dict/set! ide/runtime "lsp-db" test-db)
+
+(test/run (list
+
+  (test/case "nav-hover-core-returns-data"
+    {do
+    (= {r} (nav/hover* doc-text 2 7 "/tmp/zz-test.valk" test-db))
+    (test/assert (not (nil? r)) "hover data for symbol")
+    (= {contents} (plist/get r :contents))
+    (test/assert-eq "markdown" (plist/get contents :kind) "markdown kind")
+    (test/assert (str/contains? (plist/get contents :value) "zz-add")
+      "hover mentions symbol")
+    true
+  })
+
+  (test/case "nav-hover-core-nil-off-symbol"
+    {do
+    (= {r} (nav/hover* "   " 0 1 "/tmp/zz-test.valk" test-db))
+    (test/assert (nil? r) "whitespace hovers to nil")
+    true
+  })
+
+  (test/case "nav-completion-core-returns-items"
+    {do
+    (= {items} (nav/completion* "(zz-a" 0 5 "/tmp/zz-test.valk" test-db))
+    (test/assert (> (len items) 0) "items found")
+    (= {labels} (map (\ {i} {plist/get i :label}) items))
+    (test/assert (exists "zz-add" labels) "symbol completes")
+    true
+  })
+
+  (test/case "nav-completion-core-no-db"
+    {do
+    (= {items} (nav/completion* "(fu" 0 3 "/tmp/x.valk" nil))
+    (test/assert (> (len items) 0) "snippets still complete without db")
+    true
+  })
+
+  (test/case "lsp-symbol-info-finds-doc"
+    {do
+    (= {info} (ide/lsp-symbol-info "zz-add"))
+    (test/assert (not (nil? info)) "info found")
+    (test/assert-eq "zz-add" (SymInfo:name info) "name matches")
+    (test/assert (str/contains? (SymInfo:doc info) "adds two numbers")
+      "doc comment extracted")
+    true
+  })
+
+  (test/case "lsp-symbol-info-missing"
+    {do
+    (test/assert (nil? (ide/lsp-symbol-info "no-such-symbol-anywhere"))
+      "unknown symbol is nil")
+    (test/assert (nil? (ide/lsp-symbol-info "")) "empty word is nil")
+    true
+  })
+
+  (test/case "lsp-completion-rows"
+    {do
+    (= {rows} (ide/lsp-completion-rows "zz-ad"))
+    (test/assert-eq 1 (len rows) "row found")
+    (test/assert-eq "zz-add" (plist/get (head rows) :name) "name")
+    true
+  })
+
+  (test/case "repl-completions-carry-sig-detail"
+    {do
+    (= {cands} (ide/repl-completions "zz-ad"))
+    (test/assert-eq 1 (len cands) "one candidate")
+    (test/assert (str/contains? (plist/get (head cands) :detail) "{->")
+      "sig as detail")
+    true
+  })
+
+  (test/case "hover-key-flow"
+    {do
+    (ide/register-tool ide/repl-tool)
+    (= {cs} (ide/client-state "hc1"))
+    (ide/set-client-state "hc1" (plist/set cs :focus "repl"))
+    ; type zz-add, esc, then K over the word
+    (ide/handle-key "hc1" "i" 0)
+    (map (\ {k} {ide/handle-key "hc1" k 0}) {"z" "z" "-" "a" "d" "d"})
+    (ide/handle-key "hc1" "ESC" 0)
+    (ide/handle-key "hc1" "K" 0)
+    (= {card} (plist/get (ide/client-state "hc1") :doc))
+    (test/assert (not (nil? card)) "card popup set")
+    (test/assert-eq "zz-add" (plist/get card :symbol) "card for hovered word")
+    ; chrome carries it
+    (= {tree} (ide/chrome-view (ide/client-state "hc1") ide/commands {}))
+    (test/assert-eq "zz-add" (plist/get (plist/get tree :card) :symbol)
+      "chrome card view")
+    (= {parsed} (json/parse (json/encode tree)))
+    (test/assert (not (nil? (plist/get parsed :card))) "card encodes to json")
+    ; any other key clears it
+    (ide/handle-key "hc1" "l" 0)
+    (test/assert (nil? (plist/get (ide/client-state "hc1") :doc))
+      "next key clears doc")
+    true
+  }))
+
+  {:suite-name "IDE lsp engine"})

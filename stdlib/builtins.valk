@@ -310,6 +310,8 @@
 (sig 'http2/client-request {-> (Ref aio) Str Num Str (Handle (Ref http_response))})
 ; Send HTTP/2 client request with custom headers.
 (sig 'http2/client-request-with-headers {-> (Ref aio) Str Num Str (List (List Str)) (Handle (Ref http_response))})
+; Send HTTP/2 POST request with a body: sys host port path body -> Handle(response).
+(sig 'http2/client-post {-> (Ref aio) Str Num Str Str (Handle (Ref http_response))})
 ; Get response body as string.
 (sig 'http2/response-body {-> (Ref http_response) Str})
 ; Get response status code as string.
@@ -455,6 +457,37 @@
 (sig 'stack-depth {-> Num})
 ; Print the current environment as list of (symbol value) pairs.
 (sig 'penv {-> (List A)})
+; Create a first-class environment: child of the root env, or of the given env ref.
+(sig 'env/new {-> & (Ref env) (Ref env)})
+; Evaluate an expression in the given environment.
+(sig 'env/eval {-> (Ref env) A B})
+; Bindings of the env's own frame (not parents) as a list of (name value) pairs.
+(sig 'env/bindings {-> (Ref env) (List (List A))})
+; Parent env ref, or nil for the root.
+(sig 'env/parent {-> (Ref env) (Ref env)})
+
+; Enable the debugger (breakpoints active on all threads).
+(sig 'debug/enable {-> Nil})
+; Disable the debugger and resume any paused thread.
+(sig 'debug/disable {-> Nil})
+; Set a breakpoint: file path (canonicalized) + 1-based line. Returns id.
+(sig 'debug/break {-> Str Num Num})
+; Clear a breakpoint by id. Returns 1 if found.
+(sig 'debug/unbreak {-> Num Num})
+; List active breakpoints as ({:id N :file Str :line N} ...).
+(sig 'debug/breakpoints {-> (List (List A))})
+; 1 while a thread is parked at a breakpoint.
+(sig 'debug/paused? {-> Num})
+; Paused location: {:file Str :line N :expr Str} or nil.
+(sig 'debug/state {-> (List A)})
+; Continuation-stack frames of the paused thread, innermost first.
+(sig 'debug/frames {-> (List (List A))})
+; Environment of frame i as an env ref (use with env/eval, env/bindings).
+(sig 'debug/frame-env {-> Num (Ref env)})
+; Resume the paused thread. Returns 1 if a thread was resumed.
+(sig 'debug/continue {-> Num})
+; Resume and pause again at the next expression on a different line.
+(sig 'debug/step {-> Num})
 ; Exit process with status code.
 (sig 'exit {-> Num Num})
 ; Alias for exit.

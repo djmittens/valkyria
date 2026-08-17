@@ -1,0 +1,158 @@
+; Tests for the IDE machine core: tool lifecycle, status tool, server routes.
+; Run with: build/valk ide/test/test_ide_machine.valk
+
+(load "testing/test.valk")
+(load "ide/machine.valk")
+(load "ide/status.valk")
+(load "ide/server.valk")
+
+(test/run (list
+
+  (test/case "status-update-tick-stores-metrics"
+    {do
+    (= {st} (ide/status-init))
+    (= {ev} {:type "tick" :gc {:cycles 3 :heap-used 2048 :heap-total 4096
+                               :pause-us-max 12 :pause-us-total 20
+                               :reclaimed-bytes 1024}
+             :heap 9999 :arena 42})
+    (= {st2} (ide/status-update st ev))
+    (test/assert-eq 1 (plist/get st2 :ticks) "tick increments ticks")
+    (test/assert-eq 9999 (plist/get st2 :heap) "tick stores heap")
+    (test/assert-eq 42 (plist/get st2 :arena) "tick stores arena")
+    (test/assert-eq 3 (plist/get (plist/get st2 :gc) :cycles) "tick stores gc plist")
+    true
+  })
+
+  (test/case "status-update-reset-command"
+    {do
+    (= {st} (ide/status-update (ide/status-init) (ide/status-sample)))
+    (test/assert-eq 1 (plist/get st :ticks) "tick counted")
+    (= {st2} (ide/status-update st {:type "cmd" :id "status/reset"}))
+    (test/assert-eq 0 (plist/get st2 :ticks) "reset clears ticks")
+    true
+  })
+
+  (test/case "status-update-unknown-event-is-noop"
+    {do
+    (= {st} (ide/status-init))
+    (= {st2} (ide/status-update st {:type "bogus"}))
+    (test/assert-eq st st2 "unknown event leaves state unchanged")
+    true
+  })
+
+  (test/case "status-view-produces-panel-tree"
+    {do
+    (= {st} (ide/status-update (ide/status-init) (ide/status-sample)))
+    (= {tree} (ide/status-view st))
+    (test/assert-eq :panel (plist/get tree :w) "root widget is a panel")
+    (test/assert-eq "status" (plist/get tree :id) "panel id is status")
+    (test/assert (> (len (plist/get tree :children)) 0) "panel has children")
+    true
+  })
+
+  (test/case "status-view-encodes-to-json"
+    {do
+    (= {tree} (ide/status-view (ide/status-init)))
+    (= {parsed} (json/parse (json/encode tree)))
+    (test/assert-eq ":panel" (plist/get parsed :w) "widget kind survives round trip")
+    (test/assert-eq "status" (plist/get parsed :id) "pane id survives round trip")
+    true
+  })
+
+  (test/case "register-and-dispatch-updates-tool-state"
+    {do
+    (ide/register-tool ide/status-tool)
+    (= {tool} (ide/get-tool "status"))
+    (test/assert (not (nil? tool)) "registered tool is findable")
+    (= {st} (ide/dispatch "status" (ide/status-sample) 0))
+    (test/assert-eq 1 (plist/get st :ticks) "dispatch runs update")
+    (test/assert-eq 1 (plist/get (ide/tool-state "status") :ticks)
+      "dispatch persists new state")
+    true
+  })
+
+  (test/case "register-tool-is-idempotent"
+    {do
+    (ide/register-tool ide/status-tool)
+    (ide/register-tool ide/status-tool)
+    (test/assert-eq 1
+      (len (filter (\ {t} {== (plist/get t :id) "status"}) ide/tools))
+      "re-registering replaces, not appends")
+    true
+  })
+
+  (test/case "dispatch-unknown-tool-is-noop"
+    {do
+    (test/assert (nil? (ide/dispatch "no-such-tool" {:type "cmd"} 0))
+      "unknown tool dispatch returns nil")
+    true
+  })
+
+  (test/case "patch-json-shape"
+    {do
+    (= {payload} (ide/patch-json "status" {:w :divider} 77))
+    (= {parsed} (json/parse payload))
+    (test/assert-eq "status" (plist/get parsed :pane) "patch carries pane id")
+    (test/assert-eq 77 (plist/get parsed :ts) "patch echoes ts")
+    (test/assert-eq ":divider" (plist/get (plist/get parsed :tree) :w)
+      "patch carries tree")
+    true
+  })
+
+  (test/case "config-defaults-and-reload"
+    {do
+    (ide/config-reload)
+    (test/assert-eq 1000 (ide/config-get "tick-ms" 0) "tick-ms configured")
+    (test/assert (> (len (ide/config-get "leader-groups" {})) 0)
+      "leader groups configured")
+    (ide/config-set "tick-ms" 5)
+    (test/assert-eq 5 (ide/config-get "tick-ms" 0) "override applies")
+    (ide/config-reload)
+    (test/assert-eq 1000 (ide/config-get "tick-ms" 0) "reload restores")
+    true
+  })
+
+  (test/case "route-shell"
+    {do
+    (= {resp} (ide/handle-request {:method "GET" :path "/"}))
+    (test/assert-eq "200" (plist/get resp :status) "shell served")
+    (test/assert-eq "text/html; charset=utf-8" (plist/get resp :content-type)
+      "shell is html")
+    (test/assert (> (len (plist/get resp :body)) 100) "shell body non-trivial")
+    true
+  })
+
+  (test/case "route-events-marker"
+    {do
+    (= {resp} (ide/handle-request {:method "GET" :path "/events?client=c1"}))
+    (test/assert-eq "text/event-stream; charset=utf-8"
+      (plist/get resp :content-type) "events route is SSE")
+    true
+  })
+
+  (test/case "route-event-post-bad-json"
+    {do
+    (= {resp} (ide/handle-request {:method "POST" :path "/event" :body "not json"}))
+    (test/assert-eq "400" (plist/get resp :status) "bad json rejected")
+    true
+  })
+
+  (test/case "route-404"
+    {do
+    (= {resp} (ide/handle-request {:method "GET" :path "/nope"}))
+    (test/assert-eq "404" (plist/get resp :status) "unknown path 404s")
+    true
+  })
+
+  (test/case "query-param-parsing"
+    {do
+    (test/assert-eq "abc" (ide/query-param "client=abc&x=1" "client" "anon")
+      "param extracted")
+    (test/assert-eq "anon" (ide/query-param "x=1" "client" "anon")
+      "missing param falls back")
+    (test/assert-eq "anon" (ide/query-param nil "client" "anon")
+      "nil query falls back")
+    true
+  }))
+
+  {:suite-name "IDE machine"})

@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef VALK_COVERAGE
+#if defined(VALK_COVERAGE) || defined(VALK_DEBUG_INFO)
 
 #include "types.h"
 

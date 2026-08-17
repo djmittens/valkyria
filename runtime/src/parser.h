@@ -131,6 +131,10 @@ typedef valk_lval_t *(valk_lval_builtin_t)(valk_lenv_t *, valk_lval_t *);
 // per entry. Image-loaded envs point at the image buffer, so they stay
 // all-owned and fall back to strcmp.
 #define LENV_FLAG_KEYS_INTERNED (1ULL << 1)
+// DEF_BOUNDARY: valk_lenv_def stops walking here — top-level defs evaluated
+// under this env land in it instead of the global env. Set by env/new so
+// first-class session envs (REPL sessions) don't leak bindings to the root.
+#define LENV_FLAG_DEF_BOUNDARY (1ULL << 2)
 
 struct valk_lenv_t {
   _Atomic u64 flags;
@@ -158,9 +162,17 @@ struct valk_lenv_t {
   void *cmap;
 };
 
+// Source positions (file id, line, column) on lvals are needed by both the
+// coverage build and the debugger (VALK_DEBUG_INFO, default-on for dev
+// builds). VALK_SRC_LOC gates the fields + registry; coverage *recording*
+// stays VALK_COVERAGE-only.
+#if defined(VALK_COVERAGE) || defined(VALK_DEBUG_INFO)
+#define VALK_SRC_LOC 1
+#endif
+
 struct valk_lval_t {
   u64 flags;
-#ifdef VALK_COVERAGE
+#ifdef VALK_SRC_LOC
   u16 cov_file_id;
   u16 cov_line;
   u16 cov_column;
@@ -300,7 +312,7 @@ void valk_lval_init_singletons(void);
 u64 valk_sym_intern_count(void);
 const char *valk_sym_intern(const char *name);
 
-#ifdef VALK_COVERAGE
+#ifdef VALK_SRC_LOC
 
 
 

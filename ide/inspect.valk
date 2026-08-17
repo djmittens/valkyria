@@ -1,0 +1,76 @@
+; ide/inspect.valk — value inspector: eval results as structured trees,
+; not strings (DESIGN.md section 4). Pure value -> :tree node data.
+
+(load "ide/chrome.valk")
+
+(module ide)
+
+(def {inspect-max-items} 8)
+(def {inspect-max-depth} 3)
+
+(fun {inspect-str v} {do
+  (= {s} (if (> (len v) 60) {str (str/slice v 0 60) "…"} {v}))
+  (str "\"" s "\"")
+})
+
+(fun {plist-like? v} {
+  (if (sym? (head v))
+    {str/starts-with? (str (head v)) ":"}
+    {0})
+})
+
+(fun {inspect-pairs v acc} {
+  (if (nil? v)
+    {reverse acc}
+    {if (nil? (tail v))
+      {reverse (qcons (list (head v) nil) acc)}
+      {inspect-pairs (tail (tail v))
+        (qcons (list (head v) (head (tail v))) acc)}})
+})
+
+(fun {inspect-more-node n} {
+  `{:label ,(str "+" n " more") :style :dim}
+})
+
+(fun {inspect-list v depth} {
+  (if (>= depth inspect-max-depth)
+    {`{:label ,(str "(" (len v) " items)") :style :dim}}
+    {do
+      (= {items} (ide/take-safe inspect-max-items v))
+      (= {kids} (map (\ {x} {inspect-node x (+ depth 1)}) items))
+      (= {kids} (if (> (len v) inspect-max-items)
+        {join kids (list (inspect-more-node (- (len v) inspect-max-items)))}
+        {kids}))
+      `{:label ,(str "(" (len v) " items)") :style :plain :children ,kids}})
+})
+
+(fun {inspect-plist v depth} {
+  (if (>= depth inspect-max-depth)
+    {`{:label "{…}" :style :dim}}
+    {do
+      (= {pairs} (inspect-pairs v nil))
+      (= {shown} (ide/take-safe inspect-max-items pairs))
+      (= {kids} (map (\ {p} {
+        plist/set (inspect-node (head (tail p)) (+ depth 1))
+                  :key (str (head p))}) shown))
+      (= {kids} (if (> (len pairs) inspect-max-items)
+        {join kids (list (inspect-more-node (- (len pairs) inspect-max-items)))}
+        {kids}))
+      `{:label ,(str "{" (len pairs) " keys}") :style :plain :children ,kids}})
+})
+
+(fun {inspect-node v depth} {
+  (select
+    {(nil? v) `{:label "nil" :style :dim}}
+    {(num? v) `{:label ,(str v) :style :num}}
+    {(str? v) `{:label ,(inspect-str v) :style :string}}
+    {(error? v) `{:label ,(str v) :style :error}}
+    {(fun? v) `{:label ,(str v) :style :symbol}}
+    {(ref? v) `{:label ,(str "<ref:" (type-of v) ">") :style :type}}
+    {(list? v)
+      (if (plist-like? v) {inspect-plist v depth} {inspect-list v depth})}
+    {(sym? v) `{:label ,(str v) :style :property}}
+    {otherwise `{:label ,(str v) :style :plain}})
+})
+
+(fun {inspect-value v} {inspect-node v 0})

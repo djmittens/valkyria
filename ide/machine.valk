@@ -1,0 +1,379 @@
+; ide/machine.valk — tool registry, client registry, command registry,
+; key routing orchestration, view/broadcast loop.
+; See ide/DESIGN.md section 3 (tool contract, widget protocol, interaction).
+; Mutable machine state lives in dicts: request handlers cannot (def ...) —
+; dict/set! evacuates values to the heap, which is exactly what shared state
+; touched from handler context needs.
+
+(load "stdlib/aio/sse.valk")
+(load "ide/chrome.valk")
+
+(module ide)
+
+(def {tools} {})
+(def {commands} {})
+(def {tool-states} (dict/new))
+(def {client-states} (dict/new))
+(def {clients} (dict/new))
+(def {config} (dict/new))
+(def {runtime} (dict/new))
+
+; --- config: defaults merged under ide/config.valk overrides (section 3.6) ---
+
+(fun {config-set k v} {do
+  (dict/set! ide/config k v)
+  nil
+})
+
+(fun {config-get k d} {dict/get ide/config k d})
+
+(fun {config-defaults} {do
+  (config-set "tick-ms" 1000)
+  (config-set "leader-groups"
+    {{"SPC SPC" "palette"} {"SPC m" "machine"} {"SPC w" "window"}})
+  (config-set "card-weights" {{"used" 50} {"doc" 30} {"sig" 20}})
+  (config-set "card-thresholds"
+    {{"legendary" 85} {"epic" 65} {"rare" 45} {"uncommon" 25}})
+  nil
+})
+
+(fun {config-reload} {do
+  (config-defaults)
+  (if (file/exists? "ide/config.valk")
+    {do (map eval (parse (read-file "ide/config.valk"))) nil}
+    {nil})
+  nil
+})
+
+; --- registries ---
+
+(fun {register-command cmd} {do
+  (def {ide/commands}
+    (join (filter (\ {c} {not (== (plist/get c :id) (plist/get cmd :id))})
+                  ide/commands)
+          (list cmd)))
+  nil
+})
+
+(fun {register-tool tool} {do
+  (def {ide/tools}
+    (join (filter (\ {t} {not (== (plist/get t :id) (plist/get tool :id))})
+                  ide/tools)
+          (list tool)))
+  (dict/set! tool-states (plist/get tool :id) ((plist/get tool :init)))
+  (= {cmds} (plist/get tool :commands))
+  (if (nil? cmds) {nil} {do (map register-command cmds) nil})
+  nil
+})
+
+(fun {get-tool id} {do
+  (= {matches} (filter (\ {t} {== (plist/get t :id) id}) ide/tools))
+  (if (nil? matches) {nil} {head matches})
+})
+
+(fun {get-command id} {do
+  (= {matches} (filter (\ {c} {== (plist/get c :id) id}) ide/commands))
+  (if (nil? matches) {nil} {head matches})
+})
+
+(fun {tool-state id} {dict/get ide/tool-states id nil})
+
+(fun {render-tool tool} {
+  ((plist/get tool :view) (tool-state (plist/get tool :id)))
+})
+
+; --- clients ---
+
+(fun {default-focus} {
+  (if (nil? ide/tools) {""} {plist/get (head ide/tools) :id})
+})
+
+(fun {client-state id} {
+  dict/get ide/client-states id
+    `{:mode "normal" :pending "" :focus ,(default-focus) :palette ,nil}
+})
+
+(fun {set-client-state id cstate} {do
+  (dict/set! ide/client-states id cstate)
+  nil
+})
+
+(fun {add-client id stream} {do
+  (dict/set! ide/clients id stream)
+  (set-client-state id (client-state id))
+  nil
+})
+
+(fun {remove-client id} {do
+  (dict/remove! ide/clients id)
+  (dict/remove! ide/client-states id)
+  nil
+})
+
+(fun {client-count} {dict/count ide/clients})
+
+; --- patches ---
+
+(fun {patch-json pane-id tree ts} {
+  json/encode `{:pane ,pane-id :ts ,ts :tree ,tree}
+})
+
+(fun {send-patch stream pane-id tree ts} {
+  (if (== (sse/writable? stream) 0)
+    {nil}
+    {sse/event stream "ui-patch" (patch-json pane-id tree ts)})
+})
+
+(fun {broadcast-pane pane-id tree ts} {do
+  (map (\ {stream} {send-patch stream pane-id tree ts})
+       (dict/values ide/clients))
+  nil
+})
+
+(fun {send-chrome client-id ts} {do
+  (= {tree} (ide/chrome-view (client-state client-id) ide/commands
+                             (config-get "leader-groups" {})))
+  (= {payload} (patch-json "chrome" tree ts))
+  (= {stream} (dict/get ide/clients client-id nil))
+  (if (nil? stream)
+    {nil}
+    {if (== (sse/writable? stream) 0)
+      {nil}
+      {sse/event stream "ui-patch" payload}})
+  nil
+})
+
+(fun {send-full stream ts} {do
+  (map (\ {t} {send-patch stream (plist/get t :id) (ide/render-tool t) ts})
+       ide/tools)
+  nil
+})
+
+; --- events and commands ---
+
+(fun {dispatch tool-id event ts} {do
+  (= {tool} (get-tool tool-id))
+  (if (nil? tool)
+    {nil}
+    {do
+      (= {new-state} ((plist/get tool :update) (tool-state tool-id) event))
+      (dict/set! ide/tool-states tool-id new-state)
+      (broadcast-pane tool-id ((plist/get tool :view) new-state) ts)
+      new-state})
+})
+
+; :run wins when present (effectful commands may still be pane-scoped for
+; their key bindings); otherwise the command dispatches to its pane's tool.
+(fun {run-command id client-id} {do
+  (= {cmd} (get-command id))
+  (if (nil? cmd)
+    {nil}
+    {do
+      (= {runner} (plist/get cmd :run))
+      (if (nil? runner)
+        {do (dispatch (plist/get cmd :pane) `{:type "cmd" :id ,id} 0) nil}
+        {(runner client-id)})})
+})
+
+(fun {focused-tool cstate} {get-tool (plist/get cstate :focus)})
+
+(fun {editor-focused? cstate} {do
+  (= {tool} (focused-tool cstate))
+  (if (nil? tool)
+    {0}
+    {if (nil? (plist/get tool :editor)) {0} {1}})
+})
+
+(fun {handle-key-palette client-id cstate pal key} {do
+  (= {r} (ide/palette-step pal key ide/commands))
+  (set-client-state client-id (plist/set cstate :palette (plist/get r :palette)))
+  (= {run-id} (plist/get r :run))
+  (if (nil? run-id) {nil} {run-command run-id client-id})
+  nil
+})
+
+(fun {common-prefix-2 a b i} {
+  (if (or (>= i (len a)) (>= i (len b)))
+    {i}
+    {if (== (str/slice a i (+ i 1)) (str/slice b i (+ i 1)))
+      {common-prefix-2 a b (+ i 1)}
+      {i}})
+})
+
+(fun {common-prefix strs} {
+  foldl (\ {acc s} {str/slice acc 0 (common-prefix-2 acc s 0)})
+        (head strs) (tail strs)
+})
+
+(fun {clear-completions client-id cstate} {
+  (if (nil? (plist/get cstate :completions))
+    {cstate}
+    {do
+      (= {ns} (plist/set cstate :completions nil))
+      (set-client-state client-id ns)
+      ns})
+})
+
+(fun {clear-doc client-id cstate} {
+  (if (nil? (plist/get cstate :doc))
+    {cstate}
+    {do
+      (= {ns} (plist/set cstate :doc nil))
+      (set-client-state client-id ns)
+      ns})
+})
+
+; Completer returns {:name :detail} plists; names drive the logic, the
+; whole entries feed the popup.
+(fun {handle-completion client-id cstate} {do
+  (= {focus} (plist/get cstate :focus))
+  (= {tool} (focused-tool cstate))
+  (= {completer} (plist/get tool :completer))
+  (if (nil? completer)
+    {nil}
+    {do
+      (= {buf} (plist/get (tool-state focus) :buffer))
+      (= {word} (ide/edit-word-before buf))
+      (= {cands} (if (== word "") {nil} {completer word}))
+      (= {names} (map (\ {c} {plist/get c :name}) cands))
+      (select
+        {(nil? cands)
+          (do (clear-completions client-id cstate) nil)}
+        {(== (len cands) 1)
+          (do
+            (dispatch focus
+              `{:type "edit-insert-text"
+                :text ,(str/slice (head names) (len word) (len (head names)))} 0)
+            (clear-completions client-id cstate)
+            nil)}
+        {otherwise
+          (do
+            (= {cp} (common-prefix names))
+            (if (> (len cp) (len word))
+              {do
+                (dispatch focus
+                  `{:type "edit-insert-text"
+                    :text ,(str/slice cp (len word) (len cp))} 0)
+                nil}
+              {nil})
+            (set-client-state client-id
+              (plist/set cstate :completions (ide/take-safe 10 cands)))
+            nil)})
+      nil})
+  nil
+})
+
+(fun {handle-key-insert client-id cstate key} {do
+  (= {focus} (plist/get cstate :focus))
+  (select
+    {(== key "ESC")
+      (do
+        (set-client-state client-id
+          (plist/set (clear-completions client-id cstate) :mode "normal"))
+        (dispatch focus {:type "edit-esc"} 0)
+        nil)}
+    {(== key "TAB") (handle-completion client-id cstate)}
+    {otherwise
+      (do
+        (clear-completions client-id cstate)
+        (dispatch focus `{:type "edit-insert" :key ,key} 0)
+        nil)})
+  nil
+})
+
+(fun {handle-hover-key client-id cstate focus} {do
+  (= {hover-fn} (plist/get (focused-tool cstate) :hover))
+  (if (nil? hover-fn)
+    {nil}
+    {do
+      (= {buf} (plist/get (tool-state focus) :buffer))
+      (= {word} (ide/edit-word-at buf))
+      (= {info} (if (== word "") {nil} {hover-fn word}))
+      (set-client-state client-id (plist/set cstate :doc info))
+      nil})
+  nil
+})
+
+(fun {handle-editor-normal client-id cstate focus key} {do
+  (if (ide/edit-enters-insert? key)
+    {do
+      (set-client-state client-id (plist/set cstate :mode "insert"))
+      (dispatch focus `{:type "edit-normal" :key ,key} 0)
+      nil}
+    {select
+      {(== key "CR")
+        (do
+          (= {submit} (plist/get (focused-tool cstate) :submit))
+          (if (nil? submit) {nil} {run-command submit client-id})
+          nil)}
+      {(== key "K") (handle-hover-key client-id cstate focus)}
+      {otherwise
+        (do
+          (dispatch focus `{:type "edit-normal" :key ,key} 0)
+          nil)}})
+})
+
+(fun {handle-key-normal client-id cstate key} {do
+  (= {pending} (plist/get cstate :pending))
+  (= {focus} (plist/get cstate :focus))
+  (= {r} (ide/keys-step pending key ide/commands focus))
+  (= {new-pending} (plist/get r :pending))
+  (= {cmd} (plist/get r :cmd))
+  (set-client-state client-id (plist/set cstate :pending new-pending))
+  (if (not (nil? cmd))
+    {do (run-command cmd client-id) nil}
+    {if (and (== pending "") (== new-pending "")
+             (not (== key "SPC")) (editor-focused? cstate))
+      {handle-editor-normal client-id cstate focus key}
+      {nil}})
+  nil
+})
+
+; Raw key from a client. Routing (DESIGN.md 3.3): palette if open, insert
+; mode to the focused editor, otherwise leader/pane keymaps with editor
+; normal-mode keys as the fallback. Chrome echo patch always follows.
+(fun {handle-key client-id key ts} {do
+  (= {cstate} (client-state client-id))
+  (= {cstate} (if (== key "K") {cstate} {clear-doc client-id cstate}))
+  (= {pal} (plist/get cstate :palette))
+  (if (not (nil? pal))
+    {handle-key-palette client-id cstate pal key}
+    {if (== (plist/get cstate :mode) "insert")
+      {handle-key-insert client-id cstate key}
+      {handle-key-normal client-id cstate key}})
+  (send-chrome client-id ts)
+  nil
+})
+
+(fun {list-index-of l x i} {
+  (if (nil? l)
+    {-1}
+    {if (== (head l) x) {i} {list-index-of (tail l) x (+ i 1)}})
+})
+
+; --- framework commands (load-time registration; load is deduped) ---
+
+(register-command `{:id "palette/open" :title "Command palette" :keys {"SPC SPC"}
+  :run ,(\ {client-id} {do
+    (set-client-state client-id
+      (plist/set (client-state client-id) :palette {:query "" :sel 0}))
+    nil})})
+
+(register-command `{:id "machine/reload-config" :title "Reload config" :keys {"SPC m r"}
+  :run ,(\ {client-id} {do (config-reload) nil})})
+
+(register-command `{:id "focus/next" :title "Focus next pane" :keys {"SPC w w"}
+  :run ,(\ {client-id} {do
+    (= {ids} (map (\ {t} {plist/get t :id}) ide/tools))
+    (if (nil? ids)
+      {nil}
+      {do
+        (= {cstate} (client-state client-id))
+        (= {i} (list-index-of ids (plist/get cstate :focus) 0))
+        (= {ni} (if (< (+ i 1) (len ids)) {+ i 1} {0}))
+        (set-client-state client-id
+          (plist/set cstate :focus (nth (+ ni 1) ids)))
+        nil})
+    nil})})
+
+(config-defaults)

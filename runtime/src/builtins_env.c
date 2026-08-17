@@ -1,8 +1,11 @@
 #include "builtins_internal.h"
 
+#include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "coverage.h"
+#include "gc.h"
 
 static valk_lval_t* valk_builtin_def(valk_lenv_t* e, valk_lval_t* a) {
   if (valk_thread_ctx.request_ctx != nullptr) {
@@ -196,6 +199,91 @@ static valk_lval_t* valk_builtin_select(valk_lenv_t* e, valk_lval_t* a) {
 
 
 
+#define LVAL_ASSERT_ENV(args, v)                                          \
+  LVAL_ASSERT(args,                                                       \
+              LVAL_TYPE(v) == LVAL_REF && strcmp((v)->ref.type, "env") == 0, \
+              "Expected env ref, got %s", valk_ltype_name(LVAL_TYPE(v)))
+
+valk_lval_t* valk_lval_env_ref(valk_lenv_t* env) {
+  valk_lval_t* ref = valk_lval_ref("env", env, NULL);
+  ref->ref.mark = valk_gc_mark_env_ref;
+  valk_gc_wb_env_insert(env);
+  return ref;
+}
+
+static valk_lval_t* valk_builtin_env_new(valk_lenv_t* e, valk_lval_t* a) {
+  u64 count = valk_lval_list_count(a);
+  LVAL_ASSERT(a, count <= 1, "env/new takes 0 or 1 arguments, got %llu",
+              (unsigned long long)count);
+
+  valk_lenv_t* parent;
+  if (count == 1) {
+    valk_lval_t* pref = valk_lval_list_nth(a, 0);
+    LVAL_ASSERT_ENV(a, pref);
+    parent = pref->ref.ptr;
+  } else {
+    parent = valk_thread_ctx.root_env ? valk_thread_ctx.root_env : e;
+  }
+
+  valk_lenv_t* env = valk_lenv_empty();
+  env->parent = parent;
+  atomic_fetch_or(&env->flags, LENV_FLAG_DEF_BOUNDARY);
+  return valk_lval_env_ref(env);
+}
+
+static valk_lval_t* valk_builtin_env_eval(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 2);
+
+  valk_lval_t* env_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_ENV(a, env_ref);
+  valk_lval_t* expr = valk_lval_list_nth(a, 1);
+
+  if (LVAL_TYPE(expr) == LVAL_CONS && (expr->flags & LVAL_FLAG_QUOTED)) {
+    expr = valk_qexpr_to_cons(expr);
+  }
+
+  return valk_lval_eval(env_ref->ref.ptr, expr);
+}
+
+static valk_lval_t* valk_builtin_env_bindings(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+
+  valk_lval_t* env_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_ENV(a, env_ref);
+  valk_lenv_t* env = env_ref->ref.ptr;
+
+  char** names;
+  valk_lval_t** vals;
+  u64 n = valk_lenv_snapshot(env, &names, &vals);
+
+  valk_lval_t* res = valk_lval_nil();
+  for (u64 i = 0; i < n; i++) {
+    res = valk_lval_cons(
+        valk_lval_cons(valk_lval_sym(names[i]),
+                       valk_lval_cons(vals[i], valk_lval_nil())),
+        res);
+  }
+  free(names);
+  free(vals);
+  return res;
+}
+
+static valk_lval_t* valk_builtin_env_parent(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+
+  valk_lval_t* env_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_ENV(a, env_ref);
+  valk_lenv_t* env = env_ref->ref.ptr;
+
+  if (env->parent == nullptr) {
+    return valk_lval_nil();
+  }
+  return valk_lval_env_ref(env->parent);
+}
+
 static valk_lval_t *valk_builtin_macro(valk_lenv_t *e, valk_lval_t *a) {
   LVAL_ASSERT_COUNT_EQ(a, a, 2);
 
@@ -231,4 +319,8 @@ void valk_register_env_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "macro", valk_builtin_macro);
   valk_lenv_put_builtin(env, "penv", valk_builtin_penv);
   valk_lenv_put_builtin(env, "select", valk_builtin_select);
+  valk_lenv_put_builtin(env, "env/new", valk_builtin_env_new);
+  valk_lenv_put_builtin(env, "env/eval", valk_builtin_env_eval);
+  valk_lenv_put_builtin(env, "env/bindings", valk_builtin_env_bindings);
+  valk_lenv_put_builtin(env, "env/parent", valk_builtin_env_parent);
 }

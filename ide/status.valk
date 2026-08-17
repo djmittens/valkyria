@@ -1,0 +1,68 @@
+; ide/status.valk — machine status tool (phase 0 pane)
+; Pure init/update/view; metrics are sampled outside and arrive as :tick events.
+
+(module ide)
+
+(fun {status-sample} {
+  `{:type "tick"
+    :gc ,(mem/gc/metrics)
+    :heap ,(mem/heap/usage)
+    :arena ,(mem/arena/usage)}
+})
+
+(fun {status-init} {
+  `{:gc ,nil :heap 0 :arena 0 :ticks 0}
+})
+
+(fun {status-update state event} {do
+  (= {etype} (plist/get event :type))
+  (select
+    {(== etype "tick")
+      (plist/set (plist/set (plist/set (plist/set state
+        :gc (plist/get event :gc))
+        :heap (plist/get event :heap))
+        :arena (plist/get event :arena))
+        :ticks (+ 1 (plist/get state :ticks)))}
+    {(and (== etype "cmd") (== (plist/get event :id) "status/reset"))
+      (plist/set state :ticks 0)}
+    {otherwise state})
+})
+
+(fun {status-kb n} {str (/ n 1024) " KB"})
+
+(fun {status-gc-rows gc} {
+  (if (nil? gc)
+    {nil}
+    {list
+      (list "heap used" (status-kb (plist/get gc :heap-used)))
+      (list "heap total" (status-kb (plist/get gc :heap-total)))
+      (list "gc cycles" (str (plist/get gc :cycles)))
+      (list "pause max" (str (plist/get gc :pause-us-max) " us"))
+      (list "pause total" (str (plist/get gc :pause-us-total) " us"))
+      (list "reclaimed" (status-kb (plist/get gc :reclaimed-bytes)))})
+})
+
+(fun {status-mem-rows state} {
+  list
+    (list "heap bytes" (str (plist/get state :heap)))
+    (list "arena used %" (str (plist/get state :arena)))
+    (list "ticks" (str (plist/get state :ticks)))
+})
+
+(fun {status-view state} {do
+  (= {gc-rows} (status-gc-rows (plist/get state :gc)))
+  (= {mem-rows} (status-mem-rows state))
+  `{:w :panel :id "status" :title "MACHINE"
+    :children
+    {{:w :text :runs {{:t "gc" :style :keyword}}}
+     {:w :table :id "status-gc" :cols {"metric" "value"} :rows ,gc-rows}
+     {:w :divider}
+     {:w :text :runs {{:t "memory" :style :keyword}}}
+     {:w :table :id "status-mem" :cols {"metric" "value"} :rows ,mem-rows}}}
+})
+
+(def {status-tool}
+  `{:id "status" :title "MACHINE"
+    :init ,status-init :update ,status-update :view ,status-view
+    :commands {{:id "status/reset" :title "Reset status counters"
+                :pane "status" :keys {"r"}}}})

@@ -1,0 +1,137 @@
+; stdlib/aio/debug-server.valk — the debug wire protocol (ide/DESIGN.md 5.3).
+; Any Valk app opts in with one line: (debug/serve sys port). The IDE (or
+; any DAP-shaped client) drives it over HTTP/2 + JSON. Runs on whatever aio
+; system it is given — use a dedicated one so inspection keeps working
+; while application threads are parked at breakpoints.
+
+(module debug)
+
+(fun {_json-resp body}
+  {`{:status "200" :content-type "application/json" :body ,body}})
+
+(fun {_err-resp msg}
+  {`{:status "400" :content-type "application/json"
+     :body ,(json/encode `{:error ,msg})}})
+
+(fun {_state-json} {do
+  (= {st} (debug/state))
+  (if (nil? st)
+    {json/encode {:paused 0}}
+    {json/encode `{:paused 1
+                   :file ,(plist/get st :file)
+                   :line ,(plist/get st :line)
+                   :expr ,(plist/get st :expr)}})
+})
+
+(fun {_preview v} {do
+  (= {s} (str v))
+  (if (> (len s) 80) {str (str/slice s 0 80) "…"} {s})
+})
+
+(fun {_bindings-json frame} {do
+  (= {env} (debug/frame-env frame))
+  (if (error? env)
+    {json/encode {:error "no such frame"}}
+    {json/encode
+      (map (\ {p} {`{:name ,(str (head p))
+                     :preview ,(_preview (head (tail p)))}})
+           (env/bindings env))})
+})
+
+(fun {_eval-in-frame frame expr-text} {do
+  (= {env} (debug/frame-env frame))
+  (if (error? env)
+    {json/encode {:error "no such frame"}}
+    {do
+      (= {forms} (parse expr-text))
+      (= {r} (if (error? forms)
+        {forms}
+        {foldl (\ {_ f} {if (quoted? f) {f} {env/eval env f}}) nil forms}))
+      (json/encode `{:result ,(_preview r)
+                     :status ,(if (error? r) {"err"} {"ok"})})})
+})
+
+(fun {_handle-break body} {do
+  (= {msg} (if (nil? body) {nil} {json/parse body}))
+  (if (or (nil? msg) (not (list? msg)))
+    {_err-resp "bad json"}
+    {do
+      (= {file} (plist/get msg :file))
+      (= {line} (plist/get msg :line))
+      (if (or (nil? file) (nil? line))
+        {_err-resp "need file and line"}
+        {do
+          (= {id} (debug/break file line))
+          (if (error? id)
+            {_err-resp (str id)}
+            {_json-resp (json/encode `{:id ,id})})})})
+})
+
+(fun {_handle-unbreak body} {do
+  (= {msg} (if (nil? body) {nil} {json/parse body}))
+  (if (or (nil? msg) (nil? (plist/get msg :id)))
+    {_err-resp "need id"}
+    {_json-resp (json/encode `{:ok ,(debug/unbreak (plist/get msg :id))})})
+})
+
+; POST /dbg/step {:mode "in"|"over"|"out"} — mode optional, defaults to in.
+(fun {_handle-step body} {do
+  (= {msg} (if (nil? body) {nil} {json/parse body}))
+  (= {mode} (if (or (nil? msg) (not (list? msg))) {"in"} {plist/get msg :mode}))
+  (= {mode} (if (str? mode) {mode} {"in"}))
+  (= {ok} (select
+    {(== mode "over") (debug/step :over)}
+    {(== mode "out") (debug/step :out)}
+    {(== mode "in") (debug/step)}
+    {otherwise (error (str "unknown step mode " mode))}))
+  (if (error? ok)
+    {_err-resp (str ok)}
+    {_json-resp (json/encode `{:ok ,ok})})
+})
+
+(fun {_handle-eval body} {do
+  (= {msg} (if (nil? body) {nil} {json/parse body}))
+  (if (or (nil? msg) (nil? (plist/get msg :expr)))
+    {_err-resp "need expr"}
+    {do
+      (= {frame} (plist/get msg :frame))
+      (= {frame} (if (num? frame) {frame} {0}))
+      (_json-resp (_eval-in-frame frame (plist/get msg :expr)))})
+})
+
+; /dbg/frame/N/bindings
+(fun {_frame-route parts} {do
+  (= {n} (str->num (nth 3 parts)))
+  (_json-resp (_bindings-json n))
+})
+
+(fun {handle-request req} {do
+  (= {method} (if (ref? req) {req/method req} {plist/get req :method}))
+  (= {method} (if (nil? method) {"GET"} {method}))
+  (= {rawpath} (if (ref? req) {req/path req} {plist/get req :path}))
+  (= {path} (head (str/split rawpath "?")))
+  (= {body} (if (ref? req) {req/body req} {plist/get req :body}))
+  (select
+    {(== path "/dbg/state") (_json-resp (_state-json))}
+    {(== path "/dbg/stack") (_json-resp (json/encode (debug/frames)))}
+    {(== path "/dbg/breakpoints")
+      (_json-resp (json/encode (debug/breakpoints)))}
+    {(and (== path "/dbg/break") (== method "POST")) (_handle-break body)}
+    {(and (== path "/dbg/unbreak") (== method "POST")) (_handle-unbreak body)}
+    {(and (== path "/dbg/continue") (== method "POST"))
+      (_json-resp (json/encode `{:ok ,(debug/continue)}))}
+    {(and (== path "/dbg/step") (== method "POST")) (_handle-step body)}
+    {(and (== path "/dbg/eval") (== method "POST")) (_handle-eval body)}
+    {(str/starts-with? path "/dbg/frame/")
+      (_frame-route (tail (str/split path "/")))}
+    {otherwise
+      `{:status "404" :content-type "application/json"
+        :body "{\"error\":\"not found\"}"}})
+})
+
+; Start the debug endpoint. Enables the debugger and returns the server
+; handle. One line in any app: (debug/serve sys port)
+(fun {serve sys port} {do
+  (debug/enable)
+  (http2/server-listen sys port (\ {req} {debug/handle-request req}))
+})

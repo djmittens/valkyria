@@ -1,6 +1,6 @@
 #include "source_loc.h"
 
-#ifdef VALK_COVERAGE
+#if defined(VALK_COVERAGE) || defined(VALK_DEBUG_INFO)
 
 #include "valk_thread.h"
 #include <stdlib.h>

@@ -355,7 +355,7 @@ valk_lval_t* valk_parse_text_named(const char* text, const char* filename) {
   u16 file_id = 0;
   if (filename != nullptr) {
     valk_coverage_record_file(filename);
-#ifdef VALK_COVERAGE
+#ifdef VALK_SRC_LOC
     file_id = valk_source_register_file(filename);
 #endif
   }

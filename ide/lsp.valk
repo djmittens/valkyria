@@ -1,0 +1,66 @@
+; ide/lsp.valk — in-process LSP engine (DESIGN.md section 6): the IDE opens
+; its own workspace symdb and calls the nav/* pure cores directly. The
+; stdio valk-lsp keeps working against the same db file (idempotent
+; indexing, sqlite concurrent readers).
+
+(load "symdb/symdb.valk")
+(load "symdb/validate.valk")
+(load "lsp/analysis.valk")
+(load "lsp/refs.valk")
+(load "lsp/hints.valk")
+(load "lsp/hints-fields.valk")
+(load "lsp/io.valk")
+(load "lsp/workspace.valk")
+(load "lsp/scan.valk")
+(load "lsp/nav.valk")
+(load "ide/machine.valk")
+
+(module ide)
+
+(fun {lsp-init root} {do
+  (def {lsp/root-path} root)
+  (mkdir-p (str root "/.valk"))
+  (= {db} (symdb/init (str root "/.valk/symdb.sqlite")))
+  (= {db} (if (error? db) {symdb/init ":memory:"} {db}))
+  (lsp/seed-builtins db root)
+  (symdb/attach-live db)
+  (dict/set! ide/runtime "lsp-db" db)
+  db
+})
+
+(fun {lsp-db} {dict/get ide/runtime "lsp-db" nil})
+
+; Synchronous workspace index: fingerprint-checked per file, so warm runs
+; skip everything. Runs at startup before the server; background refresh
+; is a later phase.
+(fun {lsp-index root} {do
+  (= {db} (lsp-db))
+  (if (nil? db)
+    {0}
+    {do
+      (= {files} (lsp/collect-workspace-files root))
+      (= {n} (foldl (\ {acc f} {+ acc (lsp/seed-from-disk db f)}) 0 files))
+      n})
+})
+
+; --- REPL-facing queries ---------------------------------------------------
+
+(fun {lsp-symbol-info word} {do
+  (= {db} (lsp-db))
+  (if (or (nil? db) (== word ""))
+    {nil}
+    {do
+      (= {info} (symdb/symbol-hover-in db word "repl"))
+      (if (or (nil? info) (error? info)) {nil} {info})})
+})
+
+(fun {lsp-completion-rows prefix} {do
+  (= {db} (lsp-db))
+  (if (nil? db)
+    {nil}
+    {do
+      (= {rows} (symdb/completion-symbols db prefix))
+      (if (error? rows)
+        {nil}
+        {filter (\ {r} {str/starts-with? (plist/get r :name) prefix}) rows})})
+})

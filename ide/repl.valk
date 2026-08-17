@@ -1,0 +1,205 @@
+; ide/repl.valk — REPL tool: sessions as first-class envs (env/new),
+; eval dispatched to the work system so the UI path never blocks
+; (DESIGN.md section 4).
+
+(load "ide/machine.valk")
+(load "ide/edit.valk")
+(load "ide/hl.valk")
+(load "ide/inspect.valk")
+(load "ide/lsp.valk")
+(load "ide/cards.valk")
+
+(module ide)
+
+(def {sessions} (dict/new))
+
+(fun {repl-ensure-session name} {do
+  (if (== (dict/has? ide/sessions name) 1)
+    {nil}
+    {do (dict/set! ide/sessions name (env/new)) nil})
+  nil
+})
+
+; --- pure tool core --------------------------------------------------------
+
+(fun {repl-init} {
+  `{:session "main" :buffer ,(ide/edit-new) :history ,nil :evaling 0}
+})
+
+(fun {repl-push-history state entry} {do
+  (= {hist} (plist/get state :history))
+  (= {hist} (join (if (nil? hist) {nil} {hist}) (list entry)))
+  (= {hist} (if (> (len hist) 50) {tail hist} {hist}))
+  (plist/set state :history hist)
+})
+
+(fun {repl-finish-history state out status tree} {do
+  (= {hist} (plist/get state :history))
+  (if (nil? hist)
+    {state}
+    {do
+      (= {n} (len hist))
+      (= {last-entry} (nth n hist))
+      (= {done} (plist/set (plist/set (plist/set last-entry
+        :out out) :status status) :tree tree))
+      (plist/set state :history (join (take (- n 1) hist) (list done)))})
+})
+
+(fun {repl-update state event} {do
+  (= {etype} (plist/get event :type))
+  (select
+    {(== etype "edit-insert")
+      (plist/set state :buffer
+        (ide/edit-insert (plist/get state :buffer) (plist/get event :key)))}
+    {(== etype "edit-normal")
+      (plist/set state :buffer
+        (ide/edit-normal (plist/get state :buffer) (plist/get event :key)))}
+    {(== etype "edit-esc")
+      (plist/set state :buffer (ide/edit-esc (plist/get state :buffer)))}
+    {(== etype "edit-insert-text")
+      (plist/set state :buffer
+        (ide/edit-insert-str (plist/get state :buffer) (plist/get event :text)))}
+    {(== etype "eval-start")
+      (plist/set
+        (plist/set
+          (repl-push-history state
+            `{:in ,(plist/get event :text) :out "" :status "pending"})
+          :buffer (ide/edit-new))
+        :evaling 1)}
+    {(== etype "eval-result")
+      (plist/set
+        (repl-finish-history state (plist/get event :out)
+                             (plist/get event :status)
+                             (plist/get event :tree))
+        :evaling 0)}
+    {(and (== etype "cmd") (== (plist/get event :id) "repl/clear"))
+      (plist/set state :history nil)}
+    {otherwise state})
+})
+
+(fun {repl-in-widgets text} {do
+  (= {hl} (ide/hl-text-lines text))
+  (= {first-line} (head hl))
+  (= {rest} (tail hl))
+  (join
+    (list `{:w :text :runs ,(qcons {:t "> " :style :dim} first-line)})
+    (map (\ {runs} {`{:w :text :runs ,(qcons {:t "  " :style :dim} runs)}}) rest))
+})
+
+(fun {repl-out-widget h} {do
+  (= {status} (plist/get h :status))
+  (= {tree} (plist/get h :tree))
+  (select
+    {(== status "pending") `{:w :text :runs {{:t "..." :style :dim :effect :pulse}}}}
+    {(== status "err")
+      `{:w :text :runs {{:t ,(plist/get h :out) :style :error}}}}
+    {(not (nil? tree)) `{:w :tree :id "repl-out" :root ,tree}}
+    {otherwise `{:w :text :runs {{:t ,(plist/get h :out) :style :plain}}}})
+})
+
+(fun {repl-hist-widgets hist} {
+  flatten (map (\ {h} {
+    join (repl-in-widgets (plist/get h :in)) (list (repl-out-widget h))})
+    (if (nil? hist) {nil} {hist}))
+})
+
+(fun {repl-view state} {do
+  (= {buf} (plist/get state :buffer))
+  `{:w :panel :id "repl" :title "REPL"
+    :children
+    {,@(repl-hist-widgets (plist/get state :history))
+     {:w :input :id "repl-in"
+      :lines ,(plist/get buf :lines)
+      :hl ,(ide/hl-text-lines (ide/edit-text buf))
+      :row ,(plist/get buf :row)
+      :col ,(plist/get buf :col)}}}
+})
+
+; --- eval orchestration (impure, runs on ui-sys loop 0) --------------------
+
+; Raw result (possibly an error lval); stringification happens at the edge.
+; Quoted top-level forms are literals ({...} typed at the prompt) and
+; self-evaluate, matching script semantics — env/eval would unwrap and
+; call them (the (env/eval env {code}) idiom).
+(fun {repl-eval-form env f} {
+  (if (quoted? f) {f} {env/eval env f})
+})
+
+(fun {repl-eval-raw session-name text} {do
+  (repl-ensure-session session-name)
+  (= {env} (dict/get ide/sessions session-name nil))
+  (= {forms} (parse text))
+  (if (error? forms)
+    {forms}
+    {foldl (\ {_ f} {repl-eval-form env f}) nil forms})
+})
+
+(fun {repl-finish-event r} {
+  `{:type "eval-result"
+    :out ,(str r)
+    :status ,(if (error? r) {"err"} {"ok"})
+    :tree ,(if (error? r) {nil} {ide/inspect-value r})}
+})
+
+(fun {repl-row-detail r} {do
+  (= {sig} (plist/get r :sig))
+  (if (str? sig) {sig} {""})
+})
+
+; Completion candidates as {:name :detail} plists: workspace symdb rows
+; (with type sigs as detail) merged with session + root env bindings.
+(fun {repl-completions prefix} {do
+  (repl-ensure-session "main")
+  (= {env} (dict/get ide/sessions "main" nil))
+  (= {own} (map (\ {p} {str (head p)}) (env/bindings env)))
+  (= {root} (map (\ {p} {str (head p)}) (env/bindings (env/parent env))))
+  (= {env-names} (filter (\ {n} {str/starts-with? n prefix}) (join own root)))
+  (= {db-items} (map (\ {r} {`{:name ,(plist/get r :name)
+                               :detail ,(repl-row-detail r)}})
+                     (ide/lsp-completion-rows prefix)))
+  (= {db-names} (map (\ {i} {plist/get i :name}) db-items))
+  (= {env-items} (map (\ {n} {`{:name ,n :detail ""}})
+                      (filter (\ {n} {not (exists n db-names)}) env-names)))
+  (join db-items env-items)
+})
+
+(fun {repl-start-eval} {do
+  (= {state} (ide/tool-state "repl"))
+  (= {buf} (plist/get state :buffer))
+  (if (ide/edit-empty? buf)
+    {nil}
+    {do
+      (= {text} (ide/edit-text buf))
+      (ide/dispatch "repl" `{:type "eval-start" :text ,text} 0)
+      (= {work} (dict/get ide/runtime "work-sys" nil))
+      (= {ui} (dict/get ide/runtime "ui-sys" nil))
+      (if (nil? work)
+        ; no work system (tests): eval inline
+        {do
+          (= {r} (repl-eval-raw "main" text))
+          (ide/dispatch "repl" (repl-finish-event r) 0)
+          nil}
+        {aio/dispatch work
+          (\ {t} {ide/repl-eval-raw "main" t})
+          text
+          (\ {out} {do
+            (aio/dispatch ui
+              (\ {o} {do
+                (ide/dispatch "repl" (ide/repl-finish-event o) 0)
+                nil})
+              out
+              (\ {_} {nil}))
+            nil})})
+      nil})
+})
+
+(def {repl-tool}
+  `{:id "repl" :title "REPL" :editor 1 :submit "repl/eval"
+    :completer ,(\ {prefix} {repl-completions prefix})
+    :hover ,(\ {word} {ide/card-for word})
+    :init ,repl-init :update ,repl-update :view ,repl-view
+    :commands {{:id "repl/clear" :title "Clear REPL history"
+                :pane "repl" :keys {"SPC r c"}}}})
+
+(ide/register-command `{:id "repl/eval" :title "Eval REPL input" :keys {"SPC r e"}
+  :run ,(\ {client-id} {do (repl-start-eval) nil})})

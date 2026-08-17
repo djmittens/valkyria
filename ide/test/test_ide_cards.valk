@@ -1,0 +1,108 @@
+; Tests for the card service: art seed, stat providers, tier scoring,
+; card assembly from the symdb.
+; Run with: build/valk ide/test/test_ide_cards.valk
+
+(load "testing/test.valk")
+(load "ide/repl.valk")
+
+(def {test-db} (symdb/init ":memory:"))
+(symdb/attach-live test-db)
+(def {doc-text}
+  (str "; well documented\n"
+       "(sig 'card-hero {-> Num Num})\n"
+       "(fun {card-hero a} {a})\n"
+       "(fun {card-bare x} {x})\n"
+       "(fun {card-user}\n"
+       "  {+ (card-hero 1) (card-hero 2) (card-hero 3) (card-hero 4) (card-hero 5)\n"
+       "     (card-hero 6) (card-hero 7) (card-hero 8) (card-hero 9) (card-hero 10)\n"
+       "     (card-hero 11) (card-hero 12) (card-hero 13) (card-hero 14) (card-hero 15)\n"
+       "     (card-hero 16) (card-hero 17) (card-hero 18) (card-hero 19) (card-hero 20)})\n"))
+(symdb/sync-document test-db "file:///tmp/cards.valk" doc-text)
+(dict/set! ide/runtime "lsp-db" test-db)
+(ide/config-defaults)
+
+(test/run (list
+
+  (test/case "card-seed-deterministic"
+    {do
+    (test/assert-eq (ide/card-seed "aio/race") (ide/card-seed "aio/race")
+      "same name same seed")
+    (test/assert (not (== (ide/card-seed "aio/race") (ide/card-seed "aio/all")))
+      "different names differ")
+    (test/assert (> (ide/card-seed "x") 0) "seed positive")
+    true
+  })
+
+  (test/case "card-usage-score-brackets"
+    {do
+    (test/assert-eq 0 (ide/card-usage-score 0) "unused")
+    (test/assert-eq 35 (ide/card-usage-score 1) "rarely used")
+    (test/assert-eq 70 (ide/card-usage-score 5) "used")
+    (test/assert-eq 100 (ide/card-usage-score 20) "heavily used")
+    true
+  })
+
+  (test/case "card-tier-thresholds"
+    {do
+    (test/assert-eq "common" (ide/card-tier 0) "0 is common")
+    (test/assert-eq "uncommon" (ide/card-tier 25) "25 is uncommon")
+    (test/assert-eq "rare" (ide/card-tier 50) "50 is rare")
+    (test/assert-eq "epic" (ide/card-tier 70) "70 is epic")
+    (test/assert-eq "legendary" (ide/card-tier 90) "90 is legendary")
+    true
+  })
+
+  (test/case "card-for-documented-used-symbol"
+    {do
+    (= {card} (ide/card-for "card-hero"))
+    (test/assert (not (nil? card)) "card built")
+    (test/assert-eq "card-hero" (plist/get card :symbol) "symbol")
+    (test/assert-eq 1 (ide/card-stat (plist/get card :stats) "doc") "doc stat")
+    (test/assert-eq 1 (ide/card-stat (plist/get card :stats) "sig") "sig stat")
+    (test/assert (>= (ide/card-stat (plist/get card :stats) "used") 20)
+      "usage counted")
+    (test/assert-eq "legendary" (plist/get card :tier)
+      "documented + sigged + heavily used = legendary")
+    (test/assert (str/contains? (plist/get card :sig) "{->") "sig on card")
+    true
+  })
+
+  (test/case "card-for-bare-symbol-is-common"
+    {do
+    (= {card} (ide/card-for "card-bare"))
+    (test/assert (not (nil? card)) "card built")
+    (test/assert-eq 0 (ide/card-stat (plist/get card :stats) "doc") "no doc")
+    (test/assert-eq 0 (ide/card-stat (plist/get card :stats) "sig") "no sig")
+    (test/assert-eq "common" (plist/get card :tier) "bare symbol is common")
+    true
+  })
+
+  (test/case "card-for-unknown-is-nil"
+    {do
+    (test/assert (nil? (ide/card-for "totally-unknown-symbol")) "unknown nil")
+    true
+  })
+
+  (test/case "card-encodes-to-json"
+    {do
+    (= {card} (ide/card-for "card-hero"))
+    (= {parsed} (json/parse (json/encode card)))
+    (test/assert-eq ":card" (plist/get parsed :w) "widget kind")
+    (test/assert-eq "legendary" (plist/get parsed :tier) "tier survives")
+    (test/assert (num? (plist/get (plist/get parsed :art) :seed)) "art seed")
+    (test/assert (> (len (plist/get parsed :stats)) 0) "stats survive")
+    true
+  })
+
+  (test/case "card-weights-are-tunable-config"
+    {do
+    (ide/config-set "card-weights" {{"used" 0} {"doc" 100} {"sig" 0}})
+    (= {card} (ide/card-for "card-bare"))
+    (test/assert-eq 0 (plist/get card :score) "undocumented scores 0")
+    (= {hero} (ide/card-for "card-hero"))
+    (test/assert-eq 100 (plist/get hero :score) "documented scores 100")
+    (ide/config-defaults)
+    true
+  }))
+
+  {:suite-name "IDE cards"})

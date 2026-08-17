@@ -1,0 +1,109 @@
+; First-class environment builtins: env/new, env/eval, env/bindings, env/parent
+; Run with: build/valk runtime/test/lang/test_env_builtins.valk
+
+(load "testing/test.valk")
+
+(test/run (list
+
+  (test/case "env-new-returns-ref"
+    {do
+    (= {env} (env/new))
+    (test/assert (ref? env) "env/new returns a ref")
+    true
+  })
+
+  (test/case "env-eval-defines-and-reads"
+    {do
+    (= {env} (env/new))
+    (env/eval env {def {x} 42})
+    (test/assert-eq 42 (env/eval env {eval x}) "binding visible in env")
+    (test/assert-eq 43 (env/eval env {+ x 1}) "expressions evaluate in env")
+    true
+  })
+
+  (test/case "env-bindings-do-not-leak-to-root"
+    {do
+    (= {env} (env/new))
+    (env/eval env {def {only-in-session} 7})
+    (test/assert-eq 7 (env/eval env {eval only-in-session}) "bound in session")
+    (= {root-lookup} (env/eval (env/new) {eval only-in-session}))
+    (test/assert (error? root-lookup) "sibling env cannot see it")
+    true
+  })
+
+  (test/case "env-sees-root-builtins"
+    {do
+    (= {env} (env/new))
+    (test/assert-eq 6 (env/eval env {+ 1 2 3}) "root builtins reachable")
+    (test/assert-eq 3 (env/eval env {len {1 2 3}}) "prelude reachable")
+    true
+  })
+
+  (test/case "env-new-with-parent-chains"
+    {do
+    (= {parent} (env/new))
+    (env/eval parent {def {shared} 10})
+    (= {child} (env/new parent))
+    (test/assert-eq 10 (env/eval child {eval shared}) "child sees parent binding")
+    (env/eval child {def {mine} 1})
+    (test/assert (error? (env/eval parent {eval mine}))
+      "parent does not see child binding")
+    true
+  })
+
+  (test/case "env-bindings-lists-own-frame"
+    {do
+    (= {env} (env/new))
+    (env/eval env {def {a} 1})
+    (env/eval env {def {b} 2})
+    (= {bs} (env/bindings env))
+    (test/assert-eq 2 (len bs) "two own bindings")
+    (= {names} (map (\ {p} {str (head p)}) bs))
+    (test/assert (exists "a" names) "a listed")
+    (test/assert (exists "b" names) "b listed")
+    true
+  })
+
+  (test/case "env-parent-walks-chain"
+    {do
+    (= {parent} (env/new))
+    (= {child} (env/new parent))
+    (= {p} (env/parent child))
+    (test/assert (ref? p) "child has parent ref")
+    (env/eval parent {def {tag} 99})
+    (test/assert-eq 99 (env/eval p {eval tag}) "parent ref is the same env")
+    true
+  })
+
+  (test/case "env-eval-returns-errors-as-values"
+    {do
+    (= {env} (env/new))
+    (= {r} (env/eval env {undefined-symbol-xyz}))
+    (test/assert (error? r) "unbound symbol errors")
+    true
+  })
+
+  (test/case "env-survives-gc"
+    {do
+    (= {env} (env/new))
+    (env/eval env {def {precious} 1234})
+    (mem/gc/collect)
+    (test/assert-eq 1234 (env/eval env {eval precious})
+      "binding survives explicit collection")
+    ; churn allocations, collect again, re-check
+    (= {junk} (foldl (\ {acc i} {join acc (list (list i i i))}) nil
+                     {1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16}))
+    (mem/gc/collect)
+    (test/assert-eq 1234 (env/eval env {eval precious})
+      "binding survives collection after churn")
+    true
+  })
+
+  (test/case "env-type-errors"
+    {do
+    (test/assert (error? (env/eval 42 {+ 1 1})) "non-ref rejected")
+    (test/assert (error? (env/bindings "nope")) "string rejected")
+    true
+  }))
+
+  {:suite-name "env builtins"})

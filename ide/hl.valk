@@ -1,0 +1,64 @@
+; ide/hl.valk — sem/* tokens -> per-line styled :text runs (DESIGN.md 3.2).
+; Uses the lex tokenizer: never fails on broken input, which REPL input
+; usually is mid-keystroke.
+
+(load "lsp/analysis.valk")
+
+(module ide)
+
+(def {hl-styles}
+  {:keyword :function :parameter :variable :num :string :type :operator :property})
+
+(fun {hl-style t} {
+  (if (or (< t 0) (> t 8)) {:plain} {nth (+ t 1) hl-styles})
+})
+
+; SemToken deltas -> absolute {line col len style} tuples
+(fun {hl-abs toks line col acc} {
+  (if (nil? toks)
+    {reverse acc}
+    {do
+      (= {t} (head toks))
+      (= {dl} (SemToken:dl t))
+      (= {nl} (+ line dl))
+      (= {nc} (if (== dl 0) {+ col (SemToken:dc t)} {(SemToken:dc t)}))
+      (hl-abs (tail toks) nl nc
+        (qcons (list nl nc (SemToken:len t) (hl-style (SemToken:ttype t))) acc))})
+})
+
+(fun {hl-run t style} {`{:t ,t :style ,style}})
+
+; One line of text + its tokens (sorted by col) -> runs, plain gaps included.
+(fun {hl-line-runs s toks pos acc} {
+  (if (nil? toks)
+    {do
+      (= {rest} (str/slice s pos (len s)))
+      (reverse (if (== rest "") {acc} {qcons (hl-run rest :plain) acc}))}
+    {do
+      (= {t} (head toks))
+      (= {col} (nth 2 t))
+      (= {tlen} (nth 3 t))
+      (= {col} (if (> col (len s)) {len s} {col}))
+      (= {end} (if (> (+ col tlen) (len s)) {len s} {+ col tlen}))
+      (= {gap} (str/slice s pos col))
+      (= {acc} (if (== gap "") {acc} {qcons (hl-run gap :plain) acc}))
+      (= {tok-text} (str/slice s col end))
+      (= {acc} (if (== tok-text "") {acc} {qcons (hl-run tok-text (nth 4 t)) acc}))
+      (hl-line-runs s (tail toks) end acc)})
+})
+
+(fun {hl-lines-rec lines abs i acc} {
+  (if (nil? lines)
+    {reverse acc}
+    {do
+      (= {lt} (filter (\ {t} {== (head t) i}) abs))
+      (hl-lines-rec (tail lines) abs (+ i 1)
+        (qcons (hl-line-runs (head lines) lt 0 nil) acc))})
+})
+
+; text -> list of per-line run lists, aligned with (str/split text "\n")
+(fun {hl-text-lines text} {do
+  (= {lines} (str/split text "\n"))
+  (= {toks} (sem/parse-flat (sem/lex-tokenize text)))
+  (hl-lines-rec lines (hl-abs toks 0 0 nil) 0 nil)
+})

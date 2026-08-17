@@ -1,0 +1,90 @@
+; ide/chrome.valk — per-client chrome: statusline, which-key hints, palette.
+; Pure: palette transitions and the chrome widget tree. Client state and
+; transport live in machine.valk.
+
+(load "ide/keys.valk")
+
+(module ide)
+
+(fun {palette-items commands query} {
+  (if (== query "")
+    {commands}
+    {filter (\ {c} {or
+      (ide/fuzzy-match? query (plist/get c :id))
+      (ide/fuzzy-match? query (plist/get c :title))}) commands})
+})
+
+(fun {str-drop-last s} {
+  (if (== (len s) 0) {s} {str/slice s 0 (- (len s) 1)})
+})
+
+(fun {palette-append pal ch} {
+  plist/set (plist/set pal :query (str (plist/get pal :query) ch)) :sel 0
+})
+
+(fun {clamp-sel sel count} {
+  (if (< sel 0)
+    {0}
+    {if (>= sel count)
+      {(if (> count 0) {- count 1} {0})}
+      {sel}})
+})
+
+; One key against an open palette.
+; Returns {:palette pal|nil :run Str|nil} — :palette nil means closed.
+(fun {palette-step pal key commands} {do
+  (= {q} (plist/get pal :query))
+  (= {sel} (plist/get pal :sel))
+  (select
+    {(== key "ESC") `{:palette ,nil :run ,nil}}
+    {(== key "CR")
+      (do
+        (= {items} (palette-items commands q))
+        (if (nil? items)
+          {`{:palette ,nil :run ,nil}}
+          {`{:palette ,nil
+             :run ,(plist/get (nth (+ (clamp-sel sel (len items)) 1) items) :id)}}))}
+    {(== key "BS") `{:palette ,(plist/set pal :query (str-drop-last q)) :run ,nil}}
+    {(or (== key "DOWN") (== key "TAB")) `{:palette ,(plist/set pal :sel (+ sel 1)) :run ,nil}}
+    {(== key "UP") `{:palette ,(plist/set pal :sel (- sel 1)) :run ,nil}}
+    {(== key "SPC") `{:palette ,(palette-append pal " ") :run ,nil}}
+    {(== (len key) 1) `{:palette ,(palette-append pal key) :run ,nil}}
+    {otherwise `{:palette ,pal :run ,nil}})
+})
+
+(fun {take-safe n l} {
+  (if (> n (len l)) {l} {take n l})
+})
+
+(fun {command-keys-label cmd} {do
+  (= {ks} (plist/get cmd :keys))
+  (if (nil? ks) {""} {str/join ks ", "})
+})
+
+(fun {palette-view pal commands} {do
+  (= {q} (plist/get pal :query))
+  (= {items} (palette-items commands q))
+  (= {sel} (clamp-sel (plist/get pal :sel) (len items)))
+  `{:query ,q :sel ,sel
+    :items ,(map (\ {c} {`{:id ,(plist/get c :id)
+                           :title ,(plist/get c :title)
+                           :keys ,(command-keys-label c)}})
+                 (take-safe 12 items))}
+})
+
+; Full per-client chrome tree, shipped as pane "chrome".
+(fun {chrome-view cstate commands groups} {do
+  (= {pending} (plist/get cstate :pending))
+  (= {pal} (plist/get cstate :palette))
+  (= {cmode} (plist/get cstate :mode))
+  (= {mode} (if (nil? pal)
+    {(if (nil? cmode) {"normal"} {cmode})}
+    {"palette"}))
+  (= {sl} `{:mode ,mode :pending ,pending :focus ,(plist/get cstate :focus)})
+  (= {kh} (if (== pending "") {nil} {ide/keyhints commands pending groups}))
+  (= {pw} (if (nil? pal) {nil} {palette-view pal commands}))
+  (= {comp} (plist/get cstate :completions))
+  (= {card} (plist/get cstate :doc))
+  `{:w :chrome :statusline ,sl :keyhints ,kh :palette ,pw
+    :completions ,comp :card ,card}
+})

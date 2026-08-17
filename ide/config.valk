@@ -1,0 +1,5 @@
+; ide/config.valk — user/project overrides merged over machine defaults
+; (DESIGN.md section 3.6). Re-applied by machine/reload-config (SPC m r).
+; Data only: (ide/config-set key value) calls, no definitions.
+
+(ide/config-set "tick-ms" 1000)

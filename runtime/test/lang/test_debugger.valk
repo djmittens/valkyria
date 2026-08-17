@@ -1,0 +1,234 @@
+; Debugger runtime primitives: breakpoints, GC-transparent pause, frame
+; inspection, eval-in-frame, stepping, resume.
+; Run with: build/valk runtime/test/lang/test_debugger.valk
+
+(load "testing/test.valk")
+(load "runtime/test/fixtures/debug_target.valk")
+
+(def {fixture-path} (realpath "runtime/test/fixtures/debug_target.valk"))
+(def {aio} (aio/await (aio/start {:num-threads 2})))
+(def {results} (dict/new))
+
+(fun {sleep-ms ms} {aio/await (aio/schedule aio ms (\ {} {1}))})
+
+(fun {wait-paused tries} {
+  (if (== tries 0)
+    {0}
+    {if (== (debug/paused?) 1)
+      {1}
+      {do (sleep-ms 20) (wait-paused (- tries 1))}})
+})
+
+(fun {wait-result key tries} {
+  (if (== tries 0)
+    {nil}
+    {if (== (dict/has? results key) 1)
+      {dict/get results key nil}
+      {do (sleep-ms 20) (wait-result key (- tries 1))}})
+})
+
+; After a resume/step, paused? can still show the OLD pause until the thread
+; wakes — poll for the target line instead.
+(fun {wait-paused-at line tries} {
+  (if (== tries 0)
+    {0}
+    {do
+      (= {st} (debug/state))
+      (if (and (not (nil? st)) (== (plist/get st :line) line))
+        {1}
+        {do (sleep-ms 20) (wait-paused-at line (- tries 1))})})
+})
+
+; Poll until paused somewhere OTHER than line; returns the new line, or 0.
+(fun {wait-paused-not-at line tries} {
+  (if (== tries 0)
+    {0}
+    {do
+      (= {st} (debug/state))
+      (if (and (not (nil? st)) (not (== (plist/get st :line) line)))
+        {plist/get st :line}
+        {do (sleep-ms 20) (wait-paused-not-at line (- tries 1))})})
+})
+
+(test/run (list
+
+  (test/case "breakpoint-set-and-list"
+    {do
+    (debug/enable)
+    (= {id} (debug/break fixture-path 4))
+    (test/assert (> id 0) "breakpoint id returned")
+    (= {bps} (debug/breakpoints))
+    (test/assert-eq 1 (len bps) "one breakpoint listed")
+    (test/assert-eq 4 (plist/get (head bps) :line) "line recorded")
+    (test/assert-eq 1 (debug/unbreak id) "unbreak finds it")
+    (test/assert-eq 0 (len (debug/breakpoints)) "list empty after unbreak")
+    (test/assert-eq 0 (debug/unbreak 9999) "unknown id not found")
+    true
+  })
+
+  (test/case "pause-inspect-eval-in-frame-resume"
+    {do
+    (debug/enable)
+    (= {id} (debug/break fixture-path 4))
+    (aio/dispatch aio
+      (\ {_} {debug-target-fn 10})
+      nil
+      (\ {r} {do (dict/set! results "run1" r) nil}))
+    (test/assert-eq 1 (wait-paused 100) "worker paused at breakpoint")
+
+    (= {st} (debug/state))
+    (test/assert-eq 4 (plist/get st :line) "paused on the breakpoint line")
+    (test/assert (str/contains? (plist/get st :file) "debug_target.valk")
+      "paused in the fixture file")
+
+    (= {frames} (debug/frames))
+    (test/assert (> (len frames) 0) "frames captured")
+    (= {f0} (head frames))
+    (test/assert-eq "current" (plist/get f0 :kind) "frame 0 is current expr")
+    (test/assert-eq 4 (plist/get f0 :line) "frame 0 line")
+
+    ; eval in the paused frame: the function argument is visible
+    (= {fenv} (debug/frame-env 0))
+    (test/assert (ref? fenv) "frame env is an env ref")
+    (test/assert-eq 10 (env/eval fenv {eval x}) "argument visible in frame")
+    (test/assert-eq 11 (env/eval fenv {+ x 1}) "eval-in-frame computes")
+
+    ; GC while paused: parked thread participates, state stays valid
+    (mem/gc/collect)
+    (test/assert-eq 1 (debug/paused?) "still paused after gc")
+    (test/assert-eq 10 (env/eval (debug/frame-env 0) {eval x})
+      "frame env valid after gc")
+
+    (test/assert-eq 1 (debug/continue) "resume accepted")
+    (= {r} (wait-result "run1" 100))
+    (test/assert-eq 33 r "function completed with correct result")
+    (test/assert-eq 0 (debug/paused?) "not paused after completion")
+    (debug/unbreak id)
+    true
+  })
+
+  (test/case "step-advances-one-line"
+    {do
+    (debug/enable)
+    (= {id} (debug/break fixture-path 4))
+    (aio/dispatch aio
+      (\ {_} {debug-target-fn 20})
+      nil
+      (\ {r} {do (dict/set! results "run2" r) nil}))
+    (test/assert-eq 1 (wait-paused 100) "paused at line 4")
+    (test/assert-eq 4 (plist/get (debug/state) :line) "at line 4")
+
+    (test/assert-eq 1 (debug/step) "step accepted")
+    (test/assert-eq 1 (wait-paused-at 5 100) "paused at line 5 after step")
+    ; at line 5, a = x + 1 = 21 is bound
+    (test/assert-eq 21 (env/eval (debug/frame-env 0) {eval a})
+      "binding from previous line visible")
+
+    (test/assert-eq 1 (debug/continue) "resume after step")
+    (test/assert-eq 63 (wait-result "run2" 100) "completed: a=21 b=42 sum=63")
+    (debug/unbreak id)
+    (debug/disable)
+    true
+  })
+
+  (test/case "step-in-enters-callee"
+    {do
+    (debug/enable)
+    (= {id} (debug/break fixture-path 16))
+    (aio/dispatch aio
+      (\ {_} {debug-nested-fn 7})
+      nil
+      (\ {r} {do (dict/set! results "in1" r) nil}))
+    (test/assert-eq 1 (wait-paused 100) "paused at the call line")
+    (test/assert-eq 16 (plist/get (debug/state) :line) "at line 16")
+
+    (test/assert-eq 1 (debug/step :in) "step-in accepted")
+    (= {l} (wait-paused-not-at 16 100))
+    (test/assert (and (> l 8) (< l 13)) "paused inside the callee")
+    (test/assert-eq 7 (env/eval (debug/frame-env 0) {eval y})
+      "callee argument visible")
+
+    (test/assert-eq 1 (debug/continue) "resume")
+    (test/assert-eq 49 (wait-result "in1" 100) "completed: 24+25")
+    (debug/unbreak id)
+    true
+  })
+
+  (test/case "step-over-skips-callee"
+    {do
+    (debug/enable)
+    (= {id} (debug/break fixture-path 16))
+    (aio/dispatch aio
+      (\ {_} {debug-nested-fn 5})
+      nil
+      (\ {r} {do (dict/set! results "over1" r) nil}))
+    (test/assert-eq 1 (wait-paused 100) "paused at the call line")
+    (test/assert-eq 16 (plist/get (debug/state) :line) "at line 16")
+
+    (test/assert-eq 1 (debug/step :over) "step-over accepted")
+    (test/assert-eq 1 (wait-paused-at 17 100) "paused at line 17, not in callee")
+    (test/assert-eq 18 (env/eval (debug/frame-env 0) {eval n1})
+      "callee ran to completion during step-over")
+
+    (test/assert-eq 1 (debug/continue) "resume")
+    (test/assert-eq 37 (wait-result "over1" 100) "completed: 18+19")
+    (debug/unbreak id)
+    true
+  })
+
+  (test/case "step-out-returns-to-caller"
+    {do
+    (debug/enable)
+    (= {id} (debug/break fixture-path 10))
+    (aio/dispatch aio
+      (\ {_} {debug-nested-fn 3})
+      nil
+      (\ {r} {do (dict/set! results "out1" r) nil}))
+    (test/assert-eq 1 (wait-paused 100) "paused inside helper")
+    (test/assert-eq 10 (plist/get (debug/state) :line) "at line 10")
+
+    (test/assert-eq 1 (debug/step :out) "step-out accepted")
+    (test/assert-eq 1 (wait-paused-at 17 100) "paused back in the caller")
+    (test/assert-eq 12 (env/eval (debug/frame-env 0) {eval n1})
+      "callee result bound in caller frame")
+
+    (test/assert (error? (env/eval (debug/frame-env 0) {eval h1}))
+      "callee locals gone after step-out")
+
+    (test/assert-eq 1 (debug/continue) "resume")
+    (test/assert-eq 25 (wait-result "out1" 100) "completed: 12+13")
+    (debug/unbreak id)
+    (debug/disable)
+    true
+  })
+
+  (test/case "step-mode-validation"
+    {do
+    (test/assert (error? (debug/step :sideways)) "unknown mode rejected")
+    (test/assert-eq 0 (debug/step :over) "step-over refused when not paused")
+    (test/assert-eq 0 (debug/step :out) "step-out refused when not paused")
+    true
+  })
+
+  (test/case "no-pause-when-disabled"
+    {do
+    (debug/disable)
+    (debug/enable)
+    (= {id} (debug/break fixture-path 4))
+    (debug/disable)
+    (aio/dispatch aio
+      (\ {_} {debug-target-fn 1})
+      nil
+      (\ {r} {do (dict/set! results "run3" r) nil}))
+    (test/assert-eq 6 (wait-result "run3" 100) "runs through without pausing")
+    (test/assert-eq 0 (debug/paused?) "never paused")
+    (debug/enable)
+    (debug/unbreak id)
+    (debug/disable)
+    true
+  }))
+
+  {:suite-name "debugger primitives"})
+
+(aio/stop aio)
+(aio/run aio)

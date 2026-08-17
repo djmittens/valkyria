@@ -1,0 +1,83 @@
+; ide/server.valk — UI server routes: shell, SSE events, client event POST
+; See ide/DESIGN.md section 3.5. Route-table pattern from stdlib/aio/debug.valk.
+
+(load "ide/machine.valk")
+
+(module ide)
+
+(def {web-path} "ide/web/")
+
+(def {shell-html}
+  (str
+    (read-file (str web-path "head.html"))
+    (read-file (str web-path "style.css"))
+    (read-file (str web-path "body.html"))
+    (read-file (str web-path "app.js"))
+    (read-file (str web-path "footer.html"))))
+
+(fun {query-param query name default} {do
+  (= {params} (if (nil? query) {nil} {str/split query "&"}))
+  (= {matches}
+    (filter (\ {p} {do
+      (= {kv} (str/split p "="))
+      (and (== (len kv) 2) (== (head kv) name))}) params))
+  (if (nil? matches)
+    {default}
+    {head (tail (str/split (head matches) "="))})
+})
+
+(fun {handle-events req query} {
+  (if (not (ref? req))
+    {`{:status "200" :content-type "text/event-stream; charset=utf-8"
+       :cache-control "no-cache" :body-type :sse-stream}}
+    {do
+      (= {client-id} (query-param query "client" "anon"))
+      (= {stream} (sse/open req))
+      (ide/add-client client-id stream)
+      (stream/on-close stream (\ {} {ide/remove-client client-id}))
+      (ide/send-full stream 0)
+      (ide/send-chrome client-id 0)
+      (stream/closed stream)})
+})
+
+(fun {handle-client-event body} {do
+  (= {msg} (if (nil? body) {nil} {json/parse body}))
+  (if (or (nil? msg) (not (list? msg)))
+    {`{:status "400" :content-type "application/json"
+       :body "{\"ok\":false,\"error\":\"bad json\"}"}}
+    {do
+      (= {event} (plist/get msg :event))
+      (if (nil? event)
+        {`{:status "400" :content-type "application/json"
+           :body "{\"ok\":false,\"error\":\"missing event\"}"}}
+        {do
+          (= {ts} (plist/get event :ts))
+          (= {ts} (if (num? ts) {ts} {0}))
+          (= {client-id} (plist/get msg :client))
+          (= {client-id} (if (nil? client-id) {"anon"} {client-id}))
+          (if (== (plist/get event :type) "key")
+            {ide/handle-key client-id (plist/get event :key) ts}
+            {nil})
+          `{:status "200" :content-type "application/json"
+            :body "{\"ok\":true}"}})})
+})
+
+(fun {handle-request req} {do
+  (= {method} (if (ref? req) {req/method req} {plist/get req :method}))
+  (= {method} (if (nil? method) {"GET"} {method}))
+  (= {rawpath} (if (ref? req) {req/path req} {plist/get req :path}))
+  (= {parts} (str/split rawpath "?"))
+  (= {path} (head parts))
+  (= {query} (if (> (len parts) 1) {head (tail parts)} {nil}))
+  (select
+    {(or (== path "/") (== path "/index.html"))
+      `{:status "200" :content-type "text/html; charset=utf-8"
+        :body ,shell-html}}
+    {(== path "/favicon.ico") `{:status "204" :body ""}}
+    {(== path "/events") (handle-events req query)}
+    {(and (== path "/event") (== method "POST"))
+      (handle-client-event (if (ref? req) {req/body req} {plist/get req :body}))}
+    {otherwise
+      `{:status "404" :content-type "text/plain; charset=utf-8"
+        :body "not found"}})
+})

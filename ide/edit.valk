@@ -1,0 +1,180 @@
+; ide/edit.valk — shared modal editing machine for :input widgets
+; (DESIGN.md section 3.3). Deliberately small vim subset: h/l/j/k, 0/$,
+; x, dd, insert entries i/a/A/o. Counts, operators and text objects are
+; out of scope here — full vim lives in the nvim pane (phase 3).
+; Pure: (buffer, key) -> buffer. Mode lives in client state (machine.valk).
+
+(module ide)
+
+(fun {edit-new} { {:lines {""} :row 0 :col 0} })
+
+(fun {edit-line buf} {
+  nth (+ (plist/get buf :row) 1) (plist/get buf :lines)
+})
+
+(fun {edit-set-line lines i v} {
+  join (take i lines) (list v) (drop (+ i 1) lines)
+})
+
+(fun {edit-text buf} {str/join (plist/get buf :lines) "\n"})
+
+(fun {edit-empty? buf} {
+  (== (str/trim (edit-text buf)) "")
+})
+
+(fun {edit-with buf lines row col} {
+  plist/set (plist/set (plist/set buf :lines lines) :row row) :col col
+})
+
+(fun {edit-clamp-col col line-len max-extra} {do
+  (= {limit} (+ (if (> line-len 0) {- line-len 1} {0}) max-extra))
+  (if (< col 0) {0} {if (> col limit) {limit} {col}})
+})
+
+; --- insert mode -----------------------------------------------------------
+
+(fun {edit-insert buf key} {do
+  (= {lines} (plist/get buf :lines))
+  (= {row} (plist/get buf :row))
+  (= {col} (plist/get buf :col))
+  (= {line} (edit-line buf))
+  (select
+    {(== key "CR")
+      (do
+        (= {before} (str/slice line 0 col))
+        (= {after} (str/slice line col (len line)))
+        (= {new-lines} (join (take row lines) (list before after)
+                             (drop (+ row 1) lines)))
+        (edit-with buf new-lines (+ row 1) 0))}
+    {(== key "BS")
+      (if (> col 0)
+        {edit-with buf
+          (edit-set-line lines row
+            (str (str/slice line 0 (- col 1)) (str/slice line col (len line))))
+          row (- col 1)}
+        {if (> row 0)
+          {do
+            (= {prev} (nth row lines))
+            (= {new-lines} (join (take (- row 1) lines)
+                                 (list (str prev line))
+                                 (drop (+ row 1) lines)))
+            (edit-with buf new-lines (- row 1) (len prev))}
+          {buf}})}
+    {(== key "SPC")
+      (edit-with buf
+        (edit-set-line lines row
+          (str (str/slice line 0 col) " " (str/slice line col (len line))))
+        row (+ col 1))}
+    {(== (len key) 1)
+      (edit-with buf
+        (edit-set-line lines row
+          (str (str/slice line 0 col) key (str/slice line col (len line))))
+        row (+ col 1))}
+    {otherwise buf})
+})
+
+; Leaving insert mode clamps the cursor back onto a character.
+(fun {edit-esc buf} {
+  plist/set buf :col (edit-clamp-col (plist/get buf :col) (len (edit-line buf)) 0)
+})
+
+; --- normal mode -----------------------------------------------------------
+
+(fun {edit-move-row buf delta} {do
+  (= {lines} (plist/get buf :lines))
+  (= {row} (+ (plist/get buf :row) delta))
+  (= {row} (if (< row 0) {0} {if (>= row (len lines)) {- (len lines) 1} {row}}))
+  (= {line} (nth (+ row 1) lines))
+  (edit-with buf lines row (edit-clamp-col (plist/get buf :col) (len line) 0))
+})
+
+(fun {edit-normal buf key} {do
+  (= {lines} (plist/get buf :lines))
+  (= {row} (plist/get buf :row))
+  (= {col} (plist/get buf :col))
+  (= {line} (edit-line buf))
+  (select
+    {(== key "h") (plist/set buf :col (edit-clamp-col (- col 1) (len line) 0))}
+    {(== key "l") (plist/set buf :col (edit-clamp-col (+ col 1) (len line) 0))}
+    {(== key "j") (edit-move-row buf 1)}
+    {(== key "k") (edit-move-row buf -1)}
+    {(== key "0") (plist/set buf :col 0)}
+    {(== key "$") (plist/set buf :col (edit-clamp-col (len line) (len line) 0))}
+    {(== key "x")
+      (if (== (len line) 0)
+        {buf}
+        {edit-with buf
+          (edit-set-line lines row
+            (str (str/slice line 0 col) (str/slice line (+ col 1) (len line))))
+          row (edit-clamp-col col (- (len line) 1) 0)})}
+    {(== key "D")
+      (if (== (len lines) 1)
+        {edit-with buf {""} 0 0}
+        {do
+          (= {new-lines} (join (take row lines) (drop (+ row 1) lines)))
+          (= {new-row} (if (>= row (len new-lines)) {- (len new-lines) 1} {row}))
+          (edit-with buf new-lines new-row
+            (edit-clamp-col col (len (nth (+ new-row 1) new-lines)) 0))})}
+    {(== key "a") (plist/set buf :col (edit-clamp-col (+ col 1) (len line) 1))}
+    {(== key "A") (plist/set buf :col (len line))}
+    {(== key "o")
+      (do
+        (= {new-lines} (join (take (+ row 1) lines) (list "")
+                             (drop (+ row 1) lines)))
+        (edit-with buf new-lines (+ row 1) 0))}
+    {otherwise buf})
+})
+
+; Keys that switch the client into insert mode (machine consults this).
+(fun {edit-enters-insert? key} {
+  or (== key "i") (== key "a") (== key "A") (== key "o")
+})
+
+; --- completion support ----------------------------------------------------
+
+(fun {edit-word-delim? ch} {
+  or (== ch " ") (== ch "(") (== ch ")") (== ch "{") (== ch "}")
+     (== ch "\"") (== ch "'") (== ch "`") (== ch ",")
+})
+
+(fun {edit-word-start s col} {
+  (if (== col 0)
+    {0}
+    {if (edit-word-delim? (str/slice s (- col 1) col))
+      {col}
+      {edit-word-start s (- col 1)}})
+})
+
+; The symbol fragment immediately before the cursor.
+(fun {edit-word-before buf} {do
+  (= {line} (edit-line buf))
+  (= {col} (plist/get buf :col))
+  (str/slice line (edit-word-start line col) col)
+})
+
+(fun {edit-word-end s col} {
+  (if (>= col (len s))
+    {len s}
+    {if (edit-word-delim? (str/slice s col (+ col 1)))
+      {col}
+      {edit-word-end s (+ col 1)}})
+})
+
+; The whole symbol under the cursor (hover target).
+(fun {edit-word-at buf} {do
+  (= {line} (edit-line buf))
+  (= {col} (plist/get buf :col))
+  (str/slice line (edit-word-start line col) (edit-word-end line col))
+})
+
+; Insert a whole string at the cursor (completion acceptance).
+(fun {edit-insert-str buf s} {do
+  (= {lines} (plist/get buf :lines))
+  (= {row} (plist/get buf :row))
+  (= {col} (plist/get buf :col))
+  (= {line} (edit-line buf))
+  (edit-with buf
+    (edit-set-line lines row
+      (str (str/slice line 0 col) s (str/slice line col (len line))))
+    row (+ col (len s)))
+})

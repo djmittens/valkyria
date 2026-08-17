@@ -35,4 +35,12 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
                                              const char *path,
                                              valk_lval_t *headers);
 
+valk_lval_t *valk_http2_client_request_full_impl(valk_lenv_t *e,
+                                             valk_aio_system_t *sys,
+                                             const char *method,
+                                             const char *host, int port,
+                                             const char *path,
+                                             valk_lval_t *headers,
+                                             const char *body);
+
 

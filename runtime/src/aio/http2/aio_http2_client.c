@@ -587,8 +587,20 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
     }
     // LCOV_EXCL_STOP
 
+    nghttp2_data_provider2 data_prd;
+    nghttp2_data_provider2 *prd = nullptr;
+    if (ctx->req->body && ctx->req->bodyLen > 0) {
+      http_body_source_t *body_src = valk_mem_alloc(sizeof(http_body_source_t));
+      body_src->body = (const char *)ctx->req->body;
+      body_src->body_len = ctx->req->bodyLen;
+      body_src->offset = 0;
+      body_src->needs_free = false;
+      data_prd.source.ptr = body_src;
+      data_prd.read_callback = valk_http2_byte_body_cb;
+      prd = &data_prd;
+    }
     reqres->streamid = nghttp2_submit_request2(conn->http.session, nullptr, hdrs,
-                                               hdrCount, nullptr, reqres);
+                                               hdrCount, prd, reqres);
     // LCOV_EXCL_START nghttp2 submit failure
     if (reqres->streamid < 0) {
       VALK_ERROR("Could not submit HTTP request: %s",
@@ -681,6 +693,8 @@ typedef struct {
   char *host;
   int port;
   char *path;
+  char *method;
+  char *body;
   valk_aio_http2_client *client;
   valk_mem_arena_t *arena;
   u64 request_id;
@@ -738,10 +752,15 @@ static void __http2_client_request_connect_done(valk_async_handle_t *handle, voi
     req = valk_mem_alloc(sizeof(valk_http2_request_t));
     memset(req, 0, sizeof(*req));
     req->allocator = (valk_mem_allocator_t *)arena;
-    req->method = __client_arena_strdup("GET");
+    req->method = __client_arena_strdup(ctx->method ? ctx->method : "GET");
     req->scheme = __client_arena_strdup("https");
     req->authority = __client_arena_strdup(ctx->host);
     req->path = __client_arena_strdup(ctx->path);
+    if (ctx->body) {
+      req->bodyLen = strlen(ctx->body);
+      req->body = (u8 *)__client_arena_strdup(ctx->body);
+      req->bodyCapacity = req->bodyLen + 1;
+    }
     da_init(&req->headers); // LCOV_EXCL_BR_LINE da_init macro
 
     valk_lval_t *headers = valk_handle_resolve(&valk_sys->handle_table, ctx->headers_handle);
@@ -774,6 +793,8 @@ cleanup:
   valk_handle_release(&valk_sys->handle_table, ctx->headers_handle);
   free(ctx->host);
   free(ctx->path);
+  free(ctx->method);
+  free(ctx->body);
   free(ctx);
 }
 
@@ -804,20 +825,24 @@ static void __http2_client_request_response_done(valk_async_handle_t *handle, vo
   valk_handle_release(&valk_sys->handle_table, ctx->headers_handle);
   free(ctx->host);
   free(ctx->path);
+  free(ctx->method);
+  free(ctx->body);
   if (ctx->arena) { // LCOV_EXCL_BR_LINE defensive null check
     free(ctx->arena);
   }
   free(ctx);
 }
 
-valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
+valk_lval_t *valk_http2_client_request_full_impl(valk_lenv_t *e,
                                              valk_aio_system_t *sys,
+                                             const char *method,
                                              const char *host, int port,
                                              const char *path,
-                                             valk_lval_t *headers) {
+                                             valk_lval_t *headers,
+                                             const char *body) {
   u64 req_id = atomic_fetch_add(&g_client_request_id, 1);
-  VALK_INFO("http2/client-request[%llu]: %s:%d%s (with %zu headers)", 
-            (unsigned long long)req_id, host, port, path,
+  VALK_INFO("http2/client-request[%llu]: %s %s:%d%s (with %zu headers)",
+            (unsigned long long)req_id, method, host, port, path,
             headers ? valk_lval_list_count(headers) : 0);
 
   valk_async_handle_t *async_handle = valk_async_handle_new(sys, e);
@@ -827,6 +852,8 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
   ctx->host = strdup(host);
   ctx->port = port;
   ctx->path = strdup(path);
+  ctx->method = strdup(method);
+  ctx->body = body ? strdup(body) : nullptr;
   ctx->client = nullptr;
   ctx->arena = nullptr;
   ctx->request_id = req_id;
@@ -849,11 +876,21 @@ valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
   return valk_lval_handle(async_handle);
 }
 
+valk_lval_t *valk_http2_client_request_with_headers_impl(valk_lenv_t *e,
+                                             valk_aio_system_t *sys,
+                                             const char *host, int port,
+                                             const char *path,
+                                             valk_lval_t *headers) {
+  return valk_http2_client_request_full_impl(e, sys, "GET", host, port, path,
+                                             headers, nullptr);
+}
+
 valk_lval_t *valk_http2_client_request_impl(valk_lenv_t *e,
                                              valk_aio_system_t *sys,
                                              const char *host, int port,
                                              const char *path) {
-  return valk_http2_client_request_with_headers_impl(e, sys, host, port, path, nullptr);
+  return valk_http2_client_request_full_impl(e, sys, "GET", host, port, path,
+                                             nullptr, nullptr);
 }
 
 

@@ -1,0 +1,149 @@
+; Debug wire protocol end-to-end: a target function pauses at a breakpoint
+; set over HTTP; state/stack/bindings/eval are served while it is parked;
+; continue resumes it.
+; Run with: build/valk stdlib/test/test_debug_server.valk
+
+(load "testing/test.valk")
+(load "stdlib/aio/debug-server.valk")
+(load "runtime/test/fixtures/debug_target.valk")
+
+(def {fixture-path} (realpath "runtime/test/fixtures/debug_target.valk"))
+(def {dbg-sys} (aio/await (aio/start {:num-threads 1})))
+(def {work-sys} (aio/await (aio/start {:num-threads 2})))
+(def {results} (dict/new))
+
+(def {server} (debug/serve dbg-sys 0))
+(def {dbg-port} (http2/server-port server))
+
+(fun {sleep-ms ms} {aio/await (aio/schedule dbg-sys ms (\ {} {1}))})
+
+(fun {get-json path} {do
+  (= {resp} (aio/await (http2/client-request dbg-sys "127.0.0.1" dbg-port path)))
+  (json/parse (http2/response-body resp))
+})
+
+(fun {post-json path body} {do
+  (= {resp} (aio/await (http2/client-post dbg-sys "127.0.0.1" dbg-port path
+                                          (json/encode body))))
+  (json/parse (http2/response-body resp))
+})
+
+(fun {wait-paused-http tries} {
+  (if (== tries 0)
+    {0}
+    {if (== (plist/get (get-json "/dbg/state") :paused) 1)
+      {1}
+      {do (sleep-ms 20) (wait-paused-http (- tries 1))}})
+})
+
+(fun {wait-paused-at-http line tries} {
+  (if (== tries 0)
+    {0}
+    {do
+      (= {st} (get-json "/dbg/state"))
+      (if (and (== (plist/get st :paused) 1) (== (plist/get st :line) line))
+        {1}
+        {do (sleep-ms 20) (wait-paused-at-http line (- tries 1))})})
+})
+
+(test/run (list
+
+  (test/case "wire-breakpoint-lifecycle"
+    {do
+    (= {r} (post-json "/dbg/break" `{:file ,fixture-path :line 4}))
+    (= {id} (plist/get r :id))
+    (test/assert (> id 0) "breakpoint set over http")
+    (= {bps} (get-json "/dbg/breakpoints"))
+    (test/assert-eq 1 (len bps) "listed over http")
+    (test/assert-eq 4 (plist/get (head bps) :line) "line served")
+    (= {u} (post-json "/dbg/unbreak" `{:id ,id}))
+    (test/assert-eq 1 (plist/get u :ok) "unbreak over http")
+    (test/assert-eq 0 (len (get-json "/dbg/breakpoints")) "list empty")
+    true
+  })
+
+  (test/case "wire-pause-inspect-eval-continue"
+    {do
+    (= {r} (post-json "/dbg/break" `{:file ,fixture-path :line 4}))
+    (= {id} (plist/get r :id))
+
+    (aio/dispatch work-sys
+      (\ {_} {debug-target-fn 7})
+      nil
+      (\ {res} {do (dict/set! results "wire1" res) nil}))
+
+    (test/assert-eq 1 (wait-paused-http 100) "paused visible over http")
+
+    (= {st} (get-json "/dbg/state"))
+    (test/assert-eq 4 (plist/get st :line) "line over http")
+    (test/assert (str/contains? (plist/get st :file) "debug_target")
+      "file over http")
+
+    (= {stack} (get-json "/dbg/stack"))
+    (test/assert (> (len stack) 0) "stack over http")
+    (test/assert-eq "current" (plist/get (head stack) :kind) "frame 0 kind")
+
+    (= {binds} (get-json "/dbg/frame/0/bindings"))
+    (= {names} (map (\ {b} {plist/get b :name}) binds))
+    (test/assert (exists "x" names) "argument in bindings")
+
+    (= {ev} (post-json "/dbg/eval" {:frame 0 :expr "(+ x 100)"}))
+    (test/assert-eq "107" (plist/get ev :result) "eval-in-frame over http")
+    (test/assert-eq "ok" (plist/get ev :status) "eval status ok")
+
+    (= {c} (post-json "/dbg/continue" {:frame 0}))
+    (test/assert-eq 1 (plist/get c :ok) "continue over http")
+    (sleep-ms 200)
+    (test/assert-eq 24 (dict/get results "wire1" nil) "target completed: 8+16")
+    (test/assert-eq 0 (plist/get (get-json "/dbg/state") :paused)
+      "not paused after continue")
+    (post-json "/dbg/unbreak" `{:id ,id})
+    true
+  })
+
+  (test/case "wire-step-modes"
+    {do
+    (= {r} (post-json "/dbg/break" `{:file ,fixture-path :line 16}))
+    (= {id} (plist/get r :id))
+    (aio/dispatch work-sys
+      (\ {_} {debug-nested-fn 5})
+      nil
+      (\ {res} {do (dict/set! results "wire-step" res) nil}))
+    (test/assert-eq 1 (wait-paused-http 100) "paused at the call line")
+
+    (= {bad} (post-json "/dbg/step" {:mode "sideways"}))
+    (test/assert (not (nil? (plist/get bad :error))) "unknown mode rejected")
+
+    (= {s} (post-json "/dbg/step" {:mode "over"}))
+    (test/assert-eq 1 (plist/get s :ok) "step-over accepted over http")
+    (test/assert-eq 1 (wait-paused-at-http 17 100)
+      "paused at the next caller line, not inside the callee")
+
+    (= {ev} (post-json "/dbg/eval" {:frame 0 :expr "n1"}))
+    (test/assert-eq "18" (plist/get ev :result) "callee completed during step")
+
+    (post-json "/dbg/continue" {:a 0})
+    (sleep-ms 200)
+    (test/assert-eq 37 (dict/get results "wire-step" nil) "completed: 18+19")
+    (post-json "/dbg/unbreak" `{:id ,id})
+    true
+  })
+
+  (test/case "wire-eval-error-and-bad-requests"
+    {do
+    (= {ev} (post-json "/dbg/eval" {:frame 0 :expr "(+ 1 1)"}))
+    (test/assert (not (nil? (plist/get ev :error))) "eval without pause errors")
+    (= {b} (post-json "/dbg/break" {:only "junk"}))
+    (test/assert (not (nil? (plist/get b :error))) "bad break rejected")
+    (= {nf} (get-json "/dbg/nope"))
+    (test/assert (not (nil? (plist/get nf :error))) "unknown route 404s")
+    true
+  }))
+
+  {:suite-name "debug wire protocol"})
+
+(debug/disable)
+(aio/stop work-sys)
+(aio/run work-sys)
+(aio/stop dbg-sys)
+(aio/run dbg-sys)

@@ -1,0 +1,43 @@
+; ide/main.valk — valk-ide entry point (phase 0 + phase 1 REPL)
+; Run with: build/valk ide/main.valk
+; Then open https://localhost:7777/ (cert from build/, mkcert-trusted if installed)
+
+(load "ide/machine.valk")
+(load "ide/status.valk")
+(load "ide/repl.valk")
+(load "ide/debugger.valk")
+(load "ide/server.valk")
+
+(def {ide-port} 7777)
+
+(ide/config-reload)
+
+(def {ui-sys} (aio/await (aio/start {:num-threads 1})))
+(def {work-sys} (aio/await (aio/start {:num-threads 2})))
+
+(dict/set! ide/runtime "ui-sys" ui-sys)
+(dict/set! ide/runtime "work-sys" work-sys)
+
+(ide/lsp-init ".")
+(def {idx-t0} (time-us))
+(def {idx-n} (ide/lsp-index "."))
+(printf "workspace index: %d files refreshed in %dms\n"
+        idx-n (/ (- (time-us) idx-t0) 1000))
+
+(ide/register-tool ide/status-tool)
+(ide/register-tool ide/repl-tool)
+(ide/register-tool ide/debugger-tool)
+(ide/repl-ensure-session "main")
+(ide/dispatch "status" (ide/status-sample) 0)
+
+(http2/server-listen ui-sys ide-port (\ {req} {ide/handle-request req}))
+
+(aio/interval ui-sys (ide/config-get "tick-ms" 1000) (\ {} {do
+  (ide/dispatch "status" (ide/status-sample) 0)
+  (ide/dbg-poll)
+  :continue}))
+
+(printf "valk-ide listening on https://localhost:%d\n" ide-port)
+(aio/run ui-sys)
+(aio/stop work-sys)
+(aio/run work-sys)

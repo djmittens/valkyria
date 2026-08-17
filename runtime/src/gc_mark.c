@@ -372,6 +372,12 @@ void valk_gc_heap_mark_object(valk_gc_mark_ctx_t *ctx, void *ptr) {
 void valk_gc_heap_mark_raw(valk_gc_mark_ctx_t *ctx, void *ptr) {
   mark_ptr_only(ptr, ctx);
 }
+
+// ref.mark callback for LVAL_REFs wrapping a valk_lenv_t (env/new): traces
+// the env exactly like a closure's fun.env so the GC keeps it alive.
+void valk_gc_mark_env_ref(void *env, void *mark_ctx) {
+  mark_env((valk_lenv_t *)env, (valk_gc_mark_ctx_t *)mark_ctx);
+}
 // LCOV_EXCL_STOP
 // LCOV_EXCL_BR_STOP
 

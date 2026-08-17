@@ -240,6 +240,45 @@ int valk_http2_on_begin_headers_callback(nghttp2_session *session,
 }
 // LCOV_EXCL_BR_STOP
 
+// LCOV_EXCL_BR_START data chunk callback: body buffer growth and limit check
+int valk_http2_server_on_data_chunk_recv_callback(nghttp2_session *session,
+                                                  u8 flags, i32 stream_id,
+                                                  const u8 *data, size_t len,
+                                                  void *user_data) {
+  UNUSED(flags);
+  UNUSED(user_data);
+
+  valk_http2_server_request_t *req = (valk_http2_server_request_t *)
+      nghttp2_session_get_stream_user_data(session, stream_id);
+  if (!req) return 0;
+
+  u64 limit = req->conn->http.server->sys->config.max_request_body_size;
+  if (req->bodyLen + len > limit) {
+    VALK_WARN("Request body exceeds limit (%llu bytes) on stream %d, resetting",
+              (unsigned long long)limit, stream_id);
+    nghttp2_submit_rst_stream(session, NGHTTP2_FLAG_NONE, stream_id,
+                              NGHTTP2_REFUSED_STREAM);
+    return 0;
+  }
+
+  VALK_WITH_ALLOC((valk_mem_allocator_t*)&req->region) {
+    if (req->bodyLen + len > req->bodyCapacity) {
+      u64 new_cap = req->bodyCapacity == 0 ? 1024 : req->bodyCapacity;
+      while (new_cap < req->bodyLen + len) new_cap *= 2;
+      u8 *new_body = valk_mem_alloc(new_cap);
+      if (req->body) {
+        memcpy(new_body, req->body, req->bodyLen);
+      }
+      req->body = new_body;
+      req->bodyCapacity = new_cap;
+    }
+    memcpy(req->body + req->bodyLen, data, len);
+    req->bodyLen += len;
+  }
+  return 0;
+}
+// LCOV_EXCL_BR_STOP
+
 typedef struct {
   u64 streamid;
   valk_http2_request_t *req;
@@ -718,23 +757,23 @@ static int __handle_async_response(nghttp2_session *session, i32 stream_id,
 // LCOV_EXCL_BR_STOP
 
 // LCOV_EXCL_BR_START request handling: handler resolution, response type dispatch
-static int __handle_request_headers(nghttp2_session *session,
-                                    const nghttp2_frame *frame,
-                                    valk_aio_handle_t *conn) {
-  VALK_DEBUG(">>> Received complete HTTP/2 request (stream_id=%d)", frame->hd.stream_id);
+static int __handle_request_ready(nghttp2_session *session,
+                                  i32 stream_id,
+                                  valk_aio_handle_t *conn) {
+  VALK_DEBUG(">>> Received complete HTTP/2 request (stream_id=%d)", stream_id);
 
   valk_http2_server_request_t *req = (valk_http2_server_request_t *)
-      nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
+      nghttp2_session_get_stream_user_data(session, stream_id);
 
   if (!req) {
-    VALK_WARN("No request data for stream %d", frame->hd.stream_id);
+    VALK_WARN("No request data for stream %d", stream_id);
     return 0;
   }
 
   valk_lval_t *handler = valk_handle_resolve(&valk_sys->handle_table, 
                                               conn->http.server->lisp_handler_handle);
   if (!conn->http.server || !handler) {
-    __send_default_response(session, frame->hd.stream_id, req->stream_arena);
+    __send_default_response(session, stream_id, req->stream_arena);
     return 0;
   }
   valk_lenv_t *env = handler->fun.env;
@@ -756,7 +795,7 @@ static int __handle_request_headers(nghttp2_session *session,
 
   if (LVAL_TYPE(response) == LVAL_HANDLE) {
     response->async.handle->request_ctx = req->request_ctx;
-    int pending = __handle_async_response(session, frame->hd.stream_id, conn, req,
+    int pending = __handle_async_response(session, stream_id, conn, req,
                                           response->async.handle, env);
     if (pending) return 0;
     return 0;
@@ -764,9 +803,9 @@ static int __handle_request_headers(nghttp2_session *session,
 
   if (LVAL_TYPE(response) == LVAL_ERR) {
     VALK_WARN("Handler returned error: %s", response->str);
-    __send_error_response(session, frame->hd.stream_id, "500", response->str, req->stream_arena);
+    __send_error_response(session, stream_id, "500", response->str, req->stream_arena);
   } else {
-    valk_http2_send_response(session, frame->hd.stream_id, response, req->stream_arena);
+    valk_http2_send_response(session, stream_id, response, req->stream_arena);
   }
 
   return 0;
@@ -797,7 +836,17 @@ int valk_http2_on_frame_recv_callback(nghttp2_session *session,
 
   if (frame->hd.type == NGHTTP2_HEADERS &&
       frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
-    return __handle_request_headers(session, frame, conn);
+    if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
+      return __handle_request_ready(session, frame->hd.stream_id, conn);
+    }
+    return 0;
+  }
+
+  if ((frame->hd.flags & NGHTTP2_FLAG_END_STREAM) &&
+      (frame->hd.type == NGHTTP2_DATA ||
+       (frame->hd.type == NGHTTP2_HEADERS &&
+        frame->headers.cat == NGHTTP2_HCAT_HEADERS))) {
+    return __handle_request_ready(session, frame->hd.stream_id, conn);
   }
 
   return 0;

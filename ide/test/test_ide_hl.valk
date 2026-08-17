@@ -1,0 +1,170 @@
+; Tests for highlighting (hl.valk), value inspector (inspect.valk),
+; and TAB completion.
+; Run with: build/valk ide/test/test_ide_hl.valk
+
+(load "testing/test.valk")
+(load "ide/machine.valk")
+(load "ide/repl.valk")
+
+(fun {runs-text runs} {
+  foldl (\ {acc r} {str acc (plist/get r :t)}) "" runs
+})
+
+(fun {find-run runs text} {do
+  (= {m} (filter (\ {r} {== (plist/get r :t) text}) runs))
+  (if (nil? m) {nil} {head m})
+})
+
+(test/run (list
+
+  (test/case "hl-styles-def-form"
+    {do
+    (= {hl} (ide/hl-text-lines "(def {x} 42)"))
+    (test/assert-eq 1 (len hl) "single line")
+    (= {runs} (head hl))
+    (test/assert-eq "(def {x} 42)" (runs-text runs) "runs reassemble the text")
+    (test/assert-eq :keyword (plist/get (find-run runs "def") :style) "def is keyword")
+    (test/assert-eq :num (plist/get (find-run runs "42") :style) "42 is number")
+    (test/assert-eq :variable (plist/get (find-run runs "x") :style) "x is variable")
+    true
+  })
+
+  (test/case "hl-string-and-multiline"
+    {do
+    (= {hl} (ide/hl-text-lines "(str \"hi\")\n(+ 1 2)"))
+    (test/assert-eq 2 (len hl) "two lines")
+    (test/assert-eq "(str \"hi\")" (runs-text (head hl)) "line 1 intact")
+    (test/assert-eq "(+ 1 2)" (runs-text (head (tail hl))) "line 2 intact")
+    (test/assert-eq :string (plist/get (find-run (head hl) "\"hi\"") :style)
+      "string styled")
+    (test/assert-eq :operator (plist/get (find-run (head (tail hl)) "+") :style)
+      "operator styled")
+    true
+  })
+
+  (test/case "hl-broken-input-never-fails"
+    {do
+    (= {hl} (ide/hl-text-lines "(def {x"))
+    (test/assert-eq "(def {x" (runs-text (head hl)) "broken input reassembles")
+    (= {hl2} (ide/hl-text-lines ""))
+    (test/assert-eq 1 (len hl2) "empty input yields one line")
+    true
+  })
+
+  (test/case "inspect-scalars"
+    {do
+    (test/assert-eq "42" (plist/get (ide/inspect-value 42) :label) "num label")
+    (test/assert-eq :num (plist/get (ide/inspect-value 42) :style) "num style")
+    (test/assert-eq "\"hi\"" (plist/get (ide/inspect-value "hi") :label) "str label")
+    (test/assert-eq "nil" (plist/get (ide/inspect-value nil) :label) "nil label")
+    true
+  })
+
+  (test/case "inspect-list-and-plist"
+    {do
+    (= {n} (ide/inspect-value {1 2 3}))
+    (test/assert-eq "(3 items)" (plist/get n :label) "list label")
+    (test/assert-eq 3 (len (plist/get n :children)) "list children")
+    (= {p} (ide/inspect-value {:a 1 :b "x"}))
+    (test/assert-eq "{2 keys}" (plist/get p :label) "plist label")
+    (= {kids} (plist/get p :children))
+    (test/assert-eq ":a" (plist/get (head kids) :key) "key shown")
+    (test/assert-eq "1" (plist/get (head kids) :label) "value shown")
+    true
+  })
+
+  (test/case "inspect-depth-and-length-limits"
+    {do
+    (= {deep} (ide/inspect-value {1 {2 {3 {4}}}}))
+    (= {level2} (head (tail (plist/get deep :children))))
+    (= {level3} (head (tail (plist/get level2 :children))))
+    (= {level4} (head (tail (plist/get level3 :children))))
+    (test/assert (nil? (plist/get level4 :children)) "depth capped")
+    (test/assert-eq :dim (plist/get level4 :style) "capped node dimmed")
+    (= {long} (ide/inspect-value {1 2 3 4 5 6 7 8 9 10 11 12}))
+    (= {kids} (plist/get long :children))
+    (test/assert-eq 9 (len kids) "8 items + more marker")
+    (test/assert-eq "+4 more" (plist/get (last kids) :label) "more marker")
+    true
+  })
+
+  (test/case "inspect-encodes-to-json"
+    {do
+    (= {tree} (ide/inspect-value {:xs {1 2} :name "n"}))
+    (= {parsed} (json/parse (json/encode tree)))
+    (test/assert (> (len (plist/get parsed :children)) 0) "json round trip")
+    true
+  })
+
+  (test/case "edit-word-before"
+    {do
+    (= {buf} (foldl (\ {b k} {ide/edit-insert b k}) (ide/edit-new)
+                    {"(" "s" "t" "r" "/" "s" "p"}))
+    (test/assert-eq "str/sp" (ide/edit-word-before buf) "word after paren")
+    (= {buf2} (foldl (\ {b k} {ide/edit-insert b k}) (ide/edit-new) {"a" "SPC"}))
+    (test/assert-eq "" (ide/edit-word-before buf2) "empty at delimiter")
+    true
+  })
+
+  (test/case "repl-literal-plist-self-evaluates"
+    {do
+    (= {r} (ide/repl-eval-raw "main" "{:a 1 :b 2}"))
+    (test/assert (not (error? r)) "literal plist does not error")
+    (test/assert-eq 1 (plist/get r :a) "plist returned as value")
+    (= {r2} (ide/repl-eval-raw "main" "(len {1 2 3})"))
+    (test/assert-eq 3 r2 "qexpr args still work")
+    true
+  })
+
+  (test/case "repl-completions-prefix"
+    {do
+    (ide/repl-ensure-session "main")
+    (ide/repl-eval-raw "main" "(def {my-unique-completion-target} 1)")
+    (= {cands} (ide/repl-completions "my-unique-comp"))
+    (test/assert-eq 1 (len cands) "session binding completes")
+    (test/assert-eq "my-unique-completion-target" (plist/get (head cands) :name)
+      "exact name")
+    (= {root-names} (map (\ {c} {plist/get c :name})
+                         (ide/repl-completions "str/star")))
+    (test/assert (exists "str/starts-with?" root-names) "root builtins complete")
+    true
+  })
+
+  (test/case "tab-completion-flow"
+    {do
+    (ide/register-tool ide/repl-tool)
+    (ide/repl-eval-raw "main" "(def {tabtest-value} 7)")
+    (= {cs} (ide/client-state "tc1"))
+    (ide/set-client-state "tc1" (plist/set cs :focus "repl"))
+    (ide/handle-key "tc1" "i" 0)
+    (map (\ {k} {ide/handle-key "tc1" k 0}) {"(" "t" "a" "b" "t"})
+    (ide/handle-key "tc1" "TAB" 0)
+    (= {buf} (plist/get (ide/tool-state "repl") :buffer))
+    (test/assert-eq "(tabtest-value" (ide/edit-text buf) "unique completion inserted")
+    true
+  })
+
+  (test/case "tab-completion-common-prefix-popup"
+    {do
+    (ide/register-tool ide/repl-tool)
+    (ide/repl-eval-raw "main" "(def {zqx-alpha} 1)")
+    (ide/repl-eval-raw "main" "(def {zqx-beta} 2)")
+    ; reset buffer
+    (ide/dispatch "repl" {:type "eval-start" :text "x"} 0)
+    (ide/dispatch "repl" {:type "eval-result" :out "1" :status "ok"} 0)
+    (= {cs} (ide/client-state "tc2"))
+    (ide/set-client-state "tc2" (plist/set cs :focus "repl"))
+    (ide/handle-key "tc2" "i" 0)
+    (map (\ {k} {ide/handle-key "tc2" k 0}) {"z" "q"})
+    (ide/handle-key "tc2" "TAB" 0)
+    (= {buf} (plist/get (ide/tool-state "repl") :buffer))
+    (test/assert-eq "zqx-" (ide/edit-text buf) "common prefix extended")
+    (= {comps} (plist/get (ide/client-state "tc2") :completions))
+    (test/assert-eq 2 (len comps) "both candidates shown")
+    (ide/handle-key "tc2" "a" 0)
+    (test/assert (nil? (plist/get (ide/client-state "tc2") :completions))
+      "typing clears popup")
+    true
+  }))
+
+  {:suite-name "IDE highlight/inspect/complete"})

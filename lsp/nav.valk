@@ -83,48 +83,57 @@
       {hover/format-markdown info name})}
 })
 
+; Pure core (DESIGN.md section 6): text/position/path/db -> hover result
+; data, or nil when there is nothing under the cursor. No globals, no
+; response sending — the stdio wrapper and the IDE both call this.
+(sig 'hover* {-> Str Num Num Str Ref List})
+(fun {hover* text line col path db} {do
+  (= {offset} (sem/line-col->offset text line col))
+  (= {info} (if (nil? db) {nil}
+    {do (= {r} (symdb/node-at-offset db path offset))
+        (if (error? r) {nil} {r})}))
+  (= {wr} (symdb/word-range-at-position text line col))
+  (= {word} (if (nil? info)
+    {if (nil? wr) {nil} {wr:word}}
+    {plist/get info :name}))
+  (if (nil? word) {nil}
+    {do
+      (= {hover-str} (hover/describe info db path))
+      (= {hover-str} (if (nil? hover-str)
+        {do
+          (= {fallback-info} (if (nil? db) {nil}
+            {symdb/symbol-hover-in db word path}))
+          (if (nil? fallback-info)
+            {str "```valk\n" word "\n```"}
+            {hover/format-markdown fallback-info word})}
+        {hover-str}))
+      (= {start-line} line)
+      (= {start-col} (if (nil? wr) {col} {wr:start}))
+      (= {ntype} (if (nil? info) {nil} {plist/get info :type}))
+      (= {wlen} (if (nil? word) {0}
+        {if (== ntype "str") {+ (len word) 2} {len word}}))
+      (if (not (nil? info))
+        {do
+          (= {node-lc} (offset->line-col text (plist/get info :pos)))
+          (= {start-line} (head node-lc))
+          (= {start-col} (head (tail node-lc)))}
+        {})
+      (list :contents
+        (list :kind "markdown" :value hover-str)
+        :range
+        (list :start (list :line start-line :character start-col)
+              :end (list :line start-line :character (+ start-col wlen))))})
+})
+
 (sig 'handle-hover {-> Num TextDocPosParams Nil})
 (fun {handle-hover id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id (None)}
     {do
-      (= {offset} (sem/line-col->offset ctx:text ctx:line ctx:col))
-      (= {path} (symdb/uri->path ctx:uri))
-      (= {info} (if (nil? lsp/db) {nil}
-        {do (= {r} (symdb/node-at-offset lsp/db path offset))
-            (if (error? r) {nil} {r})}))
-      (= {wr} (symdb/word-range-at-position ctx:text ctx:line ctx:col))
-      (= {word} (if (nil? info)
-        {if (nil? wr) {nil} {wr:word}}
-        {plist/get info :name}))
-      (if (nil? word) {lsp/send-response id (None)}
-        {do
-          (= {hover-str} (hover/describe info lsp/db path))
-          (= {hover-str} (if (nil? hover-str)
-            {do
-              (= {fallback-info} (if (nil? lsp/db) {nil}
-                {symdb/symbol-hover-in lsp/db word path}))
-              (if (nil? fallback-info)
-                {str "```valk\n" word "\n```"}
-                {hover/format-markdown fallback-info word})}
-            {hover-str}))
-          (= {start-line} ctx:line)
-          (= {start-col} (if (nil? wr) {ctx:col} {wr:start}))
-          (= {ntype} (if (nil? info) {nil} {plist/get info :type}))
-          (= {wlen} (if (nil? word) {0}
-            {if (== ntype "str") {+ (len word) 2} {len word}}))
-          (if (not (nil? info))
-            {do
-              (= {node-lc} (offset->line-col ctx:text (plist/get info :pos)))
-              (= {start-line} (head node-lc))
-              (= {start-col} (head (tail node-lc)))}
-            {})
-          (lsp/send-response id
-            (list :contents
-              (list :kind "markdown" :value hover-str)
-              :range
-              (list :start (list :line start-line :character start-col)
-                    :end (list :line start-line :character (+ start-col wlen)))))})})
+      (= {r} (hover* ctx:text ctx:line ctx:col (symdb/uri->path ctx:uri) lsp/db))
+      (if (nil? r)
+        {lsp/send-response id (None)}
+        {lsp/send-response id r})})
 })
 
 ; ---------------------------------------------------------------------------
@@ -399,28 +408,38 @@
                  (if (nil? rk) {0} {rk}))
 })
 
+; Pure core (DESIGN.md section 6): text/position/path/db -> completion item
+; list. No globals, no response sending — the stdio wrapper and the IDE
+; both call this. The in-string / no-doc empty shapes stay in the wrapper
+; because their wire encodings differ.
+(sig 'completion* {-> Str Num Num Str Ref List})
+(fun {completion* text line col path db} {do
+  (= {word} (symdb/word-at-position text line col))
+  (= {prefix} (if (nil? word) {""} {word}))
+  (= {snippet-items} (if (str/starts-with? prefix ":")
+    {nil}
+    {if (== prefix "")
+      {map make-snippet-item lsp/form-snippets}
+      {filter-snippets prefix lsp/form-snippets}}))
+  (= {sym-items} (if (nil? db) {nil}
+    {do
+      (= {syms} (if (== prefix "")
+        {symdb/completion-all-in db path}
+        {symdb/completion-symbols-in db path prefix}))
+      (map make-sym-completion-item (map row->completion-row syms))}))
+  (join snippet-items (if (nil? sym-items) {nil} {sym-items}))
+})
+
 (sig 'handle-completion {-> Num TextDocPosParams Nil})
 (fun {handle-completion id params} {do
   (= {ctx} (lsp/get-text-pos params))
   (if (nil? ctx) {lsp/send-response id nil}
     {if (lsp/in-string? ctx:text ctx:line ctx:col)
       {lsp/send-response id (list :isIncomplete :false :items nil)}
-      {do
-        (= {word} (symdb/word-at-position ctx:text ctx:line ctx:col))
-        (= {prefix} (if (nil? word) {""} {word}))
-        (= {snippet-items} (if (str/starts-with? prefix ":")
-          {nil}
-          {if (== prefix "")
-            {map make-snippet-item lsp/form-snippets}
-            {filter-snippets prefix lsp/form-snippets}}))
-        (= {sym-items} (if (nil? lsp/db) {nil}
-          {do
-            (= {syms} (if (== prefix "")
-              {symdb/completion-all-in lsp/db (symdb/uri->path ctx:uri)}
-              {symdb/completion-symbols-in lsp/db (symdb/uri->path ctx:uri) prefix}))
-            (map make-sym-completion-item (map row->completion-row syms))}))
-        (= {all-items} (join snippet-items (if (nil? sym-items) {nil} {sym-items})))
-        (lsp/send-response id (list :isIncomplete :false :items all-items))}})
+      {lsp/send-response id
+        (list :isIncomplete :false :items
+          (completion* ctx:text ctx:line ctx:col
+                       (symdb/uri->path ctx:uri) lsp/db))}})
 })
 
 ; ---------------------------------------------------------------------------
