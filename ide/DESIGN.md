@@ -806,7 +806,7 @@ Phase 3. Architecture is the Neovide model:
 | 1 | `env/new`, `env/eval`, `env/bindings`, `env/parent` | wrap `valk_lenv_t` as REF; small | 1 | **done** (+ `LENV_FLAG_DEF_BOUNDARY`, GC-traced env refs) |
 | 2 | `proc/spawn` interactive subprocess | uv_spawn + UV_CREATE_PIPE stdio; returns `{:proc :stdin :stdout :stderr :wait}`; `proc/kill`, `proc/wait`, `proc/pid`. Pipes are the shared `valk_pipe_t` (`pipe_internal.h`), so `pipe/write`/`pipe/on-data`/`pipe/close` work unchanged | 2 | **done** (`builtins_proc.c`) |
 | 3 | `VALK_DEBUG_INFO` source positions | decouple from `VALK_COVERAGE` | 2 | **done** (`VALK_SRC_LOC` gate; dev default ON) |
-| 4 | Eval debug hook + breakpoint table + park/resume | `eval.c:498` insertion point; GC-safepoint interaction | 2 | **done** (`runtime/src/debugger.c`; single paused thread v1) |
+| 4 | Eval debug hook + breakpoint table + park/resume | `eval.c:498` insertion point; GC-safepoint interaction | 2 | **done** (`runtime/src/debugger.c`; multi-thread pause: 16 CAS-claimed slots + per-thread step state; `debug/pause` async interrupt) |
 | 5 | Frame walk of continuation stack | expose to debug server | 2 | **done** (snapshot + env refs per frame) |
 | 6 | `fs/watch` | `uv_fs_event` | 4 | open |
 | 7 | h2c/cleartext option for `http2/server-listen` | localhost UX | 0–1 | not needed (mkcert certs from the Makefile are browser-trusted) |
@@ -910,9 +910,10 @@ diff clean, and a UAT-style scripted test where applicable.
   collection while paused; frame envs stay valid). TSAN-clean.
 - **Self-debugging reentrancy**: breakpoints in code the debug server itself
   runs would deadlock. Mitigate by scoping breakpoints to non-debug systems
-  first; full self-debug is a stretch goal. *Still open; v1's
-  single-paused-thread CAS additionally makes a second hit skip through
-  rather than deadlock.*
+  first; full self-debug is a stretch goal. *Still open; the pause-slot
+  CAS makes hits beyond the slot table skip through rather than deadlock,
+  and `/dbg/pause` never pauses its own requester thread — but a
+  breakpoint inside debug-server code still parks the serving thread.*
 - **TLS/browser friction** (phase 0 decision, section 3.5). *Resolved:
   mkcert certs from the Makefile; no browser warnings, no C work.*
 - **symdb concurrent writers** (IDE indexer + external valk-lsp): verify in
@@ -937,8 +938,9 @@ diff clean, and a UAT-style scripted test where applicable.
   ~450ms process-wide pauses with near-zero reclaim. The UI degraded but
   stayed alive (ticks kept flowing). Under normal churn the latency UAT
   holds its 5ms budget with margin. The child-process-session escape hatch
-  is now concretely buildable — it needs exactly `proc/spawn` plus the
-  debug protocol that already exists.
+  is now fully unlocked: `proc/spawn` and the complete debug protocol
+  (including launch+attach in `ide/debugger.valk`) both exist; wiring a
+  child-process session into the session interface is pure Valk work.
 - **Remote keystroke latency**: machine-side key interpretation round-trips
   every keystroke. Acceptable on localhost; over a WAN, insert-mode typing
   will lag. Mitigation is frontend local echo with `ui-patch` confirmation
