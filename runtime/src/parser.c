@@ -68,6 +68,7 @@ void valk_lenv_builtins(valk_lenv_t* env) {
   valk_register_dict_builtins(env);
   valk_register_xml_builtins(env);
   valk_register_pipe_builtins(env);
+  valk_register_proc_builtins(env);
 
   extern void valk_macro_env_init(valk_lenv_t *env);
   valk_macro_env_init(env);

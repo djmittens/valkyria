@@ -1,15 +1,17 @@
 # Valkyria IDE — Design
 
-Status: v3 — implemented through phase 2 core (see section 0)
+Status: v4 — implemented through phase 2 complete (see section 0)
 Scope: architecture for an IDE implemented in Valk, running inside the Valk
 runtime, browser frontend first, native Vulkan frontend later.
 
 ## 0. Implementation status
 
-Phases 0–1 are complete; phase 2's runtime primitives, wire protocol, and
-debugger pane are built, including step-in/over/out (launch/attach of child
-processes remains). Run with `build/valk ide/main.valk` → https://localhost:7777/.
-A demo debug target lives in `ide/demo-target.valk`.
+Phases 0–2 are complete: runtime primitives (including `proc/spawn` and
+multi-thread pause), the full wire protocol (`/dbg/pause`, `/dbg/threads`,
+`/dbg/mem`, `/dbg/aio`, SSE `/dbg/events`), and the debugger/source/watch/
+aio/memory panes, with launch+attach of child Valk processes. Run with
+`build/valk ide/main.valk` → https://localhost:7777/. A demo debug target
+lives in `ide/demo-target.valk` (`SPC d l` launches it).
 
 | Area | Files | Notes |
 |---|---|---|
@@ -20,9 +22,12 @@ A demo debug target lives in `ide/demo-target.valk`.
 | Highlight/inspect | `ide/hl.valk`, `ide/inspect.valk` | sem/* → runs; value trees |
 | LSP engine | `ide/lsp.valk` + `nav/hover*`, `nav/completion*` | pure cores shared with stdio valk-lsp |
 | Cards | `ide/cards.valk` | tiers, stat providers, procedural art seed |
-| Debugger | `ide/debugger.valk`, `stdlib/aio/debug-server.valk` | attach client + pane; DAP-shaped wire |
+| Debugger | `ide/debugger.valk`, `stdlib/aio/debug-server.valk` | attach/launch client + pane, watch table, SSE events; DAP-shaped wire |
+| Source view | `ide/dbg-src.valk` | breakpoint gutter, current-line marker, j/k/b |
+| Target panes | `ide/target.valk` | aio slab/arena topology + memory/GC deltas |
 | UI server | `ide/server.valk`, `ide/web/` | routes, SSE, JS renderer |
-| Runtime (C) | `runtime/src/debugger.c`, `builtins_debug.c`, env builtins in `builtins_env.c` | primitives #1, #3, #4, #5 |
+| Runtime (C) | `runtime/src/debugger.c`, `builtins_debug.c`, `builtins_proc.c`, env builtins in `builtins_env.c` | primitives #1–5; multi-thread pause; `debug/pause` |
+| Streaming client | `aio_http2_client.c` + `aio_http2_client_request.c` | `http2/client-stream` (per-chunk callback; SSE consumption) |
 | Tests | `ide/test/`, `runtime/test/lang/test_{env_builtins,debugger}.valk`, `stdlib/test/test_debug_server.valk` | ~100 tests; latency UAT gates the echo budget |
 
 Key implementation decisions and deviations, recorded inline in the sections
@@ -570,15 +575,24 @@ GET  /dbg/aio          -> aio/systems-json, aio/metrics-json   ; already exist
 The protocol is deliberately DAP-shaped so a thin `valk-dap` adapter can later
 expose it to nvim/VS Code without touching the runtime.
 
-*Implemented (phase 2)*: `stdlib/aio/debug-server.valk` serves everything
-above except `/dbg/pause` and `/dbg/events` (SSE). `POST /dbg/step` takes
+*Implemented (phase 2, complete)*: `stdlib/aio/debug-server.valk` serves
+everything above. `POST /dbg/step` takes
 `{:mode "in"|"over"|"out"}` (default in): step-in pauses at the next
 expression on a different line at any depth; step-over additionally requires
 same-or-shallower call depth (`valk_thread_ctx.call_depth`, snapshotted at
 resume by the stepping thread itself); step-out requires strictly shallower
-depth and ignores the line. The IDE
-polls `/dbg/state` on its tick instead of subscribing to SSE; both are listed
-as remaining work in section 11. `/dbg/frame/N/env` shipped as
+depth and ignores the line. Multiple threads pause concurrently:
+`GET /dbg/threads` lists them and every route takes an optional thread id
+(`?thread=N` on GETs, `{:thread N}` in POST bodies). `POST /dbg/pause`
+records the requester's thread and is consumed by the next *other* thread
+to reach the eval hook, so a single-threaded debug server never pauses
+itself. `GET /dbg/events` is SSE (`state`/`paused`/`resumed` events +
+heartbeats), served per-subscriber by an `aio/interval` poll of the pause
+table — zero cost with no subscribers, no C-side event plumbing. The IDE
+subscribes via `http2/client-stream` and no longer polls on its tick.
+`/dbg/mem` serves gc metrics + heap/arena usage; `/dbg/aio` composes
+`aio/systems-json` with `aio/diagnostics-state-json`. `/dbg/frame/N/env`
+shipped as
 `/dbg/frame/N/bindings`. Frame envs are first-class env refs on the serving
 side, so eval-in-frame and locals are just `env/eval` + `env/bindings` —
 the section 4 builtins doing double duty, no new inspection machinery.
@@ -598,8 +612,11 @@ Runtime details that were only sketches above and are now real
 - sub-expressions share source lines, so resume suppresses re-hits on the
   resume line until the thread reaches a different line; suppression and
   step state are packed into single atomic words (TSAN-clean);
-- v1 pauses one thread at a time; a second thread hitting a breakpoint
-  while one is paused skips through.
+- multiple threads pause concurrently: per-thread pause slots claimed by
+  CAS (16), per-thread step/suppress state claimed once per thread; a
+  thread only skips through when all slots are taken. `debug/threads`
+  lists paused threads; state/frames/frame-env/continue/step take an
+  optional tid.
 
 ### 5.4 Visualization (RAD-debugger-inspired)
 
@@ -622,14 +639,26 @@ All frontend-side, built from the protocol + existing introspection:
 - source pane: file with breakpoint gutter + current-line highlight, semantic
   highlighting from `sem/*` (read-only in phase 2; the real editor is nvim).
 
-*Implemented (phase 2)*: the debugger pane (`ide/debugger.valk`) covers
-attach/detach, the paused banner (`:blink` — the whitelisted use), stack
-table, and frame-0 locals; `SPC d a/q/c/s/n/f` globally plus bare
-`c`/`s`/`n`/`f` (continue, step-in, step-over, step-out — the gdb muscle
-memory promised above) when the pane is focused (pane-scoped commands may
-carry `:run`, so effectful bindings stay pane-keyed). Breakpoints are set from the REPL via
-`(ide/dbg-break file line)` until the source pane exists. Watch table, aio
-topology, memory and profiler panes remain.
+*Implemented (phase 2, complete)*: the debugger pane (`ide/debugger.valk`)
+covers attach/detach/launch/kill, the paused banner (`:blink` — the
+whitelisted use), a threads table when more than one thread is paused,
+stack table, frame-0 locals, a watch table (`(ide/dbg-watch expr)`,
+re-evaluated in frame 0 at every pause), and the child process's captured
+stdout/stderr; `SPC d a/l/k/q/p/c/s/n/f` globally plus bare
+`p`/`c`/`s`/`n`/`f` when the pane is focused (pane-scoped commands may
+carry `:run`, so effectful bindings stay pane-keyed). Pause/resume arrives
+over the `/dbg/events` SSE subscription (parsed by the pure
+`dbg-sse-parse`, reconnecting while attached) — no tick polling. The
+source pane (`ide/dbg-src.valk`) renders the paused file with a
+breakpoint-gutter (`●`), current-line marker (`▶`), semantic highlighting
+via `hl-text-lines`, and `j`/`k`/`b` bindings — breakpoints toggle over
+the wire from the gutter; it follows pauses via `ide/dbg-on-pause` hooks.
+`ide/target.valk` adds the aio topology pane (slab/arena/live-handle state
+from `/dbg/aio`, live handles `:pulse`) and the memory pane (heap/GC
+metrics with allocation deltas per refresh from `/dbg/mem`), sampled on
+the machine tick while attached. Launch (`SPC d l`) spawns
+`build/valk <target>` via `proc/spawn`, pipes output into the pane,
+auto-attaches, and detaches on exit. The profiler pane remains (phase 6).
 
 ### 5.5 Native-code debugging
 
@@ -775,7 +804,7 @@ Phase 3. Architecture is the Neovide model:
 | # | Primitive | Notes | Phase | Status |
 |---|-----------|-------|-------|--------|
 | 1 | `env/new`, `env/eval`, `env/bindings`, `env/parent` | wrap `valk_lenv_t` as REF; small | 1 | **done** (+ `LENV_FLAG_DEF_BOUNDARY`, GC-traced env refs) |
-| 2 | `proc/spawn` interactive subprocess | uv_spawn + UV_CREATE_PIPE stdio; returns `{:proc :stdin :stdout :stderr}` pipes; `proc/kill`, `proc/wait`. Pipe machinery generalizes from `builtins_pipe.c` (fd is already ctx-supplied, `builtins_pipe.c:143`) | 2 | open |
+| 2 | `proc/spawn` interactive subprocess | uv_spawn + UV_CREATE_PIPE stdio; returns `{:proc :stdin :stdout :stderr :wait}`; `proc/kill`, `proc/wait`, `proc/pid`. Pipes are the shared `valk_pipe_t` (`pipe_internal.h`), so `pipe/write`/`pipe/on-data`/`pipe/close` work unchanged | 2 | **done** (`builtins_proc.c`) |
 | 3 | `VALK_DEBUG_INFO` source positions | decouple from `VALK_COVERAGE` | 2 | **done** (`VALK_SRC_LOC` gate; dev default ON) |
 | 4 | Eval debug hook + breakpoint table + park/resume | `eval.c:498` insertion point; GC-safepoint interaction | 2 | **done** (`runtime/src/debugger.c`; single paused thread v1) |
 | 5 | Frame walk of continuation stack | expose to debug server | 2 | **done** (snapshot + env refs per frame) |
@@ -793,7 +822,12 @@ Unplanned runtime work that turned out to be prerequisite:
   (bodies were never captured; `max_request_body_size` was config-only);
 - `http2/client-post` (the client could not send bodies — needed for the
   debug wire client and for testing POST routes in-process);
-- `valk_gc_mark_env_ref` export (first LVAL_REF with a GC payload).
+- `valk_gc_mark_env_ref` export (first LVAL_REF with a GC payload);
+- `http2/client-stream` (phase 2): the client buffered whole responses and
+  completed only on END_STREAM, so nothing could consume an SSE stream.
+  Body chunks now optionally flow to a Lisp callback with the
+  `pipe/on-data` scratch-arena discipline; the request-orchestration half
+  of the client split into `aio_http2_client_request.c`.
 
 ## 11. Phases
 
@@ -839,15 +873,16 @@ diff clean, and a UAT-style scripted test where applicable.
   debugger pane (source view, breakpoints, step, stack, frame env, watch,
   eval-in-frame), launch+attach of child Valk processes. aio topology and
   memory panes.
-  **Core done** (see 5.2–5.4 notes): primitives #3–5, `debug/serve`, wire
-  protocol, attach-based debugger pane with continue/step and live locals,
-  verified end-to-end against a separate process from the browser.
-  Step-over/out landed after the core: `call_depth`-gated step modes in the
-  runtime, `{:mode ...}` on the wire, `n`/`f` pane bindings.
-  Remaining: `proc/spawn` (#2) for launch+attach,
-  `/dbg/pause`, SSE debug events (IDE currently polls on its tick), source
-  pane with breakpoint gutter, watch table, aio topology + memory panes,
-  multi-thread pause.
+  **Done** (see 5.2–5.4 notes): primitives #2–5, `debug/serve`, the full
+  wire protocol (`/dbg/pause`, `/dbg/threads` + per-thread addressing,
+  `/dbg/mem`, `/dbg/aio`, SSE `/dbg/events`), multi-thread pause,
+  attach + launch (`proc/spawn`) of child Valk processes, SSE-pushed
+  pause/resume (no tick polling), source pane with breakpoint gutter,
+  watch table, and the aio topology + memory panes — verified end-to-end
+  against a separate process from the browser. Step-over/out:
+  `call_depth`-gated step modes in the runtime, `{:mode ...}` on the wire,
+  `n`/`f` pane bindings. `http2/client-stream` was the unplanned
+  prerequisite (section 10).
 - **Phase 3 — editor.** `nvim --embed`, msgpack, `:grid` widget, input
   routing, card hover overlay (anchored to grid cells), `ext_popupmenu`
   completion with card detail, theme-generated highlight groups, text-card

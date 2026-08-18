@@ -1,10 +1,20 @@
 ; stdlib/aio/debug-server.valk — the debug wire protocol (ide/DESIGN.md 5.3).
 ; Any Valk app opts in with one line: (debug/serve sys port). The IDE (or
 ; any DAP-shaped client) drives it over HTTP/2 + JSON. Runs on whatever aio
-; system it is given — use a dedicated one so inspection keeps working
-; while application threads are parked at breakpoints.
+; system it is given — use a dedicated (or at least single-threaded-serving)
+; one so inspection keeps working while application threads are parked.
+;
+; Multiple threads may be paused at once; GET /dbg/threads lists them and
+; every route takes an optional thread id (?thread=N on GETs, {:thread N}
+; in POST bodies) to address one. Without it, the first paused thread.
+; GET /dbg/events is an SSE stream of paused/resumed/state events.
+
+(load "stdlib/aio/sse.valk")
 
 (module debug)
+
+(def {events-poll-ms} 60)
+(def {events-heartbeat-ticks} 250)
 
 (fun {_json-resp body}
   {`{:status "200" :content-type "application/json" :body ,body}})
@@ -13,14 +23,44 @@
   {`{:status "400" :content-type "application/json"
      :body ,(json/encode `{:error ,msg})}})
 
-(fun {_state-json} {do
-  (= {st} (debug/state))
+; Optional thread selection: nil means "first paused thread".
+(fun {_state-of tid} {if (nil? tid) {debug/state} {debug/state tid}})
+(fun {_frames-of tid} {if (nil? tid) {debug/frames} {debug/frames tid}})
+(fun {_frame-env-of frame tid}
+  {if (nil? tid) {debug/frame-env frame} {debug/frame-env frame tid}})
+(fun {_continue-of tid} {if (nil? tid) {debug/continue} {debug/continue tid}})
+(fun {_step-of mode tid}
+  {if (nil? tid) {debug/step mode} {debug/step mode tid}})
+
+; ?name=N from a raw path; nil when absent or not a number.
+(fun {_query-num rawpath name} {do
+  (= {parts} (str/split rawpath "?"))
+  (if (< (len parts) 2)
+    {nil}
+    {foldl (\ {acc kv} {do
+      (= {p} (str/split kv "="))
+      (if (and (== (len p) 2) (== (head p) name))
+        {str->num (nth 2 p)}
+        {acc})}) nil (str/split (nth 2 parts) "&")})
+})
+
+(fun {_body-thread msg}
+  {if (or (nil? msg) (not (list? msg)))
+    {nil}
+    {do
+      (= {t} (plist/get msg :thread))
+      (if (num? t) {t} {nil})}})
+
+(fun {_state-json tid} {do
+  (= {st} (_state-of tid))
   (if (nil? st)
-    {json/encode {:paused 0}}
+    {json/encode `{:paused 0 :threads ,(len (debug/threads))}}
     {json/encode `{:paused 1
+                   :tid ,(plist/get st :tid)
                    :file ,(plist/get st :file)
                    :line ,(plist/get st :line)
-                   :expr ,(plist/get st :expr)}})
+                   :expr ,(plist/get st :expr)
+                   :threads ,(len (debug/threads))}})
 })
 
 (fun {_preview v} {do
@@ -28,8 +68,8 @@
   (if (> (len s) 80) {str (str/slice s 0 80) "…"} {s})
 })
 
-(fun {_bindings-json frame} {do
-  (= {env} (debug/frame-env frame))
+(fun {_bindings-json frame tid} {do
+  (= {env} (_frame-env-of frame tid))
   (if (error? env)
     {json/encode {:error "no such frame"}}
     {json/encode
@@ -38,8 +78,8 @@
            (env/bindings env))})
 })
 
-(fun {_eval-in-frame frame expr-text} {do
-  (= {env} (debug/frame-env frame))
+(fun {_eval-in-frame frame expr-text tid} {do
+  (= {env} (_frame-env-of frame tid))
   (if (error? env)
     {json/encode {:error "no such frame"}}
     {do
@@ -74,15 +114,16 @@
     {_json-resp (json/encode `{:ok ,(debug/unbreak (plist/get msg :id))})})
 })
 
-; POST /dbg/step {:mode "in"|"over"|"out"} — mode optional, defaults to in.
+; POST /dbg/step {:mode "in"|"over"|"out" :thread N} — both optional.
 (fun {_handle-step body} {do
   (= {msg} (if (nil? body) {nil} {json/parse body}))
   (= {mode} (if (or (nil? msg) (not (list? msg))) {"in"} {plist/get msg :mode}))
   (= {mode} (if (str? mode) {mode} {"in"}))
+  (= {tid} (_body-thread msg))
   (= {ok} (select
-    {(== mode "over") (debug/step :over)}
-    {(== mode "out") (debug/step :out)}
-    {(== mode "in") (debug/step)}
+    {(== mode "over") (_step-of :over tid)}
+    {(== mode "out") (_step-of :out tid)}
+    {(== mode "in") (_step-of :in tid)}
     {otherwise (error (str "unknown step mode " mode))}))
   (if (error? ok)
     {_err-resp (str ok)}
@@ -96,42 +137,107 @@
     {do
       (= {frame} (plist/get msg :frame))
       (= {frame} (if (num? frame) {frame} {0}))
-      (_json-resp (_eval-in-frame frame (plist/get msg :expr)))})
+      (_json-resp (_eval-in-frame frame (plist/get msg :expr)
+                                  (_body-thread msg)))})
+})
+
+(fun {_handle-continue body} {do
+  (= {msg} (if (nil? body) {nil} {json/parse body}))
+  (_json-resp (json/encode `{:ok ,(_continue-of (_body-thread msg))}))
 })
 
 ; /dbg/frame/N/bindings
-(fun {_frame-route parts} {do
+(fun {_frame-route parts tid} {do
   (= {n} (str->num (nth 3 parts)))
-  (_json-resp (_bindings-json n))
+  (_json-resp (_bindings-json n tid))
 })
 
-(fun {handle-request req} {do
+; GET /dbg/mem — target memory: gc metrics + heap/arena usage.
+(fun {_mem-json}
+  {json/encode `{:heap-used ,(mem/heap/usage)
+                 :arena-used ,(mem/arena/usage)
+                 :gc ,(mem/gc/metrics)}})
+
+; --- /dbg/events (SSE) ------------------------------------------------------
+; Per-subscriber poll of the pause state (the debug-broadcaster pattern):
+; "paused" when a thread pauses or moves, "resumed" when none remain,
+; heartbeats to survive idle sweeps. Zero cost when nobody subscribes.
+
+(fun {_events-payload} {do
+  (= {ths} (debug/threads))
+  (json/encode `{:paused ,(len ths) :threads ,ths})
+})
+
+(fun {_events-handler sys req} {do
+  (= {stream} (sse/open req))
+  (= {last} (dict/new))
+  (dict/set! last "snap" (_events-payload))
+  (dict/set! last "hb" 0)
+  (sse/event stream "state" (dict/get last "snap" ""))
+  (= {timer} (aio/interval sys debug/events-poll-ms (\ {} {
+    (if (== (stream/writable? stream) 0)
+      {:stop}
+      {do
+        (= {now} (_events-payload))
+        (= {prev} (dict/get last "snap" ""))
+        (if (== now prev)
+          {do
+            (dict/set! last "hb" (+ (dict/get last "hb" 0) 1))
+            (if (> (dict/get last "hb" 0) debug/events-heartbeat-ticks)
+              {do (dict/set! last "hb" 0) (sse/heartbeat stream) nil}
+              {nil})}
+          {do
+            (dict/set! last "snap" now)
+            (dict/set! last "hb" 0)
+            (= {name} (if (== (plist/get (json/parse now) :paused) 0)
+              {"resumed"} {"paused"}))
+            (sse/event stream name now)
+            nil})
+        :continue})})))
+  (stream/on-close stream (\ {} {do (aio/cancel timer) nil}))
+  (stream/closed stream)
+})
+
+(fun {handle-request-in sys req} {do
   (= {method} (if (ref? req) {req/method req} {plist/get req :method}))
   (= {method} (if (nil? method) {"GET"} {method}))
   (= {rawpath} (if (ref? req) {req/path req} {plist/get req :path}))
   (= {path} (head (str/split rawpath "?")))
   (= {body} (if (ref? req) {req/body req} {plist/get req :body}))
+  (= {tid} (_query-num rawpath "thread"))
   (select
-    {(== path "/dbg/state") (_json-resp (_state-json))}
-    {(== path "/dbg/stack") (_json-resp (json/encode (debug/frames)))}
+    {(== path "/dbg/state") (_json-resp (_state-json tid))}
+    {(== path "/dbg/threads") (_json-resp (json/encode (debug/threads)))}
+    {(== path "/dbg/stack") (_json-resp (json/encode (_frames-of tid)))}
     {(== path "/dbg/breakpoints")
       (_json-resp (json/encode (debug/breakpoints)))}
+    {(== path "/dbg/mem") (_json-resp (_mem-json))}
+    {(and (== path "/dbg/aio") (not (nil? sys)))
+      (_json-resp (str "{\"metrics\":" (aio/systems-json sys)
+                       ",\"state\":" (aio/diagnostics-state-json sys) "}"))}
+    {(and (== path "/dbg/events") (not (nil? sys)) (ref? req))
+      (_events-handler sys req)}
     {(and (== path "/dbg/break") (== method "POST")) (_handle-break body)}
     {(and (== path "/dbg/unbreak") (== method "POST")) (_handle-unbreak body)}
+    {(and (== path "/dbg/pause") (== method "POST"))
+      (_json-resp (json/encode `{:ok ,(debug/pause)}))}
     {(and (== path "/dbg/continue") (== method "POST"))
-      (_json-resp (json/encode `{:ok ,(debug/continue)}))}
+      (_handle-continue body)}
     {(and (== path "/dbg/step") (== method "POST")) (_handle-step body)}
     {(and (== path "/dbg/eval") (== method "POST")) (_handle-eval body)}
     {(str/starts-with? path "/dbg/frame/")
-      (_frame-route (tail (str/split path "/")))}
+      (_frame-route (tail (str/split path "/")) tid)}
     {otherwise
       `{:status "404" :content-type "application/json"
         :body "{\"error\":\"not found\"}"}})
 })
 
+; Back-compat entry for tests that drive routes without a live system.
+(fun {handle-request req} {handle-request-in nil req})
+
 ; Start the debug endpoint. Enables the debugger and returns the server
 ; handle. One line in any app: (debug/serve sys port)
 (fun {serve sys port} {do
   (debug/enable)
-  (http2/server-listen sys port (\ {req} {debug/handle-request req}))
+  (http2/server-listen sys port (\ {req} {debug/handle-request-in sys req}))
 })

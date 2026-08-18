@@ -312,6 +312,9 @@
 (sig 'http2/client-request-with-headers {-> (Ref aio) Str Num Str (List (List Str)) (Handle (Ref http_response))})
 ; Send HTTP/2 POST request with a body: sys host port path body -> Handle(response).
 (sig 'http2/client-post {-> (Ref aio) Str Num Str Str (Handle (Ref http_response))})
+; Streaming GET: body chunks are delivered to the callback as they arrive
+; (SSE consumption); the handle completes on stream close.
+(sig 'http2/client-stream {-> (Ref aio) Str Num Str Fun (Handle (Ref http_response))})
 ; Get response body as string.
 (sig 'http2/response-body {-> (Ref http_response) Str})
 ; Get response status code as string.
@@ -478,7 +481,13 @@
 (sig 'debug/breakpoints {-> (List (List A))})
 ; 1 while a thread is parked at a breakpoint.
 (sig 'debug/paused? {-> Num})
-; Paused location: {:file Str :line N :expr Str} or nil.
+; Request an async pause: the next expression evaluated by any other
+; debugged thread parks as if it hit a breakpoint.
+(sig 'debug/pause {-> Num})
+; All paused threads as ({:tid N :file Str :line N :expr Str} ...).
+(sig 'debug/threads {-> (List (List A))})
+; Paused location: {:tid N :file Str :line N :expr Str} or nil.
+; Optional arg selects a paused thread by tid.
 (sig 'debug/state {-> (List A)})
 ; Continuation-stack frames of the paused thread, innermost first.
 (sig 'debug/frames {-> (List (List A))})
@@ -684,6 +693,16 @@
 ; === Pipe I/O ===
 
 (sig 'pipe/stdin-open {-> Ref Ref})
+; Spawn an interactive subprocess with piped stdio. Returns
+; {:proc P :stdin Pipe :stdout Pipe :stderr Pipe :wait Handle}; the wait
+; handle completes with {:exit-code N :term-signal N}.
+(sig 'proc/spawn {-> (Ref aio) Str (List A)})
+; Send a signal to the child (default SIGTERM).
+(sig 'proc/kill {-> Ref Nil})
+; The child's exit handle: completes with {:exit-code N :term-signal N}.
+(sig 'proc/wait {-> Ref (Handle (List A))})
+; Child pid (0 until the spawn task has run on the event loop).
+(sig 'proc/pid {-> Ref Num})
 (sig 'pipe/stdout-open {-> Ref Ref})
 (sig 'pipe/write {-> Ref Str Nil})
 (sig 'pipe/lsp-reader {-> Ref Fun Nil})

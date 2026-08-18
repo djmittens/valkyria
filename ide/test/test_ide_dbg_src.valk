@@ -1,0 +1,89 @@
+; Source pane pure core: load/position/cursor/breakpoint gutter rendering.
+; Run with: build/valk ide/test/test_ide_dbg_src.valk
+
+(load "testing/test.valk")
+(load "ide/dbg-src.valk")
+
+(fun {fake-lines n} {
+  map (\ {i} {list `{:t ,(str "line " i) :style :plain}}) (range 1 (+ n 1))
+})
+
+(test/run (list
+
+  (test/case "src-load-and-position"
+    {do
+    (= {st} (ide/src-init))
+    (= {st} (ide/src-update st `{:type "src-loaded" :file "/a.valk"
+                                 :lines ,(fake-lines 30) :line 12}))
+    (test/assert-eq "/a.valk" (plist/get st :file) "file recorded")
+    (test/assert-eq 12 (plist/get st :cur) "exec line recorded")
+    (test/assert-eq 12 (plist/get st :cursor) "cursor follows exec line")
+    (= {st} (ide/src-update st {:type "src-line" :line 13}))
+    (test/assert-eq 13 (plist/get st :cur) "reposition without reload")
+    (= {st} (ide/src-update st {:type "src-line" :line 0}))
+    (test/assert-eq 0 (plist/get st :cur) "resume clears exec marker")
+    (test/assert-eq 13 (plist/get st :cursor) "cursor kept on resume")
+    true
+  })
+
+  (test/case "src-cursor-clamped"
+    {do
+    (= {st} (ide/src-update (ide/src-init)
+      `{:type "src-loaded" :file "/a.valk" :lines ,(fake-lines 5) :line 2}))
+    (= {st} (ide/src-update st {:type "src-cursor" :d -10}))
+    (test/assert-eq 1 (plist/get st :cursor) "clamped at top")
+    (= {st} (ide/src-update st {:type "src-cursor" :d 99}))
+    (test/assert-eq 5 (plist/get st :cursor) "clamped at bottom")
+    true
+  })
+
+  (test/case "src-window-bounds"
+    {do
+    (= {b} (ide/src-window-bounds 1 100))
+    (test/assert-eq 1 (head b) "window starts at 1 for top cursor")
+    (= {b2} (ide/src-window-bounds 50 100))
+    (test/assert-eq ide/src-window (+ (- (head (tail b2)) (head b2)) 1)
+      "window is exactly src-window lines")
+    (= {b3} (ide/src-window-bounds 100 100))
+    (test/assert-eq 100 (head (tail b3)) "window ends at last line")
+    (= {b4} (ide/src-window-bounds 3 5))
+    (test/assert-eq 1 (head b4) "short file starts at 1")
+    (test/assert-eq 5 (head (tail b4)) "short file ends at len")
+    true
+  })
+
+  (test/case "src-gutter-markers"
+    {do
+    (= {st} (ide/src-update (ide/src-init)
+      `{:type "src-loaded" :file "/a.valk" :lines ,(fake-lines 10) :line 4}))
+    (= {st} (ide/src-update st
+      {:type "src-bps" :bps {{:id 1 :file "/a.valk" :line 6}
+                             {:id 2 :file "/other.valk" :line 4}}}))
+    (= {tree} (json/encode (ide/src-view st)))
+    (test/assert (str/contains? tree "●") "breakpoint dot rendered")
+    (test/assert (str/contains? tree "▶") "exec arrow rendered")
+    (= {g6} (json/encode (ide/src-gutter 6 4 1 (list 6))))
+    (test/assert (str/contains? g6 "●") "dot on the bp line")
+    (= {g4} (json/encode (ide/src-gutter 4 4 1 (list 6))))
+    (test/assert (str/contains? g4 "▶") "arrow on the exec line")
+    (= {g5} (json/encode (ide/src-gutter 5 4 1 (list 6))))
+    (test/assert (not (str/contains? g5 "●")) "no dot elsewhere")
+    ; bp in another file does not mark this one
+    (= {bl} (ide/src-bp-lines
+      {{:id 2 :file "/other.valk" :line 4}} "/a.valk"))
+    (test/assert (nil? bl) "other-file breakpoints filtered")
+    true
+  })
+
+  (test/case "src-commands-registered"
+    {do
+    (= {ids} (map (\ {c} {plist/get c :id}) ide/commands))
+    (test/assert (exists "src/toggle-bp" ids) "toggle-bp registered")
+    (test/assert (exists "src/down" ids) "cursor down registered")
+    (test/assert (exists "src/up" ids) "cursor up registered")
+    (= {tb} (ide/get-command "src/toggle-bp"))
+    (test/assert-eq "dbg-src" (plist/get tb :pane) "b is pane-scoped")
+    true
+  }))
+
+  {:suite-name "IDE source pane"})

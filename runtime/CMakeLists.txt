@@ -134,6 +134,7 @@ set(VALKYRIA_SOURCES
   src/builtins_dict.c
   src/builtins_xml.c
   src/builtins_pipe.c
+  src/builtins_proc.c
   src/memory.c
   src/slab.c
   src/memory_os.c
@@ -189,6 +190,7 @@ set(VALKYRIA_SOURCES
   src/aio/http2/aio_http2_conn_fsm.c
   src/aio/http2/aio_http2_server.c
   src/aio/http2/aio_http2_client.c
+  src/aio/http2/aio_http2_client_request.c
   src/aio/http2/aio_http2_session.c
   # HTTP/2 overload management (src/aio/http2/overload/)
   src/aio/http2/overload/aio_overload_admission.c

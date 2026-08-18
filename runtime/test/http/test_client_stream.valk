@@ -1,0 +1,69 @@
+; http2/client-stream — streaming client: response body chunks are delivered
+; to a callback as they arrive; the handle completes on stream close.
+
+(load "testing/test.valk")
+(load "stdlib/aio/sse.valk")
+
+(def {aio} (aio/await (aio/start {:num-threads 2})))
+(def {chunks} (dict/new))
+
+(fun {sleep-ms ms} {aio/await (aio/schedule aio ms (\ {} {1}))})
+
+; Server: one immediate event, one delayed event, then close.
+(def {handler}
+  (\ {req} {do
+    (= {stream} (sse/open req))
+    (stream/write stream "data: first\n\n")
+    (aio/schedule aio 50 (\ {} {do
+      (stream/write stream "data: second\n\n")
+      (aio/schedule aio 50 (\ {} {do (stream/close stream) nil}))
+      nil}))
+    (stream/closed stream)}))
+
+(def {server} (http2/server-listen aio 0 handler))
+(def {port} (http2/server-port server))
+
+(fun {wait-contains key needle tries} {
+  (if (== tries 0)
+    {dict/get chunks key ""}
+    {do
+      (= {buf} (dict/get chunks key ""))
+      (if (str/contains? buf needle)
+        {buf}
+        {do (sleep-ms 20) (wait-contains key needle (- tries 1))})})
+})
+
+(test/run (list
+
+  (test/case "chunks-arrive-incrementally-and-handle-completes"
+    {do
+    (dict/set! chunks "buf" "")
+    (= {h} (http2/client-stream aio "127.0.0.1" port "/events"
+      (\ {chunk} {do
+        (dict/set! chunks "buf" (str (dict/get chunks "buf" "") chunk))
+        nil})))
+    ; first chunk arrives before the stream closes
+    (= {b1} (wait-contains "buf" "data: first" 100))
+    (test/assert (str/contains? b1 "data: first") "first chunk delivered")
+    ; handle completes when the server closes the stream
+    (= {resp} (aio/await h))
+    (test/assert (not (error? resp)) "stream handle completed")
+    (test/assert-eq "200" (http2/response-status resp) "status visible")
+    (= {b2} (dict/get chunks "buf" ""))
+    (test/assert (str/contains? b2 "data: second") "second chunk delivered")
+    (test/assert-eq "" (http2/response-body resp)
+      "streamed body is not buffered in the response")
+    true
+  })
+
+  (test/case "stream-to-unreachable-port-fails"
+    {do
+    (= {h} (http2/client-stream aio "127.0.0.1" 1 "/nope" (\ {c} {nil})))
+    (test/assert (error? (aio/await h)) "connect failure fails the handle")
+    true
+  })
+
+) {:suite-name "http2/client-stream"})
+
+(aio/stop aio)
+(aio/run aio)

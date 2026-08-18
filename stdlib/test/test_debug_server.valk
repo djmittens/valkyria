@@ -46,6 +46,21 @@
         {do (sleep-ms 20) (wait-paused-at-http line (- tries 1))})})
 })
 
+(fun {wait-threads-http n tries} {
+  (if (== tries 0)
+    {len (get-json "/dbg/threads")}
+    {if (== (len (get-json "/dbg/threads")) n)
+      {n}
+      {do (sleep-ms 20) (wait-threads-http n (- tries 1))}})
+})
+
+; Busy work with source positions for the /dbg/pause case.
+(fun {slow-busy n} {
+  (if (== n 0)
+    {42}
+    {slow-busy (- n 1)})
+})
+
 (test/run (list
 
   (test/case "wire-breakpoint-lifecycle"
@@ -137,6 +152,140 @@
     (test/assert (not (nil? (plist/get b :error))) "bad break rejected")
     (= {nf} (get-json "/dbg/nope"))
     (test/assert (not (nil? (plist/get nf :error))) "unknown route 404s")
+    true
+  })
+
+  (test/case "wire-threads-and-per-thread-routes"
+    {do
+    ; two workers pause at the same breakpoint (work-sys3 has 2 dispatch loops)
+    (= {work-sys3} (aio/await (aio/start {:num-threads 3})))
+    (= {r} (post-json "/dbg/break" `{:file ,fixture-path :line 4}))
+    (= {id} (plist/get r :id))
+    (aio/dispatch work-sys3
+      (\ {_} {debug-target-fn 7})
+      nil
+      (\ {res} {do (dict/set! results "th1" res) nil}))
+    (aio/dispatch work-sys3
+      (\ {_} {debug-target-fn 8})
+      nil
+      (\ {res} {do (dict/set! results "th2" res) nil}))
+    (test/assert-eq 2 (wait-threads-http 2 100) "two threads listed over http")
+
+    (= {ths} (get-json "/dbg/threads"))
+    (= {t1} (plist/get (head ths) :tid))
+    (= {t2} (plist/get (head (tail ths)) :tid))
+    (test/assert (not (== t1 t2)) "distinct tids over http")
+
+    (= {st} (get-json (str "/dbg/state?thread=" t2)))
+    (test/assert-eq t2 (plist/get st :tid) "state addressed by thread")
+    (test/assert-eq 2 (plist/get st :threads) "paused-thread count served")
+
+    (= {stack} (get-json (str "/dbg/stack?thread=" t2)))
+    (test/assert-eq "current" (plist/get (head stack) :kind)
+      "stack addressed by thread")
+
+    (= {binds} (get-json (str "/dbg/frame/0/bindings?thread=" t2)))
+    (test/assert (exists "x" (map (\ {b} {plist/get b :name}) binds))
+      "bindings addressed by thread")
+
+    (= {e1} (post-json "/dbg/eval" `{:frame 0 :expr "x" :thread ,t1}))
+    (= {e2} (post-json "/dbg/eval" `{:frame 0 :expr "x" :thread ,t2}))
+    (test/assert (not (== (plist/get e1 :result) (plist/get e2 :result)))
+      "eval-in-frame sees per-thread arguments")
+
+    (= {c1} (post-json "/dbg/continue" `{:thread ,t1}))
+    (test/assert-eq 1 (plist/get c1 :ok) "continue by thread")
+    (test/assert-eq 1 (wait-threads-http 1 100) "one thread remains")
+    (= {c2} (post-json "/dbg/continue" `{:thread ,t2}))
+    (test/assert-eq 1 (plist/get c2 :ok) "continue second thread")
+    (test/assert-eq 0 (wait-threads-http 0 100) "none remain")
+    (sleep-ms 100)
+    (test/assert-eq 24 (dict/get results "th1" nil) "first completed")
+    (test/assert-eq 27 (dict/get results "th2" nil) "second completed")
+    (post-json "/dbg/unbreak" `{:id ,id})
+    (aio/stop work-sys3)
+    (aio/run work-sys3)
+    true
+  })
+
+  (test/case "wire-pause-endpoint"
+    {do
+    (aio/dispatch work-sys
+      (\ {_} {slow-busy 300000})
+      nil
+      (\ {res} {do (dict/set! results "pz" res) nil}))
+    (sleep-ms 30)
+    (= {p} (post-json "/dbg/pause" {:a 0}))
+    (test/assert-eq 1 (plist/get p :ok) "pause accepted over http")
+    (test/assert-eq 1 (wait-paused-http 100) "running thread paused on demand")
+    (= {c} (post-json "/dbg/continue" {:a 0}))
+    (test/assert-eq 1 (plist/get c :ok) "continue after pause")
+    (fun {wait-pz tries} {
+      (if (== tries 0) {nil}
+        {if (== (dict/has? results "pz") 1) {dict/get results "pz" nil}
+          {do (sleep-ms 20) (wait-pz (- tries 1))}})})
+    (test/assert-eq 42 (wait-pz 200) "target ran to completion")
+    true
+  })
+
+  (test/case "plist-request-routing-without-server"
+    {do
+    ; handle-request drives the same routes from a plain plist (unit tests
+    ; and embedders without a live system)
+    (= {resp} (debug/handle-request {:method "GET" :path "/dbg/state"}))
+    (test/assert-eq "200" (plist/get resp :status) "plist request served")
+    (= {st} (json/parse (plist/get resp :body)))
+    (test/assert-eq 0 (plist/get st :paused) "state via plist request")
+    (= {nf} (debug/handle-request {:method "GET" :path "/dbg/aio"}))
+    (test/assert-eq "404" (plist/get nf :status)
+      "system-backed route unavailable without a system")
+    true
+  })
+
+  (test/case "wire-mem-and-aio-introspection"
+    {do
+    (= {m} (get-json "/dbg/mem"))
+    (test/assert (> (plist/get m :heap-used) 0) "heap usage served")
+    (test/assert (num? (plist/get (plist/get m :gc) :cycles))
+      "gc metrics served")
+    (= {resp} (aio/await (http2/client-request dbg-sys "127.0.0.1" dbg-port
+                                               "/dbg/aio")))
+    (test/assert-eq "200" (http2/response-status resp) "aio route serves")
+    (test/assert (str/contains? (http2/response-body resp) "slabs")
+      "aio diagnostics state served")
+    (test/assert (str/contains? (http2/response-body resp) "counters")
+      "aio metrics served")
+    true
+  })
+
+  (test/case "wire-events-sse"
+    {do
+    (dict/set! results "sse-buf" "")
+    (= {h} (http2/client-stream dbg-sys "127.0.0.1" dbg-port "/dbg/events"
+      (\ {chunk} {do
+        (dict/set! results "sse-buf"
+          (str (dict/get results "sse-buf" "") chunk))
+        nil})))
+    (fun {wait-sse needle tries} {
+      (if (== tries 0) {0}
+        {if (str/contains? (dict/get results "sse-buf" "") needle)
+          {1}
+          {do (sleep-ms 20) (wait-sse needle (- tries 1))}})})
+    (test/assert-eq 1 (wait-sse "event: state" 100) "initial state event")
+
+    ; trigger a pause: the events stream must push a paused event
+    (= {r} (post-json "/dbg/break" `{:file ,fixture-path :line 4}))
+    (= {id} (plist/get r :id))
+    (aio/dispatch work-sys
+      (\ {_} {debug-target-fn 9})
+      nil
+      (\ {res} {do (dict/set! results "sse-run" res) nil}))
+    (test/assert-eq 1 (wait-sse "event: paused" 200) "paused event pushed")
+    (test/assert-eq 1 (wait-sse "debug_target" 100) "payload carries location")
+
+    (post-json "/dbg/continue" {:a 0})
+    (test/assert-eq 1 (wait-sse "event: resumed" 200) "resumed event pushed")
+    (post-json "/dbg/unbreak" `{:id ,id})
     true
   }))
 

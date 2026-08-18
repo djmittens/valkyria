@@ -1,0 +1,62 @@
+; Target aio/memory panes pure cores.
+; Run with: build/valk ide/test/test_ide_target.valk
+
+(load "testing/test.valk")
+(load "ide/target.valk")
+
+(def {aio-sample}
+  {:slabs {{:name "tcp_buffers" :used 2 :total 576 :hwm 3 :overflow 0}
+           {:name "handles" :used 5 :total 2056 :hwm 9 :overflow 0}}
+   :arenas {{:name "stream_arenas" :used 1 :capacity 512}}
+   :gc {:heap_used_bytes 1000 :heap_total_bytes 2000}})
+
+(def {mem-sample}
+  {:heap-used 2097152 :arena-used 4096
+   :gc {:cycles 3 :pause-us-max 1500 :reclaimed-bytes 1048576
+        :heap-total 1073741824}})
+
+(test/run (list
+
+  (test/case "aio-pane-renders-slabs-and-handles"
+    {do
+    (= {st} (ide/aio-update (ide/aio-init)
+      `{:type "aio-data" :state ,aio-sample :metrics ,nil}))
+    (= {rows} (ide/aio-slab-rows (plist/get st :state)))
+    (test/assert-eq 2 (len rows) "slab rows")
+    (test/assert-eq "2/576" (head (tail (head rows))) "used/total formatted")
+    (test/assert-eq 5 (ide/aio-live-handles (plist/get st :state))
+      "live handles from the handles slab")
+    (= {tree} (json/encode (ide/aio-view st)))
+    (test/assert (str/contains? tree "live handles 5") "handles line rendered")
+    (test/assert (str/contains? tree ":pulse") "live handles pulse")
+    (= {st2} (ide/aio-update st {:type "detach"}))
+    (test/assert (nil? (plist/get st2 :state)) "detach resets")
+    (test/assert (str/contains? (json/encode (ide/aio-view st2)) "no data")
+      "empty view after detach")
+    true
+  })
+
+  (test/case "mem-pane-deltas"
+    {do
+    (= {st} (ide/mem-update (ide/mem-init) `{:type "mem-data" :mem ,mem-sample}))
+    (= {rows} (ide/mem-rows st))
+    (test/assert-eq "heap used" (head (head rows)) "heap row")
+    (test/assert-eq "2M" (head (tail (head rows))) "bytes humanized")
+    (= {grown} (plist/set mem-sample :heap-used 3145728))
+    (= {st2} (ide/mem-update st `{:type "mem-data" :mem ,grown}))
+    (= {rows2} (ide/mem-rows st2))
+    (test/assert-eq "+1M" (last (head rows2)) "allocation delta vs previous")
+    (test/assert (str/contains? (json/encode (ide/mem-view st2)) "mem-stats")
+      "table rendered")
+    true
+  })
+
+  (test/case "mem-fmt-bytes"
+    {do
+    (test/assert-eq "512" (ide/mem-fmt-bytes 512) "bytes")
+    (test/assert-eq "2K" (ide/mem-fmt-bytes 2048) "kilobytes")
+    (test/assert-eq "3M" (ide/mem-fmt-bytes 3145728) "megabytes")
+    true
+  }))
+
+  {:suite-name "IDE target panes"})

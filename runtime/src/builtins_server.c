@@ -269,6 +269,34 @@ static valk_lval_t* valk_builtin_http2_client_post(valk_lenv_t* e,
                                              nullptr, body_arg->str);
 }
 
+static valk_lval_t* valk_builtin_http2_client_stream(valk_lenv_t* e,
+                                                     valk_lval_t* a) {
+  // LCOV_EXCL_BR_START - arg validation: type dispatch branches
+  LVAL_ASSERT_COUNT_EQ(a, a, 5);
+
+  valk_lval_t* aio_ref = valk_lval_list_nth(a, 0);
+  LVAL_ASSERT_AIO_SYSTEM(a, aio_ref);
+
+  valk_lval_t* host_arg = valk_lval_list_nth(a, 1);
+  LVAL_ASSERT_TYPE(a, host_arg, LVAL_STR);
+
+  valk_lval_t* port_arg = valk_lval_list_nth(a, 2);
+  LVAL_ASSERT_TYPE(a, port_arg, LVAL_NUM);
+
+  valk_lval_t* path_arg = valk_lval_list_nth(a, 3);
+  LVAL_ASSERT_TYPE(a, path_arg, LVAL_STR);
+
+  valk_lval_t* cb_arg = valk_lval_list_nth(a, 4);
+  LVAL_ASSERT_TYPE(a, cb_arg, LVAL_FUN);
+  // LCOV_EXCL_BR_STOP
+
+  valk_aio_system_t* sys = aio_ref->ref.ptr;
+
+  return valk_http2_client_stream_impl(e, sys, host_arg->str,
+                                       (int)port_arg->num, path_arg->str,
+                                       cb_arg);
+}
+
 // LCOV_EXCL_START - unused API: http2/connect is registered but never called
 static void valk_http2_connect_done_callback(valk_async_handle_t* handle, void* ctx_ptr) {
   VALK_GC_SAFE_POINT();
@@ -346,6 +374,8 @@ void valk_register_server_builtins(valk_lenv_t* env) {
                         valk_builtin_http2_client_request_with_headers);
   valk_lenv_put_builtin(env, "http2/client-post",
                         valk_builtin_http2_client_post);
+  valk_lenv_put_builtin(env, "http2/client-stream",
+                        valk_builtin_http2_client_stream);
   valk_lenv_put_builtin(env, "http2/connect",
                         valk_builtin_http2_connect);
 }

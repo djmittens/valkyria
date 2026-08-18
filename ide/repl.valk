@@ -142,8 +142,8 @@
 })
 
 (fun {repl-row-detail r} {do
-  (= {sig} (plist/get r :sig))
-  (if (str? sig) {sig} {""})
+  (= {s} (plist/get r :sig))
+  (if (str? s) {s} {""})
 })
 
 ; Completion candidates as {:name :detail} plists: workspace symdb rows

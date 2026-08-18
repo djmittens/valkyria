@@ -83,6 +83,77 @@
     true
   })
 
+  (test/case "sse-parse-blocks-and-remainder"
+    {do
+    (= {r} (ide/dbg-sse-parse "event: paused\ndata: {\"paused\":1}\n\nevent: res"))
+    (test/assert-eq 1 (len (plist/get r :events)) "one complete event")
+    (= {ev} (head (plist/get r :events)))
+    (test/assert-eq "paused" (plist/get ev :event) "event name parsed")
+    (test/assert-eq "{\"paused\":1}" (plist/get ev :data) "data parsed")
+    (test/assert-eq "event: res" (plist/get r :rest) "tail buffered")
+    (= {r2} (ide/dbg-sse-parse "partial"))
+    (test/assert (nil? (plist/get r2 :events)) "no events in partial")
+    (test/assert-eq "partial" (plist/get r2 :rest) "partial kept")
+    ; heartbeat comments produce no events
+    (= {r3} (ide/dbg-sse-parse ":\n\nevent: resumed\ndata: {\"paused\":0}\n\n"))
+    (= {names} (map (\ {e} {plist/get e :event}) (plist/get r3 :events)))
+    (test/assert-eq 1 (len names) "comment block skipped, event kept")
+    (test/assert-eq "resumed" (head names) "resumed parsed")
+    true
+  })
+
+  (test/case "watch-table-updates"
+    {do
+    (= {st} (ide/dbg-init))
+    (= {st} (ide/dbg-update st {:type "watch-add" :expr "(+ x 1)"}))
+    (= {st} (ide/dbg-update st {:type "watch-add" :expr "a"}))
+    (test/assert-eq 2 (len (plist/get st :watches)) "two watches")
+    (= {st} (ide/dbg-update st {:type "watch-val" :idx 1 :val "42"}))
+    (= {rows} (ide/dbg-watch-rows (plist/get st :watches)))
+    (test/assert-eq "?" (last (head rows)) "unresolved watch shows ?")
+    (test/assert-eq "42" (last (head (tail rows))) "watch value updated")
+    (= {tree} (json/encode (ide/dbg-view st)))
+    (test/assert (str/contains? tree "dbg-watch") "watch table rendered")
+    (= {st} (ide/dbg-update st {:type "watch-clear"}))
+    (test/assert (nil? (plist/get st :watches)) "watches cleared")
+    true
+  })
+
+  (test/case "output-ring-and-proc-state"
+    {do
+    (= {st} (ide/dbg-init))
+    (= {st} (foldl (\ {s n} {ide/dbg-update s `{:type "dbg-out"
+                                                :line ,(str "line" n)}})
+                   st (range 1 11)))
+    (test/assert-eq 8 (len (plist/get st :out)) "output ring capped at 8")
+    (test/assert-eq "line3" (head (plist/get st :out)) "oldest dropped")
+    (= {st} (ide/dbg-update st {:type "proc-state" :running 1}))
+    (test/assert (str/contains? (json/encode (ide/dbg-view st)) "[child]")
+      "child marker rendered")
+    true
+  })
+
+  (test/case "threads-in-state-and-view"
+    {do
+    (= {st} (ide/dbg-update (ide/dbg-init)
+      `{:type "dbg-state" :paused 1 :tid 3 :file "/a.valk" :line 4 :expr "(f)"
+        :threads {{:tid 3 :file "/a.valk" :line 4 :expr "(f)"}
+                  {:tid 5 :file "/a.valk" :line 4 :expr "(g)"}}}))
+    (test/assert-eq 2 (len (plist/get st :threads)) "threads stored")
+    (test/assert-eq 3 (plist/get st :tid) "first tid recorded")
+    (test/assert (str/contains? (json/encode (ide/dbg-view st)) "dbg-threads")
+      "threads table rendered when more than one")
+    ; events payload -> dispatchable state event
+    (= {sev} (ide/dbg-state-event
+      {:paused 1 :threads {{:tid 7 :file "/b.valk" :line 9 :expr "(h)"}}}))
+    (test/assert-eq 1 (plist/get sev :paused) "paused from payload")
+    (test/assert-eq 7 (plist/get sev :tid) "tid from payload")
+    (test/assert-eq 9 (plist/get sev :line) "line from payload")
+    (= {sev2} (ide/dbg-state-event {:paused 0 :threads ()}))
+    (test/assert-eq 0 (plist/get sev2 :paused) "resumed payload")
+    true
+  })
+
   (test/case "live-attach-pause-inspect-continue"
     {do
     (ide/register-tool ide/debugger-tool)
@@ -110,6 +181,16 @@
     (= {names} (map (\ {b} {head b}) (ide/dbg-bind-rows (plist/get st2 :binds))))
     (test/assert (exists "x" names) "bindings in tool state")
 
+    ; watch helper: evaluated in frame 0 while paused
+    (ide/dbg-watch "(* x 2)")
+    (sleep-ms 300)
+    (= {ws} (plist/get (ide/tool-state "debugger") :watches))
+    (test/assert-eq 1 (len ws) "watch registered")
+    (test/assert-eq "10" (plist/get (head ws) :val) "watch evaluated in frame")
+    (ide/dbg-unwatch)
+    (test/assert (nil? (plist/get (ide/tool-state "debugger") :watches))
+      "watches cleared")
+
     ; continue via the wire client
     (ide/dbg-post "/dbg/continue" {:a 0})
     (sleep-ms 300)
@@ -117,10 +198,52 @@
     (ide/dbg-detach)
     (debug/disable)
     true
+  })
+
+  ; the /dbg/events subscription pushes pause/resume into the tool state
+  ; with zero client-side polling
+  (test/case "live-sse-push-without-polling"
+    {do
+    ; clean slate: clear breakpoints left by earlier cases
+    (map (\ {b} {do (debug/unbreak (plist/get b :id)) nil})
+         (debug/breakpoints))
+    (debug/enable)
+    (ide/dbg-attach "127.0.0.1" dbg-port)
+    (sleep-ms 200)
+    (ide/dbg-break fixture-path 5)
+    (sleep-ms 100)
+    (aio/dispatch work-sys
+      (\ {_} {debug-target-fn 6})
+      nil
+      (\ {r} {do (dict/set! results "sse-live" r) nil}))
+    (fun {wait-pushed tries} {
+      (if (== tries 0)
+        {0}
+        {if (== (plist/get (ide/tool-state "debugger") :paused) 1)
+          {1}
+          {do (sleep-ms 30) (wait-pushed (- tries 1))}})})
+    (test/assert-eq 1 (wait-pushed 100) "pause pushed over SSE, no polling")
+    (test/assert-eq 5 (plist/get (ide/tool-state "debugger") :line)
+      "pushed state carries the line")
+    (debug/continue)
+    (fun {wait-resumed tries} {
+      (if (== tries 0)
+        {0}
+        {if (== (plist/get (ide/tool-state "debugger") :paused) 0)
+          {1}
+          {do (sleep-ms 30) (wait-resumed (- tries 1))}})})
+    (test/assert-eq 1 (wait-resumed 100) "resume pushed over SSE")
+    (sleep-ms 100)
+    (test/assert-eq 21 (dict/get results "sse-live" nil) "target completed: 7+14")
+    (ide/dbg-detach)
+    (debug/disable)
+    true
   }))
 
   {:suite-name "IDE debugger"})
 
+; resume anything a failed case may have left parked before joining threads
+(debug/disable)
 (aio/stop work-sys)
 (aio/run work-sys)
 (aio/stop ui-sys)

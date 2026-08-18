@@ -7,16 +7,9 @@
 #include "aio/aio.h"
 #include "aio/aio_internal.h"
 #include "gc.h"
+#include "pipe_internal.h"
 
 #define PIPE_READ_BUF_INIT 4096
-
-typedef struct valk_pipe {
-  uv_pipe_t uv;
-  valk_aio_system_t *sys;
-  valk_handle_t callback_handle;
-  bool callback_set;
-  bool closed;
-} valk_pipe_t;
 
 typedef struct {
   uv_write_t req;

@@ -6,6 +6,8 @@
 (load "ide/status.valk")
 (load "ide/repl.valk")
 (load "ide/debugger.valk")
+(load "ide/dbg-src.valk")
+(load "ide/target.valk")
 (load "ide/server.valk")
 
 (def {ide-port} 7777)
@@ -27,14 +29,19 @@
 (ide/register-tool ide/status-tool)
 (ide/register-tool ide/repl-tool)
 (ide/register-tool ide/debugger-tool)
+(ide/register-tool ide/dbg-src-tool)
+(ide/register-tool ide/dbg-aio-tool)
+(ide/register-tool ide/dbg-mem-tool)
 (ide/repl-ensure-session "main")
 (ide/dispatch "status" (ide/status-sample) 0)
 
 (http2/server-listen ui-sys ide-port (\ {req} {ide/handle-request req}))
 
+; Pause/resume arrives over the /dbg/events SSE subscription (ide/debugger);
+; the tick only samples machine status and target aio/mem panes.
 (aio/interval ui-sys (ide/config-get "tick-ms" 1000) (\ {} {do
   (ide/dispatch "status" (ide/status-sample) 0)
-  (ide/dbg-poll)
+  (ide/target-tick)
   :continue}))
 
 (printf "valk-ide listening on https://localhost:%d\n" ide-port)

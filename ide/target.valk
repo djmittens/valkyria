@@ -1,0 +1,162 @@
+; ide/target.valk — aio topology + memory panes for the attached debug
+; target (DESIGN.md 5.4): slab/arena/handle state from /dbg/aio, GC metrics
+; and allocation deltas from /dbg/mem. Refreshed on the machine tick while
+; attached.
+
+(load "ide/debugger.valk")
+
+(module ide)
+
+; --- aio topology pane (pure core) ------------------------------------------
+
+(fun {aio-init} {`{:state ,nil :metrics ,nil :err ""}})
+
+(fun {aio-update state event} {do
+  (= {etype} (plist/get event :type))
+  (select
+    {(== etype "aio-data")
+      (plist/set (plist/set (plist/set state
+        :state (plist/get event :state))
+        :metrics (plist/get event :metrics))
+        :err "")}
+    {(== etype "aio-err")
+      (plist/set state :err (plist/get event :err))}
+    {(== etype "detach") (aio-init)}
+    {otherwise state})
+})
+
+(fun {aio-slab-rows st} {
+  map (\ {s} {list (plist/get s :name)
+                   (str (plist/get s :used) "/" (plist/get s :total))
+                   (str (plist/get s :hwm))
+                   (str (plist/get s :overflow))})
+      (if (nil? st) {nil} {plist/get st :slabs})
+})
+
+(fun {aio-arena-rows st} {
+  map (\ {s} {list (plist/get s :name)
+                   (str (plist/get s :used) "/" (plist/get s :capacity))})
+      (if (nil? st) {nil} {plist/get st :arenas})
+})
+
+(fun {aio-live-handles st} {do
+  (= {handles} (filter (\ {s} {== (plist/get s :name) "handles"})
+                       (if (nil? st) {nil} {plist/get st :slabs})))
+  (if (nil? handles) {0} {plist/get (head handles) :used})
+})
+
+(fun {aio-view state} {do
+  (= {st} (plist/get state :state))
+  (= {srows} (aio-slab-rows st))
+  (= {arows} (aio-arena-rows st))
+  (= {live} (aio-live-handles st))
+  (= {err-w} (if (== (plist/get state :err) "")
+    {nil}
+    {list `{:w :text :runs {{:t ,(plist/get state :err) :style :error}}}}))
+  (= {body} (if (nil? st)
+    {list {:w :text :runs {{:t "no data  (attach a target)" :style :dim}}}}
+    {join
+      (list
+        `{:w :text
+          :runs {{:t ,(str "live handles " live)
+                  :style :ok
+                  :effect ,(if (> live 0) {:pulse} {:none})}}}
+        {:w :divider}
+        `{:w :text :runs {{:t "slabs" :style :keyword}}}
+        `{:w :table :id "aio-slabs"
+          :cols {"slab" "used" "hwm" "ovf"} :rows ,srows})
+      (if (nil? arows) {nil}
+        {list {:w :divider}
+              `{:w :text :runs {{:t "arenas" :style :keyword}}}
+              `{:w :table :id "aio-arenas"
+                :cols {"arena" "used"} :rows ,arows}})}))
+  `{:w :panel :id "dbg-aio" :title "TARGET AIO"
+    :children ,(join err-w body)}
+})
+
+; --- memory pane (pure core) --------------------------------------------------
+
+(fun {mem-init} {`{:mem ,nil :prev ,nil :err ""}})
+
+(fun {mem-update state event} {do
+  (= {etype} (plist/get event :type))
+  (select
+    {(== etype "mem-data")
+      (plist/set (plist/set (plist/set state
+        :prev (plist/get state :mem))
+        :mem (plist/get event :mem))
+        :err "")}
+    {(== etype "mem-err")
+      (plist/set state :err (plist/get event :err))}
+    {(== etype "detach") (mem-init)}
+    {otherwise state})
+})
+
+(fun {mem-fmt-bytes n} {
+  (if (>= n 1048576)
+    {str (/ n 1048576) "M"}
+    {if (>= n 1024) {str (/ n 1024) "K"} {str n}})
+})
+
+(fun {mem-delta cur prev} {do
+  (= {d} (- cur prev))
+  (select
+    {(> d 0) (str "+" (mem-fmt-bytes d))}
+    {(< d 0) (str "-" (mem-fmt-bytes (- 0 d)))}
+    {otherwise ""})
+})
+
+(fun {mem-rows state} {do
+  (= {m} (plist/get state :mem))
+  (= {p} (plist/get state :prev))
+  (= {gc} (plist/get m :gc))
+  (= {pgc} (if (nil? p) {nil} {plist/get p :gc}))
+  (= {heap} (plist/get m :heap-used))
+  (= {pheap} (if (nil? p) {heap} {plist/get p :heap-used}))
+  (list
+    (list "heap used" (mem-fmt-bytes heap) (mem-delta heap pheap))
+    (list "heap total" (mem-fmt-bytes (plist/get gc :heap-total)) "")
+    (list "arena used" (mem-fmt-bytes (plist/get m :arena-used)) "")
+    (list "gc cycles" (str (plist/get gc :cycles))
+          (if (nil? pgc) {""}
+              {mem-delta (plist/get gc :cycles) (plist/get pgc :cycles)}))
+    (list "pause max" (str (/ (plist/get gc :pause-us-max) 1000) "ms") "")
+    (list "reclaimed" (mem-fmt-bytes (plist/get gc :reclaimed-bytes)) ""))
+})
+
+(fun {mem-view state} {
+  `{:w :panel :id "dbg-mem" :title "TARGET MEMORY"
+    :children
+    {,@(if (nil? (plist/get state :mem))
+       {list {:w :text :runs {{:t "no data  (attach a target)" :style :dim}}}}
+       {list `{:w :table :id "mem-stats"
+               :cols {"metric" "value" "delta"}
+               :rows ,(mem-rows state)}})}}
+})
+
+; --- impure refresh (called from the machine tick) ---------------------------
+
+(fun {target-tick} {do
+  (if (nil? (ide/dbg-target))
+    {nil}
+    {do
+      (ide/dbg-get "/dbg/aio" (\ {r} {do
+        (ide/dispatch "dbg-aio"
+          `{:type "aio-data"
+            :state ,(plist/get r :state)
+            :metrics ,(plist/get r :metrics)} 0)
+        nil}))
+      (ide/dbg-get "/dbg/mem" (\ {m} {do
+        (ide/dispatch "dbg-mem" `{:type "mem-data" :mem ,m} 0)
+        nil}))
+      nil})
+  nil
+})
+
+(def {dbg-aio-tool}
+  `{:id "dbg-aio" :title "TARGET AIO"
+    :init ,aio-init :update ,aio-update :view ,aio-view})
+
+(def {dbg-mem-tool}
+  `{:id "dbg-mem" :title "TARGET MEMORY"
+    :init ,mem-init :update ,mem-update :view ,mem-view})

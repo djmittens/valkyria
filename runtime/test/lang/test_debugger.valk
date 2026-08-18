@@ -50,6 +50,21 @@
         {do (sleep-ms 20) (wait-paused-not-at line (- tries 1))})})
 })
 
+(fun {wait-threads n tries} {
+  (if (== tries 0)
+    {len (debug/threads)}
+    {if (== (len (debug/threads)) n)
+      {n}
+      {do (sleep-ms 20) (wait-threads n (- tries 1))}})
+})
+
+; Busy work with source positions so a pause request can land in it.
+(fun {busy-countdown n} {
+  (if (== n 0)
+    {42}
+    {busy-countdown (- n 1)})
+})
+
 (test/run (list
 
   (test/case "breakpoint-set-and-list"
@@ -207,6 +222,90 @@
     (test/assert (error? (debug/step :sideways)) "unknown mode rejected")
     (test/assert-eq 0 (debug/step :over) "step-over refused when not paused")
     (test/assert-eq 0 (debug/step :out) "step-out refused when not paused")
+    true
+  })
+
+  (test/case "multi-thread-pause"
+    {do
+    ; two workers need two dispatch loops -> 3-thread system
+    (= {aio3} (aio/await (aio/start {:num-threads 3})))
+    (debug/enable)
+    (= {id} (debug/break fixture-path 4))
+    (aio/dispatch aio3
+      (\ {_} {debug-target-fn 10})
+      nil
+      (\ {r} {do (dict/set! results "mt1" r) nil}))
+    (aio/dispatch aio3
+      (\ {_} {debug-target-fn 20})
+      nil
+      (\ {r} {do (dict/set! results "mt2" r) nil}))
+    (test/assert-eq 2 (wait-threads 2 100) "two threads paused at once")
+
+    (= {ths} (debug/threads))
+    (= {t1} (plist/get (head ths) :tid))
+    (= {t2} (plist/get (head (tail ths)) :tid))
+    (test/assert (not (== t1 t2)) "distinct thread ids")
+    (test/assert-eq 4 (plist/get (debug/state t1) :line) "thread 1 at line 4")
+    (test/assert-eq 4 (plist/get (debug/state t2) :line) "thread 2 at line 4")
+
+    ; per-thread frame envs see per-thread arguments
+    (= {x1} (env/eval (debug/frame-env 0 t1) {eval x}))
+    (= {x2} (env/eval (debug/frame-env 0 t2) {eval x}))
+    (test/assert (or (and (== x1 10) (== x2 20))
+                     (and (== x1 20) (== x2 10)))
+      "each paused thread sees its own argument")
+
+    ; per-thread frames
+    (test/assert-eq "current" (plist/get (head (debug/frames t1)) :kind)
+      "frames addressable by tid")
+
+    ; resume one; the other stays paused
+    (test/assert-eq 1 (debug/continue t1) "resume thread 1")
+    (test/assert-eq 1 (wait-threads 1 100) "one thread still paused")
+    (test/assert (not (nil? (debug/state t2))) "thread 2 still paused")
+    (test/assert-eq 1 (debug/continue t2) "resume thread 2")
+    (test/assert-eq 0 (wait-threads 0 100) "no threads paused")
+
+    (= {r1} (wait-result "mt1" 100))
+    (= {r2} (wait-result "mt2" 100))
+    (test/assert-eq 33 r1 "first target completed")
+    (test/assert-eq 63 r2 "second target completed")
+    (debug/unbreak id)
+    (debug/disable)
+    (aio/stop aio3)
+    (aio/run aio3)
+    true
+  })
+
+  (test/case "pause-request-interrupts-running-thread"
+    {do
+    (debug/enable)
+    (aio/dispatch aio
+      (\ {_} {busy-countdown 500000})
+      nil
+      (\ {r} {do (dict/set! results "pr1" r) nil}))
+    (sleep-ms 30)
+    (test/assert-eq 1 (debug/pause) "pause request accepted")
+    (test/assert-eq 1 (wait-paused 100) "running thread parked on request")
+    (= {st} (debug/state))
+    (test/assert (not (nil? st)) "state available while pause-parked")
+    (test/assert (>= (plist/get st :tid) 0) "paused thread has a tid")
+    (test/assert-eq 1 (debug/continue) "resume after pause")
+    (test/assert-eq 42 (wait-result "pr1" 200) "target ran to completion")
+    (debug/disable)
+    true
+  })
+
+  (test/case "pause-request-not-consumed-by-requester"
+    {do
+    (debug/enable)
+    (test/assert-eq 1 (debug/pause) "pause request accepted")
+    ; this thread keeps evaluating: it must NOT consume its own request
+    (= {acc} (foldl (\ {a b} {+ a b}) 0 (list 1 2 3 4 5)))
+    (test/assert-eq 15 acc "requester kept running")
+    (test/assert-eq 0 (debug/paused?) "requester never paused")
+    (debug/disable)
+    (test/assert-eq 0 (debug/paused?) "disable clears pending request")
     true
   })
 

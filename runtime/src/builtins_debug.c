@@ -6,6 +6,15 @@
 
 #ifdef VALK_SRC_LOC
 
+// Optional trailing thread-id argument shared by the inspection builtins:
+// absent means "the first paused thread" (tid -1).
+static i64 __opt_tid(valk_lval_t* a, u64 pos) {
+  if (valk_lval_list_count(a) <= pos) return -1;
+  valk_lval_t* t = valk_lval_list_nth(a, pos);
+  if (LVAL_TYPE(t) != LVAL_NUM) return -1;
+  return t->num;
+}
+
 static valk_lval_t* valk_builtin_debug_enable(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
@@ -59,27 +68,38 @@ static valk_lval_t* valk_builtin_debug_paused(valk_lenv_t* e, valk_lval_t* a) {
   return valk_lval_num(valk_debug_paused() ? 1 : 0);
 }
 
-static valk_lval_t* valk_builtin_debug_state(valk_lenv_t* e, valk_lval_t* a) {
+static valk_lval_t* valk_builtin_debug_pause(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
   UNUSED(a);
-  return valk_debug_state();
+  valk_debug_pause_request();
+  return valk_lval_num(1);
+}
+
+static valk_lval_t* valk_builtin_debug_threads(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  UNUSED(a);
+  return valk_debug_threads();
+}
+
+static valk_lval_t* valk_builtin_debug_state(valk_lenv_t* e, valk_lval_t* a) {
+  UNUSED(e);
+  return valk_debug_state_tid(__opt_tid(a, 0));
 }
 
 static valk_lval_t* valk_builtin_debug_frames(valk_lenv_t* e, valk_lval_t* a) {
   UNUSED(e);
-  UNUSED(a);
-  return valk_debug_frames();
+  return valk_debug_frames_tid(__opt_tid(a, 0));
 }
 
 static valk_lval_t* valk_builtin_debug_frame_env(valk_lenv_t* e,
                                                  valk_lval_t* a) {
   UNUSED(e);
   // LCOV_EXCL_BR_START - arg validation
-  LVAL_ASSERT_COUNT_EQ(a, a, 1);
+  LVAL_ASSERT_COUNT_GE(a, a, 1);
   valk_lval_t* idx = valk_lval_list_nth(a, 0);
   LVAL_ASSERT_TYPE(a, idx, LVAL_NUM);
   // LCOV_EXCL_BR_STOP
-  valk_lenv_t* env = valk_debug_frame_env((u64)idx->num);
+  valk_lenv_t* env = valk_debug_frame_env_tid(__opt_tid(a, 1), (u64)idx->num);
   if (env == NULL) {
     return valk_lval_err("debug/frame-env: no frame %li (paused? %d)",
                          idx->num, valk_debug_paused() ? 1 : 0);
@@ -90,8 +110,9 @@ static valk_lval_t* valk_builtin_debug_frame_env(valk_lenv_t* e,
 static valk_lval_t* valk_builtin_debug_continue(valk_lenv_t* e,
                                                 valk_lval_t* a) {
   UNUSED(e);
-  UNUSED(a);
-  return valk_lval_num(valk_debug_resume(VALK_DEBUG_RESUME_CONTINUE) ? 1 : 0);
+  i64 tid = __opt_tid(a, 0);
+  return valk_lval_num(
+      valk_debug_resume_tid(tid, VALK_DEBUG_RESUME_CONTINUE) ? 1 : 0);
 }
 
 static valk_lval_t* valk_builtin_debug_step(valk_lenv_t* e, valk_lval_t* a) {
@@ -112,7 +133,7 @@ static valk_lval_t* valk_builtin_debug_step(valk_lenv_t* e, valk_lval_t* a) {
       return valk_lval_err("debug/step: unknown mode %s", m->str);
     }
   }
-  return valk_lval_num(valk_debug_resume(mode) ? 1 : 0);
+  return valk_lval_num(valk_debug_resume_tid(__opt_tid(a, 1), mode) ? 1 : 0);
 }
 
 #endif
@@ -125,6 +146,8 @@ void valk_register_debug_builtins(valk_lenv_t* env) {
   valk_lenv_put_builtin(env, "debug/unbreak", valk_builtin_debug_unbreak);
   valk_lenv_put_builtin(env, "debug/breakpoints", valk_builtin_debug_breakpoints);
   valk_lenv_put_builtin(env, "debug/paused?", valk_builtin_debug_paused);
+  valk_lenv_put_builtin(env, "debug/pause", valk_builtin_debug_pause);
+  valk_lenv_put_builtin(env, "debug/threads", valk_builtin_debug_threads);
   valk_lenv_put_builtin(env, "debug/state", valk_builtin_debug_state);
   valk_lenv_put_builtin(env, "debug/frames", valk_builtin_debug_frames);
   valk_lenv_put_builtin(env, "debug/frame-env", valk_builtin_debug_frame_env);

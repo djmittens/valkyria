@@ -1,0 +1,195 @@
+; ide/dbg-src.valk — read-only source pane with breakpoint gutter and
+; current-line highlight (DESIGN.md 5.4). Follows the debugger's pause events
+; via ide/dbg-on-pause; j/k move the cursor, b toggles a breakpoint on the
+; cursor line over the wire.
+
+(load "ide/debugger.valk")
+(load "ide/hl.valk")
+
+(module ide)
+
+(def {src-window} 20)
+
+; --- pure tool core ---------------------------------------------------------
+
+(fun {src-init} {
+  `{:file "" :lines ,nil :cur 0 :cursor 1 :bps ,nil :err ""}
+})
+
+(fun {src-clamp n lo hi} {
+  (if (< n lo) {lo} {if (> n hi) {hi} {n}})
+})
+
+(fun {src-update state event} {do
+  (= {etype} (plist/get event :type))
+  (select
+    {(== etype "src-loaded")
+      (do
+        (= {line} (plist/get event :line))
+        (plist/set (plist/set (plist/set (plist/set (plist/set state
+          :file (plist/get event :file))
+          :lines (plist/get event :lines))
+          :cur line)
+          :cursor (if (> line 0) {line} {1}))
+          :err ""))}
+    {(== etype "src-line")
+      (do
+        (= {line} (plist/get event :line))
+        (plist/set (plist/set state :cur line)
+          :cursor (if (> line 0) {line}
+                      {plist/get state :cursor})))}
+    {(== etype "src-bps") (plist/set state :bps (plist/get event :bps))}
+    {(== etype "src-cursor")
+      (plist/set state :cursor
+        (src-clamp (+ (plist/get state :cursor) (plist/get event :d))
+                   1 (len (plist/get state :lines))))}
+    {(== etype "src-err")
+      (plist/set state :err (plist/get event :err))}
+    {otherwise state})
+})
+
+(fun {src-bp-lines bps file} {
+  map (\ {b} {plist/get b :line})
+      (filter (\ {b} {== (plist/get b :file) file})
+              (if (nil? bps) {nil} {bps}))
+})
+
+; Gutter runs for line n: breakpoint dot, exec arrow, padded line number.
+(fun {src-gutter n cur cursor bp-lines} {do
+  (= {mark} (if (exists n bp-lines) {"●"} {" "}))
+  (= {arrow} (if (== n cur) {"▶"} {" "}))
+  (= {num} (str n))
+  (= {pad} (str/slice "     " 0 (- 4 (len num))))
+  `{{:t ,mark :style :error}
+    {:t ,arrow :style ,(if (== n cur) {:ok} {:plain})}
+    {:t ,(str pad num " ") :style ,(if (== n cursor) {:keyword} {:dim})}}
+})
+
+(fun {src-line-widget n runs cur cursor bp-lines} {
+  `{:w :text
+    :runs ,(join (src-gutter n cur cursor bp-lines)
+                 (if (nil? runs)
+                   {list {:t "" :style :plain}}
+                   {runs}))}
+})
+
+(fun {src-window-bounds cursor total} {do
+  (= {half} (/ ide/src-window 2))
+  (= {lo} (src-clamp (- cursor half) 1 (if (< total 1) {1} {total})))
+  (= {hi} (src-clamp (+ lo (- ide/src-window 1)) 1 total))
+  (= {lo} (src-clamp (- hi (- ide/src-window 1)) 1 total))
+  (list lo hi)
+})
+
+(fun {src-line-widgets state} {do
+  (= {lines} (plist/get state :lines))
+  (= {total} (len lines))
+  (if (== total 0)
+    {nil}
+    {do
+      (= {cur} (plist/get state :cur))
+      (= {cursor} (plist/get state :cursor))
+      (= {bp-lines} (src-bp-lines (plist/get state :bps)
+                                  (plist/get state :file)))
+      (= {bounds} (src-window-bounds cursor total))
+      (= {lo} (head bounds))
+      (= {hi} (head (tail bounds)))
+      (map (\ {n} {src-line-widget n (nth n lines) cur cursor bp-lines})
+           (range lo (+ hi 1)))})
+})
+
+(fun {src-view state} {do
+  (= {file} (plist/get state :file))
+  (= {header} (if (== file "")
+    {`{{:t "no source  (pauses load the file; j/k move, b toggles bp)"
+        :style :dim}}}
+    {`{{:t ,(ide/dbg-short-file file) :style :string}
+       {:t ,(str "  " (plist/get state :err)) :style :error}}}))
+  `{:w :panel :id "dbg-src" :title "SOURCE"
+    :children
+    {{:w :text :runs ,header}
+     ,@(src-line-widgets state)}}
+})
+
+; --- impure wrappers ---------------------------------------------------------
+
+(fun {src-refresh-bps} {do
+  (ide/dbg-get "/dbg/breakpoints" (\ {bps} {do
+    (ide/dispatch "dbg-src" `{:type "src-bps" :bps ,bps} 0)
+    nil}))
+  nil
+})
+
+; Load (or re-position within) a source file. Impure: reads from disk.
+(fun {src-show file line} {do
+  (= {st} (ide/tool-state "dbg-src"))
+  (if (== (plist/get st :file) file)
+    {do (ide/dispatch "dbg-src" `{:type "src-line" :line ,line} 0) nil}
+    {do
+      (if (file/exists? file)
+        {do
+          (= {lines} (ide/hl-text-lines (read-file file)))
+          (ide/dispatch "dbg-src"
+            `{:type "src-loaded" :file ,file :lines ,lines :line ,line} 0)
+          (src-refresh-bps)
+          nil}
+        {do
+          (ide/dispatch "dbg-src"
+            `{:type "src-err" :err ,(str "cannot read " file)} 0)
+          nil})
+      nil})
+  nil
+})
+
+; Toggle a breakpoint on the cursor line.
+(fun {src-toggle-bp} {do
+  (= {st} (ide/tool-state "dbg-src"))
+  (= {file} (plist/get st :file))
+  (if (== file "")
+    {nil}
+    {do
+      (= {cursor} (plist/get st :cursor))
+      (= {existing} (filter (\ {b} {and (== (plist/get b :file) file)
+                                        (== (plist/get b :line) cursor)})
+                            (if (nil? (plist/get st :bps)) {nil}
+                                {plist/get st :bps})))
+      (if (nil? existing)
+        {ide/dbg-post "/dbg/break" `{:file ,file :line ,cursor}}
+        {ide/dbg-post "/dbg/unbreak"
+          `{:id ,(plist/get (head existing) :id)}})
+      (aio/schedule (dict/get ide/runtime "ui-sys" nil) 100 (\ {} {do
+        (ide/src-refresh-bps)
+        nil}))
+      nil})
+  nil
+})
+
+; Follow the debugger: pauses load the file and mark the line.
+(ide/dbg-on-pause (\ {sev} {do
+  (if (== (plist/get sev :paused) 1)
+    {src-show (plist/get sev :file) (plist/get sev :line)}
+    {do (ide/dispatch "dbg-src" {:type "src-line" :line 0} 0) nil})
+  nil}))
+
+(def {dbg-src-tool}
+  `{:id "dbg-src" :title "SOURCE"
+    :init ,src-init :update ,src-update :view ,src-view})
+
+(ide/register-command `{:id "src/down" :title "Source cursor down"
+  :keys {"j"} :pane "dbg-src"
+  :run ,(\ {cid} {do (ide/dispatch "dbg-src" {:type "src-cursor" :d 1} 0) nil})})
+
+(ide/register-command `{:id "src/up" :title "Source cursor up"
+  :keys {"k"} :pane "dbg-src"
+  :run ,(\ {cid} {do (ide/dispatch "dbg-src" {:type "src-cursor" :d -1} 0) nil})})
+
+(ide/register-command `{:id "src/toggle-bp" :title "Toggle breakpoint"
+  :keys {"b"} :pane "dbg-src"
+  :run ,(\ {cid} {do (src-toggle-bp) nil})})
+
+(ide/register-command `{:id "src/open" :title "Open file in source pane"
+  :keys {"SPC d o"}
+  :run ,(\ {cid} {do
+    (= {t} (ide/config-get "debug-source" nil))
+    (if (nil? t) {nil} {src-show (realpath t) 0})
+    nil})})

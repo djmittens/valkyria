@@ -1,7 +1,8 @@
 ; ide/debugger.valk — debug client + debugger pane (DESIGN.md 5.4).
-; Attaches to any Valk process running (debug/serve sys port); polls
-; /dbg/state on the machine tick and pulls stack + frame bindings while the
-; target is paused. Continue/step are commands (SPC d namespace globally,
+; Attaches to any Valk process running (debug/serve sys port); subscribes to
+; its /dbg/events SSE stream and pulls stack + frame bindings + watches when
+; the target pauses. Can also launch a child Valk process (proc/spawn) and
+; attach to it. Continue/step/pause are commands (SPC d namespace globally,
 ; single keys when the pane is focused).
 
 (load "ide/machine.valk")
@@ -12,8 +13,39 @@
 
 (fun {dbg-init} {
   `{:target "" :attached 0 :paused 0
-    :file "" :line 0 :expr ""
-    :stack ,nil :binds ,nil :err ""}
+    :file "" :line 0 :expr "" :tid -1
+    :threads ,nil :stack ,nil :binds ,nil
+    :watches ,nil :out ,nil :proc 0 :err ""}
+})
+
+(fun {dbg-update-state state event} {do
+  (= {p} (plist/get event :paused))
+  (= {ns} (plist/set (plist/set (plist/set (plist/set (plist/set (plist/set
+    state
+    :paused p)
+    :file (plist/get event :file))
+    :line (plist/get event :line))
+    :expr (plist/get event :expr))
+    :tid (if (num? (plist/get event :tid)) {plist/get event :tid} {-1}))
+    :err ""))
+  (= {ns} (if (nil? (plist/get event :threads))
+    {plist/set ns :threads nil}
+    {plist/set ns :threads (plist/get event :threads)}))
+  (if (== p 1)
+    {ns}
+    {plist/set (plist/set ns :stack nil) :binds nil})
+})
+
+(fun {dbg-watch-set watches idx val} {
+  map (\ {w} {
+    (if (== (plist/get w :idx) idx) {plist/set w :val val} {w})})
+    watches
+})
+
+(fun {dbg-out-push out line} {do
+  (= {n} (join (if (nil? out) {nil} {out}) (list line)))
+  (= {extra} (- (len n) 8))
+  (if (> extra 0) {drop extra n} {n})
 })
 
 (fun {dbg-update state event} {do
@@ -25,20 +57,25 @@
         :attached 1)
         :err "")}
     {(== etype "detach")
-      (plist/set (plist/set (plist/set (plist/set state
-        :attached 0) :paused 0) :stack nil) :binds nil)}
-    {(== etype "dbg-state")
-      (do
-        (= {p} (plist/get event :paused))
-        (= {ns} (plist/set (plist/set (plist/set (plist/set (plist/set state
-          :paused p)
-          :file (plist/get event :file))
-          :line (plist/get event :line))
-          :expr (plist/get event :expr))
-          :err ""))
-        (if (== p 1) {ns} {plist/set (plist/set ns :stack nil) :binds nil}))}
+      (plist/set (plist/set (plist/set (plist/set (plist/set state
+        :attached 0) :paused 0) :stack nil) :binds nil) :threads nil)}
+    {(== etype "dbg-state") (dbg-update-state state event)}
     {(== etype "dbg-stack") (plist/set state :stack (plist/get event :stack))}
     {(== etype "dbg-binds") (plist/set state :binds (plist/get event :binds))}
+    {(== etype "watch-add")
+      (plist/set state :watches
+        (join (plist/get state :watches)
+              (list `{:idx ,(len (plist/get state :watches))
+                      :expr ,(plist/get event :expr) :val "?"})))}
+    {(== etype "watch-clear") (plist/set state :watches nil)}
+    {(== etype "watch-val")
+      (plist/set state :watches
+        (dbg-watch-set (plist/get state :watches)
+                       (plist/get event :idx) (plist/get event :val)))}
+    {(== etype "dbg-out")
+      (plist/set state :out
+        (dbg-out-push (plist/get state :out) (plist/get event :line)))}
+    {(== etype "proc-state") (plist/set state :proc (plist/get event :running))}
     {(== etype "dbg-err")
       (plist/set (plist/set state :err (plist/get event :err)) :paused 0)}
     {otherwise state})
@@ -62,12 +99,27 @@
       (ide/take-safe 12 (if (nil? binds) {nil} {binds}))
 })
 
+(fun {dbg-watch-rows watches} {
+  map (\ {w} {list (str (plist/get w :idx)) (plist/get w :expr)
+                   (plist/get w :val)})
+      (if (nil? watches) {nil} {watches})
+})
+
+(fun {dbg-thread-rows threads} {
+  map (\ {t} {
+    list (str (plist/get t :tid))
+         (str (dbg-short-file (plist/get t :file)) ":" (plist/get t :line))
+         (plist/get t :expr)})
+    (ide/take-safe 6 (if (nil? threads) {nil} {threads}))
+})
+
 (fun {dbg-status-runs state} {
   (select
     {(not (== (plist/get state :err) ""))
       `{{:t ,(plist/get state :err) :style :error}}}
     {(== (plist/get state :attached) 0)
-      `{{:t "detached" :style :dim} {:t "  SPC d a attaches" :style :dim}}}
+      `{{:t "detached" :style :dim}
+        {:t "  SPC d a attaches, SPC d l launches" :style :dim}}}
     {(== (plist/get state :paused) 1)
       `{{:t "PAUSED " :style :error :effect :blink}
         {:t ,(str (dbg-short-file (plist/get state :file)) ":"
@@ -76,22 +128,74 @@
     {otherwise `{{:t "running" :style :ok :effect :pulse}}})
 })
 
+(fun {dbg-section title table} {
+  (if (nil? (plist/get table :rows))
+    {nil}
+    {list {:w :divider}
+          `{:w :text :runs {{:t ,title :style :keyword}}}
+          table})
+})
+
 (fun {dbg-view state} {do
   (= {rows} (dbg-stack-rows (plist/get state :stack)))
   (= {brows} (dbg-bind-rows (plist/get state :binds)))
+  (= {wrows} (dbg-watch-rows (plist/get state :watches)))
+  (= {trows} (dbg-thread-rows (plist/get state :threads)))
+  (= {out} (plist/get state :out))
   `{:w :panel :id "debugger" :title "DEBUGGER"
     :children
-    {{:w :text :runs {{:t ,(str "target " (plist/get state :target))
+    {{:w :text :runs {{:t ,(str "target " (plist/get state :target)
+                                (if (== (plist/get state :proc) 1)
+                                  {" [child]"} {""}))
                       :style :dim}}}
      {:w :text :runs ,(dbg-status-runs state)}
+     ,@(if (< (len trows) 2) {nil}
+       {dbg-section "threads"
+         `{:w :table :id "dbg-threads" :cols {"tid" "at" "expr"}
+           :rows ,trows}})
      ,@(if (nil? rows) {nil}
-       {list {:w :divider}
-             `{:w :text :runs {{:t "stack" :style :keyword}}}
-             `{:w :table :id "dbg-stack" :cols {"kind" "fn" "at"} :rows ,rows}})
+       {dbg-section "stack"
+         `{:w :table :id "dbg-stack" :cols {"kind" "fn" "at"} :rows ,rows}})
      ,@(if (nil? brows) {nil}
-       {list {:w :divider}
-             `{:w :text :runs {{:t "frame 0" :style :keyword}}}
-             `{:w :table :id "dbg-binds" :cols {"name" "value"} :rows ,brows}})}}
+       {dbg-section "frame 0"
+         `{:w :table :id "dbg-binds" :cols {"name" "value"} :rows ,brows}})
+     ,@(if (nil? wrows) {nil}
+       {dbg-section "watch"
+         `{:w :table :id "dbg-watch" :cols {"#" "expr" "value"}
+           :rows ,wrows}})
+     ,@(if (nil? out) {nil}
+       {join (list {:w :divider}
+                   `{:w :text :runs {{:t "output" :style :keyword}}})
+             (map (\ {l} {`{:w :text :runs {{:t ,l :style :dim}}}}) out)})}}
+})
+
+; --- SSE event stream parsing (pure) ---------------------------------------
+; Accumulated chunk text -> {:events ({:event Str :data Str} ...) :rest Str}.
+; Complete events are terminated by a blank line; the tail stays buffered.
+
+(fun {dbg-sse-block block} {do
+  (= {lines} (str/split block "\n"))
+  (= {ev} (foldl (\ {acc l} {
+    (if (str/starts-with? l "event: ")
+      {str/slice l 7 (len l)}
+      {acc})}) "message" lines))
+  (= {data} (foldl (\ {acc l} {
+    (if (str/starts-with? l "data: ")
+      {str/slice l 6 (len l)}
+      {acc})}) "" lines))
+  `{:event ,ev :data ,data}
+})
+
+(fun {dbg-sse-parse buf} {do
+  (= {parts} (str/split buf "\n\n"))
+  (if (< (len parts) 2)
+    {`{:events ,nil :rest ,buf}}
+    {do
+      (= {blocks} (take (- (len parts) 1) parts))
+      (= {complete} (filter (\ {b} {or (str/contains? b "event: ")
+                                       (str/contains? b "data: ")}) blocks))
+      `{:events ,(map dbg-sse-block complete)
+        :rest ,(last parts)}})
 })
 
 ; --- wire client (impure; runs on ui-sys loop 0) ---------------------------
@@ -127,6 +231,120 @@
       nil})
 })
 
+; Hooks other panes register to follow pause/resume (the source pane).
+(fun {dbg-on-pause hook} {do
+  (dict/set! ide/runtime "dbg-pause-hooks"
+    (join (dict/get ide/runtime "dbg-pause-hooks" nil) (list hook)))
+  nil
+})
+
+(fun {dbg-run-pause-hooks st} {do
+  (map (\ {h} {do (h st) nil})
+       (dict/get ide/runtime "dbg-pause-hooks" nil))
+  nil
+})
+
+(fun {dbg-state-event st} {do
+  (= {ths} (plist/get st :threads))
+  (= {first-th} (if (nil? ths) {nil} {head ths}))
+  (= {p} (if (nil? first-th) {0} {1}))
+  (= {f} (\ {k d} {if (nil? first-th) {d} {plist/get first-th k}}))
+  `{:type "dbg-state"
+    :paused ,p
+    :tid ,(if (nil? first-th) {-1} {plist/get first-th :tid})
+    :file ,(if (str? (f :file "")) {f :file ""} {""})
+    :line ,(if (num? (f :line 0)) {f :line 0} {0})
+    :expr ,(if (str? (f :expr "")) {f :expr ""} {""})
+    :threads ,ths}
+})
+
+(fun {dbg-refresh-watches} {do
+  (= {st} (ide/tool-state "debugger"))
+  (map (\ {w} {do
+    (= {idx} (plist/get w :idx))
+    (= {t} (dbg-target))
+    (= {sys} (dict/get ide/runtime "ui-sys" nil))
+    (if (or (nil? t) (nil? sys))
+      {nil}
+      {do
+        (aio/then
+          (http2/client-post sys (plist/get t :host) (plist/get t :port)
+            "/dbg/eval"
+            (json/encode `{:frame 0 :expr ,(plist/get w :expr)}))
+          (\ {resp} {do
+            (if (error? resp)
+              {nil}
+              {do
+                (= {r} (json/parse (http2/response-body resp)))
+                (ide/dispatch "debugger"
+                  `{:type "watch-val" :idx ,idx
+                    :val ,(if (nil? (plist/get r :result))
+                            {"<err>"} {plist/get r :result})} 0)})
+            nil}))
+        nil})
+    nil})
+    (plist/get st :watches))
+  nil
+})
+
+(fun {dbg-pull-paused} {do
+  (ide/dbg-get "/dbg/stack" (\ {stack} {do
+    (ide/dispatch "debugger" `{:type "dbg-stack" :stack ,stack} 0)
+    nil}))
+  (ide/dbg-get "/dbg/frame/0/bindings" (\ {binds} {do
+    (ide/dispatch "debugger" `{:type "dbg-binds" :binds ,binds} 0)
+    nil}))
+  (dbg-refresh-watches)
+  nil
+})
+
+(fun {dbg-handle-event ev} {do
+  (= {name} (plist/get ev :event))
+  (if (not (exists name (list "state" "paused" "resumed")))
+    {nil}
+    {do
+      (= {st} (json/parse (plist/get ev :data)))
+      (= {sev} (dbg-state-event st))
+      (ide/dispatch "debugger" sev 0)
+      (if (== (plist/get sev :paused) 1) {dbg-pull-paused} {nil})
+      (dbg-run-pause-hooks sev)
+      nil})
+})
+
+(fun {dbg-on-sse-chunk chunk} {do
+  (= {buf} (str (dict/get ide/runtime "dbg-sse-buf" "") chunk))
+  (= {r} (dbg-sse-parse buf))
+  (dict/set! ide/runtime "dbg-sse-buf" (plist/get r :rest))
+  (map dbg-handle-event (plist/get r :events))
+  nil
+})
+
+; Long-lived /dbg/events subscription with reconnect while attached. The
+; generation counter kills stale reconnect loops after detach/re-attach.
+(fun {dbg-events-connect gen} {do
+  (= {t} (dbg-target))
+  (= {sys} (dict/get ide/runtime "ui-sys" nil))
+  (if (or (nil? t) (nil? sys)
+          (not (== gen (dict/get ide/runtime "dbg-events-gen" 0))))
+    {nil}
+    {do
+      (dict/set! ide/runtime "dbg-sse-buf" "")
+      (aio/then
+        (http2/client-stream sys (plist/get t :host) (plist/get t :port)
+          "/dbg/events" (\ {chunk} {do (ide/dbg-on-sse-chunk chunk) nil}))
+        (\ {resp} {do
+          ; stream ended (target restart, max-session, error): resubscribe
+          (if (== gen (dict/get ide/runtime "dbg-events-gen" 0))
+            {do
+              (aio/schedule sys 500 (\ {} {do
+                (ide/dbg-events-connect gen)
+                nil}))
+              nil}
+            {nil})
+          nil}))
+      nil})
+})
+
 (fun {dbg-poll} {do
   (if (nil? (dbg-target))
     {nil}
@@ -134,39 +352,110 @@
       (ide/dispatch "debugger"
         `{:type "dbg-state"
           :paused ,(plist/get st :paused)
+          :tid ,(if (num? (plist/get st :tid)) {plist/get st :tid} {-1})
           :file ,(if (str? (plist/get st :file)) {plist/get st :file} {""})
           :line ,(if (num? (plist/get st :line)) {plist/get st :line} {0})
           :expr ,(if (str? (plist/get st :expr)) {plist/get st :expr} {""})} 0)
-      (if (== (plist/get st :paused) 1)
-        {do
-          (ide/dbg-get "/dbg/stack" (\ {stack} {do
-            (ide/dispatch "debugger" `{:type "dbg-stack" :stack ,stack} 0)
-            nil}))
-          (ide/dbg-get "/dbg/frame/0/bindings" (\ {binds} {do
-            (ide/dispatch "debugger" `{:type "dbg-binds" :binds ,binds} 0)
-            nil}))
-          nil}
-        {nil})
+      (if (== (plist/get st :paused) 1) {dbg-pull-paused} {nil})
       nil})})
   nil
 })
 
 (fun {dbg-attach host port} {do
   (dict/set! ide/runtime "dbg-target" `{:host ,host :port ,port})
+  (dict/set! ide/runtime "dbg-events-gen"
+    (+ (dict/get ide/runtime "dbg-events-gen" 0) 1))
   (ide/dispatch "debugger" `{:type "attach" :host ,host :port ,port} 0)
   (dbg-poll)
+  (dbg-events-connect (dict/get ide/runtime "dbg-events-gen" 0))
   nil
 })
 
 (fun {dbg-detach} {do
   (dict/remove! ide/runtime "dbg-target")
+  (dict/set! ide/runtime "dbg-events-gen"
+    (+ (dict/get ide/runtime "dbg-events-gen" 0) 1))
   (ide/dispatch "debugger" {:type "detach"} 0)
+  ; target panes reset too (no-ops when the tools are not registered)
+  (ide/dispatch "dbg-aio" {:type "detach"} 0)
+  (ide/dispatch "dbg-mem" {:type "detach"} 0)
   nil
 })
 
-; REPL-callable helper: (ide/dbg-break "path/to/file.valk" 42)
+; --- launch + attach of a child Valk process (proc/spawn) -------------------
+
+(fun {dbg-out-line prefix chunk} {do
+  (map (\ {l} {do
+    (if (== l "")
+      {nil}
+      {do (ide/dispatch "debugger"
+            `{:type "dbg-out" :line ,(str prefix l)} 0) nil})
+    nil})
+    (ide/take-safe 4 (str/split chunk "\n")))
+  nil
+})
+
+(fun {dbg-launch file host port} {do
+  (= {sys} (dict/get ide/runtime "ui-sys" nil))
+  (if (or (nil? sys) (not (nil? (dict/get ide/runtime "dbg-proc" nil))))
+    {nil}
+    {do
+      (= {p} (proc/spawn sys "build/valk" file))
+      (dict/set! ide/runtime "dbg-proc" p)
+      (ide/dispatch "debugger" {:type "proc-state" :running 1} 0)
+      (ide/dispatch "debugger"
+        `{:type "dbg-out" :line ,(str "launched build/valk " file)} 0)
+      (pipe/on-data (plist/get p :stdout)
+        (\ {chunk} {do
+          (if (str? chunk) {dbg-out-line "" chunk} {nil}) nil}))
+      (pipe/on-data (plist/get p :stderr)
+        (\ {chunk} {do
+          (if (str? chunk) {dbg-out-line "! " chunk} {nil}) nil}))
+      (aio/then (plist/get p :wait)
+        (\ {r} {do
+          (dict/remove! ide/runtime "dbg-proc")
+          (ide/dispatch "debugger" {:type "proc-state" :running 0} 0)
+          (ide/dispatch "debugger"
+            `{:type "dbg-out"
+              :line ,(if (error? r)
+                {str "launch failed: " r}
+                {str "target exited (code "
+                     (plist/get r :exit-code) ")"})} 0)
+          (ide/dbg-detach)
+          nil}))
+      ; give the child a moment to open its debug port, then attach
+      (aio/schedule sys 700 (\ {} {do
+        (if (nil? (dict/get ide/runtime "dbg-proc" nil))
+          {nil}
+          {dbg-attach host port})
+        nil}))
+      nil})
+})
+
+(fun {dbg-kill} {do
+  (= {p} (dict/get ide/runtime "dbg-proc" nil))
+  (if (nil? p)
+    {nil}
+    {do (proc/kill (plist/get p :proc)) nil})
+})
+
+; --- REPL-callable helpers ---------------------------------------------------
+
+; (ide/dbg-break "path/to/file.valk" 42)
 (fun {dbg-break file line} {do
   (dbg-post "/dbg/break" `{:file ,(realpath file) :line ,line})
+  nil
+})
+
+; (ide/dbg-watch "(len xs)") — evaluated in frame 0 at every pause.
+(fun {dbg-watch expr} {do
+  (ide/dispatch "debugger" `{:type "watch-add" :expr ,expr} 0)
+  (dbg-refresh-watches)
+  nil
+})
+
+(fun {dbg-unwatch} {do
+  (ide/dispatch "debugger" {:type "watch-clear"} 0)
   nil
 })
 
@@ -181,9 +470,25 @@
     (dbg-attach (plist/get t :host) (plist/get t :port))
     nil})})
 
+(ide/register-command `{:id "dbg/launch" :title "Launch debug target"
+  :keys {"SPC d l"}
+  :run ,(\ {cid} {do
+    (= {t} (ide/config-get "debug-launch"
+      {:file "ide/demo-target.valk" :host "127.0.0.1" :port 7788}))
+    (dbg-launch (plist/get t :file) (plist/get t :host) (plist/get t :port))
+    nil})})
+
+(ide/register-command `{:id "dbg/kill" :title "Kill launched target"
+  :keys {"SPC d k"}
+  :run ,(\ {cid} {do (dbg-kill) nil})})
+
 (ide/register-command `{:id "dbg/detach" :title "Detach debugger"
   :keys {"SPC d q"}
   :run ,(\ {cid} {do (dbg-detach) nil})})
+
+(ide/register-command `{:id "dbg/pause" :title "Pause target"
+  :keys {"SPC d p" "p"} :pane "debugger"
+  :run ,(\ {cid} {do (dbg-post "/dbg/pause" {:a 0}) nil})})
 
 (ide/register-command `{:id "dbg/continue" :title "Continue target"
   :keys {"SPC d c" "c"} :pane "debugger"

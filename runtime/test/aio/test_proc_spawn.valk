@@ -1,0 +1,84 @@
+; proc/spawn — interactive subprocess with live stdio pipes (DESIGN.md
+; section 8 primitive #2). Spawn, write stdin, read stdout via pipe/on-data,
+; wait for exit, kill.
+
+(load "testing/test.valk")
+
+(def {aio} (aio/await (aio/start {:num-threads 2})))
+(def {results} (dict/new))
+
+(fun {sleep-ms ms} {aio/await (aio/schedule aio ms (\ {} {1}))})
+
+(fun {wait-key key tries} {
+  (if (== tries 0)
+    {nil}
+    {if (== (dict/has? results key) 1)
+      {dict/get results key nil}
+      {do (sleep-ms 20) (wait-key key (- tries 1))}})
+})
+
+(test/run (list
+
+  (test/case "spawn-returns-proc-and-pipes"
+    {do
+    (= {p} (proc/spawn aio "cat"))
+    (test/assert (ref? (plist/get p :proc)) "proc ref returned")
+    (test/assert (ref? (plist/get p :stdin)) "stdin pipe returned")
+    (test/assert (ref? (plist/get p :stdout)) "stdout pipe returned")
+    (test/assert (ref? (plist/get p :stderr)) "stderr pipe returned")
+    (proc/kill (plist/get p :proc) 9)
+    (aio/await (proc/wait (plist/get p :proc)))
+    true
+  })
+
+  (test/case "stdin-write-stdout-read-roundtrip"
+    {do
+    (= {p} (proc/spawn aio "cat"))
+    (pipe/on-data (plist/get p :stdout)
+      (\ {chunk} {do
+        (if (str? chunk)
+          {dict/set! results "echo" chunk}
+          {nil})
+        nil}))
+    (pipe/write (plist/get p :stdin) "hello-proc\n")
+    (test/assert-eq "hello-proc\n" (wait-key "echo" 100)
+      "stdout echoes stdin through the child")
+    ; closing stdin sends EOF; cat exits 0
+    (pipe/close (plist/get p :stdin))
+    (= {r} (aio/await (proc/wait (plist/get p :proc))))
+    (test/assert-eq 0 (plist/get r :exit-code) "clean exit after stdin EOF")
+    (test/assert-eq 0 (plist/get r :term-signal) "no signal")
+    true
+  })
+
+  (test/case "kill-terminates-child"
+    {do
+    (= {p} (proc/spawn aio "sleep" "30"))
+    (sleep-ms 50)
+    (test/assert (> (proc/pid (plist/get p :proc)) 0) "child pid available")
+    (proc/kill (plist/get p :proc))
+    (= {r} (aio/await (proc/wait (plist/get p :proc))))
+    (test/assert-eq 15 (plist/get r :term-signal) "terminated by SIGTERM")
+    true
+  })
+
+  (test/case "spawn-failure-fails-wait-handle"
+    {do
+    (= {p} (proc/spawn aio "no-such-binary-xyz-123"))
+    (test/assert (error? (aio/await (plist/get p :wait)))
+      "wait handle fails for missing binary")
+    true
+  })
+
+  (test/case "wait-field-is-the-wait-handle"
+    {do
+    (= {p} (proc/spawn aio "true"))
+    (= {r} (aio/await (plist/get p :wait)))
+    (test/assert-eq 0 (plist/get r :exit-code) "await :wait directly")
+    true
+  })
+
+) {:suite-name "proc/spawn"})
+
+(aio/stop aio)
+(aio/run aio)

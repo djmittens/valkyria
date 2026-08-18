@@ -58,6 +58,14 @@ struct valk_lval_t *valk_http2_client_request_impl(struct valk_lenv_t *e,
                                                     const char *host, int port,
                                                     const char *path);
 
+// Streaming GET (SSE consumption): body chunks delivered to on_data as
+// they arrive; the returned handle completes on stream close.
+struct valk_lval_t *valk_http2_client_stream_impl(struct valk_lenv_t *e,
+                                                  valk_aio_system_t *sys,
+                                                  const char *host, int port,
+                                                  const char *path,
+                                                  struct valk_lval_t *on_data);
+
 // HTTP/2 client request with custom headers
 struct valk_lval_t *valk_http2_client_request_with_headers_impl(struct valk_lenv_t *e,
                                                     valk_aio_system_t *sys,
