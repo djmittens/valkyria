@@ -1,0 +1,99 @@
+; ide/perspective.valk — perspectives: intent-driven pane layouts (pure core).
+; A perspective declares which panes are visible, which slot each occupies
+; (main / side / bottom), and the default focus. Per-client perspective state
+; and transport live in machine.valk.
+
+(module ide)
+
+(def {perspectives}
+  {{:id "edit" :title "edit"
+    :slots {{:slot "main" :panes {"dbg-src"}}
+            {:slot "bottom" :panes {"repl"}}}
+    :focus "dbg-src"}
+   {:id "repl" :title "repl"
+    :slots {{:slot "main" :panes {"repl"}}
+            {:slot "side" :panes {"status"}}}
+    :focus "repl"}
+   {:id "debug" :title "debug"
+    :slots {{:slot "main" :panes {"dbg-src"}}
+            {:slot "side" :panes {"debugger" "dbg-aio" "dbg-mem"}}
+            {:slot "bottom" :panes {"repl"}}}
+    :focus "debugger"}})
+
+(fun {perspective-default} {head perspectives})
+
+(fun {perspective-get id} {do
+  (= {m} (filter (\ {p} {== (plist/get p :id) id}) perspectives))
+  (if (nil? m) {nil} {head m})
+})
+
+(fun {perspective-pane-ids p} {
+  flatten (map (\ {s} {plist/get s :panes}) (plist/get p :slots))
+})
+
+(fun {perspective-layout-tree p} {
+  `{:w :layout :perspective ,(plist/get p :id)
+    :slots ,(plist/get p :slots)}
+})
+
+(fun {perspective-visible-ids p registered} {
+  filter (\ {i} {exists i registered}) (perspective-pane-ids p)
+})
+
+; Keep focus if it is a visible registered pane; otherwise fall back to the
+; perspective's default focus, then the first visible pane.
+(fun {perspective-valid-focus p focus registered} {do
+  (= {ids} (perspective-visible-ids p registered))
+  (select
+    {(exists focus ids) focus}
+    {(exists (plist/get p :focus) ids) (plist/get p :focus)}
+    {(not (nil? ids)) (head ids)}
+    {otherwise focus})
+})
+
+; cstate transition: switch to perspective pid. remember=1 records the
+; current perspective in :prev-perspective (for intent-driven auto-return).
+(fun {perspective-apply cstate pid registered remember} {do
+  (= {p} (perspective-get pid))
+  (if (nil? p)
+    {cstate}
+    {do
+      (= {cur} (plist/get cstate :perspective))
+      (= {ns} (plist/set cstate :perspective pid))
+      (= {ns} (if (and (== remember 1) (not (== cur pid)))
+        {plist/set ns :prev-perspective cur}
+        {ns}))
+      (plist/set ns :focus
+        (perspective-valid-focus p (plist/get cstate :focus) registered))})
+})
+
+; Return to :prev-perspective, but only when the client is still in the
+; perspective the intent put it in (from-pid). Manual switches win.
+(fun {perspective-restore cstate registered from-pid} {do
+  (= {prev} (plist/get cstate :prev-perspective))
+  (if (or (nil? prev)
+          (not (== (plist/get cstate :perspective) from-pid)))
+    {cstate}
+    {perspective-apply (plist/set cstate :prev-perspective nil)
+                       prev registered 0})
+})
+
+(fun {list-index-of l x i} {
+  (if (nil? l)
+    {-1}
+    {if (== (head l) x) {i} {list-index-of (tail l) x (+ i 1)}})
+})
+
+(fun {perspective-cycle ids focus} {do
+  (= {i} (list-index-of ids focus 0))
+  (= {ni} (if (< (+ i 1) (len ids)) {+ i 1} {0}))
+  (nth (+ ni 1) ids)
+})
+
+; Next focus within the perspective's visible panes; falls back to cycling
+; all registered panes when the perspective has none registered.
+(fun {perspective-next-focus p focus registered} {do
+  (= {ids} (perspective-visible-ids p registered))
+  (= {ids} (if (nil? ids) {registered} {ids}))
+  (if (nil? ids) {focus} {perspective-cycle ids focus})
+})

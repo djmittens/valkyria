@@ -366,6 +366,7 @@
   (dict/set! ide/runtime "dbg-events-gen"
     (+ (dict/get ide/runtime "dbg-events-gen" 0) 1))
   (ide/dispatch "debugger" `{:type "attach" :host ,host :port ,port} 0)
+  (ide/perspective-switch-all "debug")
   (dbg-poll)
   (dbg-events-connect (dict/get ide/runtime "dbg-events-gen" 0))
   nil
@@ -379,6 +380,7 @@
   ; target panes reset too (no-ops when the tools are not registered)
   (ide/dispatch "dbg-aio" {:type "detach"} 0)
   (ide/dispatch "dbg-mem" {:type "detach"} 0)
+  (ide/perspective-restore-all "debug")
   nil
 })
 

@@ -35,6 +35,7 @@
       (= {stream} (sse/open req))
       (ide/add-client client-id stream)
       (stream/on-close stream (\ {} {ide/remove-client client-id}))
+      (ide/send-layout client-id 0)
       (ide/send-full stream 0)
       (ide/send-chrome client-id 0)
       (stream/closed stream)})
@@ -55,9 +56,12 @@
           (= {ts} (if (num? ts) {ts} {0}))
           (= {client-id} (plist/get msg :client))
           (= {client-id} (if (nil? client-id) {"anon"} {client-id}))
-          (if (== (plist/get event :type) "key")
-            {ide/handle-key client-id (plist/get event :key) ts}
-            {nil})
+          (select
+            {(== (plist/get event :type) "key")
+              (ide/handle-key client-id (plist/get event :key) ts)}
+            {(== (plist/get event :type) "focus")
+              (ide/handle-focus client-id (plist/get event :pane) ts)}
+            {otherwise nil})
           `{:status "200" :content-type "application/json"
             :body "{\"ok\":true}"}})})
 })

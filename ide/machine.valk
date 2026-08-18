@@ -7,6 +7,7 @@
 
 (load "stdlib/aio/sse.valk")
 (load "ide/chrome.valk")
+(load "ide/perspective.valk")
 
 (module ide)
 
@@ -84,13 +85,28 @@
 
 ; --- clients ---
 
-(fun {default-focus} {
-  (if (nil? ide/tools) {""} {plist/get (head ide/tools) :id})
+(fun {tool-ids} {map (\ {t} {plist/get t :id}) ide/tools})
+
+(fun {default-focus} {do
+  (= {ids} (tool-ids))
+  (if (nil? ids)
+    {""}
+    {do
+      (= {p} (ide/perspective-default))
+      (= {f} (ide/perspective-valid-focus p (plist/get p :focus) ids))
+      (if (exists f ids) {f} {head ids})})
 })
 
 (fun {client-state id} {
   dict/get ide/client-states id
-    `{:mode "normal" :pending "" :focus ,(default-focus) :palette ,nil}
+    `{:mode "normal" :pending "" :focus ,(default-focus) :palette ,nil
+      :perspective ,(plist/get (ide/perspective-default) :id)
+      :prev-perspective ,nil}
+})
+
+(fun {client-perspective cstate} {do
+  (= {p} (ide/perspective-get (plist/get cstate :perspective)))
+  (if (nil? p) {(ide/perspective-default)} {p})
 })
 
 (fun {set-client-state id cstate} {do
@@ -104,9 +120,10 @@
   nil
 })
 
+; Client state (perspective, focus, mode) survives disconnects so an SSE
+; reconnect restores the client where it was; only the stream is dropped.
 (fun {remove-client id} {do
   (dict/remove! ide/clients id)
-  (dict/remove! ide/client-states id)
   nil
 })
 
@@ -143,9 +160,45 @@
   nil
 })
 
+(fun {send-layout client-id ts} {do
+  (= {stream} (dict/get ide/clients client-id nil))
+  (if (nil? stream)
+    {nil}
+    {send-patch stream "layout"
+      (ide/perspective-layout-tree (client-perspective (client-state client-id)))
+      ts})
+  nil
+})
+
 (fun {send-full stream ts} {do
   (map (\ {t} {send-patch stream (plist/get t :id) (ide/render-tool t) ts})
        ide/tools)
+  nil
+})
+
+; --- perspectives (impure orchestration; pure core in perspective.valk) ---
+
+(fun {perspective-switch client-id pid remember} {do
+  (set-client-state client-id
+    (ide/perspective-apply (client-state client-id) pid (tool-ids) remember))
+  (send-layout client-id 0)
+  (send-chrome client-id 0)
+  nil
+})
+
+; Intent-driven switches apply to every connected client.
+(fun {perspective-switch-all pid} {do
+  (map (\ {cid} {perspective-switch cid pid 1}) (dict/keys ide/clients))
+  nil
+})
+
+(fun {perspective-restore-all from-pid} {do
+  (map (\ {cid} {do
+    (set-client-state cid
+      (ide/perspective-restore (client-state cid) (tool-ids) from-pid))
+    (send-layout cid 0)
+    (send-chrome cid 0)
+    nil}) (dict/keys ide/clients))
   nil
 })
 
@@ -329,6 +382,25 @@
   nil
 })
 
+; Focus follows the mouse: hover only moves focus between panes that are
+; visible in the client's perspective, and never while typing (insert mode
+; keeps keyboard focus until ESC).
+(fun {handle-focus client-id pane-id ts} {do
+  (= {cstate} (client-state client-id))
+  (if (or (== (plist/get cstate :mode) "insert")
+          (== (plist/get cstate :focus) pane-id)
+          (nil? (get-tool pane-id))
+          (not (exists pane-id
+                 (ide/perspective-visible-ids (client-perspective cstate)
+                                              (tool-ids)))))
+    {nil}
+    {do
+      (set-client-state client-id (plist/set cstate :focus pane-id))
+      (send-chrome client-id ts)
+      nil})
+  nil
+})
+
 ; Raw key from a client. Routing (DESIGN.md 3.3): palette if open, insert
 ; mode to the focused editor, otherwise leader/pane keymaps with editor
 ; normal-mode keys as the fallback. Chrome echo patch always follows.
@@ -345,12 +417,6 @@
   nil
 })
 
-(fun {list-index-of l x i} {
-  (if (nil? l)
-    {-1}
-    {if (== (head l) x) {i} {list-index-of (tail l) x (+ i 1)}})
-})
-
 ; --- framework commands (load-time registration; load is deduped) ---
 
 (register-command `{:id "palette/open" :title "Command palette" :keys {"SPC SPC"}
@@ -364,16 +430,23 @@
 
 (register-command `{:id "focus/next" :title "Focus next pane" :keys {"SPC w w"}
   :run ,(\ {client-id} {do
-    (= {ids} (map (\ {t} {plist/get t :id}) ide/tools))
-    (if (nil? ids)
-      {nil}
-      {do
-        (= {cstate} (client-state client-id))
-        (= {i} (list-index-of ids (plist/get cstate :focus) 0))
-        (= {ni} (if (< (+ i 1) (len ids)) {+ i 1} {0}))
-        (set-client-state client-id
-          (plist/set cstate :focus (nth (+ ni 1) ids)))
-        nil})
+    (= {cstate} (client-state client-id))
+    (set-client-state client-id
+      (plist/set cstate :focus
+        (ide/perspective-next-focus (client-perspective cstate)
+                                (plist/get cstate :focus) (tool-ids))))
     nil})})
+
+(register-command `{:id "perspective/edit" :title "Edit perspective"
+  :keys {"SPC w e"}
+  :run ,(\ {client-id} {do (perspective-switch client-id "edit" 1) nil})})
+
+(register-command `{:id "perspective/repl" :title "Repl perspective"
+  :keys {"SPC w r"}
+  :run ,(\ {client-id} {do (perspective-switch client-id "repl" 1) nil})})
+
+(register-command `{:id "perspective/debug" :title "Debug perspective"
+  :keys {"SPC w d"}
+  :run ,(\ {client-id} {do (perspective-switch client-id "debug" 1) nil})})
 
 (config-defaults)

@@ -9,6 +9,53 @@ const latEl = document.getElementById("latency");
 const kw = (v) => (typeof v === "string" && v.startsWith(":")) ? v.slice(1) : v;
 const has = (v) => v != null && !(Array.isArray(v) && v.length === 0);
 
+// Layout slots: perspectives assign panes to main/side/bottom; unlisted
+// panes park hidden (their state keeps flowing, they just don't render).
+const SLOT_NAMES = ["main", "side", "bottom"];
+const slotEls = {};
+SLOT_NAMES.forEach((s) => {
+  const d = document.createElement("div");
+  d.id = "slot-" + s;
+  d.className = "slot";
+  root.appendChild(d);
+  slotEls[s] = d;
+});
+const hiddenEl = document.createElement("div");
+hiddenEl.id = "slot-hidden";
+root.appendChild(hiddenEl);
+
+let layout = null;
+
+function applyLayout() {
+  if (!layout) return;
+  const used = { main: false, side: false, bottom: false };
+  const listed = new Set();
+  (layout.slots || []).forEach((s) => {
+    const name = kw(s.slot);
+    const el = slotEls[name];
+    if (!el) return;
+    (s.panes || []).forEach((pid) => {
+      listed.add(pid);
+      const p = document.getElementById("pane-" + pid);
+      if (p) {
+        el.appendChild(p);
+        used[name] = true;
+      }
+    });
+  });
+  root.querySelectorAll(".w-panel[id^='pane-']").forEach((p) => {
+    if (!listed.has(p.id.slice(5))) hiddenEl.appendChild(p);
+  });
+  SLOT_NAMES.forEach((s) => {
+    slotEls[s].style.display = used[s] ? "flex" : "none";
+  });
+  root.style.gridTemplateColumns = used.side ? "1fr minmax(340px, 28%)" : "1fr";
+  root.style.gridTemplateRows = used.bottom ? "1fr minmax(160px, 30%)" : "1fr";
+  root.style.gridTemplateAreas = used.bottom
+    ? (used.side ? '"main side" "bottom side"' : '"main" "bottom"')
+    : (used.side ? '"main side"' : '"main"');
+}
+
 function renderText(node, el) {
   (node.runs || []).forEach((r) => {
     const s = document.createElement("span");
@@ -109,6 +156,9 @@ function render(node) {
     b.className = "panel-body";
     (node.children || []).forEach((c) => b.appendChild(render(c)));
     el.appendChild(b);
+  } else if (w === "scroll") {
+    if (node.id) el.dataset.wid = node.id;
+    (node.children || []).forEach((c) => el.appendChild(render(c)));
   } else if (w === "text") {
     renderText(node, el);
   } else if (w === "table") {
@@ -207,6 +257,15 @@ function renderCard(c) {
   return card;
 }
 
+let focusedPane = null;
+
+function markFocus(paneId) {
+  focusedPane = paneId;
+  root.querySelectorAll(".w-panel.focused").forEach((p) => p.classList.remove("focused"));
+  const el = document.getElementById("pane-" + paneId);
+  if (el) el.classList.add("focused");
+}
+
 function renderChrome(tree) {
   chromeEl.textContent = "";
 
@@ -265,20 +324,40 @@ function renderChrome(tree) {
   sl.className = "w-statusline";
   const st = tree.statusline || {};
   sl.appendChild(span("mode mode-" + (st.mode || "normal"), st.mode || "normal"));
+  if (st.perspective) sl.appendChild(span("perspective", "[" + st.perspective + "]"));
   if (st.pending) sl.appendChild(span("pending", st.pending));
   sl.appendChild(span("slot", "focus " + (st.focus || "")));
   chromeEl.appendChild(sl);
+  if (st.focus) markFocus(st.focus);
 }
 
 function applyPatch(msg) {
   if (msg.pane === "chrome" && has(msg.tree)) {
     renderChrome(msg.tree);
+  } else if (msg.pane === "layout" && has(msg.tree)) {
+    layout = msg.tree;
+    applyLayout();
   } else if (msg.pane && has(msg.tree)) {
     const el = render(msg.tree);
     el.id = "pane-" + msg.pane;
     const old = document.getElementById("pane-" + msg.pane);
-    if (old) old.replaceWith(el);
-    else root.appendChild(el);
+    const scrollPos = {};
+    if (old) {
+      old.querySelectorAll(".w-scroll[data-wid]").forEach((s) => {
+        const atBottom = s.scrollTop + s.clientHeight >= s.scrollHeight - 4;
+        scrollPos[s.dataset.wid] = { top: s.scrollTop, atBottom: atBottom };
+      });
+      old.replaceWith(el);
+    } else {
+      (layout ? hiddenEl : slotEls.main).appendChild(el);
+      applyLayout();
+    }
+    el.querySelectorAll(".w-scroll[data-wid]").forEach((s) => {
+      const prev = scrollPos[s.dataset.wid];
+      if (!prev || prev.atBottom) s.scrollTop = s.scrollHeight;
+      else s.scrollTop = prev.top;
+    });
+    if (focusedPane) markFocus(focusedPane);
   }
   if (msg.ts && msg.ts > 0) {
     const now = Math.round(performance.now() * 1000);
@@ -310,14 +389,35 @@ function keyName(e) {
   return null;
 }
 
+// Events are serialized through a promise chain: concurrent fetches give no
+// ordering guarantee, and key events are only meaningful in order.
+let sendChain = Promise.resolve();
+function sendEvent(ev) {
+  ev.ts = Math.round(performance.now() * 1000);
+  const body = JSON.stringify({ client: clientId, event: ev });
+  sendChain = sendChain
+    .then(() => fetch("/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: body,
+    }))
+    .catch(() => {});
+}
+
 window.addEventListener("keydown", (e) => {
   const key = keyName(e);
   if (key === null) return;
   e.preventDefault();
-  const ev = { type: "key", key: key, ts: Math.round(performance.now() * 1000) };
-  fetch("/event", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ client: clientId, event: ev }),
-  });
+  sendEvent({ type: "key", key: key });
+});
+
+// Focus follows the mouse. The server ignores hovers over panes hidden by
+// the current perspective and any hover while in insert mode.
+let hoverPane = null;
+root.addEventListener("pointerover", (e) => {
+  const panel = e.target.closest(".w-panel[id^='pane-']");
+  const pane = panel ? panel.id.slice(5) : null;
+  if (pane === null || pane === hoverPane) return;
+  hoverPane = pane;
+  sendEvent({ type: "focus", pane: pane });
 });

@@ -119,6 +119,7 @@ void test_byte_body_cb_needs_free(VALK_TEST_ARGS()) {
   src->body_len = 4;
   src->offset = 0;
   src->needs_free = true;
+  src->owner = nullptr;
 
   nghttp2_data_source ds = { .ptr = src };
   u8 buf[256];

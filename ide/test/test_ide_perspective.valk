@@ -1,0 +1,215 @@
+; Tests for perspectives: pure core transitions + machine integration.
+; Run with: build/valk ide/test/test_ide_perspective.valk
+
+(load "testing/test.valk")
+(load "ide/machine.valk")
+(load "ide/status.valk")
+(load "ide/repl.valk")
+(load "ide/server.valk")
+
+(test/run (list
+
+  (test/case "perspective-get-known-and-unknown"
+    {do
+    (test/assert-eq "edit" (plist/get (ide/perspective-get "edit") :id)
+      "edit perspective exists")
+    (test/assert-eq "repl" (plist/get (ide/perspective-get "repl") :id)
+      "repl perspective exists")
+    (test/assert-eq "debug" (plist/get (ide/perspective-get "debug") :id)
+      "debug perspective exists")
+    (test/assert (nil? (ide/perspective-get "bogus")) "unknown returns nil")
+    true
+  })
+
+  (test/case "perspective-pane-ids-ordered"
+    {do
+    (= {p} (ide/perspective-get "debug"))
+    (test/assert-eq {"dbg-src" "debugger" "dbg-aio" "dbg-mem" "repl"}
+      (ide/perspective-pane-ids p) "debug panes in slot order")
+    true
+  })
+
+  (test/case "layout-tree-shape-and-json-round-trip"
+    {do
+    (= {tree} (ide/perspective-layout-tree (ide/perspective-get "edit")))
+    (test/assert-eq :layout (plist/get tree :w) "widget kind is layout")
+    (test/assert-eq "edit" (plist/get tree :perspective) "carries perspective id")
+    (= {parsed} (json/parse (json/encode tree)))
+    (test/assert-eq ":layout" (plist/get parsed :w) "kind survives round trip")
+    (= {slots} (plist/get parsed :slots))
+    (test/assert-eq "main" (plist/get (head slots) :slot) "slot name survives")
+    (test/assert-eq "dbg-src" (head (plist/get (head slots) :panes))
+      "pane id survives")
+    true
+  })
+
+  (test/case "valid-focus-keeps-visible-fixes-hidden"
+    {do
+    (= {p} (ide/perspective-get "debug"))
+    (= {reg} {"dbg-src" "debugger" "repl" "status"})
+    (test/assert-eq "repl" (ide/perspective-valid-focus p "repl" reg)
+      "visible focus kept")
+    (test/assert-eq "debugger" (ide/perspective-valid-focus p "status" reg)
+      "hidden focus falls back to perspective default")
+    (test/assert-eq "dbg-src"
+      (ide/perspective-valid-focus p "status" {"dbg-src" "status"})
+      "unregistered default falls back to first visible")
+    (test/assert-eq "status"
+      (ide/perspective-valid-focus p "status" {"status"})
+      "no visible panes leaves focus unchanged")
+    true
+  })
+
+  (test/case "apply-switches-and-remembers"
+    {do
+    (= {cs} `{:mode "normal" :pending "" :focus "repl"
+              :perspective "edit" :prev-perspective ,nil})
+    (= {reg} {"dbg-src" "debugger" "repl"})
+    (= {ns} (ide/perspective-apply cs "debug" reg 1))
+    (test/assert-eq "debug" (plist/get ns :perspective) "perspective switched")
+    (test/assert-eq "edit" (plist/get ns :prev-perspective) "previous recorded")
+    (test/assert-eq "repl" (plist/get ns :focus) "visible focus preserved")
+    (= {ns2} (ide/perspective-apply ns "debug" reg 1))
+    (test/assert-eq "edit" (plist/get ns2 :prev-perspective)
+      "re-applying same perspective keeps original previous")
+    (test/assert-eq cs (ide/perspective-apply cs "bogus" reg 1)
+      "unknown perspective is a noop")
+    true
+  })
+
+  (test/case "restore-returns-to-previous"
+    {do
+    (= {cs} {:mode "normal" :pending "" :focus "debugger"
+             :perspective "debug" :prev-perspective "repl"})
+    (= {reg} {"dbg-src" "debugger" "repl" "status"})
+    (= {ns} (ide/perspective-restore cs reg "debug"))
+    (test/assert-eq "repl" (plist/get ns :perspective) "restored to previous")
+    (test/assert (nil? (plist/get ns :prev-perspective)) "previous cleared")
+    (test/assert-eq "repl" (plist/get ns :focus) "focus moved to visible pane")
+    true
+  })
+
+  (test/case "restore-respects-manual-switch"
+    {do
+    (= {cs} {:mode "normal" :pending "" :focus "repl"
+             :perspective "repl" :prev-perspective "debug"})
+    (= {reg} {"dbg-src" "debugger" "repl"})
+    (test/assert-eq cs (ide/perspective-restore cs reg "debug")
+      "no restore when client already left the intent perspective")
+    (= {cs2} (plist/set cs :prev-perspective nil))
+    (test/assert-eq cs2 (ide/perspective-restore cs2 reg "repl")
+      "no restore without a previous perspective")
+    true
+  })
+
+  (test/case "next-focus-cycles-visible-panes"
+    {do
+    (= {p} (ide/perspective-get "debug"))
+    (= {reg} {"dbg-src" "debugger" "repl" "status"})
+    (test/assert-eq "debugger" (ide/perspective-next-focus p "dbg-src" reg)
+      "cycles to next visible")
+    (test/assert-eq "dbg-src" (ide/perspective-next-focus p "repl" reg)
+      "wraps to first visible")
+    (test/assert-eq "dbg-src" (ide/perspective-next-focus p "status" reg)
+      "hidden focus restarts at first visible")
+    (test/assert-eq "status" (ide/perspective-next-focus p "status" {"status"})
+      "falls back to cycling registered panes")
+    true
+  })
+
+  (test/case "handle-key-switches-perspective"
+    {do
+    (ide/register-tool ide/status-tool)
+    (ide/register-tool ide/repl-tool)
+    (= {cid} "pc1")
+    (test/assert-eq "edit" (plist/get (ide/client-state cid) :perspective)
+      "clients start in the default perspective")
+    (map (\ {k} {ide/handle-key cid k 0}) {"SPC" "w" "r"})
+    (= {cs} (ide/client-state cid))
+    (test/assert-eq "repl" (plist/get cs :perspective) "SPC w r switches")
+    (test/assert-eq "edit" (plist/get cs :prev-perspective) "previous recorded")
+    (test/assert-eq "repl" (plist/get cs :focus) "focus follows perspective")
+    (map (\ {k} {ide/handle-key cid k 0}) {"SPC" "w" "w"})
+    (test/assert-eq "status" (plist/get (ide/client-state cid) :focus)
+      "focus cycles within perspective panes")
+    (map (\ {k} {ide/handle-key cid k 0}) {"SPC" "w" "w"})
+    (test/assert-eq "repl" (plist/get (ide/client-state cid) :focus)
+      "focus wraps within perspective panes")
+    true
+  })
+
+  (test/case "handle-focus-follows-mouse-within-perspective"
+    {do
+    (ide/register-tool ide/status-tool)
+    (ide/register-tool ide/repl-tool)
+    (= {cid} "fm1")
+    (ide/set-client-state cid
+      (plist/set (ide/client-state cid) :perspective "repl"))
+    (ide/handle-focus cid "status" 0)
+    (test/assert-eq "status" (plist/get (ide/client-state cid) :focus)
+      "hover moves focus to a visible pane")
+    (ide/handle-focus cid "repl" 0)
+    (test/assert-eq "repl" (plist/get (ide/client-state cid) :focus)
+      "hover moves focus back")
+    (ide/handle-focus cid "no-such-pane" 0)
+    (test/assert-eq "repl" (plist/get (ide/client-state cid) :focus)
+      "unknown pane ignored")
+    true
+  })
+
+  (test/case "handle-focus-ignores-hidden-panes-and-insert-mode"
+    {do
+    (ide/register-tool ide/status-tool)
+    (ide/register-tool ide/repl-tool)
+    (= {cid} "fm2")
+    (ide/set-client-state cid
+      (plist/set (ide/client-state cid) :perspective "edit"))
+    (ide/handle-focus cid "status" 0)
+    (test/assert-eq "repl" (plist/get (ide/client-state cid) :focus)
+      "pane hidden by the perspective does not take focus")
+    (ide/set-client-state cid
+      (plist/set (plist/set (ide/client-state cid)
+        :perspective "repl") :mode "insert"))
+    (ide/handle-focus cid "status" 0)
+    (test/assert-eq "repl" (plist/get (ide/client-state cid) :focus)
+      "insert mode keeps keyboard focus")
+    true
+  })
+
+  (test/case "route-event-post-focus-flow"
+    {do
+    (ide/register-tool ide/status-tool)
+    (ide/register-tool ide/repl-tool)
+    (ide/set-client-state "fm3"
+      (plist/set (ide/client-state "fm3") :perspective "repl"))
+    (= {body} "{\"client\":\"fm3\",\"event\":{\"type\":\"focus\",\"pane\":\"status\",\"ts\":1}}")
+    (= {resp} (ide/handle-request `{:method "POST" :path "/event" :body ,body}))
+    (test/assert-eq "200" (plist/get resp :status) "focus event accepted")
+    (test/assert-eq "status" (plist/get (ide/client-state "fm3") :focus)
+      "focus event routed to handle-focus")
+    true
+  })
+
+  (test/case "client-state-survives-reconnect"
+    {do
+    (ide/register-tool ide/status-tool)
+    (ide/register-tool ide/repl-tool)
+    (= {cid} "rc9")
+    (ide/set-client-state cid
+      (plist/set (ide/client-state cid) :perspective "repl"))
+    (ide/remove-client cid)
+    (test/assert-eq "repl" (plist/get (ide/client-state cid) :perspective)
+      "perspective survives disconnect/reconnect")
+    true
+  })
+
+  (test/case "switch-all-and-restore-all-without-clients"
+    {do
+    (test/assert (nil? (ide/perspective-switch-all "debug"))
+      "switch-all with no clients is a noop")
+    (test/assert (nil? (ide/perspective-restore-all "debug"))
+      "restore-all with no clients is a noop")
+    true
+  }))
+
+  {:suite-name "IDE perspective"})

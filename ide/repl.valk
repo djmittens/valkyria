@@ -103,11 +103,14 @@
     (if (nil? hist) {nil} {hist}))
 })
 
+; Output scrolls in its own region; the prompt sits below it and is always
+; visible regardless of history length.
 (fun {repl-view state} {do
   (= {buf} (plist/get state :buffer))
   `{:w :panel :id "repl" :title "REPL"
     :children
-    {,@(repl-hist-widgets (plist/get state :history))
+    {{:w :scroll :id "repl-out-scroll"
+      :children ,(repl-hist-widgets (plist/get state :history))}
      {:w :input :id "repl-in"
       :lines ,(plist/get buf :lines)
       :hl ,(ide/hl-text-lines (ide/edit-text buf))

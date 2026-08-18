@@ -197,6 +197,7 @@ typedef struct valk_http2_server_request {
   bool response_complete;
   bool has_async_handler;
   bool stream_response;
+  void *pending_body_src;
   struct valk_sse_stream_entry *sse_entry;
   struct valk_request_ctx *request_ctx;
 } valk_http2_server_request_t;
@@ -379,6 +380,7 @@ typedef struct {
   u64 body_len;
   u64 offset;
   bool needs_free;
+  void **owner;
 } http_body_source_t;
 
 typedef struct {

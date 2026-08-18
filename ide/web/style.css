@@ -22,9 +22,57 @@ body {
   font-size: 12px;
   line-height: 1.4;
   padding: 8px;
+  overflow: hidden;
 }
 
-#root { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+#root {
+  display: grid;
+  gap: 8px;
+  grid-template-areas: "main";
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  height: calc(100vh - 44px);
+}
+
+.slot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+}
+#slot-main { grid-area: main; }
+#slot-side { grid-area: side; }
+#slot-bottom { grid-area: bottom; }
+#slot-hidden { display: none; }
+
+#slot-main > .w-panel,
+#slot-bottom > .w-panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+#slot-main > .w-panel > .panel-body,
+#slot-bottom > .w-panel > .panel-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+#slot-side > .w-panel { flex: 0 0 auto; }
+
+.w-scroll {
+  flex: 1 1 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+.panel-body > .w-input { flex: 0 0 auto; }
+
+.w-panel.focused { border-color: var(--accent); }
+.w-panel.focused > .panel-title { color: var(--fg); background: rgba(227, 179, 65, 0.08); }
 
 #hud {
   position: fixed; right: 8px; bottom: 8px;

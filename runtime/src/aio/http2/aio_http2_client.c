@@ -641,6 +641,7 @@ static void __valk_aio_http2_request_send_cb(valk_aio_system_t *sys,
       body_src->body_len = ctx->req->bodyLen;
       body_src->offset = 0;
       body_src->needs_free = false;
+      body_src->owner = nullptr;
       data_prd.source.ptr = body_src;
       data_prd.read_callback = valk_http2_byte_body_cb;
       prd = &data_prd;

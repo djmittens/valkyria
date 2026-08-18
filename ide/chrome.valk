@@ -80,7 +80,8 @@
   (= {mode} (if (nil? pal)
     {(if (nil? cmode) {"normal"} {cmode})}
     {"palette"}))
-  (= {sl} `{:mode ,mode :pending ,pending :focus ,(plist/get cstate :focus)})
+  (= {sl} `{:mode ,mode :pending ,pending :focus ,(plist/get cstate :focus)
+            :perspective ,(plist/get cstate :perspective)})
   (= {kh} (if (== pending "") {nil} {ide/keyhints commands pending groups}))
   (= {pw} (if (nil? pal) {nil} {palette-view pal commands}))
   (= {comp} (plist/get cstate :completions))

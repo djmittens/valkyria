@@ -45,9 +45,6 @@ struct valk_stream_body {
   u64 pending_offset;
   u64 pending_capacity;
 
-  valk_mem_arena_t *arena;
-  valk_arena_checkpoint_t chunk_checkpoint;
-
   bool data_deferred;
   u64 bytes_sent;
   u64 chunks_sent;
@@ -74,8 +71,7 @@ valk_stream_body_t *valk_stream_body_new(
     valk_aio_handle_t *conn,
     nghttp2_session *session,
     i32 stream_id,
-    nghttp2_data_provider2 *data_prd_out,
-    valk_mem_arena_t *arena);
+    nghttp2_data_provider2 *data_prd_out);
 
 void valk_stream_body_close(valk_stream_body_t *body);
 void valk_stream_body_force_close(valk_stream_body_t *body);

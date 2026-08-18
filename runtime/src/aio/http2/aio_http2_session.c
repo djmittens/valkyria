@@ -383,6 +383,9 @@ nghttp2_ssize valk_http2_byte_body_cb(nghttp2_session *session,
   if (src->offset >= src->body_len) {
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
     if (src->needs_free) {
+      if (src->owner) {
+        *src->owner = nullptr;
+      }
       free(src);
     }
   }
@@ -414,6 +417,7 @@ int valk_http2_send_overload_response(nghttp2_session *session,
   body_src->body_len = body_len;
   body_src->offset = 0;
   body_src->needs_free = true;
+  body_src->owner = nullptr;
 
   nghttp2_nv headers[] = {
     MAKE_NV2(":status", "503"),
@@ -474,16 +478,8 @@ int valk_http2_send_response(nghttp2_session *session, int stream_id,
   u64 body_len = 0;
   valk_lval_t* body_val = valk_http2_qexpr_get(response_qexpr, ":body");
   if (body_val && LVAL_TYPE(body_val) == LVAL_STR) {
-    body_len = strlen(body_val->str);
-    if (body_len > 1024 * 1024) {
-      body = body_val->str;
-    } else {
-      VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
-        char* body_copy = valk_mem_alloc(body_len + 1);
-        memcpy(body_copy, body_val->str, body_len + 1);
-        body = body_copy;
-      }
-    }
+    body = body_val->str;
+    body_len = strlen(body);
   }
 
   valk_http2_metrics_on_response_body(session, stream_id, body_len, status);
@@ -513,13 +509,30 @@ int valk_http2_send_response(nghttp2_session *session, int stream_id,
     }
   }
 
-  http_body_source_t *body_src;
-  VALK_WITH_ALLOC((valk_mem_allocator_t*)arena) {
-    body_src = valk_mem_alloc(sizeof(http_body_source_t));
-    body_src->body = body;
-    body_src->body_len = body_len;
-    body_src->offset = 0;
-    body_src->needs_free = false;
+  // The body source outlives this call: nghttp2 drains it via
+  // valk_http2_byte_body_cb whenever the connection's send window allows.
+  // It must not live in the stream arena (released at stream close, and a
+  // full arena silently spills allocations into unrooted GC heap memory) nor
+  // point at lval strings (GC-owned). One self-contained malloc block, freed
+  // at body EOF or at stream close if the stream dies first.
+  http_body_source_t *body_src = malloc(sizeof(http_body_source_t) + body_len + 1);
+  if (!body_src) { // LCOV_EXCL_START OOM
+    return NGHTTP2_ERR_NOMEM;
+  } // LCOV_EXCL_STOP
+  char *body_copy = (char *)(body_src + 1);
+  memcpy(body_copy, body, body_len);
+  body_copy[body_len] = '\0';
+  body_src->body = body_copy;
+  body_src->body_len = body_len;
+  body_src->offset = 0;
+  body_src->needs_free = true;
+  body_src->owner = nullptr;
+
+  valk_http2_server_request_t *req = (valk_http2_server_request_t *)
+      nghttp2_session_get_stream_user_data(session, stream_id);
+  if (req) {
+    req->pending_body_src = body_src;
+    body_src->owner = &req->pending_body_src;
   }
 
   nghttp2_data_provider2 data_prd;
@@ -561,6 +574,11 @@ int valk_http2_server_on_stream_close_callback(nghttp2_session *session,
 
   void *stream_data = nghttp2_session_get_stream_user_data(session, stream_id);
   valk_http2_server_request_t *req = (valk_http2_server_request_t *)stream_data;
+
+  if (req && req->pending_body_src) {
+    free(req->pending_body_src);
+    req->pending_body_src = nullptr;
+  }
 
   bool was_sse_stream = valk_http2_metrics_on_sse_stream_close(conn, stream_id);
 

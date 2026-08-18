@@ -77,7 +77,7 @@ static void test_stream_body_null_args(VALK_TEST_ARGS()) {
 
   nghttp2_data_provider2 data_prd;
 
-  valk_stream_body_t *body = valk_stream_body_new(nullptr, nullptr, 1, &data_prd, nullptr);
+  valk_stream_body_t *body = valk_stream_body_new(nullptr, nullptr, 1, &data_prd);
   ASSERT_NULL(body);
 
   VALK_PASS();

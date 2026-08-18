@@ -28,28 +28,24 @@ static void __stream_chunk_free(valk_stream_chunk_t *chunk);
 
 void valk_http2_flush_pending(valk_aio_handle_t *conn);
 
+// Stream bodies and their chunks are plain heap allocations, always. They
+// must not live in the stream arena: the queue outlives arbitrary amounts of
+// event-loop time while nghttp2 drains it, the arena is released at stream
+// close, and a full arena silently spills allocations into unrooted GC heap
+// memory that the collector is free to reuse.
 valk_stream_body_t *valk_stream_body_new(
     valk_aio_handle_t *conn,
     nghttp2_session *session,
     i32 stream_id,
-    nghttp2_data_provider2 *data_prd_out,
-    valk_mem_arena_t *arena) {
+    nghttp2_data_provider2 *data_prd_out) {
 
   if (!conn || !session || !data_prd_out) { // LCOV_EXCL_START
     VALK_ERROR("stream_body: invalid arguments to valk_stream_body_new");
     return nullptr;
   } // LCOV_EXCL_STOP
 
-  valk_stream_body_t *body;
-  char *pending_buf;
-
-  if (arena) { // LCOV_EXCL_BR_LINE -- arena path tested via HTTP/2 integration
-    body = valk_mem_arena_alloc(arena, sizeof(valk_stream_body_t));
-    pending_buf = valk_mem_arena_alloc(arena, STREAM_DEFAULT_BUFFER_SIZE);
-  } else {
-    body = malloc(sizeof(valk_stream_body_t));
-    pending_buf = body ? malloc(STREAM_DEFAULT_BUFFER_SIZE) : nullptr; // LCOV_EXCL_BR_LINE -- OOM
-  }
+  valk_stream_body_t *body = malloc(sizeof(valk_stream_body_t));
+  char *pending_buf = body ? malloc(STREAM_DEFAULT_BUFFER_SIZE) : nullptr; // LCOV_EXCL_BR_LINE -- OOM
 
   if (!body) { // LCOV_EXCL_START
     VALK_ERROR("stream_body: failed to allocate body struct");
@@ -57,7 +53,7 @@ valk_stream_body_t *valk_stream_body_new(
   } // LCOV_EXCL_STOP
   if (!pending_buf) { // LCOV_EXCL_START
     VALK_ERROR("stream_body: failed to allocate pending buffer");
-    if (!arena) free(body);
+    free(body);
     return nullptr;
   } // LCOV_EXCL_STOP
 
@@ -73,11 +69,6 @@ valk_stream_body_t *valk_stream_body_new(
   body->pending_capacity = STREAM_DEFAULT_BUFFER_SIZE;
   body->pending_data = pending_buf;
 
-  body->arena = arena;
-  if (arena) { // LCOV_EXCL_BR_LINE -- arena path tested via HTTP/2 integration
-    body->chunk_checkpoint = valk_arena_checkpoint_save(arena);
-  }
-
   body->data_deferred = true;
 
   u64 now = uv_hrtime() / 1000000;
@@ -88,27 +79,25 @@ valk_stream_body_t *valk_stream_body_new(
   data_prd_out->source.ptr = body;
   data_prd_out->read_callback = __stream_data_read_callback;
 
-  VALK_DEBUG("stream_body: created id=%llu, http2_stream=%d, arena=%p",
-             (unsigned long long)body->id, stream_id, (void*)arena);
+  VALK_DEBUG("stream_body: created id=%llu, http2_stream=%d",
+             (unsigned long long)body->id, stream_id);
 
   return body;
 }
 
 // LCOV_EXCL_START -- internal cleanup, invoked only by nghttp2 callback or close path
 static void __stream_body_finish_close(valk_stream_body_t *body) {
-  if (!body->arena) {
-    valk_stream_chunk_t *chunk = body->queue_head;
-    while (chunk) {
-      valk_stream_chunk_t *next = chunk->next;
-      __stream_chunk_free(chunk);
-      chunk = next;
-    }
+  valk_stream_chunk_t *chunk = body->queue_head;
+  while (chunk) {
+    valk_stream_chunk_t *next = chunk->next;
+    __stream_chunk_free(chunk);
+    chunk = next;
   }
   body->queue_head = nullptr;
   body->queue_tail = nullptr;
   body->queue_len = 0;
 
-  if (body->pending_data && !body->arena) {
+  if (body->pending_data) {
     free(body->pending_data);
     body->pending_data = nullptr;
   }
@@ -198,9 +187,7 @@ void valk_stream_body_free(valk_stream_body_t *body) {
     valk_stream_body_close(body);
   }
 
-  if (!body->arena) {
-    free(body);
-  }
+  free(body);
 }
 // LCOV_EXCL_STOP
 
@@ -222,12 +209,7 @@ int valk_stream_body_write(valk_stream_body_t *body, const char *data, u64 len) 
     return -2;
   }
 
-  valk_stream_chunk_t *chunk;
-  if (body->arena) { // LCOV_EXCL_BR_LINE -- arena path tested via HTTP/2 integration
-    chunk = valk_mem_arena_alloc(body->arena, sizeof(valk_stream_chunk_t) + len + 1);
-  } else {
-    chunk = malloc(sizeof(valk_stream_chunk_t) + len + 1);
-  }
+  valk_stream_chunk_t *chunk = malloc(sizeof(valk_stream_chunk_t) + len + 1);
   if (!chunk) { // LCOV_EXCL_START
     VALK_ERROR("stream_body: failed to allocate chunk");
     return -3;
@@ -355,9 +337,6 @@ static nghttp2_ssize __stream_data_read_callback(
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
       return 0;
     }
-    if (body->arena) {
-      valk_arena_checkpoint_restore(body->arena, body->chunk_checkpoint);
-    }
     body->data_deferred = true;
     VALK_DEBUG("stream_body: body %llu queue empty, deferring",
                (unsigned long long)body->id);
@@ -373,18 +352,16 @@ static nghttp2_ssize __stream_data_read_callback(
 
   if (chunk->data_len > body->pending_capacity) {
     u64 new_capacity = chunk->data_len;
-    char *new_buf = body->arena ? nullptr : realloc(body->pending_data, new_capacity);
-    if (!new_buf && !body->arena) {
+    char *new_buf = realloc(body->pending_data, new_capacity);
+    if (!new_buf) { // LCOV_EXCL_START OOM
       VALK_ERROR("stream_body: failed to grow pending buffer for body %llu",
                  (unsigned long long)body->id);
       __stream_chunk_free(chunk);
       *data_flags |= NGHTTP2_DATA_FLAG_EOF;
       return 0;
-    }
-    if (!body->arena) {
-      body->pending_data = new_buf;
-      body->pending_capacity = new_capacity;
-    }
+    } // LCOV_EXCL_STOP
+    body->pending_data = new_buf;
+    body->pending_capacity = new_capacity;
   }
 
   memcpy(body->pending_data, chunk->data, chunk->data_len);
@@ -401,9 +378,7 @@ static nghttp2_ssize __stream_data_read_callback(
   VALK_DEBUG("stream_body: body %llu dequeued chunk (size=%zu, queue_len=%zu, total_chunks=%llu)",
              body->id, chunk->data_len, body->queue_len, (unsigned long long)body->chunks_sent);
 
-  if (!body->arena) {
-    __stream_chunk_free(chunk);
-  }
+  __stream_chunk_free(chunk);
 
   u64 to_send = body->pending_len < length ? body->pending_len : length;
   memcpy(buf, body->pending_data, to_send);

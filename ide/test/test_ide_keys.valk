@@ -158,10 +158,8 @@
     (test/assert (not (nil? (plist/get (ide/client-state "kc1") :palette)))
       "palette open")
 
-    ; type res, enter -> status/reset dispatched to the tool
-    (ide/handle-key "kc1" "r" 0)
-    (ide/handle-key "kc1" "e" 0)
-    (ide/handle-key "kc1" "s" 0)
+    ; type status, enter -> status/reset dispatched to the tool
+    (map (\ {k} {ide/handle-key "kc1" k 0}) {"s" "t" "a" "t" "u" "s"})
     (ide/handle-key "kc1" "CR" 0)
     (test/assert (nil? (plist/get (ide/client-state "kc1") :palette))
       "palette closed")
