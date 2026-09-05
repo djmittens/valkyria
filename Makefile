@@ -112,18 +112,17 @@ configure:
 	./configure && \
 	make install
 
-# Locally-trusted TLS certs for the localhost dev/UAT servers.
-# cmake_configure already drops a cert into each build dir, but it is
-# self-signed (untrusted) unless mkcert is installed AND its CA is in the
-# trust store. `mkcert -install` does the latter; CAROOT decides where the
-# CA lives (/state/mkcert in a workspace site, so it survives a rebuild).
+# Reissue locally-trusted TLS certs into every existing build dir.
+# cmake_configure already drops one in at configure time; this is for build
+# dirs that predate the CA, or an expired cert. The CA itself comes from the
+# environment: baked into the trust store in Containerfile.workspace, or
+# `mkcert -install` once by hand on a dev machine.
 .PHONY: cert
 cert:
 	@command -v mkcert >/dev/null 2>&1 || { \
 		echo "cert: mkcert not found (pacman -S mkcert nss | brew install mkcert | apt install mkcert)"; \
 		exit 1; \
 	}
-	mkcert -install
 	@for d in build build-asan build-tsan build-coverage; do \
 		if [ -d $$d ]; then \
 			mkcert -cert-file $$d/server.crt -key-file $$d/server.key localhost 127.0.0.1 ::1; \
