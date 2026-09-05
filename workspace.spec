@@ -1,5 +1,5 @@
 tools     = mason
 services  = foreman
 egress    = true
-test      = make test
+test      = git submodule update --init --recursive && make test
 threshold = 64
