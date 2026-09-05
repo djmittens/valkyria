@@ -1,0 +1,35 @@
+FROM docker.io/library/archlinux:latest
+
+# Build deps mirror CMakeLists.txt and docs/CONTRIBUTING.md:
+#   clang            - CMAKE_C_COMPILER is hardcoded to /usr/bin/clang, C23
+#   llvm             - VALK_LLVM=ON by default; find_package(LLVM CONFIG)
+#   cmake ninja make - Makefile drives `cmake -G Ninja`; make is the entry point
+#   pkgconf          - pkg_check_modules(EDITLINE/EXPAT)
+#   libuv openssl libedit expat - find_library/find_package in CMakeLists.txt
+#   git              - vendor/{editline,mpc,nghttp2} are submodules
+#   python           - scripts/profile-lsp-nvim.sh; test harness is Valk, not pytest
+#   gdb lldb         - debug a failing build turn instead of reporting red
+#   mkcert nss       - Makefile gen_ssl_certs prefers mkcert; without it every
+#                      build dir gets an untrusted self-signed localhost cert
+RUN pacman -Syu --noconfirm --needed \
+      clang llvm cmake ninja make pkgconf \
+      libuv openssl libedit expat \
+      git ca-certificates python \
+      gdb lldb \
+      ccache mkcert nss \
+    && pacman -Scc --noconfirm
+
+WORKDIR /workspace
+
+# ccache survives across turns via /state.
+ENV CCACHE_DIR=/state/ccache \
+    CMAKE_C_COMPILER_LAUNCHER=ccache \
+    CAROOT=/usr/local/share/mkcert
+
+# Generate the dev CA and put it in the image's trust store (system + nss), so
+# every container is born trusting the localhost certs `make cert` issues and
+# nobody has to run `mkcert -install` by hand. The CA is only ever asked to
+# sign localhost/127.0.0.1/::1 and never leaves the dev image.
+RUN mkcert -install
+
+CMD ["sleep", "infinity"]
