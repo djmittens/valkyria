@@ -130,9 +130,13 @@
   (= {suites} (join suites (discover-valk-in-dir valk "ide/test" "ide")))
 
   (if (== include-stress 1)
-    {if (file/exists? "runtime/test/stress")
-      {(= {suites} (join suites (discover-valk-in-dir valk "runtime/test/stress" "stress")))}
-      {nil}}
+    {do
+      (if (file/exists? "runtime/test/stress")
+        {(= {suites} (join suites (discover-valk-in-dir valk "runtime/test/stress" "stress")))}
+        {nil})
+      (if (file/exists? "ide/test/stress")
+        {(= {suites} (join suites (discover-valk-in-dir valk "ide/test/stress" "stress")))}
+        {nil})}
     {nil})
 
   suites
