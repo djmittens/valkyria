@@ -94,17 +94,22 @@ return {
 
     -- Cmd-T flow: query for "clamp" via workspace/symbol; expect
     -- a hit pointing at utils.valk.
-    local res = lib.request(bufnr, "workspace/symbol",
-      { query = "clamp" }, 5000)
-    lib.assert_truthy(res, "workspace/symbol returned nil")
-    local found = false
-    for _, s in ipairs(res) do
-      if (s.name or ""):match("clamp")
-         and (s.location and s.location.uri or ""):match("utils%.valk$") then
-        found = true; break
+    -- utils.valk is indexed asynchronously by the workspace scan, so a
+    -- one-shot query can legitimately return before it lands (observed on
+    -- loaded CI runners, where the sibling document_symbols assertion in
+    -- this same scenario took 420ms). Poll until the cross-file hit shows
+    -- up rather than asking exactly once.
+    lib.require_until(function()
+      local res = lib.request(bufnr, "workspace/symbol",
+        { query = "clamp" }, 1000)
+      if type(res) ~= "table" then return nil end
+      for _, s in ipairs(res) do
+        if (s.name or ""):match("clamp")
+           and (s.location and s.location.uri or ""):match("utils%.valk$") then
+          return true
+        end
       end
-    end
-    lib.assert_truthy(found,
-      "workspace/symbol clamp didn't return utils/clamp from utils.valk")
+      return nil
+    end, "workspace/symbol clamp didn't return utils/clamp from utils.valk", 5000)
   end,
 }
